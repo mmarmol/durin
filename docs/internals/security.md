@@ -172,10 +172,13 @@ with (`requires`, registered next to its executor in
 `durin/agent/approval_executors.py`), and `approval.decide` checks it before a
 record moves from `pending` to `approved`: a decision made where a handle is
 missing is refused, the record is left as it was, and the refusal says where
-it can be approved. An exec request can only be approved in the chat that
-asked, since only that turn holds the literal command, so the CLI, the
-Pending page and a late webui click are refused; the record closes when that
-turn stops waiting. A dependency install needs a shell runner, so a decision
+it can be approved. An exec request runs only inside the turn that asked,
+since only that turn holds the literal command. While that turn still waits, a
+decision from the Pending page or a webui click is handed to it
+(`pending_answers`, in the same gateway process), and the turn runs the
+command; once the turn stopped waiting, the record closes and a decision that
+raced it is refused. The CLI runs in its own process and never reaches the
+waiting turn, so it always refuses an exec request. A dependency install needs a shell runner, so a decision
 on a gateway with exec disabled (the Pending page, a late webui click) is
 refused and points to `durin approvals approve`. An
 action that `install_policy: auto` allowed files no record; a skill installed
@@ -195,7 +198,8 @@ own tools among them — are refused with 403. The kind is chosen by the server
 path that mints the token; the token API and CLI never set it. On top of
 that, the decision takes the scope of the change's domain: `skills:write` for
 a skill kind, `mcp:write` for an MCP change, `admin` for anything else. An
-exec request is still refused there (only its own turn holds the command).
+exec request decided there goes to its own turn while that turn still waits,
+and is refused once it stopped waiting (only that turn holds the command).
 
 A request decided outside the turn that filed it — from the Pending page, or a
 chat card clicked after its turn stopped waiting — posts a system note into
@@ -216,12 +220,15 @@ its wait ends, as above).
 Self-approval is therefore blocked at every channel the agent controls: the
 chat (a verdict never passes through the model), API input (it never
 approves), HTTP (only a dashboard session decides), and the shell. That is a
-best-effort limit, not a proof: the exec filters are pattern-based, so a
-command that reaches the same effect another way (a script the agent writes
-that rewrites a record under `.approvals/`, or one that mints a dashboard
-session from loopback — `/webui/bootstrap` needs no secret there — and calls
-the decision route or the socket, say) is a known gap until exec
-runs in a sandbox.
+best-effort limit, not a proof, and the real baseline is this: a local process
+that can reach the gateway when no setup secret is configured can obtain a
+dashboard session — `/webui/bootstrap` asks no secret of a loopback caller
+then — and act with it, deciding requests over HTTP or the socket. That
+includes the agent itself, through exec: the internal-URL guard only matches
+URL patterns, so a command that builds the URL another way gets past it. A
+script the agent writes can likewise rewrite a record under `.approvals/`.
+Configuring a setup secret keeps other local processes from minting a
+session; running exec in a sandbox is what closes the gap for the agent.
 
 **Layered skill gates.** Importing a skill passes two independent scan stages.
 The first is deterministic: a regex and AST pass that always runs. The second is

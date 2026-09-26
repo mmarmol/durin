@@ -194,8 +194,13 @@ dashboard. A turn it opens or joins therefore does **not** carry the authority
 to approve privileged actions: installing an MCP server, or importing, editing
 or installing dependencies for a skill. durin records such a request instead of
 running it, and it waits on the dashboard's Pending page and in
-`durin approvals` for a person to act on. A token cannot decide it either:
-the approval decision route takes only the dashboard session. A shell
+`durin approvals` for a person to act on. The approval decision route
+(`POST /api/v1/approvals/{id}/decision`) refuses API tokens: only the
+dashboard session decides a request there. The domain write routes are a
+separate matter: they act with the operator authority their scope grants,
+without an approval request — a token with `mcp:write` can add an MCP server,
+and one with `skills:write` can install a quarantined skill through the skills
+routes. A shell
 command that would need the person's approval is refused. A message sent with a
 token never answers an approval request the conversation is waiting on, even
 "yes": only the person can. Asking the person (or program) a question and

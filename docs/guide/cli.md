@@ -112,7 +112,9 @@ suggestions), and approves or rejects them with a click. Rejecting a skill
 install also discards the imported skill waiting for it, and installing or
 discarding that import from the Skills page closes the request. Only your dashboard
 session can: an API token cannot decide a request over HTTP. A shell command
-is refused there as here, and a dependency install is refused on a gateway
+can be decided there only while the chat that asked still waits (the decision
+goes to that chat, which runs it); once the chat stopped waiting it is refused,
+and here it is always refused. A dependency install is refused on a gateway
 with exec disabled (approve it here instead, which sets up its own shell
 runner). When you decide a request from the dashboard, the chat that asked
 for it is told how it ended.
