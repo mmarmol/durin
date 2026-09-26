@@ -257,7 +257,9 @@ below), since the latter would miss a run overwriting a SAME-NAMED file an earli
 already left there. The shared, top-level copy `output_file`/provenance touch is never
 duplicated there beyond this best-effort snapshot; a reader (`WorkflowRunsTool.show`) checks
 the run's own `runs/<run_id>/` subfolder first and falls back to the flat, shared layout when
-it does not exist — a run recorded before this existed.
+it does not exist — a run recorded before this existed. The fingerprint is `mtime_ns`, not a
+content hash, so a filesystem with coarse mtime resolution can in principle miss an overwrite
+that lands within that resolution window.
 
 A work or script node may be **detached** (`detached: true`): the walk launches it on a
 small per-run executor and continues immediately along its `next` — the upstream edge text
