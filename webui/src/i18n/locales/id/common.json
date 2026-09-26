@@ -1595,6 +1595,27 @@
       "retry": "Coba lagi"
     }
   },
+  "pending": {
+    "title": "Tertunda",
+    "subtitle": "Semua yang menunggu keputusan Anda, di satu tempat.",
+    "loading": "Memuat…",
+    "empty": "Tidak ada yang menunggu Anda.",
+    "refresh": "Muat ulang",
+    "openRun": "Buka run",
+    "sourceError": "Gagal memuat {{source}}: {{detail}}",
+    "source": {
+      "approval": "Persetujuan",
+      "skill_quarantine": "Impor skill",
+      "automation_run": "Otomatisasi",
+      "workflow_run": "Run workflow",
+      "flagged_pair": "Pasangan memori",
+      "skill_suggestion": "Saran skill"
+    },
+    "notice": {
+      "resumed": "Run dilanjutkan.",
+      "resolved": "Selesai."
+    }
+  },
   "skills": {
     "view": "Lihat",
     "remove": "Hapus",

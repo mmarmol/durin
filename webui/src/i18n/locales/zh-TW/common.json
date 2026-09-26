@@ -1595,6 +1595,27 @@
       "retry": "重試"
     }
   },
+  "pending": {
+    "title": "待處理",
+    "subtitle": "所有等待你決定的事項，集中在一處。",
+    "loading": "正在載入…",
+    "empty": "沒有等待你處理的事項。",
+    "refresh": "重新整理",
+    "openRun": "開啟執行",
+    "sourceError": "無法載入{{source}}：{{detail}}",
+    "source": {
+      "approval": "核准請求",
+      "skill_quarantine": "技能匯入",
+      "automation_run": "自動化",
+      "workflow_run": "工作流程執行",
+      "flagged_pair": "記憶配對",
+      "skill_suggestion": "技能建議"
+    },
+    "notice": {
+      "resumed": "已繼續執行。",
+      "resolved": "已完成。"
+    }
+  },
   "skills": {
     "view": "檢視",
     "remove": "移除",

@@ -1595,6 +1595,27 @@
       "retry": "Réessayer"
     }
   },
+  "pending": {
+    "title": "En attente",
+    "subtitle": "Tout ce qui attend votre décision, au même endroit.",
+    "loading": "Chargement…",
+    "empty": "Rien ne vous attend.",
+    "refresh": "Actualiser",
+    "openRun": "Ouvrir l’exécution",
+    "sourceError": "Impossible de charger {{source}} : {{detail}}",
+    "source": {
+      "approval": "Approbations",
+      "skill_quarantine": "Imports de skills",
+      "automation_run": "Automatisations",
+      "workflow_run": "Exécutions de workflows",
+      "flagged_pair": "Paires de mémoire",
+      "skill_suggestion": "Suggestions de skills"
+    },
+    "notice": {
+      "resumed": "Exécution reprise.",
+      "resolved": "Fait."
+    }
+  },
   "skills": {
     "view": "Voir",
     "remove": "Retirer",

@@ -1595,6 +1595,27 @@
       "retry": "重试"
     }
   },
+  "pending": {
+    "title": "待处理",
+    "subtitle": "所有等待你决定的事项，集中在一处。",
+    "loading": "正在加载…",
+    "empty": "没有等待你处理的事项。",
+    "refresh": "刷新",
+    "openRun": "打开运行",
+    "sourceError": "无法加载{{source}}：{{detail}}",
+    "source": {
+      "approval": "批准请求",
+      "skill_quarantine": "技能导入",
+      "automation_run": "自动化",
+      "workflow_run": "工作流运行",
+      "flagged_pair": "记忆对",
+      "skill_suggestion": "技能建议"
+    },
+    "notice": {
+      "resumed": "运行已恢复。",
+      "resolved": "已完成。"
+    }
+  },
   "skills": {
     "view": "查看",
     "remove": "移除",

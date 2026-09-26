@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { resources } from "@/i18n";
 import en from "@/i18n/locales/en/common.json";
 import es from "@/i18n/locales/es/common.json";
 
@@ -22,5 +23,17 @@ describe("pending i18n", () => {
       "flagged_pair",
       "skill_suggestion",
     ]);
+  });
+});
+
+describe("pending i18n across locales", () => {
+  it("every locale carries every en pending.* key", () => {
+    const expected = keysDeep((en as any).pending);
+    for (const [locale, resource] of Object.entries(resources)) {
+      expect({ locale, keys: keysDeep((resource.common as any).pending ?? {}) }).toEqual({
+        locale,
+        keys: expected,
+      });
+    }
   });
 });
