@@ -102,6 +102,7 @@ def build_service_registry(
     from durin.service.memory import MemoryService
     from durin.service.modes import ModesService
     from durin.service.oauth import OAuthService
+    from durin.service.pending import PendingService
     from durin.service.personas import PersonasService
     from durin.service.secrets import SecretsService
     from durin.service.sessions import SessionsService
@@ -180,6 +181,7 @@ def build_service_registry(
         serves_channel=(
             (lambda name: channel_manager.get_channel(name) is not None)
             if channel_manager is not None else None)))
+    registry.register("pending", PendingService(workspace_resolver=_workspace))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died

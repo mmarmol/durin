@@ -1583,6 +1583,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Everything waiting on a person: approval requests, skill imports in quarantine, paused automation runs, workflow runs waiting for input (not an automation's), memory pairs the dream flagged, and skill suggestions. Each source shows with the read scope of its own listing route; admin covers them all. */
+        get: operations["pending_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/personas": {
         parameters: {
             query?: never;
@@ -4890,6 +4907,73 @@ export interface components {
         PairingRevokeResult: {
             /** Ok */
             ok: boolean;
+        };
+        /** PendingAction */
+        PendingAction: {
+            /**
+             * Body
+             * @default null
+             */
+            body: {
+                [key: string]: unknown;
+            } | null;
+            /** Method */
+            method: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
+        /** PendingItem */
+        PendingItem: {
+            /** Created At */
+            created_at: string | null;
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            resolve: components["schemas"]["PendingResolve"];
+            /** Source */
+            source: string;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * PendingQuery
+         * @description No inputs — returns everything pending that the caller may read.
+         */
+        PendingQuery: Record<string, never>;
+        /** PendingResolve */
+        PendingResolve: {
+            /** Actions */
+            actions: components["schemas"]["PendingAction"][];
+            /** Form */
+            form: string;
+        };
+        /** PendingResult */
+        PendingResult: {
+            /** Count */
+            count: number;
+            /**
+             * Errors
+             * @default []
+             */
+            errors: components["schemas"]["PendingSourceError"][];
+            /** Items */
+            items: components["schemas"]["PendingItem"][];
+        };
+        /** PendingSourceError */
+        PendingSourceError: {
+            /** Detail */
+            detail: string;
+            /** Source */
+            source: string;
         };
         /** PersonaDeleteCommand */
         PersonaDeleteCommand: {
@@ -8990,6 +9074,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpenRouterStatusResult"];
+                };
+            };
+        };
+    };
+    pending_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PendingQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingResult"];
                 };
             };
         };

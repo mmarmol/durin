@@ -4,6 +4,7 @@ security verdict; kept separate so the agent context path stays scan-free."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from durin.agent.skills_store import _durin_blob, _loader, list_skills_info, removable_action
@@ -165,6 +166,11 @@ def quarantined_skills(workspace) -> list[dict]:
                  "verdict": "", "findings": [], "trust_prefix": "", "install_specs": [],
                  "needs": "confirm", "reasons": []}
         sj = d / ".scan.json"
+        # When it was scanned into quarantine: the import writes .scan.json
+        # last (a re-audit rewrites it), so its time is the item's age.
+        stamp_path = sj if sj.is_file() else d
+        entry["quarantined_at"] = datetime.fromtimestamp(
+            stamp_path.stat().st_mtime, tz=timezone.utc).isoformat()
         meta = None
         if sj.is_file():
             try:

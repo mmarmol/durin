@@ -163,6 +163,24 @@ class SkillSuggestions(Result):
     suggestions: list[SkillSuggestion]
 
 
+def suggestion_list(workspace: Path) -> list[SkillSuggestion]:
+    """The curation suggestions awaiting review. The listing behind
+    ``GET /api/v1/skills/suggestions`` and the Pending page's section."""
+    from durin.agent import skill_suggestions as sg
+
+    return [
+        SkillSuggestion(
+            id=r["id"],
+            skill=r.get("skill", ""),
+            type=r.get("type", ""),
+            reason=r.get("reason", ""),
+            patch=r.get("patch"),
+            created_at=r.get("created_at", ""),
+        )
+        for r in sg.read_suggestions(workspace)
+    ]
+
+
 class SkillObservationsQuery(Query):
     """OPEN observations, optionally filtered to one skill ref."""
 
@@ -703,20 +721,7 @@ class SkillsService:
         self, query: SkillSuggestionsQuery, principal: Principal
     ) -> SkillSuggestions:
         principal.require(Scope.SKILLS_READ)
-        from durin.agent import skill_suggestions as sg
-
-        items = [
-            SkillSuggestion(
-                id=r["id"],
-                skill=r.get("skill", ""),
-                type=r.get("type", ""),
-                reason=r.get("reason", ""),
-                patch=r.get("patch"),
-                created_at=r.get("created_at", ""),
-            )
-            for r in sg.read_suggestions(self._workspace)
-        ]
-        return SkillSuggestions(suggestions=items)
+        return SkillSuggestions(suggestions=suggestion_list(self._workspace))
 
     @route(
         "POST",

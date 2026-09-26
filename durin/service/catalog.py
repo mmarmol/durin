@@ -32,6 +32,7 @@ registry.  Each class's dep handling:
 - ``SlackService``         — no deps (slack_sdk imported lazily per call).
 - ``ChannelsRuntimeService`` — ``channel_manager=None`` (stored, never called here).
 - ``ApprovalsService``     — ``workspace_resolver=lambda: Path("/")`` (callable, never called).
+- ``PendingService``       — ``workspace_resolver=lambda: Path("/")`` (callable, never called).
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from durin.service.mcp import McpService
 from durin.service.memory import MemoryService
 from durin.service.modes import ModesService
 from durin.service.oauth import OAuthService
+from durin.service.pending import PendingService
 from durin.service.personas import PersonasService
 from durin.service.registry import ServiceRegistry
 from durin.service.secrets import SecretsService
@@ -91,6 +93,7 @@ SERVICE_CLASSES: list[type] = [
     ChannelPostService,
     ChatService,
     ApprovalsService,
+    PendingService,
 ]
 
 
@@ -127,4 +130,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("channels_post", ChannelPostService())
     registry.register("chat", ChatService())
     registry.register("approvals", ApprovalsService(workspace_resolver=lambda: Path("/")))
+    registry.register("pending", PendingService(workspace_resolver=lambda: Path("/")))
     return registry
