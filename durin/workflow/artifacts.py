@@ -111,6 +111,29 @@ def keyed_work_dir(base: str | Path, workflow_name: str, work_key: str) -> Path:
     return d
 
 
+# Subfolder (inside a work_dir) holding each keyed run's own preserved copy of
+# whatever it wrote ad hoc — see run_evidence_dir.
+EVIDENCE_DIRNAME = "runs"
+
+
+def run_evidence_dir(work_dir: str | Path, run_id: str) -> Path:
+    """Where a keyed run's own copy of its ad hoc (non-``output_file``) writes
+    is preserved: ``<work_dir>/runs/<run_id>/``.
+
+    A ``work_key`` folder is shared on purpose, across separate run_ids, so
+    ``output_file``/``.provenance.json`` (the reuse gate) survive into the
+    next run — but nothing else a node writes is meant to be shared. Two runs
+    reusing one key can each write, say, a script's own "params.json"; without
+    this, the second run's write would silently destroy the first run's only
+    copy (review N3). The engine preserves a copy of a keyed run's new files
+    here, alongside the (unchanged) shared originals. Does not create the
+    directory — the caller does, when it actually has something to put there.
+    A reader falls back to the flat ``work_dir`` layout when this subfolder
+    does not exist: a run recorded before this existed.
+    """
+    return Path(work_dir) / EVIDENCE_DIRNAME / run_id
+
+
 # Lock target name, kept BESIDE the keyed work dir (not inside it) so the ".lock"
 # file cross_process_lock derives never shows up as a run artifact — mirrors
 # workflow/version_store.py's identical VERSION_LOCK_NAME/version_lock_target pattern.

@@ -53,6 +53,32 @@ def test_drain_skips_messages_older_than_the_age_cap(tmp_path: Path) -> None:
     assert [m.content for m in journal.drain()] == ["fresh"]
 
 
+def test_a_stale_entry_of_another_kind_is_dropped_not_kept_forever(tmp_path: Path) -> None:
+    """A line belonging to a process kind that may never run again must not
+    be rewritten back into the file on every drain, forever: the same
+    max_age_s cutoff that applies to a TAKEN entry also applies to a KEPT
+    one. A "gateway" drain never takes a "tui"-tagged line, so under the bug
+    it was kept unconditionally, with no age check at all — checked here by
+    the file itself: a stale kept line must vanish, not be rewritten back."""
+    path = tmp_path / "j.jsonl"
+    journal = InboundJournal(path, max_age_s=3600)
+    stale_other_kind = _msg("stale-tui", timestamp=datetime.now() - timedelta(hours=2))
+    journal.append([stale_other_kind], kind="tui")
+
+    assert journal.drain(kind="gateway") == []   # not "gateway"'s to take
+    assert not path.exists()                     # aged out, not kept forever
+
+
+def test_a_fresh_entry_of_another_kind_still_survives_untouched(tmp_path: Path) -> None:
+    """The age cutoff on a kept line must not age out a merely-different-kind
+    line that is still young — only a genuinely stale one."""
+    journal = InboundJournal(tmp_path / "j.jsonl", max_age_s=3600)
+    journal.append([_msg("fresh-tui")], kind="tui")
+
+    assert journal.drain(kind="gateway") == []
+    assert [m.content for m in journal.drain(kind="tui")] == ["fresh-tui"]
+
+
 def test_drain_skips_malformed_lines_and_keeps_the_rest(tmp_path: Path) -> None:
     path = tmp_path / "j.jsonl"
     journal = InboundJournal(path)
@@ -72,3 +98,120 @@ def test_append_of_nothing_writes_no_file(tmp_path: Path) -> None:
     path = tmp_path / "j.jsonl"
     assert InboundJournal(path).append([]) == 0
     assert not path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Cross-process partitioning: one journal file is shared by the gateway, the
+# TUI and the legacy REPL. A drain must only take the entries journaled by a
+# process of its OWN kind, leaving another kind's entries in place.
+# ---------------------------------------------------------------------------
+
+
+def test_a_tui_written_entry_survives_a_gateway_replay_and_is_replayed_by_the_tui(
+    tmp_path: Path,
+) -> None:
+    journal = InboundJournal(tmp_path / "j.jsonl")
+    journal.append([_msg("from the tui")], kind="tui")
+
+    # A gateway starting up must not steal the TUI's own turn.
+    assert journal.drain(kind="gateway") == []
+
+    # The TUI's own next start still finds it.
+    replayed = journal.drain(kind="tui")
+    assert [m.content for m in replayed] == ["from the tui"]
+    assert journal.drain(kind="tui") == []       # replayed once
+
+
+def test_the_gateways_own_entries_are_replayed(tmp_path: Path) -> None:
+    journal = InboundJournal(tmp_path / "j.jsonl")
+    journal.append([_msg("from the gateway")], kind="gateway")
+
+    assert [m.content for m in journal.drain(kind="gateway")] == ["from the gateway"]
+
+
+def test_each_kind_only_takes_its_own_entries_from_a_mixed_file(tmp_path: Path) -> None:
+    journal = InboundJournal(tmp_path / "j.jsonl")
+    journal.append([_msg("g1")], kind="gateway")
+    journal.append([_msg("t1")], kind="tui")
+    journal.append([_msg("g2")], kind="gateway")
+
+    assert [m.content for m in journal.drain(kind="gateway")] == ["g1", "g2"]
+    assert [m.content for m in journal.drain(kind="tui")] == ["t1"]
+    assert journal.drain(kind="gateway") == []
+    assert journal.drain(kind="tui") == []
+
+
+def test_an_untagged_entry_matches_any_replaying_kind(tmp_path: Path) -> None:
+    """A journal file written before this partitioning existed carries no
+    kind tag at all; a reader that now asks for a specific kind must still
+    take it, exactly as it always could."""
+    path = tmp_path / "j.jsonl"
+    journal = InboundJournal(path)
+    journal.append([_msg("pre-upgrade")])   # no kind= at all — untagged
+
+    assert [m.content for m in journal.drain(kind="gateway")] == ["pre-upgrade"]
+
+
+def test_drain_with_no_kind_ignores_every_tag(tmp_path: Path) -> None:
+    """A caller that does not distinguish process kinds at all (drain() with
+    no kind=, matching every call before this feature existed) still takes
+    everything, whatever it is tagged with."""
+    journal = InboundJournal(tmp_path / "j.jsonl")
+    journal.append([_msg("g")], kind="gateway")
+    journal.append([_msg("t")], kind="tui")
+
+    assert sorted(m.content for m in journal.drain()) == ["g", "t"]
+
+
+def test_concurrent_append_during_a_drain_is_not_lost(tmp_path: Path, monkeypatch) -> None:
+    """append and drain both lock the file: a concurrent append waits for a
+    drain in progress to finish rather than racing its read-modify-write."""
+    import threading
+    from contextlib import contextmanager
+
+    import durin.bus.journal as journal_mod
+
+    path = tmp_path / "j.jsonl"
+    journal = InboundJournal(path)
+    journal.append([_msg("before")], kind="gateway")
+
+    real_lock = journal_mod.cross_process_lock
+    drain_holds_lock = threading.Event()
+    release_drain = threading.Event()
+    calls = {"n": 0}
+
+    @contextmanager
+    def _instrumented_lock(target, **kwargs):
+        calls["n"] += 1
+        first_call = calls["n"] == 1
+        with real_lock(target, **kwargs):
+            if first_call:
+                drain_holds_lock.set()
+                assert release_drain.wait(timeout=5), "drain never released"
+            yield
+
+    monkeypatch.setattr(journal_mod, "cross_process_lock", _instrumented_lock)
+
+    drained: dict[str, list] = {}
+    def _drain() -> None:
+        drained["result"] = journal.drain(kind="gateway")
+
+    drain_thread = threading.Thread(target=_drain)
+    drain_thread.start()
+    assert drain_holds_lock.wait(timeout=5), "drain never acquired the lock"
+
+    appended = {}
+    def _append() -> None:
+        appended["count"] = journal.append([_msg("concurrent")], kind="gateway")
+
+    append_thread = threading.Thread(target=_append)
+    append_thread.start()
+
+    release_drain.set()
+    drain_thread.join(timeout=5)
+    append_thread.join(timeout=5)
+
+    assert [m.content for m in drained["result"]] == ["before"]
+    assert appended["count"] == 1
+    # Not lost: a later drain still finds the message the concurrent append wrote.
+    assert [m.content for m in journal.drain(kind="gateway")] == ["concurrent"]

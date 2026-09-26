@@ -286,6 +286,27 @@ def test_realistic_long_commands_are_checked_quickly(command):
         assert refusal is None or refusal.kind == "deny"
 
 
+@pytest.mark.parametrize("command", [
+    _python_heredoc(18_000), _rm_script(18_000), _json_argument(18_000),
+], ids=["python-heredoc-at-cap", "rm-f-script-at-cap", "json-argument-at-cap"])
+def test_realistic_long_commands_at_the_new_cap_are_checked_quickly(command):
+    """The same realistic shapes as test_realistic_long_commands_are_checked_quickly,
+    scaled up near the current 20_000-character cap (fix round 1 lowered it from
+    200_000 — see MAX_CHECKED_COMMAND_CHARS's own comment): a realistic command
+    stays cheap right up to the cap's edge, not just well under it."""
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    assert len(command) <= MAX_CHECKED_COMMAND_CHARS
+    for restrict in (False, True):
+        tool = ExecTool(restrict_to_workspace=restrict, working_dir="/w")
+        start = time.perf_counter()
+        refusal = tool._check(command, "/w")
+        assert time.perf_counter() - start < 2.0
+        assert refusal is None or refusal.kind == "deny"
+
+
 @pytest.mark.parametrize("unit", ["rm ", "cp ", "sudo -x ", "http://a ", "mv x "],
                          ids=["rm", "cp", "sudo", "url", "mv"])
 def test_adversarial_repetition_at_the_cap_is_still_checked_quickly(unit):
@@ -302,6 +323,76 @@ def test_adversarial_repetition_at_the_cap_is_still_checked_quickly(unit):
     start = time.perf_counter()
     ExecTool(restrict_to_workspace=True, working_dir="/w")._check(command, "/w")
     assert time.perf_counter() - start < 3.0
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: two shapes survive the linear-time pre-checks (see
+# MAX_CHECKED_COMMAND_CHARS's own comment) because their gate literal is
+# trivial to satisfy without ever forming a real match — a bare "-" for the
+# rm-recursive hard-floor pattern, one leading "memory/" token for every
+# memory-vault pattern. Both still drive the same O(n^2) the pre-checks
+# otherwise fix. This is what forced the cap back down from 200_000 to
+# 20_000, not a bypass: _check's verdict on these shapes is unchanged
+# (see test_hard_floor_precheck_never_disagrees_with_the_unfiltered_regex
+# and friends above), only how large a command may reach the regex at all.
+# ---------------------------------------------------------------------------
+
+
+def _rm_dash_only(chars: int) -> str:
+    return ("rm -" * (chars // 4 + 1))[:chars]
+
+
+def _memory_then_verb(chars: int, verb: str) -> str:
+    prefix = "memory/z "
+    body = verb * ((chars - len(prefix)) // len(verb) + 1)
+    return (prefix + body)[:chars]
+
+
+_CAP_SHAPES = {
+    "rm-dash-only": _rm_dash_only,
+    "memory-then-rm": lambda n: _memory_then_verb(n, "rm "),
+    "memory-then-dd": lambda n: _memory_then_verb(n, "dd "),
+    "memory-then-tee": lambda n: _memory_then_verb(n, "tee "),
+    "memory-then-sed-i": lambda n: _memory_then_verb(n, "sed -i "),
+    "memory-then-cp": lambda n: _memory_then_verb(n, "cp "),
+    "memory-then-mv": lambda n: _memory_then_verb(n, "mv "),
+}
+
+
+@pytest.mark.parametrize("shape_name", list(_CAP_SHAPES), ids=list(_CAP_SHAPES))
+def test_surviving_quadratic_shapes_are_checked_quickly_at_the_new_cap(shape_name):
+    """At the (lowered) cap, even the two shapes the pre-checks cannot fix
+    stay well under the 3s budget (generous for CI; the real numbers are in
+    the fix-round report)."""
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    command = _CAP_SHAPES[shape_name](MAX_CHECKED_COMMAND_CHARS)
+    assert len(command) <= MAX_CHECKED_COMMAND_CHARS
+    start = time.perf_counter()
+    ExecTool(restrict_to_workspace=True, working_dir="/w")._check(command, "/w")
+    assert time.perf_counter() - start < 3.0
+
+
+@pytest.mark.parametrize("shape_name", list(_CAP_SHAPES), ids=list(_CAP_SHAPES))
+def test_surviving_quadratic_shapes_are_refused_unchecked_at_200k(shape_name):
+    """At 200k characters — the size these shapes used to run uncapped at,
+    taking tens of seconds each (the reason the cap came back down) — the
+    length cap itself now refuses the command before any pattern runs, fast.
+    This is the shape actually failing to reach the guard, not a test
+    failure: it pins that raising the cap back to 200k without also fixing
+    these two shapes would be unsafe."""
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    command = _CAP_SHAPES[shape_name](200_000)
+    assert len(command) > MAX_CHECKED_COMMAND_CHARS
+    start = time.perf_counter()
+    refusal = ExecTool(restrict_to_workspace=True, working_dir="/w")._check(command, "/w")
+    assert time.perf_counter() - start < 0.5
+    assert refusal is not None and refusal.kind == "guard" and not refusal.approvable
 
 
 def test_a_command_over_the_cap_is_refused_before_any_check():
@@ -426,3 +517,122 @@ def test_the_memory_vault_guard_for_sed_and_dd(command, blocked):
     """The sed -i and dd of= rules commit to the first flag they meet; that
     changes their cost, never what they refuse."""
     assert (ExecTool._guard_memory_mutation(command.lower()) is not None) is blocked
+
+
+# ---------------------------------------------------------------------------
+# Equivalence proof for the linear-time rewrite: a cheap literal pre-check
+# (_HARD_FLOOR_PRECHECKS / _DENY_PRECHECKS / _guard_memory_mutation's own
+# "memory/" gate) now runs before several patterns that used to be quadratic
+# under an adversarial repeat of an anchor word with no trigger literal
+# anywhere. None of the pattern TEXT changed — the pre-check only ever SKIPS
+# a regex call that would have found nothing anyway (every literal it checks
+# for is read directly off the pattern it gates: absent, the pattern cannot
+# match). These tests hold that promise to a battery of cases: every FLOOR/
+# NOT_FLOOR/APPROVALS case already in this file, the vault fixtures above,
+# and new cases built to specifically probe the pre-check's edges (the
+# trigger literal present but positioned so the real regex must still
+# decide, a long run of the anchor before the trigger, the trigger absent
+# entirely). Comparing "does the pre-check allow it through" against "does
+# the raw, unfiltered regex match" — the actual old behavior, still runnable
+# since no pattern text changed — is the equivalence proof requested for
+# this item: run the same case against the old (unfiltered) and new (gated)
+# form of every pattern.
+# ---------------------------------------------------------------------------
+
+_TRICKY_HARD_FLOOR_CASES = [
+    # The literal present, but not at a real command position, or spelled as
+    # part of a longer word — the pre-check must still let the real regex
+    # decide (and the regex must still say no).
+    "mkfs_is_just_a_directory_name/run.sh",
+    "echo 'talking about mkfs and diskpart here'",
+    "grep -r 'shutdown reboot poweroff halt' src/",
+    "echo init 0 is not a runlevel here",
+    "cat notes-about-durin-approvals-approve.txt",
+    "grep -rn 'durin approvals approve' docs/",
+    # A long run of the adversarial anchor BEFORE the real trigger appears —
+    # the case that used to cost the most backtracking per starting position.
+    "sudo -x " * 500 + "mkfs.ext4 /dev/sda",
+    "sudo -x " * 500 + "shutdown -h now",
+    "sudo -x " * 500 + "init 0",
+    "sudo -x " * 500 + "durin approvals approve req-1",
+    "rm " * 500 + "rm -rf /",
+    # The trigger literal absent entirely (the actual adversarial shape).
+    "sudo -x " * 500,
+    "rm " * 500,
+]
+
+_TRICKY_DENY_HISTORY_CASES = [
+    "echo 'history.jsonl is just a filename in this sentence'",
+    "cp " * 500 + "cp a.txt history.jsonl",
+    "mv " * 500 + "mv a.txt history.jsonl",
+    "tee " * 500 + "tee history.jsonl",
+    "dd " * 500 + "dd of=history.jsonl",
+    "sed " * 500 + "sed -i history.jsonl",
+    "cp " * 500,
+]
+
+_TRICKY_MEMORY_VAULT_CASES = [
+    "echo 'memory/ is just a path fragment in this sentence'",
+    "rm " * 500 + "rm -rf memory/people/ada.md",
+    "cp " * 500 + "cp a.txt memory/x.md",
+    "sed " * 500 + "sed -i memory/x.md",
+    "dd " * 500 + "dd of=memory/x.md",
+    "rm " * 500,
+]
+
+
+def test_hard_floor_precheck_never_disagrees_with_the_unfiltered_regex():
+    import re
+
+    from durin.agent.tools.shell import _HARD_FLOOR_PRECHECKS, _cheap_prefilter_ok
+
+    cases = [c.lower() for c in (FLOOR + NOT_FLOOR + APPROVALS_BYPASS + _TRICKY_HARD_FLOOR_CASES)]
+    for pattern, clauses in _HARD_FLOOR_PRECHECKS.items():
+        for case in cases:
+            allowed_through = _cheap_prefilter_ok(case, clauses)
+            really_matches = re.search(pattern, case) is not None
+            assert allowed_through or not really_matches, (
+                f"pre-check skipped a real hard-floor match: pattern={pattern!r} case={case!r}"
+            )
+
+
+def test_deny_precheck_never_disagrees_with_the_unfiltered_regex():
+    import re
+
+    from durin.agent.tools.shell import _DENY_PRECHECKS, _cheap_prefilter_ok
+
+    cases = [c.lower() for c in (FLOOR + NOT_FLOOR + _TRICKY_DENY_HISTORY_CASES)]
+    for pattern, clauses in _DENY_PRECHECKS.items():
+        for case in cases:
+            allowed_through = _cheap_prefilter_ok(case, clauses)
+            really_matches = re.search(pattern, case) is not None
+            assert allowed_through or not really_matches, (
+                f"pre-check skipped a real deny match: pattern={pattern!r} case={case!r}"
+            )
+
+
+def test_memory_vault_precheck_never_disagrees_with_the_unfiltered_scan():
+    """_guard_memory_mutation's own "memory/" gate (checked once, before the
+    per-pattern loop) must never skip a command any of the 7 vault patterns
+    would have matched."""
+    import re
+
+    from durin.agent.tools.shell import ExecTool as _ExecTool
+
+    cases = [c.lower() for c in (FLOOR + NOT_FLOOR + _TRICKY_MEMORY_VAULT_CASES)] + [
+        cmd.lower() for cmd, _blocked in [
+            ("sed -i 's/a/b/' memory/people/ada.md", True),
+            ("dd if=/dev/zero of=memory/x.md bs=1 count=1", True),
+            ("dd if=/dev/zero of=/tmp/out; ls memory/", False),
+        ]
+    ]
+    for case in cases:
+        gate_says_maybe = "memory/" in case
+        really_matches = any(
+            re.search(p, case) for p in _ExecTool._MEMORY_MUTATION_PATTERNS
+        )
+        assert gate_says_maybe or not really_matches, (
+            f"memory/ gate skipped a real vault match: case={case!r}"
+        )
+        # And the full guard's own answer must be unaffected either way.
+        assert (_ExecTool._guard_memory_mutation(case) is not None) == really_matches

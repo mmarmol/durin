@@ -29,7 +29,7 @@ from typing import Any
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.workflow import provenance, run_log
-from durin.workflow.artifacts import ARTIFACT_ROOT
+from durin.workflow.artifacts import ARTIFACT_ROOT, run_evidence_dir
 
 # A run_id is minted as ``uuid.uuid4().hex[:12]`` (see engine.py / run_workflow.py) —
 # lowercase hex. The shape check is intentionally a bit looser (hyphen allowed, 6+
@@ -451,7 +451,7 @@ class WorkflowRunsTool(Tool):
         return " ".join(bits)
 
     @staticmethod
-    def _artifact_lines(work_dir: Path) -> list[str]:
+    def _artifact_lines(work_dir: Path, run_id: str) -> list[str]:
         if not work_dir.is_dir():
             return ["  (work dir not found on disk)"]
 
@@ -482,15 +482,25 @@ class WorkflowRunsTool(Tool):
         if len(stamped) > _MAX_ARTIFACTS:
             out.append(f"    …and {len(stamped) - _MAX_ARTIFACTS} more")
 
+        # A keyed work_dir is shared by every run of the same (workflow,
+        # work_key): whatever this run wrote ad hoc (not a declared
+        # output_file) is preserved under its own runs/<run_id>/ subfolder
+        # (durin/workflow/artifacts.py's run_evidence_dir), so scanning THAT
+        # shows this run's own files instead of whichever run's write to the
+        # same filename happens to be on top of the shared folder right now.
+        # A run recorded before that subfolder existed has none — fall back
+        # to the flat layout so it still displays.
+        evidence_dir = run_evidence_dir(work_dir, run_id)
+        scan_dir = evidence_dir if evidence_dir.is_dir() else work_dir
         try:
-            all_files = sorted(p for p in work_dir.rglob("*") if p.is_file())
+            all_files = sorted(p for p in scan_dir.rglob("*") if p.is_file())
         except OSError:
             all_files = []
         prov_keys = set(prov.keys())
         unstamped = [
             rel for p in all_files
             if p.name != provenance.FILENAME
-            and (rel := str(p.relative_to(work_dir))) not in prov_keys
+            and (rel := str(p.relative_to(scan_dir))) not in prov_keys
         ]
         if unstamped:
             out.append(f"  unstamped files in work dir ({len(unstamped)}):")
@@ -530,7 +540,7 @@ class WorkflowRunsTool(Tool):
         if rec.get("work_key"):
             lines.append(f"  work key: {rec['work_key']}")
         lines.append(f"  work dir: {work_dir}")
-        lines.extend(self._artifact_lines(Path(work_dir)))
+        lines.extend(self._artifact_lines(Path(work_dir), run_id))
         return "\n".join(lines)
 
     @staticmethod

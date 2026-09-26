@@ -19,6 +19,7 @@ import difflib
 import json
 from typing import TYPE_CHECKING, Any
 
+from rich.markup import escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -446,7 +447,10 @@ class ToolCallBubble(Vertical):
         a = self._args if isinstance(self._args, dict) else {}
         if self._name == "approval":
             # The kind names what is being approved; the summary is in the body.
-            return str(a.get("kind") or "")
+            # Escaped like every detail value in _approval_renderable: this
+            # string reaches the header through markup=True, so a literal
+            # "[" in it must not be parsed as the start of a style tag.
+            return escape(str(a.get("kind") or ""))
         if self._name == "memory_prefetch":
             # The header reports how many memories came back, not the
             # query it searched for — the query is already visible in the
