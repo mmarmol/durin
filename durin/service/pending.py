@@ -214,7 +214,10 @@ def _automation_run_items(workspace: Path) -> list[PendingItem]:
 
     items: list[PendingItem] = []
     # Paused runs are exempt from the listing's cap, so a cap of one keeps
-    # every one of them and skips reading back the finished history.
+    # every one of them. The cap only trims what is returned: the listing
+    # still reads every retained run manifest, since a run's status lives
+    # only inside its file. Retention bounds that (``automations.keep_runs``
+    # finished runs per automation, plus the active ones).
     for run in run_log.list_all_runs(workspace, limit=1):
         if run.get("status") != "paused":
             continue
@@ -241,7 +244,10 @@ def _workflow_run_items(workspace: Path) -> list[PendingItem]:
     from durin.workflow import run_log
 
     items: list[PendingItem] = []
-    # needs_input runs are exempt from the listing's cap (see above).
+    # needs_input runs are exempt from the listing's cap. As above, the cap
+    # only trims what is returned: every retained manifest is read (a
+    # workflow keeps its recent finished runs plus every resumable one), and
+    # a waiting run's manifest once more for its questions.
     for run in run_log.list_all_runs(workspace, limit=1):
         if run.get("status") != "needs_input" or not run.get("needs_input_node"):
             continue

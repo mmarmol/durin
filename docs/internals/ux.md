@@ -491,7 +491,9 @@ A **Pending** entry heads the sidebar's section list, with a badge counting
 everything that waits on the person. The count comes from
 `GET /api/v1/pending`: the shell polls it on the same cadence as the other
 sidebar badges, and the page reports every read it makes, so resolving an item
-there updates the badge at once.
+there updates the badge at once. While the page is open, the shell's poll
+stands down and the page's own reads keep the badge current, so the list is
+read once per interval, not twice.
 
 The page (`PendingView`) lists the items grouped by source, in a fixed order:
 approval requests, skill imports, automation runs, workflow runs, memory

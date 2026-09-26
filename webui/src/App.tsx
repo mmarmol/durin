@@ -639,9 +639,12 @@ function Shell({
   }, [token]);
 
   // Poll the Pending list for the sidebar badge: everything that waits on the
-  // person, across sections. The Pending page reports its own reads too, so
-  // resolving an item there updates the badge at once.
+  // person, across sections. While the Pending page is open it polls the same
+  // list and reports every read to the badge (resolving an item there updates
+  // it at once), so this poll stands down rather than read the list twice.
+  const pendingOpen = view === "pending";
   useEffect(() => {
+    if (pendingOpen) return;
     let cancelled = false;
     const load = () => {
       listPending(token)
@@ -658,7 +661,7 @@ function Shell({
       cancelled = true;
       clearInterval(id);
     };
-  }, [token]);
+  }, [token, pendingOpen]);
 
   useEffect(() => {
     return client.onStatus((status) => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
@@ -588,5 +588,28 @@ describe("App layout", () => {
     await waitFor(() =>
       expect(within(pendingButton).queryByText(/^\d+$/)).not.toBeInTheDocument(),
     );
+  });
+
+  it("reads the Pending list once per poll while the Pending page is open", async () => {
+    // The page polls the list itself and reports the count to the badge, so
+    // the shell's badge poll stands down meanwhile.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<App />);
+      await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+      const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+      fireEvent.click(within(sidebar).getByRole("button", { name: /Pending/ }));
+      await screen.findByText("Nothing is waiting on you.");
+      const before = (listPending as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      const after = (listPending as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(after - before).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
