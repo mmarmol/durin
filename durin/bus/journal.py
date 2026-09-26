@@ -94,16 +94,22 @@ class InboundJournal:
 
     def drain(self, *, kind: str | None = None) -> list[InboundMessage]:
         """Read every journaled message tagged for ``kind`` (or carrying no
-        kind at all) that is still young enough to replay, and remove only
-        those lines — a line tagged for a DIFFERENT kind is left in the file
-        untouched, for that other process's own next drain. ``kind=None``
-        (the default) matches every entry regardless of its own tag, the
-        same as before this existed.
+        kind at all) that is still young enough to replay, and remove those
+        lines — plus every OTHER line past the age cutoff regardless of ITS
+        kind. A still-fresh line tagged for a DIFFERENT kind is the only
+        thing left in the file, untouched, for that other process's own
+        next drain. ``kind=None`` (the default) matches every entry
+        regardless of its own tag, the same as before this existed.
 
-        A message is replayed at most once: the lines this call takes are
-        removed before returning, even if replay itself is never attempted.
-        A line that does not parse is logged and dropped either way. Locked
-        against a concurrent append or drain on this same file.
+        The age cutoff applies to every line, not only the ones this call
+        would otherwise take: without that, a line belonging to a process
+        kind that never runs again (or a `kind=None` caller update that
+        left old entries behind) would be read and rewritten back on every
+        single drain, forever. A message is replayed at most once: the
+        lines this call takes are removed before returning, even if replay
+        itself is never attempted. A line that does not parse is logged and
+        dropped either way. Locked against a concurrent append or drain on
+        this same file.
         """
         with cross_process_lock(self.path):
             if not self.path.exists():
@@ -124,19 +130,31 @@ class InboundJournal:
                     logger.warning("inbound journal: skipping unreadable line ({}): {}", exc, stripped[:120])
                     continue
                 entry_kind = raw.pop(_KIND_KEY, None)
+                # Read the timestamp straight off the raw record (not via
+                # _from_record) so aging a line we may only be KEEPING, not
+                # taking, never requires it to satisfy the full InboundMessage
+                # shape — a kept line must stay exactly as untouched as its
+                # own next drain would find it, malformed-but-fresh included.
+                raw_ts = raw.get("timestamp")
+                try:
+                    entry_time = datetime.fromisoformat(raw_ts) if isinstance(raw_ts, str) else None
+                except ValueError:
+                    entry_time = None
+                if entry_time is not None and entry_time.timestamp() < cutoff:
+                    logger.info(
+                        "inbound journal: dropping a message from {} older than {}s "
+                        "(session {}, kind {})",
+                        entry_time.isoformat(timespec="minutes"), int(self.max_age_s),
+                        raw.get("session_key"), entry_kind,
+                    )
+                    continue
                 if kind is not None and entry_kind is not None and entry_kind != kind:
-                    kept_lines.append(stripped)   # another process's own entry — untouched
+                    kept_lines.append(stripped)   # another process's own, still-fresh entry
                     continue
                 try:
                     msg = _from_record(raw)
                 except (ValueError, TypeError) as exc:
                     logger.warning("inbound journal: skipping unreadable line ({}): {}", exc, stripped[:120])
-                    continue
-                if msg.timestamp.timestamp() < cutoff:
-                    logger.info(
-                        "inbound journal: dropping a message from {} older than {}s (session {})",
-                        msg.timestamp.isoformat(timespec="minutes"), int(self.max_age_s), msg.session_key,
-                    )
                     continue
                 messages.append(msg)
             if kept_lines:

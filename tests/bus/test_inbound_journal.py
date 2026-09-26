@@ -53,6 +53,32 @@ def test_drain_skips_messages_older_than_the_age_cap(tmp_path: Path) -> None:
     assert [m.content for m in journal.drain()] == ["fresh"]
 
 
+def test_a_stale_entry_of_another_kind_is_dropped_not_kept_forever(tmp_path: Path) -> None:
+    """A line belonging to a process kind that may never run again must not
+    be rewritten back into the file on every drain, forever: the same
+    max_age_s cutoff that applies to a TAKEN entry also applies to a KEPT
+    one. A "gateway" drain never takes a "tui"-tagged line, so under the bug
+    it was kept unconditionally, with no age check at all — checked here by
+    the file itself: a stale kept line must vanish, not be rewritten back."""
+    path = tmp_path / "j.jsonl"
+    journal = InboundJournal(path, max_age_s=3600)
+    stale_other_kind = _msg("stale-tui", timestamp=datetime.now() - timedelta(hours=2))
+    journal.append([stale_other_kind], kind="tui")
+
+    assert journal.drain(kind="gateway") == []   # not "gateway"'s to take
+    assert not path.exists()                     # aged out, not kept forever
+
+
+def test_a_fresh_entry_of_another_kind_still_survives_untouched(tmp_path: Path) -> None:
+    """The age cutoff on a kept line must not age out a merely-different-kind
+    line that is still young — only a genuinely stale one."""
+    journal = InboundJournal(tmp_path / "j.jsonl", max_age_s=3600)
+    journal.append([_msg("fresh-tui")], kind="tui")
+
+    assert journal.drain(kind="gateway") == []
+    assert [m.content for m in journal.drain(kind="tui")] == ["fresh-tui"]
+
+
 def test_drain_skips_malformed_lines_and_keeps_the_rest(tmp_path: Path) -> None:
     path = tmp_path / "j.jsonl"
     journal = InboundJournal(path)
