@@ -219,9 +219,11 @@ the same note.
     the detail: scan verdict, findings, command, every other detail key as
     a row, and the diff. Approve / Reject send an `approval_decision` socket
     frame (`request_id`, `approval_id`, `decision`) that never becomes a chat
-    message. The channel refuses a malformed id, an unknown record, and a
-    record whose `requested_by_session` is not one of the chats this
-    connection is attached to. Chats are keyed the way the loop keys turns,
+    message. The channel refuses a frame from a socket the dashboard session
+    did not open (one opened with the static token or with no token), a
+    malformed id, an unknown record, and a record whose
+    `requested_by_session` is not one of the chats this connection is
+    attached to. Chats are keyed the way the loop keys turns,
     so in unified mode they share one key. Otherwise `approval.decide`
     hands the verdict to the waiting turn. When that turn has stopped
     waiting, it runs the recorded request on the gateway with
@@ -256,10 +258,11 @@ the same note.
   In a webui chat the wait ends like a blocking question's: once the last
   webui tab has been closed for the grace window, the request stays pending
   (an exec request is closed as `expired`) and the turn continues. For an
-  approval that window starts when the last tab closes, whether or not an API
-  client is following the chat over SSE: an
-  API message never decides an approval, so such a watcher does not hold the
-  wait, and its attaching does not stop the window. It also starts when the
+  approval that window starts when the last dashboard tab closes, whether or
+  not an API client is following the chat over SSE or a socket opened with the
+  static token or no token is attached: neither can decide an approval, so
+  such a watcher does not hold the wait, and its attaching does not stop the
+  window. It also starts when the
   approval is asked in a chat no webui tab is watching (the asker's snapshot
   finds no tab attached); a tab that loads inside the window keeps the wait.
   The release checks what the turn waits on when it fires, so a question that

@@ -71,11 +71,15 @@ class StarletteConnectionAdapter:
     (default object identity is hashable and stable per connection).
     """
 
-    __slots__ = ("_ws", "_iter")
+    __slots__ = ("_ws", "_iter", "answers_approvals")
 
-    def __init__(self, ws: WebSocket) -> None:
+    def __init__(self, ws: WebSocket, *, answers_approvals: bool = False) -> None:
         self._ws = ws
         self._iter: Any = None
+        # True only for a socket the dashboard session opened: its Approve /
+        # Reject clicks decide approvals (see ``_answers_approvals`` in the
+        # websocket channel). Any other socket may chat, never approve.
+        self.answers_approvals = answers_approvals
 
     async def send_text(self, raw: str) -> None:
         # The channel treats ``ConnectionClosed`` as "this client is gone":
@@ -851,7 +855,8 @@ def build_gateway_http_app(
         for k in raw_query.keys():
             query[k] = raw_query.getlist(k)
 
-        if not channel._ws_auth_ok(query):
+        credential = channel._ws_auth(query)
+        if credential is None:
             await websocket.close(1008)
             return
 
@@ -863,7 +868,8 @@ def build_gateway_http_app(
 
         await websocket.accept()
 
-        adapter = StarletteConnectionAdapter(websocket)
+        adapter = StarletteConnectionAdapter(
+            websocket, answers_approvals=credential == "webui")
         try:
             await channel._run_connection(adapter, client_id)
         except WebSocketDisconnect:

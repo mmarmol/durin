@@ -296,10 +296,12 @@ def _is_valid_chat_id(value: Any) -> bool:
 def _answers_approvals(connection: Any) -> bool:
     """True for a watcher that can answer an approval the chat waits on.
 
-    A socket connection can (the webui's Approve / Reject). A watcher that
-    only reads the chat's frames declares ``answers_approvals = False``: the
-    API's SSE subscriber, whose client may answer a question with a plain
-    message but whose messages never decide an approval."""
+    A socket the dashboard session opened can (the webui's Approve / Reject).
+    A watcher that cannot declares ``answers_approvals = False``: a socket
+    opened with the static token or with no token, and the API's SSE
+    subscriber, whose client may answer a question with a plain message but
+    never decides an approval. Such a watcher's decision frame is refused, and
+    its presence does not keep an approval waiting."""
     return bool(getattr(connection, "answers_approvals", True))
 
 
@@ -1455,10 +1457,14 @@ class WebSocketChannel(BaseChannel):
             ("X-Content-Type-Options", "nosniff"),
         ]
 
-    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
-        """Return True if the WebSocket handshake is authorised.
+    def _ws_auth(self, query: dict[str, list[str]]) -> str | None:
+        """Which credential opened a WebSocket handshake; None when refused.
 
-        Called by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        ``"webui"``: a single-use token ``/webui/bootstrap`` minted — the
+        dashboard session, the one connection whose Approve / Reject decides
+        an approval. ``"static"``: the configured static token. ``"anonymous"``:
+        no valid token, allowed because none is required. Called by the
+        Starlette WebSocket endpoint (``chat_ws_endpoint`` in
         ``durin/api/asgi.py``).
         Side-effect: consumes a single-use issued token when one is accepted.
         """
@@ -1467,19 +1473,23 @@ class WebSocketChannel(BaseChannel):
 
         if static_token:
             if supplied and hmac.compare_digest(supplied, static_token):
-                return True
+                return "static"
             if supplied and self._take_issued_token_if_valid(supplied):
-                return True
-            return False
+                return "webui"
+            return None
 
         if self.config.websocket_requires_token:
             if supplied and self._take_issued_token_if_valid(supplied):
-                return True
-            return False
+                return "webui"
+            return None
 
-        if supplied:
-            self._take_issued_token_if_valid(supplied)
-        return True
+        if supplied and self._take_issued_token_if_valid(supplied):
+            return "webui"
+        return "anonymous"
+
+    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
+        """Return True if the WebSocket handshake is authorised (``_ws_auth``)."""
+        return self._ws_auth(query) is not None
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging
@@ -2027,8 +2037,10 @@ class WebSocketChannel(BaseChannel):
         """Resolve an approval from an Approve / Reject click.
 
         The verdict never becomes a chat message, so the model can neither see
-        nor forge it. The record must belong to a chat this connection is
-        attached to. ``approval.decide`` hands the verdict to the turn still
+        nor forge it. Only a connection the dashboard session opened may send
+        one (``_answers_approvals``): a socket opened with the static token or
+        with no token is refused. The record must belong to a chat this
+        connection is attached to. ``approval.decide`` hands the verdict to the turn still
         waiting on it. When that turn stopped waiting (the click came after
         its timeout), ``decide`` runs the recorded request here with the
         gateway's live handles, except an exec request, which only its own
@@ -2056,6 +2068,11 @@ class WebSocketChannel(BaseChannel):
                 status=status, message=message,
             )
 
+        if not _answers_approvals(connection):
+            await _reply("refused", (
+                "Deciding an approval takes a person's dashboard session; this "
+                "connection was not opened with one."))
+            return
         if not _APPROVAL_ID_RE.match(approval_id):
             await _reply("refused", "Invalid approval id.")
             return

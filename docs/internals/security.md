@@ -131,7 +131,13 @@ Reject click travels on the webui socket, and a token issued for the API (a
 configured static `token` (the operator's own secret) or the single-use token
 `/webui/bootstrap` just minted. With `websocket_requires_token` off and no static `token`,
 the handshake takes every connection that reaches the socket, token or not —
-the operator's choice, which no API token changes. A `chat:write`
+the operator's choice, which no API token changes. Only a socket opened with a
+bootstrap-minted token — the dashboard session — decides an approval: the
+handshake records which credential opened the connection (`_ws_auth`), and an
+`approval_decision` frame on a socket opened with the static token or with no
+token is refused (`refused`, the record left as it was). Such a socket may
+still chat, and it does not keep an approval waiting when the dashboard tabs
+have left. A `chat:write`
 token may hold a conversation in the dashboard's sessions, but it is a
 program, and it must not carry the person's authority to install or rewrite
 executable state. The API-input rule narrows only approval, not answering: a
