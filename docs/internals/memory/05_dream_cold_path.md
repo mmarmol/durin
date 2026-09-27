@@ -469,12 +469,12 @@ threaded through; it is `None` when the vector index is unavailable.
    told to read the source document of a thin page (a sentence or two, no
    relations) before deciding, and to answer `unclear` with low confidence
    rather than guess when the evidence is still insufficient. Its guide draws
-   the merge line on facts, not names — `same` only when every fact on each
-   page belongs to the one thing, `related` when one page carries a fact, scope
-   or abstraction the other does not share — and types a `related` edge by what
-   links the two (is-a, part, nested data, usage or implementation) instead of
-   defaulting to `specialization_of`; `06_prompts_and_instructions.md` §5.4
-   has the rules.
+   the merge line on facts, not descriptive names — `same` only when every
+   fact on each page belongs to the one thing, `related` when one page carries
+   a fact, scope or abstraction the other does not share — and types a
+   `related` edge by what links the two (is-a, part, nested data, usage or
+   implementation) instead of defaulting to `specialization_of`;
+   `06_prompts_and_instructions.md` §5.4 has the rules.
    The ceiling always ends in an answer: when the agent spends every iteration
    on tools (its final text is then the runner's stop message, not a verdict)
    or answers without the envelope, the judge spends **one more call with no
