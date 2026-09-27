@@ -25,9 +25,9 @@ Design notes:
   (``===VERDICT===`` / ``===CONFIDENCE===`` / ``===REASONING===`` /
   ``===END===``). Keeps the parser surface consistent.
 - **Retry on parse failure**: up to ``max_retries`` (default 2)
-  attempts. Each retry re-sends the same prompt with no feedback —
-  parse failures are usually transient (e.g. the model wrapped the
-  output in extra prose).
+  attempts. Each retry appends what could not be parsed and the exact
+  envelope to use, since most parse failures are format drift the model
+  corrects when told (e.g. it wrapped the output in extra prose).
 - **Always succeeds OR raises**: the function returns a populated
   :class:`JudgeResult` or raises :class:`JudgeError`. Callers should
   catch and treat a failure as "skip this candidate".

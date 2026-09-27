@@ -455,10 +455,26 @@ threaded through; it is `None` when the vector index is unavailable.
    non-merge resolution with confidence in `[escalate_floor, resolve_threshold)`
    — is handed to a
    **bounded sub-agent** (`durin/memory/tier2_judge.py`). The sub-agent
-   (`escalate_judge`) spins up an `AgentRunner` with four read-only tools —
-   `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
-   `memory_search` — and a fixed iteration ceiling. It investigates both entities
-   in depth and returns the same `JudgeResult` envelope as the Tier 1 judge.
+   (`escalate_judge`) spins up an `AgentRunner` with read-only tools —
+   `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`,
+   `memory_source_document` and `memory_search` — and a fixed iteration ceiling.
+   It investigates both entities in depth and returns the same `JudgeResult`
+   envelope as the Tier 1 judge. Most pages the document passes seed from the
+   Library are one-sentence stubs whose facts live in the document they were
+   extracted from, so `memory_source_document` hands the sub-agent that
+   document: for each reference a page cites (its `derived_from` and
+   `[[references/…]]` source refs), a bounded excerpt around the places the
+   document names the entity, or its opening when it names it nowhere —
+   reading only files that resolve inside `memory/references/`. The sub-agent is
+   told to read the source document of a thin page (a sentence or two, no
+   relations) before deciding, and to answer `unclear` with low confidence
+   rather than guess when the evidence is still insufficient. Its guide draws
+   the merge line on facts, not descriptive names — `same` only when every
+   fact on each page belongs to the one thing, `related` when one page carries
+   a fact, scope or abstraction the other does not share — and types a
+   `related` edge by what links the two (is-a, part, nested data, usage or
+   implementation) instead of defaulting to `specialization_of`;
+   `06_prompts_and_instructions.md` §5.4 has the rules.
    The ceiling always ends in an answer: when the agent spends every iteration
    on tools (its final text is then the runner's stop message, not a verdict)
    or answers without the envelope, the judge spends **one more call with no
@@ -565,7 +581,12 @@ aliases, attributes, relations, body — deliberately excluding provenance,
 `derived_from`, and timestamps, so source accrual does not reopen a settled
 pair) plus the judge identity (prompt-template hash + model). A cache hit
 skips the pair with reason `cached_verdict`; a change to either page's
-content, the template, or the model re-judges. Outcomes without a settled
+content, the template, or the model re-judges. The template is the Tier 1
+judge's (`absorb_judge.md`): the Tier 2 judge's prompts and tools are not part
+of the identity, so a change to them re-judges nothing by itself — it reaches
+the pairs escalated once their recheck cooldown expires and the Inbox through
+`durin memory rereview`, while a pair the Tier 2 judge already settled stays
+settled until one of its pages changes. Outcomes without a settled
 verdict — an unparseable reply (cached as `error`, skipped as `cached_error`),
 an `unclear`, a `same` below the merge threshold, an escalated pair — are
 remembered with an expiry `auto_absorb.recheck_days` ahead and skipped as
@@ -792,7 +813,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
 | `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `related` / `unclear` + confidence and an optional proposed resolution. |
-| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair, then forces one tool-free final-answer call when the investigation ends without the envelope; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
+| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with read-only tools (entity page, lineage, source conversations, source documents, search) to investigate a borderline pair, then forces one tool-free final-answer call when the investigation ends without the envelope; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
 | `default_llm_invoke` / `LLMResponse` | `durin/memory/llm_invoke.py` | The one-prompt invoke every pass uses (resolves `agents.aux_models.memory`, runs the provider's retry policy). Its reply carries the answer as `text` — and as `content`, the name the provider layer's own response uses — plus token counts and `finish_reason`; `"error"` means the text is the provider's error message, not an answer. A pass that takes its own `llm_invoke` must accept this shape. |
 | `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs awaiting a human decision, with the judge's `proposal` and `source`. `remove_flagged` is called after the pair is resolved so it no longer appears in the Inbox. |
 | `rekey_ref_in_stores` / `read_tombstones` | `durin/memory/refine_dream.py` | Move tombstones and flagged pairs to a new key after a rename or merge (dropping verdict-cache entries for the old key); list the user's kept-separate pairs. |

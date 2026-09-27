@@ -1,6 +1,6 @@
 """Tier-2 merge judge: a bounded sub-agent that investigates a borderline pair
-with the read-entity / lineage / source-session tools and returns the same
-verdict envelope as the cheap judge — including the proposed resolution
+with the read-entity / lineage / source-session / source-document tools and
+returns the same verdict envelope as the cheap judge — including the proposed resolution
 (survivor, clearer keys, alias ownership, the edge between related pages).
 
 ``user_kept_separate=True`` is the re-review of a pair the user already
@@ -28,27 +28,66 @@ _ENVELOPE = (
 )
 
 _GUIDE = (
-    "Verdicts: same = one real-world entity; related = two distinct entities "
-    "where one is a part, version, edition, instance or specialization of the "
-    "other (merging them would lose that distinction); different = unrelated "
-    "homonyms or distinct things; unclear = not enough evidence.\n"
+    "Verdicts:\n"
+    "- same: both pages describe one real thing, and every fact on each page "
+    "belongs to that one thing;\n"
+    "- related: one page carries a fact, scope or abstraction the other does "
+    "not share, so the two are distinct things — a part, a specialization, an "
+    "instance, a configuration, or a pattern and its implementation; merging "
+    "them would lose or misattribute that fact;\n"
+    "- different: homonyms, such as the same class name in two unrelated repos "
+    "or projects, or otherwise unconnected things;\n"
+    "- unclear: not enough evidence.\n"
+    "Before answering same, check each page for a fact that would be false or "
+    "misplaced on the merged page — a capability, role or scope that belongs "
+    "to only one of the two. If there is one, the pages are related, not the "
+    "same. A fact one page merely lacks does not count: two descriptions of "
+    "one thing, written from different sources, rarely list the same facts. "
+    "Decide on the facts, not on descriptive names or on the kind of "
+    "document each page came from. An established name is a fact, though: a "
+    "page named for a product and one named for a sub-service of it are "
+    "related, even where a document uses the product's name loosely for the "
+    "sub-service.\n"
     "Resolution (only what the evidence supports): survivor (same only) = the "
     "ref with the clearest, most canonical key; renames = a clearer slug "
     "(lowercase, digits, '-') or name when a key is cryptic or ambiguous — "
     "never change the type, and on same only the survivor may be renamed; "
     "alias_moves = an alias that belongs to only ONE of them (keep_on that "
     "ref) or is junk such as OCR noise (keep_on none) — legitimate homonyms "
-    "(a first name two people share) stay on both; relation (related only) "
-    "points from the more specific page to the more general one.\n"
+    "(a first name two people share) stay on both; relation (related only) = "
+    "the edge between them, typed as below.\n"
+    "Relation type — tell is-a apart from composition and from usage:\n"
+    "- is-a: specialization_of / instance_of, only when the specific page IS a "
+    "kind or an instance of the general one (electric-car specialization_of car);\n"
+    "- parts: part_of / component_of / feature_of / subsystem_of "
+    "(spell-checker feature_of text-editor);\n"
+    "- data nested inside other data: embeds / contains (bounce-notice embeds "
+    "original-message — a record that carries another is not a kind of it);\n"
+    "- usage and implementation: uses / depends_on / implements (photo-app uses "
+    "image-recognition — a product that applies a technology is not a kind of it);\n"
+    "- other links where they fit: configures, runs_on (nginx-config configures "
+    "nginx, build-job runs_on ci-server).\n"
+    "Prefer a label the graph already uses — part_of, uses, component_of, "
+    "used_by, integrates_with, feature_of, implements, subsystem_of, contains, "
+    "depends_on, provides — and do not coin a synonym when one of them fits. The "
+    "edge reads '<from> <type> <to>' and points from the more specific page or "
+    "the part to the more general page or the whole (uses, not used_by); for "
+    "nested data, the record that carries the other is the more specific page "
+    "(<outer> embeds <inner>).\n"
 )
 
 _TASK = (
     "Decide what to do with these two colliding memory entities.\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigate with your tools: read each entity in full (memory_read_entity), "
-    "their git lineage (memory_entity_lineage), and the source conversations "
-    "(memory_source_session). Weigh consistent facts and shared specifics; be "
-    "wary of homonyms.\n{extra}" + _GUIDE + "Then answer ONLY in this envelope:\n" + _ENVELOPE
+    "their git lineage (memory_entity_lineage), the source conversations "
+    "(memory_source_session) and the reference documents they were extracted "
+    "from (memory_source_document). A thin page — one or two sentences, no "
+    "relations — cannot tell two names for one thing from two distinct things "
+    "on its own: read its source document before you decide. Weigh consistent "
+    "facts and shared specifics; be wary of homonyms. If the evidence is still "
+    "insufficient, answer unclear with low confidence rather than guess.\n"
+    "{extra}" + _GUIDE + "Then answer ONLY in this envelope:\n" + _ENVELOPE
 )
 
 _SEPARATED_NOTE = (
@@ -66,7 +105,8 @@ _SEPARATED_NOTE = (
 # for the verdict with no tools on offer, so the budget always ends in an answer.
 _FINAL_BRIEF = (
     "Your investigation budget for this pair is spent. Decide NOW from the notes "
-    "below — no more tools are available.\n{extra}" + _GUIDE
+    "below — no more tools are available. If they do not settle it, answer "
+    "unclear with low confidence rather than guess.\n{extra}" + _GUIDE
     + "Answer ONLY in this envelope:\n" + _ENVELOPE + "\n\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigation notes (→ a tool call, ← what it returned):\n{notes}"
@@ -130,6 +170,7 @@ def _build_tools(workspace: Path) -> Any:
     from durin.agent.tools.memory_lineage_tools import (
         MemoryEntityLineageTool,
         MemoryReadEntityTool,
+        MemorySourceDocumentTool,
         MemorySourceSessionTool,
     )
     from durin.agent.tools.memory_search import MemorySearchTool
@@ -138,6 +179,7 @@ def _build_tools(workspace: Path) -> Any:
     t.register(MemoryReadEntityTool(workspace))
     t.register(MemoryEntityLineageTool(workspace))
     t.register(MemorySourceSessionTool(workspace))
+    t.register(MemorySourceDocumentTool(workspace))
     try:
         t.register(MemorySearchTool(workspace=workspace))
     except Exception:  # noqa: BLE001 — search optional

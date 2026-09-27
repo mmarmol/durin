@@ -562,6 +562,40 @@ def test_refine_always_on_flip_keeps_cached_verdict(tmp_path):
     assert counter["n"] == 1, "an always_on flip must not reopen a settled pair"
 
 
+def test_refine_judge_identity_is_the_cheap_judge_template_and_the_model(tmp_path, monkeypatch):
+    """Settled verdicts are cached under the judge identity: the cheap judge's
+    template and the model. A new identity re-judges every cached pair — on a
+    large workspace thousands of paid calls, night after night — so the
+    investigating Tier-2 judge's prompts and tools are not part of it:
+    changing them keeps the cache, while a template change re-judges."""
+    import json
+
+    from durin.memory import absorb_judge, tier2_judge
+
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter), model="m1")
+    cache = json.loads((tmp_path / "memory" / ".refine_verdicts.json").read_text(encoding="utf-8"))
+    assert {e["judge"] for e in cache.values()} == {
+        f"{absorb_judge.judge_template_fingerprint()}|m1"}
+
+    monkeypatch.setattr(tier2_judge, "_GUIDE", "another guide\n")
+    monkeypatch.setattr(tier2_judge, "_TASK", "another task {a} {b} {extra}")
+    monkeypatch.setattr(tier2_judge, "_FINAL_BRIEF", "another brief {a} {b} {extra} {notes}")
+    monkeypatch.setattr(tier2_judge, "_build_tools", lambda workspace: None)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter), model="m1")
+    assert counter["n"] == 1, "a Tier-2 judge change must not re-judge cached pairs"
+    assert [s["reason"] for s in out["skipped"]] == ["cached_verdict"]
+
+    original = absorb_judge._TEMPLATE_PATH.read_text(encoding="utf-8")
+    block = absorb_judge._load_template()
+    edited = tmp_path / "absorb_judge.md"
+    edited.write_text(original.replace(block, block + "\nOne more instruction."), encoding="utf-8")
+    monkeypatch.setattr(absorb_judge, "_TEMPLATE_PATH", edited)
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter), model="m1")
+    assert counter["n"] == 2, "a change to the cheap judge's template re-judges"
+
+
 def test_refine_tier2_failure_is_flagged_remembered_and_reported(tmp_path, monkeypatch):
     """Tier-1 same@75 → escalate → the sub-agent raises. Live, the pair then
     left no trace at all — not flagged, not remembered, not logged — and was

@@ -12,7 +12,8 @@ operations. The write and retrieval tools are live: `memory_search`,
 The **read-only inspection tools** — `memory_read_entity`,
 `memory_entity_lineage`, and `memory_source_session` — are registered in the
 same auto-discovery path and available to the main agent as well as to the
-Dream Tier 2 sub-agent.
+Dream Tier 2 sub-agent. One more inspection tool, `memory_source_document`, is
+registered only for the Tier 2 sub-agent (see below).
 
 These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
@@ -635,6 +636,47 @@ produced it.
 Returns an empty `sources` list when no provenance source refs are recorded or
 the referenced session files are no longer present.
 
+### `memory_source_document`
+
+**File:** `durin/agent/tools/memory_lineage_tools.py`
+
+Reads the **reference documents** an entity was extracted from: the
+`reference:<slug>` entries in its `derived_from` and every
+`[[references/<slug>.md]]` source ref on the page. The pages the document
+passes seed from the Library are often a sentence long; the document holds the
+facts that tell two such pages apart. For each document the result carries an
+excerpt around the places the document names the entity (its name, an alias,
+or its slug read as words), in document order, or the document's opening when
+it names the entity nowhere.
+
+Registered only by the Dream Tier 2 judge (`tier2_judge._build_tools`). Its
+`dream` scope keeps it off the auto-discovered agent surfaces, where
+`memory_drill` already reads a whole document by its `reference:` URI.
+
+**Parameters:** `ref` (required) — entity ref in `<type>:<slug>` form.
+
+**Return:**
+
+```json
+{
+  "ref": "artifact:order-error-schema",
+  "documents": [
+    {"doc": "reference:order-service-log-codes", "title": "Order service log codes",
+     "chars": 12480, "matched": ["OrderError Structure"],
+     "excerpt": "…### OrderError Structure\nThe error payload embeds the original order event…"}
+  ]
+}
+```
+
+The result is bounded: a few thousand characters per document, and a total
+that stays under the Tier 2 judge's per-result ceiling however many documents
+a page cites (`documents_not_shown` counts the ones a call leaves out). It is
+read-only and confined to the Library: a citation that resolves outside
+`memory/references/` — a `..` climb, an absolute path, a symlink out — is
+refused with an `error` entry, as is a document that no longer exists, and the
+page's other documents are still read. A page that cites no document returns
+an empty `documents` list; a missing page returns `{"error": "no entity <ref>"}`.
+
 ---
 
 ## Key types and entry points
@@ -649,6 +691,7 @@ the referenced session files are no longer present.
 | `MemoryReadEntityTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_read_entity` tool. Returns `EntityPage.to_markdown()` for a single ref — complete page, no truncation. |
 | `MemoryEntityLineageTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_entity_lineage` tool. Walks the dulwich git log for an entity page; returns up to 20 commits with SHA, timestamp, author, message. |
 | `MemorySourceSessionTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_session` tool. Collects `source_ref` / `derived_from` provenance entries from an entity page and reads the matching session turns. |
+| `MemorySourceDocumentTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_document` tool, registered only for the Dream Tier 2 judge. Bounded excerpts, around the entity's name and aliases, of the reference documents an entity page cites; reads only files inside `memory/references/`. |
 | `ToolLoader` | `durin/agent/tools/loader.py` | Discovers `Tool` subclasses, calls `enabled(ctx)` + `create(ctx)`, registers into `ToolRegistry`. |
 | `run_search_pipeline` | `durin/memory/search_pipeline.py` | Full search pipeline entry point called by `memory_search`. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass carrying one result row into the renderer. |
@@ -781,6 +824,15 @@ the LLM (and the Dream Tier 2 sub-agent) ask a focused question ("what is this
 entity's history?") without knowing the storage layout. They are general-purpose
 and registered in the main auto-discovery path — not Dream-internal — so the
 main agent can use them for any conversation involving entity provenance.
+
+**`memory_source_document` stays with the Tier 2 judge.** It answers the one
+question the investigating judge must ask of a thin page — what does the
+document this page came from say about it? — with an excerpt centred on the
+entity, bounded and confined to the Library. `memory_drill` would return a long
+document from its head (the runner keeps the head of an oversized result, so the
+mention can fall past the cut) and resolves any path it is given. The main agent
+reads documents with `memory_drill` and `memory_search(scope="library")`, and
+keeping this tool off its surface spares every turn another tool schema.
 
 **Tool descriptions are canonical in code, not in docs.** The exact text the LLM
 reads lives in each tool's `_PARAMETERS["description"]` and is delegated to the

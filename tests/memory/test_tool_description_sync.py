@@ -27,6 +27,7 @@ from durin.agent.tools.memory_ingest import MemoryIngestTool
 from durin.agent.tools.memory_lineage_tools import (
     MemoryEntityLineageTool,
     MemoryReadEntityTool,
+    MemorySourceDocumentTool,
     MemorySourceSessionTool,
 )
 from durin.agent.tools.memory_search import MemorySearchTool
@@ -158,6 +159,14 @@ def test_memory_source_session_description_matches_doc(doc_text: str) -> None:
     actual = _tool_description(MemorySourceSessionTool)
     assert _normalise(actual) == _normalise(expected), (
         "memory_source_session `.description` property drifted from doc 06 §3.8."
+    )
+
+
+def test_memory_source_document_description_matches_doc(doc_text: str) -> None:
+    expected = _extract_section_block(doc_text, "### 3.9 `memory_source_document`")
+    actual = _tool_description(MemorySourceDocumentTool)
+    assert _normalise(actual) == _normalise(expected), (
+        "memory_source_document `.description` property drifted from doc 06 §3.9."
     )
 
 
