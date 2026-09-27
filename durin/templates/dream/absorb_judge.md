@@ -1,97 +1,113 @@
-# Absorb judge prompt — v2
+# Absorb judge prompt — v4
 
-> LLM-judge para decidir qué hacer con DOS entity pages que colisionan
-> (comparten un alias o están muy cerca en embeddings). Usado por el refine
-> pass `durin/memory/refine_dream.py::run_refine`.
+> LLM judge deciding what to do with TWO entity pages that collide (they
+> share an alias, or are very close in embeddings). Used by the refine pass
+> `durin/memory/refine_dream.py::run_refine`.
 >
-> Diseñado adversarial: el alias compartido es NECESARIO y NO suficiente. El
-> judge defaultea a "different" cuando la evidencia de contenido es débil.
-> Incluye timestamps en cada página para mitigar self-consistency bias cuando
+> Designed adversarially: the shared alias is NECESSARY and NOT sufficient.
+> The judge defaults to "different" when content evidence is weak. Includes
+> timestamps on each page to mitigate self-consistency bias when
 > `judge_model == dream_model`.
 >
-> v2: además del veredicto, el judge propone una **resolución** — qué página
-> sobrevive a un merge, claves más claras, a quién pertenece un alias en
-> disputa, y la relación tipada entre páginas relacionadas. Veredicto nuevo
-> `related`: identidades distintas donde una es parte, versión o
-> especialización de la otra.
+> v2: besides the verdict, the judge proposes a **resolution** — which page
+> survives a merge, clearer keys, who owns a contested alias, and the typed
+> relation between related pages. New verdict `related`: distinct identities
+> where one is a part, version or specialization of the other.
 >
-> Output esperado: `===VERDICT===` (one of `same` / `different` / `related` /
-> `unclear`), `===CONFIDENCE===` (entero 0-100), `===REASONING===` (1-3
-> oraciones), `===RESOLUTION===` (objeto JSON, `{}` si no hay nada que
-> proponer), terminado por `===END===`.
+> v3: adds `{relation_guide}` — the rule for telling "same" apart from
+> "related", and the relation-type guide (is-a vs. composition vs. usage),
+> shared word for word with the Tier-2 judge (`pair_resolution.py`). That is
+> why `judge_template_fingerprint()` also hashes that text: changing it
+> re-judges the cached pairs just like a template change does.
 >
-> Variables a sustituir:
-> - `{shared_aliases}` — lista de alias que comparten ambos refs
+> v4: the template itself is now in English (it was Spanish through v3) —
+> project convention is English code and docs, and this same change already
+> re-judges the verdict cache once (the fingerprint now covers
+> `{relation_guide}`), so translating now costs nothing extra. Meaning,
+> placeholders and the envelope are unchanged; item 2's `relation` field no
+> longer lists its own example labels and instead defers to
+> `{relation_guide}` above it.
+>
+> Expected output: `===VERDICT===` (one of `same` / `different` / `related` /
+> `unclear`), `===CONFIDENCE===` (integer 0-100), `===REASONING===` (1-3
+> sentences), `===RESOLUTION===` (JSON object, `{}` when there is nothing to
+> propose), ending with `===END===`.
+>
+> Variables to substitute:
+> - `{shared_aliases}` — list of aliases both refs share
 > - `{ref_a}`, `{ref_b}` — entity refs (e.g. `person:marcelo`)
-> - `{page_a_block}`, `{page_b_block}` — cada uno con header de
->   metadatos temporales + body del page
+> - `{page_a_block}`, `{page_b_block}` — each with a temporal-metadata
+>   header plus the page's body
+> - `{relation_guide}` — the relation guide shared with the Tier-2 judge,
+>   injected verbatim at render time
 
 ---
 
 ## Template
 
 ```
-Eres durin, evaluando qué hacer con DOS páginas de entidad que colisionan.
+You are durin, evaluating what to do with TWO entity pages that collide.
 
-IMPORTANTE: ambas páginas comparten al menos un alias ("{shared_aliases}") o están
-muy cerca semánticamente. Esto es NECESARIO pero NO suficiente para fusionar:
-- Dos personas pueden llamarse "Marcelo".
-- Dos proyectos pueden compartir un acrónimo.
-- Un alias casual ("admin", "user") puede aparecer en entidades no relacionadas.
+IMPORTANT: both pages share at least one alias ("{shared_aliases}") or are
+very close semantically. This is NECESSARY but NOT sufficient to merge:
+- Two people can both be named "Marcelo".
+- Two projects can share an acronym.
+- A casual alias ("admin", "user") can appear on unrelated entities.
 
-Default a "different" cuando la evidencia de contenido es débil. La penalización
-por un falso positivo (merge incorrecto) es alta — la información se conserva
-en archive/ pero el slug se mueve y la búsqueda semántica cambia.
+Default to "different" when content evidence is weak. The penalty for a
+false positive (an incorrect merge) is high — the information is preserved
+under archive/, but the slug moves and semantic search is affected.
 
-## Página A: {ref_a}
+## Page A: {ref_a}
 
 {page_a_block}
 
-## Página B: {ref_b}
+## Page B: {ref_b}
 
 {page_b_block}
 
-## Tu tarea
+## Your task
 
-1) Decide la relación entre A y B, basándote en CONTENIDO (no solo alias):
+1) Decide the relation between A and B, based on CONTENT (not just alias):
 
-- same — describen la MISMA entidad real. Señales fuertes (cualquiera basta):
-  identifiers que coinciden literalmente (email, github, slack, jira, phone);
-  detalles biográficos / factuales consistentes; una página menciona a la otra
-  como sí misma.
-- related — son entidades DISTINTAS pero una es parte, versión, edición,
-  instancia o especialización de la otra (una edición y el juego al que
-  pertenece; una regla específica y la general que la contiene). No es "same":
-  fusionarlas perdería la distinción.
-- different — entidades distintas sin esa relación estructural. Señales:
-  contradicciones de hecho; contextos desconectados; timestamps de períodos
-  no superpuestos; solo homonimia.
-- unclear — la evidencia no alcanza para decidir.
+- same — they describe the SAME real entity. Strong signals (any one is
+  enough): identifiers that match literally (email, github, slack, jira,
+  phone); consistent biographical or factual detail; one page refers to the
+  other as itself.
+- related — they are DISTINCT entities but one is a part, version, edition,
+  instance or specialization of the other (an edition and the game it
+  belongs to; a specific rule and the general one that contains it). Not
+  "same": merging them would lose the distinction.
+- different — distinct entities with no such structural relation. Signals:
+  factual contradictions; disconnected contexts; non-overlapping time
+  periods; mere homonymy.
+- unclear — the evidence is not enough to decide.
 
-2) Propone la resolución (todo opcional; solo lo que el contenido justifique):
+{relation_guide}
+2) Propose the resolution (all optional; only what the content justifies):
 
-- survivor (solo si same): el ref cuya clave es la más clara y canónica.
-- renames: una clave (slug) o nombre más claro cuando la actual es críptica o
-  ambigua ("5e" → "dnd-5e"). Slug en minúsculas, dígitos y guiones; nunca
-  cambies el tipo. Si same, solo puede renombrarse el survivor.
-- alias_moves: para un alias que en realidad pertenece a UNA sola de las dos
-  (keep_on: ese ref) o que es basura — ruido de OCR, fragmentos, variantes
-  rotas — (keep_on: "none"). Los homónimos legítimos (un nombre de pila
-  compartido por dos personas) se quedan en ambas: no los muevas.
-- relation (solo si related): {{"from": <el más específico>, "type": <etiqueta
-  en snake_case: edition_of, part_of, instance_of, specializes, …>,
-  "to": <el más general>}}.
+- survivor (same only): the ref whose key is the clearest and most
+  canonical.
+- renames: a clearer slug or name when the current one is cryptic or
+  ambiguous ("5e" → "dnd-5e"). Slug in lowercase, digits and hyphens; never
+  change the type. On same, only the survivor may be renamed.
+- alias_moves: for an alias that actually belongs to only ONE of the two
+  (keep_on: that ref), or that is junk — OCR noise, fragments, broken
+  variants — (keep_on: "none"). Legitimate homonyms (a first name two
+  people share) stay on both: do not move them.
+- relation (related only): {{"from": <the more specific one>, "type": <see
+  the relation-type guide above>, "to": <the more general one>}}.
 
-Output exacto en este formato (sin texto antes ni después):
+Answer in exactly this format (no text before or after):
 
 ===VERDICT===
 same | different | related | unclear
 ===CONFIDENCE===
-<entero 0-100 — qué tan seguro estás de tu verdict>
+<integer 0-100 — how sure you are of your verdict>
 ===REASONING===
-<1-3 oraciones cortas explicando la decisión y cada operación propuesta. Citá señales concretas vistas.>
+<1-3 short sentences explaining the decision and each proposed operation. Cite concrete signals seen.>
 ===RESOLUTION===
-{{"survivor": "<ref>", "renames": {{"<ref>": {{"slug": "<slug>", "name": "<nombre>"}}}}, "alias_moves": [{{"alias": "<alias>", "keep_on": "<ref>|both|none"}}], "relation": {{"from": "<ref>", "type": "<tipo>", "to": "<ref>"}}}}
-(omití las claves que no apliquen; {{}} si no propones nada)
+{{"survivor": "<ref>", "renames": {{"<ref>": {{"slug": "<slug>", "name": "<name>"}}}}, "alias_moves": [{{"alias": "<alias>", "keep_on": "<ref>|both|none"}}], "relation": {{"from": "<ref>", "type": "<type>", "to": "<ref>"}}}}
+(omit keys that do not apply; {{}} if you propose nothing)
 ===END===
 ```

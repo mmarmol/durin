@@ -582,8 +582,15 @@ aliases, attributes, relations, body — deliberately excluding provenance,
 pair) plus the judge identity (prompt-template hash + model). A cache hit
 skips the pair with reason `cached_verdict`; a change to either page's
 content, the template, or the model re-judges. The template is the Tier 1
-judge's (`absorb_judge.md`): the Tier 2 judge's prompts and tools are not part
-of the identity, so a change to them re-judges nothing by itself — it reaches
+judge's (`absorb_judge.md`), and its hash (`judge_template_fingerprint`)
+covers the rendered `{relation_guide}` placeholder too, not just the file on
+disk: the merge-versus-relate rule and the relation-type guide it injects
+(`pair_resolution.MERGE_VS_RELATE_RULE` / `RELATION_TYPE_GUIDE`) are the same
+constants the Tier 2 judge's guide is built from, so editing them re-judges
+the cache exactly like a template edit, even though the constants themselves
+live in `pair_resolution.py`, not in `absorb_judge.md`. The rest of the
+Tier 2 judge's prompt — its task wrapper, investigation tools and envelope —
+is not part of the identity, so a change to them re-judges nothing by itself — it reaches
 the pairs escalated once their recheck cooldown expires and the Inbox through
 `durin memory rereview`, while a pair the Tier 2 judge already settled stays
 settled until one of its pages changes. Outcomes without a settled
