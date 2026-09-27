@@ -560,6 +560,16 @@ forwarded to `execute` and on to the engine unchanged — see `workflow.md`'s
 reuse-gate entrances for what it does and why a plain launch with no key
 never gets a stable folder to reuse against.
 
+**`POST /api/v1/workflows/{name}/runs/{run_id}/cancel`** (scope
+`workflows:write`, same as the run/launch routes above,
+`WorkflowsService.cancel_run`) finalizes a run parked on `needs_input` as
+`cancelled` with no engine call — see `workflow.md`'s cancelling section for
+what it preserves and records. It answers **200** with `{run_id, status}`
+whether the run was just cancelled or already was: cancelling twice is
+idempotent, not a 409. The only rejections are **404** for an unknown run and
+**422** for one that is not currently `needs_input` (a running run has its
+own stop; a finished run is already terminal).
+
 **`POST /api/v1/channels/post`** (scope `channels:write`,
 `ChannelPostService`) posts a message through a running channel *and records it
 in the session that conversation belongs to*. It exists because workflow script
