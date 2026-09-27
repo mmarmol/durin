@@ -1,5 +1,8 @@
 """Tests for WorkflowsService (list / load / save / delete)."""
 
+import asyncio
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -438,6 +441,187 @@ async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_t
         with pytest.raises(ValidationFailedError):
             await svc.run(WorkflowRunCommand(name="wf", task="prod env", resume_run_id="r1"), p)
     fake_run.assert_not_called()
+
+
+# --- cancel_run: finalize a needs_input run in place, no engine call --------
+
+
+def _park_needs_input(tmp_path, name, run_id, *, ask_kind, root_session_key=None):
+    parked = WorkflowResult(
+        status="needs_input", run_id=run_id, final_output="which env?",
+        needs_input_node="a", ask_kind=ask_kind,
+        runs=[NodeRun(node_id="a", iteration=1, output="asking")],
+    )
+    run_log.finalize_run(
+        tmp_path, name, parked,
+        root_session_key=root_session_key, started_at=1.0, finished_at=2.0, task="triage the inbox",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_of_a_question_pause_finalizes_cancelled_and_records_the_decider(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+    before = run_log.read_manifest(tmp_path, "wf", "r1")
+
+    manifest = await svc.cancel_run("wf", "r1", p)
+
+    assert manifest["status"] == "cancelled"
+    assert manifest["cancelled_by"] == {"kind": "operator", "channel": "local"}
+    assert manifest["cancelled_at"] is not None
+    assert manifest["needs_input_node"] is None
+    assert manifest["ask_kind"] is None
+    assert [r["node_id"] for r in manifest["runs"]] == [r["node_id"] for r in before["runs"]]
+    assert manifest["work_dir"] == before["work_dir"]
+
+    with pytest.raises(ValidationFailedError):
+        await svc.execute("wf", "prod env", resume_run_id="r1")
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_of_an_approval_pause_finalizes_cancelled_and_records_the_decider(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="approval")
+
+    manifest = await svc.cancel_run("wf", "r1", p)
+
+    assert manifest["status"] == "cancelled"
+    assert manifest["cancelled_by"] == {"kind": "operator", "channel": "local"}
+    assert manifest["ask_kind"] is None
+
+    with pytest.raises(ValidationFailedError):
+        await svc.execute("wf", "approve", resume_run_id="r1")
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_running_run(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0)
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_completed_run(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    completed = WorkflowResult(status="completed", run_id="r1", final_output="done", runs=[])
+    run_log.finalize_run(
+        tmp_path, "wf", completed, root_session_key=None, started_at=1.0, finished_at=2.0,
+    )
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_is_idempotent(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+
+    first = await svc.cancel_run("wf", "r1", p)
+    second = await svc.cancel_run("wf", "r1", p)
+
+    assert first["status"] == second["status"] == "cancelled"
+    assert first["cancelled_at"] == second["cancelled_at"]
+    assert first["cancelled_by"] == second["cancelled_by"]
+
+
+def test_cancel_and_resume_racing_the_same_run_exactly_one_wins(tmp_path):
+    """A person's Cancel click and a person's resume answer (two tabs, a
+    retried request) can both reach the service for the SAME paused run at
+    nearly the same moment. Without a lock serializing "read the status, then
+    act on it", both could pass their own check before either writes, so a
+    resume executes real engine nodes on a run cancel_run just finalized (or
+    the reverse). Forces the overlap deterministically: cancel's own finalize
+    is slowed while it holds the per-run lock, and resume starts a beat later
+    — while cancel is still inside that critical section — so resume's lock
+    acquisition is FORCED to wait rather than racing past on a stale read
+    taken before cancel ever wrote anything."""
+    svc = _runnable_svc(tmp_path)
+    p = Principal.local()
+    asyncio.run(svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p))
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+
+    real_finalize = run_log.finalize_short_circuit
+
+    def slow_finalize(*args, **kwargs):
+        time.sleep(0.1)
+        return real_finalize(*args, **kwargs)
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+
+    def fake_engine_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                        output_format=None, resume=None, work_key=None):
+        return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
+
+    outcomes: dict[str, object] = {}
+
+    def run_cancel():
+        try:
+            outcomes["cancel"] = asyncio.run(svc.cancel_run("wf", "r1", p))
+        except Exception as exc:  # noqa: BLE001 - captured for the assertions below
+            outcomes["cancel"] = exc
+
+    def run_resume():
+        time.sleep(0.02)  # let cancel's thread enter its critical section first
+        try:
+            with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+                 patch("durin.workflow.engine.WorkflowEngine.run", fake_engine_run):
+                outcomes["resume"] = asyncio.run(svc.execute("wf", "prod env", resume_run_id="r1"))
+        except Exception as exc:  # noqa: BLE001
+            outcomes["resume"] = exc
+
+    with patch("durin.workflow.run_log.finalize_short_circuit", side_effect=slow_finalize):
+        t_cancel = threading.Thread(target=run_cancel)
+        t_resume = threading.Thread(target=run_resume)
+        t_cancel.start()
+        t_resume.start()
+        t_cancel.join(timeout=5)
+        t_resume.join(timeout=5)
+
+    # Cancel entered its critical section first (and holds it for 0.1s), so it
+    # wins outright: a real cancellation, not an exception.
+    assert isinstance(outcomes["cancel"], dict), outcomes["cancel"]
+    assert outcomes["cancel"]["status"] == "cancelled"
+    # Resume's own re-read, taken only after it finally acquires the SAME lock
+    # (once cancel releases it), sees the run is no longer needs_input and
+    # refuses — it must never have gone on to run the (fake) engine.
+    assert isinstance(outcomes["resume"], ValidationFailedError), outcomes["resume"]
+
+    manifest = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert manifest["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_run_started_by_an_automation(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question",
+                       root_session_key="automation:cobrar-fac-1042")
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+    # Refused before touching the manifest — the automation's own paused run
+    # record is the one to resolve, and this route must leave this one alone.
+    manifest = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert manifest["status"] == "needs_input"
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_unknown_run_raises_not_found(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+
+    with pytest.raises(NotFoundError):
+        await svc.cancel_run("wf", "ghost", p)
 
 
 # --- session_runs route: optional session -> global feed (F8) ---------------

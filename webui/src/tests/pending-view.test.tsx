@@ -14,6 +14,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listPending: vi.fn(),
     decideApproval: vi.fn(),
     runWorkflow: vi.fn(),
+    cancelWorkflowRun: vi.fn(),
     resolveFlaggedPair: vi.fn(),
     acceptSkillSuggestion: vi.fn(),
     rejectSkillSuggestion: vi.fn(),
@@ -189,6 +190,25 @@ describe("PendingView", () => {
     expect(api.runWorkflow).toHaveBeenCalledWith(
       "tok", "triage", "the billing label", [], "", "", "wrun1",
     );
+    expect(await screen.findByText("Nothing is waiting on you.")).toBeInTheDocument();
+  });
+
+  it("cancels a workflow run only after confirming in the page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listPending)
+      .mockResolvedValueOnce(list([WORKFLOW]))
+      .mockResolvedValueOnce(list([]));
+    vi.mocked(api.cancelWorkflowRun).mockResolvedValue({ run_id: "wrun1", status: "cancelled" });
+
+    render(wrap(<PendingView />));
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
+    expect(api.cancelWorkflowRun).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel run" }));
+
+    expect(api.cancelWorkflowRun).toHaveBeenCalledWith("tok", "triage", "wrun1");
+    await waitFor(() => expect(api.listPending).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("Nothing is waiting on you.")).toBeInTheDocument();
   });
 

@@ -18,6 +18,7 @@ from typing import Any
 
 from loguru import logger
 
+from durin.service.approvals import decider_of
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import (
@@ -204,6 +205,16 @@ class WorkflowRunManifestQuery(Query):
 
 class WorkflowRunManifestResult(Result):
     manifest: dict[str, Any]   # the live/terminal run manifest (status, started/finished, per-node trace)
+
+
+class WorkflowCancelCommand(Command):
+    name: str
+    run_id: str
+
+
+class WorkflowCancelResult(Result):
+    run_id: str
+    status: str
 
 
 class WorkflowSessionRunsQuery(Query):
@@ -798,45 +809,73 @@ class WorkflowsService:
                     "only a needs_input run (with the answers as task) or an aborted "
                     "run (retried at its failed node) can."
                 )
-            if manifest.get("ask_kind") == "approval":
-                from durin.workflow.approval import build_approval_resume, parse_approval_reply
+            if paused:
+                # A needs_input run can also be cancelled (WorkflowsService.cancel_run)
+                # racing this same call, or — for an approval pause — rejected right
+                # here: both finalize the SAME manifest this call is about to resume
+                # into the engine. Re-read and act under the per-run lock
+                # (run_log.run_lock_target, shared with cancel_run) so whichever of a
+                # racing cancel/resume/reject gets here first wins outright — the
+                # loser's own locked re-read sees the winner's already-written status
+                # and refuses, instead of a resume executing real nodes on a run
+                # cancel_run just finalized (or the reverse).
+                with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
+                    manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+                    if manifest is None or manifest.get("status") != "needs_input":
+                        raise ValidationFailedError(
+                            f"run {resume_run_id!r} of workflow {name!r} cannot be "
+                            "resumed — it was cancelled, or already resumed, before "
+                            "this reached it."
+                        )
+                    if manifest.get("ask_kind") == "approval":
+                        from durin.workflow.approval import build_approval_resume, parse_approval_reply
 
-                action = parse_approval_reply(task) or "revise"
-                if action == "reject":
-                    # No engine call at all: the approver declined it, which is not
-                    # a failure — finalize 'cancelled' with rejected=True directly,
-                    # IN PLACE on the existing manifest (preserves its per-node
-                    # trace and work_dir; finalize_run would instead rewrite them
-                    # away from this minimal result's empty runs=[]).
-                    run_log.finalize_short_circuit(
-                        self._workspace, name, resume_run_id,
-                        status="cancelled", final_output=manifest.get("final_output"),
-                        rejected=True,
-                    )
-                    return WorkflowResult(
-                        status="cancelled", ask_kind=None,
-                        final_output=manifest.get("final_output"),
-                        run_id=resume_run_id, rejected=True,
-                    )
-                approval_resume = build_approval_resume(
-                    workflow, manifest, action, task if action == "revise" else "")
-                if approval_resume is None:
-                    # Approve on a terminal approval node (no `next`): the run
-                    # completes now, with the proposal as the final output — again
-                    # no engine call, there is nowhere left for it to resume into.
-                    run_log.finalize_short_circuit(
-                        self._workspace, name, resume_run_id,
-                        status="completed", final_output=manifest.get("final_output"),
-                    )
-                    return WorkflowResult(
-                        status="completed", final_output=manifest.get("final_output"),
-                        final_output_node=manifest.get("needs_input_node"),
-                        run_id=resume_run_id,
-                    )
-                resume = approval_resume
+                        action = parse_approval_reply(task) or "revise"
+                        if action == "reject":
+                            # No engine call at all: the approver declined it, which is not
+                            # a failure — finalize 'cancelled' with rejected=True directly,
+                            # IN PLACE on the existing manifest (preserves its per-node
+                            # trace and work_dir; finalize_run would instead rewrite them
+                            # away from this minimal result's empty runs=[]).
+                            run_log.finalize_short_circuit(
+                                self._workspace, name, resume_run_id,
+                                status="cancelled", final_output=manifest.get("final_output"),
+                                rejected=True,
+                            )
+                            return WorkflowResult(
+                                status="cancelled", ask_kind=None,
+                                final_output=manifest.get("final_output"),
+                                run_id=resume_run_id, rejected=True,
+                            )
+                        approval_resume = build_approval_resume(
+                            workflow, manifest, action, task if action == "revise" else "")
+                        if approval_resume is None:
+                            # Approve on a terminal approval node (no `next`): the run
+                            # completes now, with the proposal as the final output — again
+                            # no engine call, there is nowhere left for it to resume into.
+                            run_log.finalize_short_circuit(
+                                self._workspace, name, resume_run_id,
+                                status="completed", final_output=manifest.get("final_output"),
+                            )
+                            return WorkflowResult(
+                                status="completed", final_output=manifest.get("final_output"),
+                                final_output_node=manifest.get("needs_input_node"),
+                                run_id=resume_run_id,
+                            )
+                        resume = approval_resume
+                    else:
+                        resume = build_resume_state(manifest, task)
+                    task = manifest.get("task") or task
+                    # Claim: move the manifest off needs_input now, before releasing
+                    # the lock, so a cancel_run (or reject) racing in right behind
+                    # this sees it lost and refuses instead of finalizing a run that
+                    # is, by then, genuinely resuming. WorkflowEngine.run's own
+                    # _start_manifest fully rewrites this again within milliseconds —
+                    # this claim only needs to survive that brief window.
+                    run_log.claim_for_resume(self._workspace, name, resume_run_id)
             else:
                 resume = build_resume_state(manifest, task)
-            task = manifest.get("task") or task
+                task = manifest.get("task") or task
 
         app_config = self._live_config()
         preset = app_config.resolve_default_preset()
@@ -970,6 +1009,72 @@ class WorkflowsService:
         if manifest is None:
             raise NotFoundError(f"run {query.run_id!r} of workflow {query.name!r} not found")
         return WorkflowRunManifestResult(manifest=manifest)
+
+    async def cancel_run(self, name: str, run_id: str, principal: Principal) -> dict[str, Any]:
+        """Finalize a ``needs_input`` run as ``cancelled`` IN PLACE — the same
+        short-circuit an approval reject uses (see ``execute``'s resume branch):
+        preserves the manifest's per-node trace and work dir, makes no engine
+        call. Works on either ask kind — a stale question pause has no
+        reject-style exit of its own, so this is the only way out besides
+        answering it. Refuses any other status: a running run has its own stop,
+        and a finished run is already final. Idempotent — cancelling an
+        already-cancelled run returns its existing state unchanged, rather than
+        overwriting who/when it was cancelled.
+
+        Also refuses a run an automation started (``root_session_key`` prefixed
+        ``automation:`` — the same check the Pending service's workflow-run
+        source uses to leave such a run to the Automations inbox instead of
+        listing it twice): that run has its own paused record in
+        ``durin.automations.run_log``, which only that automation's own
+        answer/stop keeps in sync with this one. Finalizing it here instead
+        would leave the automation's record stuck `paused`, so a later answer
+        finds the workflow run already `cancelled` and the automation ends up
+        `failed` rather than resolved.
+
+        A concurrent resume — or, for an approval pause, a reject — can be
+        racing to claim/finalize this SAME manifest right now. The status
+        check and the finalize happen together under the per-run lock
+        (``run_log.run_lock_target``, shared with ``execute``'s resume path)
+        so only one of them wins: whichever gets the lock first, the loser's
+        re-read here (or there) sees the winner's already-written status."""
+        manifest = run_log.read_manifest(self._workspace, name, run_id)
+        if manifest is None:
+            raise NotFoundError(f"run {run_id!r} of workflow {name!r} not found")
+        root_session_key = str(manifest.get("root_session_key") or "")
+        if root_session_key.startswith("automation:"):
+            raise ValidationFailedError(
+                f"run {run_id!r} of workflow {name!r} was started by automation "
+                f"{root_session_key.split(':', 1)[1]!r} — stop it from that "
+                "automation's own run instead."
+            )
+        with cross_process_lock(run_log.run_lock_target(self._workspace, name, run_id)):
+            manifest = run_log.read_manifest(self._workspace, name, run_id)
+            if manifest is None:
+                raise NotFoundError(f"run {run_id!r} of workflow {name!r} not found")
+            if manifest.get("status") == "cancelled":
+                return manifest
+            if manifest.get("status") != "needs_input":
+                raise ValidationFailedError(
+                    f"run {run_id!r} of workflow {name!r} cannot be cancelled — "
+                    "a running run has its own stop, and a finished run is already "
+                    "final; only a run waiting for input can be cancelled."
+                )
+            return run_log.finalize_short_circuit(
+                self._workspace, name, run_id,
+                status="cancelled", final_output=manifest.get("final_output"),
+                cancelled_by=decider_of(principal),
+            )
+
+    @route(
+        "POST", "/api/v1/workflows/{name}/runs/{run_id}/cancel",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowCancelCommand, response_model=WorkflowCancelResult,
+        summary="Cancel a run paused for input: finalizes it as cancelled in place, with no engine call.",
+    )
+    async def cancel(self, cmd: WorkflowCancelCommand, principal: Principal) -> WorkflowCancelResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        manifest = await self.cancel_run(cmd.name, cmd.run_id, principal)
+        return WorkflowCancelResult(run_id=manifest["run_id"], status=manifest["status"])
 
     @route(
         "GET", "/api/v1/workflows/{name}/recommendations",

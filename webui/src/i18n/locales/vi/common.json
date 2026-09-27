@@ -1393,6 +1393,10 @@
     "answersPlaceholder": "Nhập câu trả lời của bạn…",
     "resumeRun": "Tiếp tục lượt chạy",
     "resumeCaption": "tiếp tục tại {{node}} · cùng thư mục làm việc và phiên · lượt chạy {{runId}}",
+    "cancelRun": "Hủy lượt chạy",
+    "cancelConfirmTitle": "Hủy lượt chạy này?",
+    "cancelConfirmBody": "Kết thúc lượt chạy ngay bây giờ — lượt chạy sẽ không thể tiếp tục.",
+    "keepWaiting": "Tiếp tục chờ",
     "abortedTitle": "Lượt chạy bị dừng",
     "cancelledTitle": "Lượt chạy đã hủy",
     "outputFiles": "tệp đầu ra",
@@ -1706,6 +1710,7 @@
     },
     "notice": {
       "resumed": "Đã tiếp tục lượt chạy.",
+      "cancelled": "Đã hủy lượt chạy.",
       "resolved": "Xong."
     }
   },

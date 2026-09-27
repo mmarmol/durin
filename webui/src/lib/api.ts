@@ -471,6 +471,10 @@ export type WorkflowRunResult = {
   // typical_s (which spans every branch prior runs took, while one run takes
   // one). Absent/null when the workflow has no completed-run history yet.
   typical_total_s?: number | null;
+  // The manifest's root session key — an `automation:<name>` origin vs. an
+  // interactive session, same source as WorkflowGlobalRun's `origin` below.
+  // Absent on a manifest written before this field existed.
+  root_session_key?: string | null;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.
@@ -540,6 +544,23 @@ export async function getWorkflowRunManifest(
     token,
   );
   return body.manifest;
+}
+
+export type WorkflowCancelResult = { run_id: string; status: string };
+
+// Finalizes a needs_input run as cancelled in place — no engine call, and the
+// run cannot be resumed afterwards.
+export async function cancelWorkflowRun(
+  token: string,
+  name: string,
+  runId: string,
+  base: string = "",
+): Promise<WorkflowCancelResult> {
+  return post<WorkflowCancelResult>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/cancel`,
+    token,
+    {},
+  );
 }
 
 export async function runWorkflow(

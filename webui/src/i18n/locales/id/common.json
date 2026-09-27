@@ -1393,6 +1393,10 @@
     "answersPlaceholder": "Ketik jawaban Anda…",
     "resumeRun": "Lanjutkan run",
     "resumeCaption": "lanjut di {{node}} · folder kerja dan sesi yang sama · run {{runId}}",
+    "cancelRun": "Batalkan run",
+    "cancelConfirmTitle": "Batalkan run ini?",
+    "cancelConfirmBody": "Mengakhiri run sekarang — run tidak akan bisa dilanjutkan.",
+    "keepWaiting": "Tetap menunggu",
     "abortedTitle": "Run dihentikan",
     "cancelledTitle": "Run dibatalkan",
     "outputFiles": "file keluaran",
@@ -1706,6 +1710,7 @@
     },
     "notice": {
       "resumed": "Run dilanjutkan.",
+      "cancelled": "Run dibatalkan.",
       "resolved": "Selesai."
     }
   },

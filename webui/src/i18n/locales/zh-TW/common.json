@@ -1393,6 +1393,10 @@
     "answersPlaceholder": "輸入你的答案…",
     "resumeRun": "繼續執行",
     "resumeCaption": "從 {{node}} 繼續 · 相同的工作資料夾與會話 · 執行 {{runId}}",
+    "cancelRun": "取消執行",
+    "cancelConfirmTitle": "取消此執行？",
+    "cancelConfirmBody": "立即結束執行——執行將無法恢復。",
+    "keepWaiting": "繼續等待",
     "abortedTitle": "執行已中止",
     "cancelledTitle": "執行已取消",
     "outputFiles": "輸出檔案",
@@ -1706,6 +1710,7 @@
     },
     "notice": {
       "resumed": "已繼續執行。",
+      "cancelled": "已取消執行。",
       "resolved": "已完成。"
     }
   },

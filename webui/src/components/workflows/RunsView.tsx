@@ -6,6 +6,7 @@ import { NodeDetailSheet } from "@/components/workflows/NodeDetailSheet";
 import { CopyableKey, RunDetail, RunStatusIcon } from "@/components/workflows/RunDetail";
 import {
   ApiError,
+  cancelWorkflowRun,
   getWorkflowRunManifest,
   listAllWorkflowRuns,
   runWorkflow,
@@ -260,6 +261,7 @@ export function RunsView({
   const [manifest, setManifest] = useState<WorkflowRunResult | null>(null);
   const [manifestLoading, setManifestLoading] = useState(false);
   const [resumingId, setResumingId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   // The node whose detail drawer is open, if any. Held here rather than inside
   // RunDetail so the drawer survives the manifest refreshes that re-render it
   // while a run is still going.
@@ -398,6 +400,24 @@ export function RunsView({
     [token, refresh],
   );
 
+  const onCancel = useCallback(
+    async (entry: WorkflowGlobalRun) => {
+      setCancellingId(entry.run_id);
+      setError(null);
+      try {
+        await cancelWorkflowRun(token, entry.workflow, entry.run_id);
+        await refresh();
+        setSelected(null);
+        setManifest(null);
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setCancellingId(null);
+      }
+    },
+    [token, refresh],
+  );
+
   const onSelectEntry = useCallback(
     async (entry: WorkflowGlobalRun) => {
       setSelected(entry);
@@ -468,6 +488,11 @@ export function RunsView({
     },
     [selected, onResume],
   );
+
+  const onCancelFromDetail = useCallback(() => {
+    if (!selected) return;
+    void onCancel(selected);
+  }, [selected, onCancel]);
 
   const startedMs = selected?.started_at ? selected.started_at * 1000 : null;
 
@@ -644,6 +669,8 @@ export function RunsView({
                     result={manifest}
                     resuming={resumingId === selected.run_id}
                     onResume={onResumeFromDetail}
+                    cancelling={cancellingId === selected.run_id}
+                    onCancel={onCancelFromDetail}
                     childRuns={childEntries}
                     onOpenRun={(r) => void onSelectEntry(r)}
                     onOpenNode={setOpenNode}

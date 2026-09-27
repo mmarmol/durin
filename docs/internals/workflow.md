@@ -517,7 +517,11 @@ contributed, e.g. an aborted run); `final_route_label` — the verdict that ende
 a matched `cases` label, binary `"PASS"`/`"FAIL"`, or `null` for every other ending (§4d);
 `rejected` — `true` only when a paused approval was answered "reject", so the run ends
 `cancelled` because the approver explicitly declined it rather than because anything
-failed (`false` otherwise); `output_files`: the relative paths (within the
+failed (`false` otherwise); `cancelled_by`/`cancelled_at` — who (in the same shape
+`durin/service/approvals.py`'s `decider_of` gives an approval decision) and when a
+person cancelled a `needs_input` run through `WorkflowsService.cancel_run` (§4g);
+absent on every other terminal status, including an approval reject/approve, which
+never set either; `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
 status or produced no files (never includes the engine's own `.provenance.json`
 bookkeeping file — same exclusion as a node's `artifacts`, above); `missing_artifacts` — declared `output.artifacts` paths a
@@ -549,8 +553,9 @@ engine deletes the oldest *terminal* records (completed/exhausted/aborted/cancel
 beyond `keep`, run best-effort and never fatal to the run. A `running` manifest, or a
 `needs_input` manifest carrying its `needs_input_node`, is never deleted and never counts
 against `keep` — a running record is live, and a resumable needs_input manifest is the
-pause point a caller may still act on (the deliberate consequence: resumable records that
-are never resumed accumulate outside the retention bound until acted on). A `needs_input`
+pause point a caller may still act on, by resuming OR cancelling it (§4g) — cancelling
+moves it to the ordinary `cancelled` retention bucket above (the deliberate consequence:
+a pause acted on neither way accumulates outside the retention bound indefinitely). A `needs_input`
 manifest WITHOUT a re-entry node — written before resume existed — is not resumable (the
 resume endpoints reject it) and retains like any terminal record, so legacy pauses cannot
 accumulate as unactionable ghosts; the runs UI likewise counts only resumable pauses in
@@ -842,6 +847,21 @@ pause gets — and, for a question pause, that generic text is itself only sent
 when a person can be asked in the calling context (`is_interactive` on the
 root session key); a cron or workflow context is told not to ask the user and
 to answer from what it already has, or report the run as waiting.
+
+**Cancelling a needs_input run.** A run parked on `needs_input` — either ask
+kind — has nothing executing to interrupt, so cancelling it needs no engine
+call at all: `POST /api/v1/workflows/{name}/runs/{run_id}/cancel`
+(`WorkflowsService.cancel_run`, scoped like the resume route above) finalizes
+it as `cancelled` in place through the same `finalize_short_circuit` an
+approval reject uses, preserving the paused manifest's per-node trace and
+`work_dir` rather than rewriting them away. It additionally stamps
+`cancelled_by` — who cancelled it, in the shape `durin/service/approvals.py`'s
+`decider_of` gives an approval decision — and `cancelled_at`, fields an
+approval reject/approve never sets. It refuses any run that is not currently
+`needs_input`: a running run has the cooperative stop below instead, and a
+finished run is already terminal. It is idempotent — cancelling an
+already-cancelled run returns its existing state rather than overwriting who
+and when it was cancelled the first time.
 
 **Cooperative cancellation — two modes.** `tasks(action='stop', …)` marks the
 `run_id` in a process-global registry (`durin/workflow/cancellation.py`) with a

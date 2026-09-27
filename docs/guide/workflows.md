@@ -332,6 +332,13 @@ rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
 their intake step.
 
+A stale pause with no good answer left — the environment it needs is gone,
+the person who'd know has moved on — doesn't have to sit there forever:
+cancel it instead, from the Runs pane or the Pending page (below), next to
+the resume form. Cancelling finalizes the run as `cancelled` in place — its
+trace and working folder stay for the record — and it can no longer be
+resumed, so the dashboard asks you to confirm before it goes through.
+
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
 runs) asking for the files — and if you do pass files but one is missing
@@ -358,9 +365,10 @@ clean up.
   (`<workspace>/.workflow/<run_id>/work/`, gitignored) and the run
   manifests are pruned automatically, keeping the most recent runs per
   workflow. `workflow.keep_runs` (default 20) controls how many are kept;
-  a run still waiting on your input is never pruned, and completed runs
-  keep their history entry until they age out — copy out any deliverable
-  you need to keep before then.
+  a run still waiting on your input is never pruned — resume or cancel it
+  to let it retire like any other finished run — and completed runs keep
+  their history entry until they age out — copy out any deliverable you
+  need to keep before then.
 
 ## Editing visually
 
@@ -380,14 +388,15 @@ per-node progress as the graph executes.
 The Workflows section's **Runs** pane is where to look across *all* workflows
 and origins (sessions, HTTP, cron, the editor) at once: a global, filterable
 run feed, with any run stranded on `needs_input` surfaced in a tray up top —
-questions and a resume form included — so you can find and answer a paused run
-without knowing which session or workflow started it. A badge on the sidebar's
-**Workflows** button shows the count of stranded runs even while you're
-elsewhere in the app. A run an [automation](automations.md) paused is excluded
-from this tray and badge — it belongs to the Automations section's own "Needs
-you" inbox instead, so the same paused run never asks for attention in two
-places at once; when one exists, a small link under the tray takes you there.
-The same stranded runs, with their resume forms, also show on the dashboard's
+questions, a resume form, and a Cancel control included — so you can find and
+answer (or give up on) a paused run without knowing which session or workflow
+started it. A badge on the sidebar's **Workflows** button shows the count of
+stranded runs even while you're elsewhere in the app. A run an
+[automation](automations.md) paused is excluded from this tray and badge — it
+belongs to the Automations section's own "Needs you" inbox instead, so the
+same paused run never asks for attention in two places at once; when one
+exists, a small link under the tray takes you there. The same stranded runs,
+with their resume and Cancel controls, also show on the dashboard's
 **Pending** page, next to everything else that waits on you.
 
 Each workflow also has a self-improvement mode (`manual` by default): a

@@ -13,6 +13,11 @@ The record is a *live manifest*: ``start_run`` writes it ``running`` before the 
 and ``finalize_run`` writes the terminal status. Each file is unique (``<run_id>.json``)
 and single-writer (the one run that owns the id), so a full-file rewrite per update is
 safe with no RMW lock. A per-workflow cursor marks how far the dream pass has consumed.
+
+One state has more than one writer: a ``needs_input`` pause can be answered (resumed),
+rejected (an approval pause), or cancelled, each from its own caller, each a
+read-then-write on the SAME manifest. ``run_lock_target`` serializes those so exactly
+one of a racing pair wins — see its docstring.
 """
 
 from __future__ import annotations
@@ -321,6 +326,7 @@ def finalize_run(
 def finalize_short_circuit(
     workspace: str | Path, name: str, run_id: str, *,
     status: str, final_output: str | None, rejected: bool = False,
+    cancelled_by: dict | None = None,
 ) -> dict:
     """Rewrite an existing manifest to a terminal status IN PLACE, preserving every
     field it already has — ``runs``, ``work_dir``, ``work_key``, ``task``,
@@ -337,8 +343,11 @@ def finalize_short_circuit(
     Sets ``status``, ``final_output`` (capped exactly like ``finalize_run`` caps
     it), ``finished_at``/``ts``, ``rejected``, clears ``active_node`` (nothing is
     in flight any more), and drops the pause markers ``needs_input_node`` and
-    ``ask_kind`` to ``None`` — the run is no longer answerable. Returns the
-    rewritten dict."""
+    ``ask_kind`` to ``None`` — the run is no longer answerable. ``cancelled_by``
+    (``durin.service.approvals.decider_of``'s shape) is recorded together with
+    ``cancelled_at`` only when a caller passes it — a person explicitly cancelling
+    a paused run through ``WorkflowsService.cancel_run``, never an approval
+    reject/approve, which leave both fields unset. Returns the rewritten dict."""
     prior = read_manifest(workspace, name, run_id) or {}
     now = time.time()
     record = dict(prior)
@@ -350,6 +359,52 @@ def finalize_short_circuit(
     record["active_node"] = None
     record["needs_input_node"] = None
     record["ask_kind"] = None
+    if cancelled_by is not None:
+        record["cancelled_by"] = cancelled_by
+        record["cancelled_at"] = now
+    path = _record_path(workspace, name, run_id)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+# Lock target name, kept BESIDE the run's manifest file (not overwriting it) so it
+# never matches the `*.json` glob list_runs/list_all_runs/reconcile_running walk —
+# mirrors workflow/version_store.py's VERSION_LOCK_NAME/version_lock_target pattern.
+_RUN_CLAIM_LOCK_SUFFIX = ".claim"
+
+
+def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
+    """The cross-process lock target serializing every caller that checks a
+    ``needs_input`` run's status and then acts on it: ``WorkflowsService.cancel_run``
+    finalizing it, ``WorkflowsService.execute``'s resume path claiming it (moving it
+    off ``needs_input`` before actually resuming), and the approval-reject
+    short-circuit inside that same resume path. Each of those is a read-then-write
+    on the SAME manifest; without a lock, two racing callers can both read
+    ``needs_input`` before either writes, so — for example — a resume goes on to run
+    real nodes on a run ``cancel_run`` just finalized. Whichever caller acquires the
+    lock first wins outright: the loser's own re-read, taken only once it acquires
+    the lock in turn, sees the winner's already-written status and refuses instead
+    of acting a second time. Every OTHER manifest write (a running walk's own
+    per-node updates, a terminal ``finalize_run``) stays single-writer with no lock,
+    same as this module's own docstring says — this guards only the ``needs_input``
+    check-then-act window, where an outside caller (not the walk itself) can act on
+    the manifest."""
+    return _wf_dir(workspace, name) / f"{run_id}{_RUN_CLAIM_LOCK_SUFFIX}"
+
+
+def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
+    """Move a ``needs_input`` manifest to ``running`` IN PLACE, preserving every
+    other field — called under ``run_lock_target``'s lock, right before the caller
+    releases it and actually resumes the run, so a ``cancel_run`` (or an approval
+    reject) racing in right behind sees this run is no longer ``needs_input`` and
+    refuses instead of finalizing a run that is, by then, genuinely resuming.
+    ``WorkflowEngine.run``'s own ``_start_manifest`` fully rewrites the manifest
+    again moments later (a fresh ``started_at``, the resumed walk's own ``runs``) —
+    this claim only needs to survive the brief window between releasing this lock
+    and that first real write, not to be a lasting record itself."""
+    prior = read_manifest(workspace, name, run_id) or {}
+    record = dict(prior)
+    record["status"] = "running"
     path = _record_path(workspace, name, run_id)
     path.write_text(json.dumps(record), encoding="utf-8")
     return record

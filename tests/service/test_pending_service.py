@@ -11,6 +11,7 @@ requires.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -132,6 +133,17 @@ def test_a_workflow_run_started_by_an_automation_is_left_to_automations(tmp_path
     assert [item.id for item in result.items] == ["mine"]
 
 
+def test_cancelling_a_workflow_run_leaves_it_off_the_list(tmp_path):
+    from durin.service.workflows import WorkflowsService
+
+    _needs_input_run(tmp_path, "triage", "wrun1", origin="websocket:chat-1")
+    assert _sources(collect_pending(tmp_path, ADMIN)) == ["workflow_run"]
+
+    asyncio.run(WorkflowsService(workspace=tmp_path).cancel_run("triage", "wrun1", ADMIN))
+
+    assert collect_pending(tmp_path, ADMIN).items == []
+
+
 def test_expired_approval_records_do_not_show_as_pending(tmp_path):
     fresh = _approval(tmp_path)
     stale = _approval(tmp_path, kind="skill_edit")
@@ -230,7 +242,10 @@ def test_each_item_carries_its_sources_record_and_how_to_resolve_it(tmp_path):
 
     workflow = items["workflow_run"]
     assert workflow.data["questions"] == "Which mailbox?"
-    assert workflow.resolve.actions[0].body == {"resume_run_id": "wrun1"}
+    assert [(a.name, a.method, a.path, a.body) for a in workflow.resolve.actions] == [
+        ("resume", "POST", "/api/v1/workflows/triage/run", {"resume_run_id": "wrun1"}),
+        ("cancel", "POST", "/api/v1/workflows/triage/runs/wrun1/cancel", None),
+    ]
 
     pair = items["flagged_pair"]
     assert pair.data["ref_a"] == "person:ana" and pair.data["ref_b"] == "person:ana-lopez"

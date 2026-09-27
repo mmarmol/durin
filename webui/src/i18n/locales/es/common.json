@@ -1440,6 +1440,7 @@
     },
     "notice": {
       "resumed": "Corrida reanudada.",
+      "cancelled": "Corrida cancelada.",
       "resolved": "Listo."
     }
   },
@@ -2466,6 +2467,10 @@
     "answersPlaceholder": "Escribe tus respuestas…",
     "resumeRun": "Reanudar ejecución",
     "resumeCaption": "reanuda en {{node}} · misma carpeta de trabajo y sesiones · ejecución {{runId}}",
+    "cancelRun": "Cancelar ejecución",
+    "cancelConfirmTitle": "¿Cancelar esta ejecución?",
+    "cancelConfirmBody": "Termina la ejecución ahora — no podrá reanudarse.",
+    "keepWaiting": "Seguir esperando",
     "abortedTitle": "Ejecución abortada",
     "cancelledTitle": "Ejecución cancelada",
     "outputFiles": "archivos de salida",

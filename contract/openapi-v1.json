@@ -7637,6 +7637,43 @@
         "title": "WhatsAppLoginState",
         "type": "object"
       },
+      "WorkflowCancelCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id"
+        ],
+        "title": "WorkflowCancelCommand",
+        "type": "object"
+      },
+      "WorkflowCancelResult": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status"
+        ],
+        "title": "WorkflowCancelResult",
+        "type": "object"
+      },
       "WorkflowDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -13555,6 +13592,35 @@
         },
         "summary": "Read one run's manifest (status + per-node session trace).",
         "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/{name}/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "workflows_cancel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCancelCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowCancelResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Cancel a run paused for input: finalizes it as cancelled in place, with no engine call.",
+        "x-required-scope": "workflows:write"
       }
     }
   }
