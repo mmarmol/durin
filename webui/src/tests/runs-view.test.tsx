@@ -18,6 +18,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listAllWorkflowRuns: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
     runWorkflow: vi.fn(),
+    cancelWorkflowRun: vi.fn(),
   };
 });
 
@@ -214,6 +215,51 @@ describe("RunsView", () => {
 
     await waitFor(() =>
       expect(api.runWorkflow).toHaveBeenCalledWith("tok", "onboarding", "prod", [], "", "", "run-waiting"),
+    );
+  });
+
+  it("shows a Cancel control only for a needs_input run, not a completed one", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
+    vi.mocked(api.getWorkflowRunManifest).mockImplementation((_token, _name, runId) =>
+      Promise.resolve(
+        runId === "run-waiting"
+          ? {
+              status: "needs_input", final_output: "Which environment — staging or prod?",
+              needs_input_node: "ask", run_id: "run-waiting", runs: [],
+            }
+          : { status: "completed", final_output: "the weekly digest", run_id: "run-done", runs: [] },
+      ),
+    );
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+
+    await user.click(await screen.findByRole("button", { name: /summarize the week/ }));
+    await screen.findByText("the weekly digest");
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /paused/i }));
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+  });
+
+  it("cancels a run from its detail after confirming in the page", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "needs_input", final_output: "Which environment — staging or prod?",
+      needs_input_node: "ask", run_id: "run-waiting", runs: [],
+    });
+    vi.mocked(api.cancelWorkflowRun).mockResolvedValue({ run_id: "run-waiting", status: "cancelled" });
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+
+    await user.click(await screen.findByRole("button", { name: /paused/i }));
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
+    expect(api.cancelWorkflowRun).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel run" }));
+
+    await waitFor(() =>
+      expect(api.cancelWorkflowRun).toHaveBeenCalledWith("tok", "onboarding", "run-waiting"),
     );
   });
 

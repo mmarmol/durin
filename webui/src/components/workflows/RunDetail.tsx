@@ -292,6 +292,8 @@ export function RunDetail({
   result,
   onResume,
   resuming,
+  onCancel,
+  cancelling = false,
   childRuns,
   onOpenRun,
   onOpenNode,
@@ -299,6 +301,11 @@ export function RunDetail({
   result: WorkflowRunResult;
   onResume: (answers: string) => void;
   resuming: boolean;
+  // Absent leaves the needs_input banner with no Cancel control (the workflow
+  // editor's own inline test-run panel, which has no need to abandon a run it
+  // just launched itself).
+  onCancel?: () => void;
+  cancelling?: boolean;
   // Runs this run spawned through subworkflow nodes (from the global feed), in
   // execution order; rendered as a navigable section when provided.
   childRuns?: WorkflowGlobalRun[];
@@ -342,6 +349,8 @@ export function RunDetail({
           questions={result.final_output ?? ""}
           resuming={resuming}
           onResume={onResume}
+          cancelling={cancelling}
+          onCancel={onCancel}
         />
       )}
       {result.status === "exhausted" && (
