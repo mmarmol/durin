@@ -59,7 +59,8 @@ this order:
    by a persisted reference, which carries:
    - the size and line count of the saved file;
    - a 1,200-char preview;
-   - the exact `read_file` / `grep` call that gets the rest;
+   - the exact `read_file` call that gets the rest, and the `grep` call
+     (`output_mode="content"`) that returns the matching lines;
    - a line telling the model not to re-run the call.
 
    A structured result is saved as a line-pageable rendering: one

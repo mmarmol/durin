@@ -9,6 +9,7 @@ import pytest
 
 from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.filesystem import ReadFileTool
+from durin.agent.tools.search import GrepTool
 from durin.utils.helpers import maybe_persist_tool_result, parse_persisted_reference
 
 BIG = "\n".join(f"row {i}: " + "value " * 12 for i in range(1_500))  # ~120,000 chars
@@ -39,3 +40,17 @@ async def test_following_a_persisted_reference_gives_a_page_that_fits(tmp_path: 
 
     assert len(page) <= 16_000
     assert re.search(r"Use offset=\d+ to continue", page)
+
+
+@pytest.mark.asyncio
+async def test_following_the_grep_hint_literally_returns_the_matching_lines(tmp_path: Path) -> None:
+    ref = maybe_persist_tool_result(
+        tmp_path, "sess", "call_1", BIG + "\nTHE_FACT is here\n", max_chars=16_000,
+    )
+    hint = re.search(r"grep\(pattern=\.\.\., ([^)]*)\)", ref)
+    assert hint is not None, ref
+    arguments = dict(re.findall(r'(\w+)="([^"]*)"', hint.group(1)))
+
+    result = await GrepTool(workspace=tmp_path).execute(pattern="THE_FACT", **arguments)
+
+    assert "THE_FACT is here" in result

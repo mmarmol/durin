@@ -327,7 +327,7 @@ def _render_tool_result_reference(
         "The whole result is on disk: do not re-run the call to get it back. "
         f'Read it with read_file(path="{filepath}"): each call returns one page '
         "that fits and ends with the offset to continue from. To find something "
-        f'specific, use grep(pattern=..., path="{filepath}").\n'
+        f'specific, use grep(pattern=..., path="{filepath}", output_mode="content").\n'
         f"Preview:\n{preview}"
     )
     if truncated_preview:
