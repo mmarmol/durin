@@ -18,6 +18,7 @@ import contextvars
 import dataclasses
 import json
 import threading
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -228,7 +229,8 @@ class AgentNodeRunner:
         *,
         default_model: str,
         max_iterations: int = 50,
-        max_tool_result_chars: int = 16000,
+        # None: the runner scales the per-result cap from the node's window.
+        max_tool_result_chars: int | None = None,
         tools_config: ToolsConfig | None = None,
         live_tool_registry: ToolRegistry | None = None,
         main_loop=None,
@@ -437,6 +439,22 @@ class AgentNodeRunner:
         except Exception:  # noqa: BLE001 - a bare/test-double provider may carry no generation; params degrade to None
             generation = None
         return provider, model, generation
+
+    def _node_context_window(self, provider: Any, model: str) -> int | None:
+        """The context window of the model a node runs on, resolved the way a
+        /model pick resolves it: the user's per-model entry, then the catalog,
+        then the default. It gives the node's run an input budget — the
+        mid-turn precheck, pruning near the limit and a per-result cap that
+        follows the window. None without a config to resolve against."""
+        if self._app_config is None:
+            return None
+        from durin.command.builtin import adhoc_preset_config
+
+        try:
+            provider_key = getattr(provider, "provider_key", None) or "auto"
+            return adhoc_preset_config(self._app_config, provider_key, model).context_window_tokens
+        except Exception:  # noqa: BLE001 - an unresolvable window must not fail the node
+            return None
 
     @staticmethod
     def _pass_note(req: NodeRunRequest) -> str:
@@ -708,6 +726,13 @@ class AgentNodeRunner:
         provider_key = getattr(node_provider, "provider_key", None)
         resolved_params_hash = (
             params_hash(node_generation) if node_generation is not None else None)
+        # The node's runs get its model's window (their input budget) and a
+        # place to save oversized or pruned results: the workspace its own
+        # file tools read, under the node's session key, so every pointer to
+        # a saved result can be followed from inside the node.
+        node_window = self._node_context_window(node_provider, model)
+        node_workspace = Path(req.workspace_override or self.sessions.workspace)
+        node_session_key = self._session_key(req)
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
@@ -781,6 +806,9 @@ class AgentNodeRunner:
                 temperature=persona_temperature,
                 max_iterations=run_max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
+                context_window_tokens=node_window,
+                workspace=node_workspace,
+                session_key=node_session_key,
                 # Nodes are read/search-heavy (gather, review, verify): run independent
                 # concurrency-safe tool calls in parallel, same as the main loop and
                 # subagents; the runner keeps mutations serial.
@@ -843,6 +871,9 @@ class AgentNodeRunner:
                     temperature=persona_temperature,
                     max_iterations=run_max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
+                    context_window_tokens=node_window,
+                    workspace=node_workspace,
+                    session_key=node_session_key,
                     concurrent_tools=True,
                     hook=hook,
                 ), req.cancel_check)
@@ -895,6 +926,9 @@ class AgentNodeRunner:
                     temperature=persona_temperature,
                     max_iterations=1,
                     max_tool_result_chars=self.max_tool_result_chars,
+                    context_window_tokens=node_window,
+                    workspace=node_workspace,
+                    session_key=node_session_key,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
                 raise self._on_failure(req, list(result.messages), exc) from exc

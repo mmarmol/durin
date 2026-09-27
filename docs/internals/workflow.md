@@ -311,6 +311,12 @@ a dedicated provider only when that entry's params actually differ from the run'
 a bare name with nothing configured for it keeps sharing the default client. A persona's own
 `temperature`, when set, overrides whatever the resolved model would otherwise use. Resolved
 providers are cached per run (per node) so repeated nodes on the same ref don't rebuild one.
+A node's agent turn runs under the context window of the model it resolved to (the per-model
+entry, then the catalog, then the default — `AgentNodeRunner._node_context_window`), which gives
+it the runner's input budget: the mid-turn precheck, the pruning of old tool results near the
+limit, and a per-result cap that follows the window. The turn also carries the node's workspace
+(its private copy when writing in parallel) and session key, so an oversized or pruned result is
+saved where the node's own file tools can read it back.
 This resolution is also what `reuse: "if-unchanged"` compares against: an unresolvable ref logs
 a warning, runs the node against the default provider/model anyway (a workflow run never dies
 on a bad ref), but reports an unknown producer identity so that node's reuse gate never fires.
