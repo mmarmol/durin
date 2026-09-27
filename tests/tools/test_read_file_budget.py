@@ -90,6 +90,51 @@ async def test_a_batch_read_fits_the_cap_as_a_whole(tmp_path: Path, small_cap: i
         assert re.search(r"Use offset=\d+ to continue", record["content"])
 
 
+@pytest.fixture()
+def run_cap():
+    token = set_result_char_cap(16_000)
+    yield 16_000
+    reset_result_char_cap(token)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_page_cut_to_its_share_does_not_make_a_later_read_unchanged(tmp_path: Path, run_cap: int) -> None:
+    paths = []
+    for k in range(15):
+        f = tmp_path / f"mod{k}.py"
+        f.write_text("\n".join(f"def f{i}(): return {i}  # module {k}" for i in range(800)), encoding="utf-8")
+        paths.append(str(f))
+    tool = ReadFileTool(workspace=tmp_path)
+
+    batch = await tool.execute(paths=paths)
+    assert "Use offset=" in batch["results"][3]["content"]
+
+    single = await tool.execute(path=paths[3])
+
+    assert "unchanged since last read" not in single
+    assert "def f100(): return 100  # module 3" in single
+
+
+@pytest.mark.asyncio
+async def test_in_a_two_file_batch_only_the_cut_page_loses_its_dedup(tmp_path: Path, run_cap: int) -> None:
+    big = tmp_path / "big.txt"
+    big.write_text("\n".join(f"big line {i} " + "x" * 40 for i in range(180)), encoding="utf-8")  # ~9,900 chars
+    small = tmp_path / "small.txt"
+    small.write_text("\n".join(f"small line {i}" for i in range(20)), encoding="utf-8")
+    tool = ReadFileTool(workspace=tmp_path)
+
+    batch = await tool.execute(paths=[str(big), str(small)])
+    big_page, small_page = (record["content"] for record in batch["results"])
+    assert "Use offset=" in big_page
+    assert "(End of file" in small_page
+
+    again_big = await tool.execute(path=str(big))
+    assert "unchanged since last read" not in again_big
+    assert "big line 150 " in again_big
+    # The small file was shown whole, so a repeat read may say so.
+    assert "unchanged since last read" in await tool.execute(path=str(small))
+
+
 @pytest.mark.asyncio
 async def test_outside_an_agent_run_the_historical_limit_applies(tmp_path: Path) -> None:
     f = tmp_path / "big.txt"

@@ -554,11 +554,13 @@ class ReadFileTool(_FsTool):
             last = min(start + (limit or self._DEFAULT_LIMIT), total)
             numbered: list[str] = []
             used = 0
+            cut_by_budget = False
             for index in range(start, last):
                 line_no = index + 1
                 entry_text = self._display_line(line_no, all_lines[index], self._LINE_CAP)
                 cost = len(entry_text) + (1 if numbered else 0)
                 if used + cost > room:
+                    cut_by_budget = True
                     if not numbered:
                         # Not even one line fits: show the head of it and
                         # point at the rest, so a page is never empty.
@@ -582,6 +584,13 @@ class ReadFileTool(_FsTool):
             result_chars = len(result)
             result = notes_block + result
             self._file_states.record_read(fp, offset=offset, limit=limit)
+            if budget is not None and cut_by_budget:
+                # A batch page holds only its share of the batch's budget, so
+                # a later read of this file shows more than the model saw
+                # here: it must not be answered "unchanged since last read".
+                entry = self._file_states.get(fp)
+                if entry is not None:
+                    entry.can_dedup = False
             self._emit("tool.read_file", {
                 "path": self._display_path(fp),
                 "offset": offset,
