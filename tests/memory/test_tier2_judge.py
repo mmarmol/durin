@@ -1,6 +1,12 @@
 """Tests for the Tier-2 sub-agent judge (Task 5)."""
 import asyncio
+import json
+from datetime import datetime, timezone
+
+from durin.agent.tools.memory_lineage_tools import MemorySourceDocumentTool
 from durin.memory import tier2_judge
+from durin.memory.field_patch import FieldPatch
+from durin.memory.memory_writer import write_entity
 
 
 def test_escalate_judge_parses_agent_verdict(tmp_path, monkeypatch):
@@ -176,3 +182,136 @@ def test_escalate_judge_does_not_spend_a_final_step_when_the_agent_answered(
                         lambda: (object(), "fake-model"))
     tier2_judge.escalate_judge(tmp_path, "person:a", "person:b")
     assert len(runs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Source-document evidence: the reference document a page was extracted from
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
+
+
+def _reference_doc(ws, slug, body, title="Spec"):
+    d = ws / "memory" / "references"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.md").write_text(
+        f"---\ntype: reference\ntitle: {title}\nsource: ''\n---\n\n{body}\n", encoding="utf-8")
+
+
+def _stub_from(ws, ref, name, slugs, body="A one-line stub."):
+    """A thin page extracted from reference documents, written the way the
+    document seeding pass writes it."""
+    patches = []
+    for slug in slugs:
+        src = f"[[references/{slug}.md]]"
+        patches += [
+            FieldPatch(kind="body_if_absent", value=body, author="dream", source_ref=src, at=_NOW),
+            FieldPatch(kind="derived_from", value=f"reference:{slug}", author="dream",
+                       source_ref=src, at=_NOW),
+        ]
+    write_entity(ws, ref, patches, create=True, name=name)
+
+
+def _filler(tag, lines):
+    return "\n".join(f"{tag} paragraph {i}: routine configuration notes." for i in range(lines))
+
+
+def _read_documents(ws, ref):
+    return asyncio.run(MemorySourceDocumentTool(ws).execute(ref=ref))
+
+
+def test_source_document_returns_a_bounded_excerpt_around_the_entitys_mention(tmp_path):
+    body = ("OPENING-SENTINEL overview of the statistics module.\n"
+            + _filler("early", 300)
+            + "\n### EmailError Structure\n"
+              "The error payload embeds the original event as a nested field.\n"
+            + _filler("late", 300) + "\nCLOSING-SENTINEL\n")
+    _reference_doc(tmp_path, "stats-log-codes", body)
+    _stub_from(tmp_path, "artifact:email-error-schema", "EmailError Structure", ["stats-log-codes"])
+
+    out = _read_documents(tmp_path, "artifact:email-error-schema")
+
+    (doc,) = out["documents"]
+    assert doc["doc"] == "reference:stats-log-codes"
+    assert doc["matched"] == ["EmailError Structure"]
+    assert "embeds the original event as a nested field" in doc["excerpt"]
+    assert "OPENING-SENTINEL" not in doc["excerpt"]
+    assert "CLOSING-SENTINEL" not in doc["excerpt"]
+    assert len(doc["excerpt"]) <= 3000 < len(body)
+
+
+def test_source_document_shows_the_opening_when_the_page_name_is_absent(tmp_path):
+    _reference_doc(tmp_path, "platform",
+                   "OPENING-SENTINEL the platform overview.\n" + _filler("more", 300))
+    _stub_from(tmp_path, "topic:inbox-abstraction", "Inbox Abstraction Layer", ["platform"])
+
+    (doc,) = _read_documents(tmp_path, "topic:inbox-abstraction")["documents"]
+
+    assert doc["matched"] == []
+    assert doc["excerpt"].startswith("OPENING-SENTINEL")
+    assert len(doc["excerpt"]) <= 3000
+
+
+def test_source_document_fits_one_tool_result_for_a_page_citing_many_long_documents(tmp_path):
+    """The investigating judge's runner cuts any tool result longer than its
+    per-result ceiling (``max_tool_result_chars`` in ``tier2_judge``, 8000)
+    at the head, which would drop every document after the first. However
+    many documents a page cites, the result stays under it."""
+    slugs = [f"doc-{i}" for i in range(6)]
+    for s in slugs:
+        _reference_doc(tmp_path, s, _filler(s, 50) + "\nStorage Providers upload attachments.\n"
+                       + _filler(s, 600))
+    _stub_from(tmp_path, "topic:storage-providers", "Storage Providers", slugs)
+
+    out = _read_documents(tmp_path, "topic:storage-providers")
+
+    assert len(json.dumps(out, ensure_ascii=False)) < 8000
+    shown = out["documents"]
+    assert shown and all("Storage Providers upload attachments" in d["excerpt"] for d in shown)
+    assert len(shown) + out.get("documents_not_shown", 0) == len(slugs)
+
+
+def test_source_document_refuses_a_document_outside_the_reference_library(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "memory" / "entities" / "artifact").mkdir(parents=True)
+    (ws / "memory" / "references").mkdir(parents=True)
+    (tmp_path / "secret.md").write_text("TOP-SECRET outside the workspace\n", encoding="utf-8")
+    (ws / "secret.md").write_text("TOP-SECRET outside the library\n", encoding="utf-8")
+    (ws / "memory" / "references" / "link.md").symlink_to(tmp_path / "secret.md")
+    # A tampered page whose citations climb out of the reference library.
+    (ws / "memory" / "entities" / "artifact" / "leaky.md").write_text(
+        "---\ntype: artifact\nname: Leaky\naliases: []\n"
+        "derived_from:\n- reference:../../../secret\n- reference:link\n"
+        "provenance:\n  body:\n    source_ref: '[[references/../../secret.md]]'\n"
+        "    author: dream\n    at: '2026-09-27T00:00:00+00:00'\n"
+        "author: agent_created\n---\nLeaky page.\n", encoding="utf-8")
+
+    out = _read_documents(ws, "artifact:leaky")
+
+    assert len(out["documents"]) == 3
+    assert all("error" in d and "excerpt" not in d for d in out["documents"])
+    assert "TOP-SECRET" not in json.dumps(out)
+
+
+def test_source_document_reports_a_missing_document_and_reads_the_rest(tmp_path):
+    _reference_doc(tmp_path, "present", "Inbox Providers fetch mail from Gmail, Office365 and IMAP.")
+    _stub_from(tmp_path, "topic:inbox-providers", "Inbox Providers", ["gone", "present"])
+
+    gone, present = _read_documents(tmp_path, "topic:inbox-providers")["documents"]
+
+    assert gone["doc"] == "reference:gone" and "error" in gone and "excerpt" not in gone
+    assert "Gmail, Office365 and IMAP" in present["excerpt"]
+
+
+def test_source_document_on_a_page_without_documents_and_on_a_missing_page(tmp_path):
+    write_entity(tmp_path, "topic:chat-only",
+                 [FieldPatch(kind="body_if_absent", value="Learned in a chat.", author="agent",
+                             source_ref="[[sessions/s1.md#turn-1]]", at=_NOW)],
+                 create=True, name="Chat only")
+
+    assert _read_documents(tmp_path, "topic:chat-only")["documents"] == []
+    assert "error" in _read_documents(tmp_path, "topic:nope")
+
+
+def test_the_investigating_judge_is_offered_the_source_document_tool(tmp_path):
+    assert "memory_source_document" in tier2_judge._build_tools(tmp_path).tool_names

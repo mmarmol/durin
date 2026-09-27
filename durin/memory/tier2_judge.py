@@ -1,6 +1,6 @@
 """Tier-2 merge judge: a bounded sub-agent that investigates a borderline pair
-with the read-entity / lineage / source-session tools and returns the same
-verdict envelope as the cheap judge — including the proposed resolution
+with the read-entity / lineage / source-session / source-document tools and
+returns the same verdict envelope as the cheap judge — including the proposed resolution
 (survivor, clearer keys, alias ownership, the edge between related pages).
 
 ``user_kept_separate=True`` is the re-review of a pair the user already
@@ -77,9 +77,14 @@ _TASK = (
     "Decide what to do with these two colliding memory entities.\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigate with your tools: read each entity in full (memory_read_entity), "
-    "their git lineage (memory_entity_lineage), and the source conversations "
-    "(memory_source_session). Weigh consistent facts and shared specifics; be "
-    "wary of homonyms.\n{extra}" + _GUIDE + "Then answer ONLY in this envelope:\n" + _ENVELOPE
+    "their git lineage (memory_entity_lineage), the source conversations "
+    "(memory_source_session) and the reference documents they were extracted "
+    "from (memory_source_document). A thin page — one or two sentences, no "
+    "relations — cannot tell two names for one thing from two distinct things "
+    "on its own: read its source document before you decide. Weigh consistent "
+    "facts and shared specifics; be wary of homonyms. If the evidence is still "
+    "insufficient, answer unclear with low confidence rather than guess.\n"
+    "{extra}" + _GUIDE + "Then answer ONLY in this envelope:\n" + _ENVELOPE
 )
 
 _SEPARATED_NOTE = (
@@ -97,7 +102,8 @@ _SEPARATED_NOTE = (
 # for the verdict with no tools on offer, so the budget always ends in an answer.
 _FINAL_BRIEF = (
     "Your investigation budget for this pair is spent. Decide NOW from the notes "
-    "below — no more tools are available.\n{extra}" + _GUIDE
+    "below — no more tools are available. If they do not settle it, answer "
+    "unclear with low confidence rather than guess.\n{extra}" + _GUIDE
     + "Answer ONLY in this envelope:\n" + _ENVELOPE + "\n\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigation notes (→ a tool call, ← what it returned):\n{notes}"
@@ -161,6 +167,7 @@ def _build_tools(workspace: Path) -> Any:
     from durin.agent.tools.memory_lineage_tools import (
         MemoryEntityLineageTool,
         MemoryReadEntityTool,
+        MemorySourceDocumentTool,
         MemorySourceSessionTool,
     )
     from durin.agent.tools.memory_search import MemorySearchTool
@@ -169,6 +176,7 @@ def _build_tools(workspace: Path) -> Any:
     t.register(MemoryReadEntityTool(workspace))
     t.register(MemoryEntityLineageTool(workspace))
     t.register(MemorySourceSessionTool(workspace))
+    t.register(MemorySourceDocumentTool(workspace))
     try:
         t.register(MemorySearchTool(workspace=workspace))
     except Exception:  # noqa: BLE001 — search optional
