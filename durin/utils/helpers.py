@@ -310,17 +310,28 @@ def _render_tool_result_reference(
     filepath: Path,
     *,
     original_size: int,
+    line_count: int,
     preview: str,
     truncated_preview: bool,
 ) -> str:
+    # The first three lines are parsed back by ``parse_persisted_reference``
+    # (compaction keeps the recovery path from them); keep their format.
+    # The instructions name the exact call because a model that is only
+    # told "saved to a file" tends to re-run the original call instead.
     result = (
         f"{_PERSISTED_REFERENCE_MARKER}\n"
         f"{_PERSISTED_PATH_PREFIX}{filepath}\n"
         f"{_PERSISTED_SIZE_PREFIX}{original_size}{_PERSISTED_SIZE_SUFFIX}\n"
+        f"Lines: {line_count}\n"
+        "This result was too large for the context, so only a preview is shown. "
+        "The whole result is on disk: do not re-run the call to get it back. "
+        f'Read it with read_file(path="{filepath}"): each call returns one page '
+        "that fits and ends with the offset to continue from. To find something "
+        f'specific, use grep(pattern=..., path="{filepath}").\n'
         f"Preview:\n{preview}"
     )
     if truncated_preview:
-        result += "\n...\n(Read the saved file if you need the full output.)"
+        result += "\n..."
     return result
 
 
@@ -497,6 +508,7 @@ def maybe_persist_tool_result(
     return _render_tool_result_reference(
         path,
         original_size=len(file_text),
+        line_count=len(file_text.splitlines()),
         preview=file_text[:_TOOL_RESULT_PREVIEW_CHARS],
         truncated_preview=len(file_text) > _TOOL_RESULT_PREVIEW_CHARS,
     )

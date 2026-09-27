@@ -620,6 +620,21 @@ def test_microcompact_fires_over_threshold_with_informative_placeholder():
     assert "began:" in stale
 
 
+def test_a_trimmed_result_points_at_reading_the_file_not_rerunning(tmp_path):
+    """The placeholder names the read that brings the result back, so the
+    model reads it instead of repeating the original (possibly slow or
+    costly) call."""
+    from durin.agent.runner import AgentRunner
+
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(context_window_tokens=8_000, workspace=tmp_path, session_key="sess")
+    messages = _many_compactable_tool_results(count=14, chars=600)
+    result = runner._microcompact(spec, messages, MagicMock())
+    stale = result[0]["content"]
+    assert 'read_file(path="' in stale
+    assert "instead of re-running" in stale
+
+
 def test_governance_repairs_orphans_after_snip():
     """After _snip_history clips an assistant+tool_calls, the second
     _drop_orphan_tool_results pass must clean up the resulting orphans."""
