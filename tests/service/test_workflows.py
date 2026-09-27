@@ -1,5 +1,8 @@
 """Tests for WorkflowsService (list / load / save / delete)."""
 
+import asyncio
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -527,6 +530,73 @@ async def test_cancel_run_is_idempotent(tmp_path):
     assert first["status"] == second["status"] == "cancelled"
     assert first["cancelled_at"] == second["cancelled_at"]
     assert first["cancelled_by"] == second["cancelled_by"]
+
+
+def test_cancel_and_resume_racing_the_same_run_exactly_one_wins(tmp_path):
+    """A person's Cancel click and a person's resume answer (two tabs, a
+    retried request) can both reach the service for the SAME paused run at
+    nearly the same moment. Without a lock serializing "read the status, then
+    act on it", both could pass their own check before either writes, so a
+    resume executes real engine nodes on a run cancel_run just finalized (or
+    the reverse). Forces the overlap deterministically: cancel's own finalize
+    is slowed while it holds the per-run lock, and resume starts a beat later
+    — while cancel is still inside that critical section — so resume's lock
+    acquisition is FORCED to wait rather than racing past on a stale read
+    taken before cancel ever wrote anything."""
+    svc = _runnable_svc(tmp_path)
+    p = Principal.local()
+    asyncio.run(svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p))
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+
+    real_finalize = run_log.finalize_short_circuit
+
+    def slow_finalize(*args, **kwargs):
+        time.sleep(0.1)
+        return real_finalize(*args, **kwargs)
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+
+    def fake_engine_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                        output_format=None, resume=None, work_key=None):
+        return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
+
+    outcomes: dict[str, object] = {}
+
+    def run_cancel():
+        try:
+            outcomes["cancel"] = asyncio.run(svc.cancel_run("wf", "r1", p))
+        except Exception as exc:  # noqa: BLE001 - captured for the assertions below
+            outcomes["cancel"] = exc
+
+    def run_resume():
+        time.sleep(0.02)  # let cancel's thread enter its critical section first
+        try:
+            with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+                 patch("durin.workflow.engine.WorkflowEngine.run", fake_engine_run):
+                outcomes["resume"] = asyncio.run(svc.execute("wf", "prod env", resume_run_id="r1"))
+        except Exception as exc:  # noqa: BLE001
+            outcomes["resume"] = exc
+
+    with patch("durin.workflow.run_log.finalize_short_circuit", side_effect=slow_finalize):
+        t_cancel = threading.Thread(target=run_cancel)
+        t_resume = threading.Thread(target=run_resume)
+        t_cancel.start()
+        t_resume.start()
+        t_cancel.join(timeout=5)
+        t_resume.join(timeout=5)
+
+    # Cancel entered its critical section first (and holds it for 0.1s), so it
+    # wins outright: a real cancellation, not an exception.
+    assert isinstance(outcomes["cancel"], dict), outcomes["cancel"]
+    assert outcomes["cancel"]["status"] == "cancelled"
+    # Resume's own re-read, taken only after it finally acquires the SAME lock
+    # (once cancel releases it), sees the run is no longer needs_input and
+    # refuses — it must never have gone on to run the (fake) engine.
+    assert isinstance(outcomes["resume"], ValidationFailedError), outcomes["resume"]
+
+    manifest = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert manifest["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
