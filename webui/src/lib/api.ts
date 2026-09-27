@@ -542,6 +542,23 @@ export async function getWorkflowRunManifest(
   return body.manifest;
 }
 
+export type WorkflowCancelResult = { run_id: string; status: string };
+
+// Finalizes a needs_input run as cancelled in place — no engine call, and the
+// run cannot be resumed afterwards.
+export async function cancelWorkflowRun(
+  token: string,
+  name: string,
+  runId: string,
+  base: string = "",
+): Promise<WorkflowCancelResult> {
+  return post<WorkflowCancelResult>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/cancel`,
+    token,
+    {},
+  );
+}
+
 export async function runWorkflow(
   token: string,
   name: string,

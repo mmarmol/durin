@@ -13,6 +13,7 @@ import { NeedsInputForm } from "@/components/workflows/NeedsInputForm";
 import {
   ApiError,
   acceptSkillSuggestion,
+  cancelWorkflowRun,
   decideApproval,
   listPending,
   rejectSkillSuggestion,
@@ -248,6 +249,17 @@ export function PendingView({
                     async () => {
                       await runWorkflow(token, run.workflow, answers, [], "", "", run.run_id);
                       resolved(t("pending.notice.resumed"));
+                    },
+                    errMsg,
+                  )
+                }
+                cancelling={busy.has(key)}
+                onCancel={() =>
+                  void track(
+                    key,
+                    async () => {
+                      await cancelWorkflowRun(token, run.workflow, run.run_id);
+                      resolved(t("pending.notice.cancelled"));
                     },
                     errMsg,
                   )

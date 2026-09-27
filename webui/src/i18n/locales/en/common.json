@@ -1393,6 +1393,10 @@
     "answersPlaceholder": "Type your answers…",
     "resumeRun": "Resume run",
     "resumeCaption": "resumes at {{node}} · same working folder and sessions · run {{runId}}",
+    "cancelRun": "Cancel run",
+    "cancelConfirmTitle": "Cancel this run?",
+    "cancelConfirmBody": "Ends the run now — it cannot be resumed.",
+    "keepWaiting": "Keep waiting",
     "abortedTitle": "Run aborted",
     "cancelledTitle": "Run cancelled",
     "outputFiles": "output files",
@@ -1706,6 +1710,7 @@
     },
     "notice": {
       "resumed": "Run resumed.",
+      "cancelled": "Run cancelled.",
       "resolved": "Done."
     }
   },

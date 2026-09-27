@@ -1706,6 +1706,7 @@
     },
     "notice": {
       "resumed": "Run dilanjutkan.",
+      "cancelled": "Run dibatalkan.",
       "resolved": "Selesai."
     }
   },

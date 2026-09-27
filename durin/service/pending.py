@@ -267,6 +267,8 @@ def _workflow_run_items(workspace: Path) -> list[PendingItem]:
                 PendingAction(name="resume", method="POST",
                               path=f"/api/v1/workflows/{_seg(name)}/run",
                               body={"resume_run_id": run_id}),
+                PendingAction(name="cancel", method="POST",
+                              path=f"/api/v1/workflows/{_seg(name)}/runs/{_seg(run_id)}/cancel"),
             ]),
             data=run,
         ))

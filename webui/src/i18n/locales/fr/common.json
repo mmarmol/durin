@@ -1706,6 +1706,7 @@
     },
     "notice": {
       "resumed": "Exécution reprise.",
+      "cancelled": "Exécution annulée.",
       "resolved": "Fait."
     }
   },

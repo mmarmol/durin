@@ -1706,6 +1706,7 @@
     },
     "notice": {
       "resumed": "Đã tiếp tục lượt chạy.",
+      "cancelled": "Đã hủy lượt chạy.",
       "resolved": "Xong."
     }
   },

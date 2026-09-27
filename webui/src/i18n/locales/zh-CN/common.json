@@ -1706,6 +1706,7 @@
     },
     "notice": {
       "resumed": "运行已恢复。",
+      "cancelled": "运行已取消。",
       "resolved": "已完成。"
     }
   },
