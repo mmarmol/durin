@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.absorb_judge import JudgeError, JudgeResult, _parse_response
+from durin.memory.pair_resolution import MERGE_VS_RELATE_RULE, RELATION_TYPE_GUIDE
 
 AgentRunner = None  # late-bound; patched in tests
 
@@ -38,16 +39,7 @@ _GUIDE = (
     "- different: homonyms, such as the same class name in two unrelated repos "
     "or projects, or otherwise unconnected things;\n"
     "- unclear: not enough evidence.\n"
-    "Before answering same, check each page for a fact that would be false or "
-    "misplaced on the merged page — a capability, role or scope that belongs "
-    "to only one of the two. If there is one, the pages are related, not the "
-    "same. A fact one page merely lacks does not count: two descriptions of "
-    "one thing, written from different sources, rarely list the same facts. "
-    "Decide on the facts, not on descriptive names or on the kind of "
-    "document each page came from. An established name is a fact, though: a "
-    "page named for a product and one named for a sub-service of it are "
-    "related, even where a document uses the product's name loosely for the "
-    "sub-service.\n"
+    + MERGE_VS_RELATE_RULE +
     "Resolution (only what the evidence supports): survivor (same only) = the "
     "ref with the clearest, most canonical key; renames = a clearer slug "
     "(lowercase, digits, '-') or name when a key is cryptic or ambiguous — "
@@ -56,24 +48,7 @@ _GUIDE = (
     "ref) or is junk such as OCR noise (keep_on none) — legitimate homonyms "
     "(a first name two people share) stay on both; relation (related only) = "
     "the edge between them, typed as below.\n"
-    "Relation type — tell is-a apart from composition and from usage:\n"
-    "- is-a: specialization_of / instance_of, only when the specific page IS a "
-    "kind or an instance of the general one (electric-car specialization_of car);\n"
-    "- parts: part_of / component_of / feature_of / subsystem_of "
-    "(spell-checker feature_of text-editor);\n"
-    "- data nested inside other data: embeds / contains (bounce-notice embeds "
-    "original-message — a record that carries another is not a kind of it);\n"
-    "- usage and implementation: uses / depends_on / implements (photo-app uses "
-    "image-recognition — a product that applies a technology is not a kind of it);\n"
-    "- other links where they fit: configures, runs_on (nginx-config configures "
-    "nginx, build-job runs_on ci-server).\n"
-    "Prefer a label the graph already uses — part_of, uses, component_of, "
-    "used_by, integrates_with, feature_of, implements, subsystem_of, contains, "
-    "depends_on, provides — and do not coin a synonym when one of them fits. The "
-    "edge reads '<from> <type> <to>' and points from the more specific page or "
-    "the part to the more general page or the whole (uses, not used_by); for "
-    "nested data, the record that carries the other is the more specific page "
-    "(<outer> embeds <inner>).\n"
+    + RELATION_TYPE_GUIDE
 )
 
 _TASK = (

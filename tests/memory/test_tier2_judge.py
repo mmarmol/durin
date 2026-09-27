@@ -4,9 +4,18 @@ import json
 from datetime import datetime, timezone
 
 from durin.agent.tools.memory_lineage_tools import MemorySourceDocumentTool
-from durin.memory import tier2_judge
+from durin.memory import pair_resolution, tier2_judge
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
+
+
+def test_guide_uses_the_relation_guidance_shared_with_tier1():
+    """The merge-versus-relate rule and the relation-type guide must come
+    from the shared constants, not a local copy — otherwise the cheap Tier-1
+    judge (which injects the same constants into its own template) and this
+    investigating judge could silently drift apart."""
+    assert pair_resolution.MERGE_VS_RELATE_RULE in tier2_judge._GUIDE
+    assert pair_resolution.RELATION_TYPE_GUIDE in tier2_judge._GUIDE
 
 
 def test_escalate_judge_parses_agent_verdict(tmp_path, monkeypatch):

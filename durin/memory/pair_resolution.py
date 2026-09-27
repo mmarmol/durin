@@ -42,6 +42,8 @@ __all__ = [
     "PairPageMissingError",
     "ResolutionError",
     "RESOLUTION_KINDS",
+    "MERGE_VS_RELATE_RULE",
+    "RELATION_TYPE_GUIDE",
     "apply_resolution",
     "effective_resolution",
     "resolution_from_judge",
@@ -52,6 +54,55 @@ logger = logging.getLogger(__name__)
 
 RESOLUTION_KINDS = ("merge", "disambiguate", "relate", "keep")
 _KEEP_ON_SPECIAL = ("both", "none")
+
+# --------------------------------------------------------------------------
+# Guidance shared by both entity-pair judges
+# --------------------------------------------------------------------------
+#
+# The cheap Tier-1 judge (``absorb_judge.py``) and the investigating Tier-2
+# judge (``tier2_judge.py``) both decide ``same`` versus ``related`` and, on
+# ``related``, what kind of edge connects the two pages. Defined once here so
+# the two prompts cannot drift apart.
+#
+# Tier-2 builds this text into its guide inline (``tier2_judge._GUIDE``).
+# Tier-1's template injects it at render time (``absorb_judge._build_prompt``);
+# because of that, ``absorb_judge.judge_template_fingerprint`` — the verdict
+# cache's judge identity — hashes this text too, so an edit here re-judges
+# every cached Tier-1 verdict instead of silently resting on a stale prompt.
+
+MERGE_VS_RELATE_RULE = (
+    "Before answering same, check each page for a fact that would be false or "
+    "misplaced on the merged page — a capability, role or scope that belongs "
+    "to only one of the two. If there is one, the pages are related, not the "
+    "same. A fact one page merely lacks does not count: two descriptions of "
+    "one thing, written from different sources, rarely list the same facts. "
+    "Decide on the facts, not on descriptive names or on the kind of "
+    "document each page came from. An established name is a fact, though: a "
+    "page named for a product and one named for a sub-service of it are "
+    "related, even where a document uses the product's name loosely for the "
+    "sub-service.\n"
+)
+
+RELATION_TYPE_GUIDE = (
+    "Relation type — tell is-a apart from composition and from usage:\n"
+    "- is-a: specialization_of / instance_of, only when the specific page IS a "
+    "kind or an instance of the general one (electric-car specialization_of car);\n"
+    "- parts: part_of / component_of / feature_of / subsystem_of "
+    "(spell-checker feature_of text-editor);\n"
+    "- data nested inside other data: embeds / contains (bounce-notice embeds "
+    "original-message — a record that carries another is not a kind of it);\n"
+    "- usage and implementation: uses / depends_on / implements (photo-app uses "
+    "image-recognition — a product that applies a technology is not a kind of it);\n"
+    "- other links where they fit: configures, runs_on (nginx-config configures "
+    "nginx, build-job runs_on ci-server).\n"
+    "Prefer a label the graph already uses — part_of, uses, component_of, "
+    "used_by, integrates_with, feature_of, implements, subsystem_of, contains, "
+    "depends_on, provides — and do not coin a synonym when one of them fits. The "
+    "edge reads '<from> <type> <to>' and points from the more specific page or "
+    "the part to the more general page or the whole (uses, not used_by); for "
+    "nested data, the record that carries the other is the more specific page "
+    "(<outer> embeds <inner>).\n"
+)
 
 
 class ResolutionError(ValueError):
