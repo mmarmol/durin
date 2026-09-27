@@ -201,11 +201,16 @@ def test_operating_floor_template_contains_execution_rules() -> None:
 
 
 def test_operating_floor_teaches_recovering_truncated_output() -> None:
-    """Every prompt says what a truncated/saved/trimmed tool result means and
-    how to get the rest, and to keep findings where trimming can't reach."""
+    """Every prompt says how to get the rest of a tool result that names the
+    file it was saved to, that a result cut with no saved file can be
+    narrowed and re-run, and to keep findings where trimming can't reach."""
     floor = (pkg_files("durin") / "templates" / "agent" / "operating_floor.md").read_text(encoding="utf-8")
-    assert "read_file" in floor
-    assert "do not re-run" in floor
+    rule = next(line for line in floor.splitlines() if "do not re-run" in line)
+    assert "read_file" in rule
+    # Several tools cut their own output and keep no file (web_fetch,
+    # execute_code, session_search): the no-re-run rule must not cover them.
+    assert "names a saved file path" in rule
+    assert "narrow" in rule
     assert "note_decision" in floor
 
 
