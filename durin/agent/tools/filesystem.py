@@ -557,6 +557,11 @@ class ReadFileTool(_FsTool):
                 return f"Error: offset {offset} is beyond end of file ({total} lines)"
 
             page_budget = budget if budget is not None else self._page_budget()
+            if char_offset == 0 and len(all_lines[offset - 1]) <= self._LINE_CAP:
+                # A line a normal page shows whole needs no character pages:
+                # char_offset=0 there (a caller filling in every default)
+                # reads the same page as no char_offset.
+                char_offset = None
             if char_offset is not None:
                 return self._read_line_page(fp, all_lines, offset, char_offset, page_budget)
             # A batch page (``budget`` given) reaches the model inside the

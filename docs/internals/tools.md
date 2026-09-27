@@ -370,6 +370,7 @@ keeps its own limits there too.
 - A line over 2,000 chars is shortened with the call that reads the rest of it:
   `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
   saved tool output) is read in character pages through `char_offset`.
+  `char_offset=0` on a line of 2,000 chars or less reads the normal page.
 - A page that cannot hold even one line shows the line's head with the same
   pointer, never an empty page.
 

@@ -206,6 +206,18 @@ async def test_a_batch_of_documents_arrives_whole(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_char_offset_zero_on_a_short_line_reads_the_normal_page(tmp_path: Path, run_cap: int) -> None:
+    f = tmp_path / "mod.py"
+    f.write_text("\n".join(f"line {i}" for i in range(500)), encoding="utf-8")
+
+    explicit = await ReadFileTool(workspace=tmp_path).execute(path=str(f), char_offset=0)
+    plain = await ReadFileTool(workspace=tmp_path).execute(path=str(f))
+
+    assert explicit == plain
+    assert "(End of file — 500 lines total)" in explicit
+
+
+@pytest.mark.asyncio
 async def test_outside_an_agent_run_the_historical_limit_applies(tmp_path: Path) -> None:
     f = tmp_path / "big.txt"
     f.write_text("\n".join("z" * 50 for _ in range(1_000)), encoding="utf-8")  # ~51,000 chars
