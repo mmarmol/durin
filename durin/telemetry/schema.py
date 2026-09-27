@@ -455,7 +455,8 @@ class ToolReadFileEvent(TypedDict):
     when none matched or the feature is off) — the field that measures
     artifact recall, since the lookup itself emits no search event.
     ``verbatim`` marks the raw-content path used by scripts; no numbered
-    view, no notes.
+    view, no notes. ``kind == "line_window"`` is a character page of one
+    long line, starting at ``char_offset``.
     """
 
     path: str
@@ -469,6 +470,7 @@ class ToolReadFileEvent(TypedDict):
     memory_notes: NotRequired[int]
     truncated: NotRequired[bool]
     verbatim: NotRequired[bool]
+    char_offset: NotRequired[int]
 
 
 class ToolEditFileEvent(TypedDict):

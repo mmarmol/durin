@@ -436,8 +436,10 @@ class TestOfficeDocTruncation:
             f = tmp_path / "large.docx"
             f.write_bytes(b"PK")
             result = await tool.execute(path=str(f))
-        assert len(result) <= ReadFileTool._MAX_CHARS + 100
-        assert "truncated at ~128K chars" in result
+        assert len(result) <= ReadFileTool._MAX_CHARS
+        # The marker gives the real sizes and how to get the whole text.
+        assert "of 200,000 chars" in result
+        assert "convert_to_markdown" in result
 
     @pytest.mark.asyncio
     async def test_small_document_not_truncated(self, tool, tmp_path):

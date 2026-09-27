@@ -146,6 +146,33 @@ async def test_secrets_inside_a_dict_result_never_reach_the_model_or_the_disk(tm
 
 
 @pytest.mark.asyncio
+async def test_a_tool_sees_the_result_cap_of_the_run_that_calls_it(tmp_path: Path) -> None:
+    from durin.agent.tools.context import current_result_char_cap
+
+    caps: list[int | None] = []
+
+    async def execute(name: str, params: Any) -> str:
+        caps.append(current_result_char_cap())
+        return "ok"
+
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = execute
+    provider, _ = _scripted_provider(tool_rounds=1)
+    await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=8_000,
+        workspace=tmp_path,
+    ))
+
+    assert caps == [8_000]
+    assert current_result_char_cap() is None
+
+
+@pytest.mark.asyncio
 async def test_an_oversized_text_block_list_is_saved_line_by_line(tmp_path: Path) -> None:
     body = "\n".join(f"row {i} " + "z" * 60 for i in range(600))
     blocks = [{"type": "text", "text": "header"}, {"type": "text", "text": body}]

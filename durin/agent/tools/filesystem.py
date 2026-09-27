@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
+from durin.agent.tools.context import (
+    ContextAware,
+    RequestContext,
+    RequestContextVar,
+    current_result_char_cap,
+)
 from durin.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.post_edit_check import run_post_edit_check
@@ -281,6 +286,15 @@ MAX_READ_PATHS: int = 15
             description="Maximum number of lines to read (default 2000)",
             minimum=1,
         ),
+        char_offset=IntegerSchema(
+            0,
+            description=(
+                "Read one very long line in character pages: the character "
+                "position within line `offset` to start from (single `path` "
+                "only; the page's footer gives the next value)"
+            ),
+            minimum=0,
+        ),
         pages=StringSchema("Page range for PDF files, e.g. '1-5' (default: all, max 20 pages)"),
     )
 )
@@ -291,6 +305,15 @@ class ReadFileTool(_FsTool):
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
     _MAX_PDF_PAGES = 20
+    # A line longer than this is shortened in a normal read, with a pointer
+    # to read the rest of it in character pages.
+    _LINE_CAP = 2_000
+    # Held back from the calling run's per-result cap, for the footer and
+    # the runner's own framing, so a full page still fits the cap.
+    _RESULT_RESERVE = 600
+    # Room kept free inside a page for its "continue at" footer.
+    _FOOTER_ROOM = 200
+    _MIN_PAGE = 500
 
     @property
     def name(self) -> str:
@@ -308,9 +331,21 @@ class ReadFileTool(_FsTool):
             "Text output format: LINE_NUM|CONTENT. "
             "Images return visual content for analysis. "
             "Supports PDF, DOCX, XLSX, PPTX documents. "
-            "Use offset and limit for large text files (single `path` only). "
-            "Reads exceeding ~128K chars are truncated."
+            "Each call returns one page sized to fit the context; a longer file "
+            "ends with a footer giving the `offset` to continue from (single "
+            "`path` only). Lines over 2,000 characters are shortened; read the "
+            "rest of such a line with offset=<line>, limit=1, char_offset=<n> "
+            "as its marker says. This also pages saved tool outputs whose "
+            "preview says the full result is on disk."
         )
+
+    def _page_budget(self) -> int:
+        """Characters one page may use: the calling run's cap minus a reserve,
+        or this tool's own limit outside an agent run."""
+        cap = current_result_char_cap()
+        if cap is None:
+            return self._MAX_CHARS
+        return max(self._MIN_PAGE, cap - self._RESULT_RESERVE)
 
     @property
     def read_only(self) -> bool:
@@ -328,6 +363,7 @@ class ReadFileTool(_FsTool):
         limit: int | None = None,
         pages: str | None = None,
         verbatim: bool = False,
+        char_offset: int | None = None,
         **kwargs: Any,
     ) -> Any:
         # Mutually exclusive surfaces, mirroring memory_drill / web_fetch.
@@ -338,28 +374,47 @@ class ReadFileTool(_FsTool):
                 return "Error: paths must be a non-empty list"
             if len(paths) > MAX_READ_PATHS:
                 return f"Error: too many paths ({len(paths)}); cap is {MAX_READ_PATHS} per call"
+            if char_offset is not None:
+                return "Error: `char_offset` needs a single `path`"
+            # The batch comes back as one result, so the files share one
+            # page budget. JSON encoding of the batch escapes every line
+            # break, so part of the budget is left for that growth.
+            per_file = max(self._MIN_PAGE, int(self._page_budget() * 0.85) // len(paths))
             # Each read is independent local IO touching a distinct file-state
             # key, so awaiting them together is safe; this collapses N reads
             # into one tool call (one round-trip, guaranteed grouping).
             results = await asyncio.gather(*[
-                self._read_one_safe(str(p)) for p in paths
+                self._read_one_safe(str(p), per_file) for p in paths
             ])
             return {"results": results}
 
-        return await self._read_one(path, offset, limit, pages, verbatim=verbatim)
+        return await self._read_one(
+            path, offset, limit, pages, verbatim=verbatim, char_offset=char_offset,
+        )
 
-    async def _read_one_safe(self, path: str) -> dict[str, Any]:
+    async def _read_one_safe(self, path: str, budget: int | None = None) -> dict[str, Any]:
         """Batch helper — never raises, always returns a record carrying the
         path so the caller can match it back to its request."""
         if not path:
             return {"path": path, "error": "empty path"}
         try:
-            content = await self._read_one(path)
+            content = await self._read_one(path, budget=budget)
         except Exception as exc:  # defensive: one read must not abort the batch
             return {"path": path, "error": f"read failed: {exc}"}
         return {"path": path, "content": content}
 
-    async def _read_one(self, path: str | None = None, offset: int = 1, limit: int | None = None, pages: str | None = None, verbatim: bool = False, **kwargs: Any) -> Any:
+    async def _read_one(
+        self,
+        path: str | None = None,
+        offset: int = 1,
+        limit: int | None = None,
+        pages: str | None = None,
+        verbatim: bool = False,
+        *,
+        budget: int | None = None,
+        char_offset: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
         try:
             if not path:
                 return "Error reading file: Unknown path"
@@ -415,13 +470,17 @@ class ReadFileTool(_FsTool):
                 return build_image_content_blocks(raw, mime, str(fp), f"(Image file: {path})")
 
             # Read dedup: same path + offset + limit + unchanged mtime → stub
-            # Always check for external modifications before dedup
+            # Always check for external modifications before dedup. A
+            # character page is never deduped: successive pages of one line
+            # share offset and limit and differ only in char_offset.
             entry = self._file_states.get(fp)
             try:
                 current_mtime = os.path.getmtime(fp)
             except OSError:
                 current_mtime = 0.0
-            if entry and entry.can_dedup and entry.offset == offset and entry.limit == limit:
+            if char_offset is not None:
+                pass
+            elif entry and entry.can_dedup and entry.offset == offset and entry.limit == limit:
                 if current_mtime != entry.mtime:
                     # File was modified externally - force full read and mark as not dedupable
                     entry.can_dedup = False
@@ -476,20 +535,40 @@ class ReadFileTool(_FsTool):
             if offset > total:
                 return f"Error: offset {offset} is beyond end of file ({total} lines)"
 
-            start = offset - 1
-            end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
-            result = "\n".join(numbered)
+            page_budget = budget if budget is not None else self._page_budget()
+            if char_offset is not None:
+                return self._read_line_page(fp, all_lines, offset, char_offset, page_budget)
 
-            if len(result) > self._MAX_CHARS:
-                trimmed, chars = [], 0
-                for line in numbered:
-                    chars += len(line) + 1
-                    if chars > self._MAX_CHARS:
-                        break
-                    trimmed.append(line)
-                end = start + len(trimmed)
-                result = "\n".join(trimmed)
+            # The notes lead the page instead of trailing it, and count against
+            # its budget: anything past the calling run's cap is taken out of
+            # the model's context, so a trailing block would never be seen.
+            notes = self._memory_notes(fp)
+            notes_block = (
+                "Memory notes about this file (memory_drill a uri for the full body):\n"
+                + "\n".join(notes)
+                + "\n\n"
+            ) if notes else ""
+            room = max(self._MIN_PAGE, page_budget - len(notes_block)) - self._FOOTER_ROOM
+
+            start = offset - 1
+            last = min(start + (limit or self._DEFAULT_LIMIT), total)
+            numbered: list[str] = []
+            used = 0
+            for index in range(start, last):
+                line_no = index + 1
+                entry_text = self._display_line(line_no, all_lines[index], self._LINE_CAP)
+                cost = len(entry_text) + (1 if numbered else 0)
+                if used + cost > room:
+                    if not numbered:
+                        # Not even one line fits: show the head of it and
+                        # point at the rest, so a page is never empty.
+                        keep = max(1, room - len(f"{line_no}| ") - 150)
+                        numbered.append(self._display_line(line_no, all_lines[index], keep))
+                    break
+                numbered.append(entry_text)
+                used += cost
+            end = start + len(numbered)
+            result = "\n".join(numbered)
 
             if end < total:
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
@@ -501,18 +580,7 @@ class ReadFileTool(_FsTool):
             # the file content that was returned, and `memory_notes` reports
             # what artifact recall added on top of it.
             result_chars = len(result)
-            notes = self._memory_notes(fp)
-            if notes:
-                # The notes lead the result instead of trailing it: a read of a
-                # long file overruns the agent loop's per-result character cap,
-                # and the loop keeps the head of the result and drops the tail —
-                # a trailing block would be cut off before the model saw it.
-                result = (
-                    "Memory notes about this file (memory_drill a uri for the full body):\n"
-                    + "\n".join(notes)
-                    + "\n\n"
-                    + result
-                )
+            result = notes_block + result
             self._file_states.record_read(fp, offset=offset, limit=limit)
             self._emit("tool.read_file", {
                 "path": self._display_path(fp),
@@ -531,6 +599,66 @@ class ReadFileTool(_FsTool):
             return f"Error: {e}"
         except Exception as e:
             return f"Error reading file: {e}"
+
+    @staticmethod
+    def _display_line(line_no: int, line: str, limit: int) -> str:
+        """One numbered line; past ``limit`` characters it is cut and ends
+        with the call that reads the rest of it."""
+        if len(line) <= limit:
+            return f"{line_no}| {line}"
+        return (
+            f"{line_no}| {line[:limit]}… [line {line_no} has {len(line):,} chars; "
+            f"read the rest with offset={line_no}, limit=1, char_offset={limit}]"
+        )
+
+    def _read_line_page(
+        self,
+        fp: Path,
+        all_lines: list[str],
+        line_no: int,
+        char_offset: int,
+        page_budget: int,
+    ) -> str:
+        """One character page of line ``line_no``: the way to read a line no
+        line-based page can hold (a minified or single-line JSON file)."""
+        line = all_lines[line_no - 1]
+        if char_offset and char_offset >= len(line):
+            return (
+                f"Error: char_offset {char_offset} is beyond the end of line "
+                f"{line_no} ({len(line):,} chars)"
+            )
+        prefix = f"{line_no}| "
+        room = max(1, page_budget - len(prefix) - self._FOOTER_ROOM)
+        chunk = line[char_offset:char_offset + room]
+        stop = char_offset + len(chunk)
+        if stop < len(line):
+            footer = (
+                f"\n\n(Line {line_no}: chars {char_offset}-{stop} of {len(line):,}. "
+                f"Use offset={line_no}, limit=1, char_offset={stop} to continue.)"
+            )
+        else:
+            footer = (
+                f"\n\n(Line {line_no}: chars {char_offset}-{stop} of {len(line):,}, "
+                f"end of the line; the file has {len(all_lines)} lines.)"
+            )
+        self._file_states.record_read(fp, offset=line_no, limit=1)
+        entry = self._file_states.get(fp)
+        if entry is not None:
+            entry.can_dedup = False
+        self._emit("tool.read_file", {
+            "path": self._display_path(fp),
+            "offset": line_no,
+            "limit": 1,
+            "char_offset": char_offset,
+            "total_lines": len(all_lines),
+            "returned_lines": 1,
+            "result_chars": len(chunk),
+            "memory_notes": 0,
+            "kind": "line_window",
+            "truncated": stop < len(line),
+            "dedup": False,
+        })
+        return prefix + chunk + footer
 
     def _memory_notes(self, fp: Path) -> list[str]:
         """Memory entries that mention this file, or [] — never raises."""
@@ -581,10 +709,18 @@ class ReadFileTool(_FsTool):
             return f"(PDF has no extractable text: {fp})"
 
         result = "\n\n".join(parts)
-        if end < total_pages - 1:
+        budget = self._page_budget() - self._FOOTER_ROOM
+        if len(result) > budget:
+            # Cut first, then say where to continue: a continuation hint added
+            # before the cut would be the part that gets cut.
+            result = (
+                result[:budget]
+                + f"\n\n(PDF text of pages {start + 1}-{end + 1} cut at {budget:,} of "
+                f"{len(result):,} chars; request fewer pages at a time, e.g. "
+                f"pages='{start + 1}-{start + 1}'.)"
+            )
+        elif end < total_pages - 1:
             result += f"\n\n(Showing pages {start + 1}-{end + 1} of {total_pages}. Use pages='{end + 2}-{min(end + 1 + self._MAX_PDF_PAGES, total_pages)}' to continue.)"
-        if len(result) > self._MAX_CHARS:
-            result = result[:self._MAX_CHARS] + "\n\n(PDF text truncated at ~128K chars)"
         return result
 
     def _read_office_doc(self, fp: Path) -> str:
@@ -601,8 +737,14 @@ class ReadFileTool(_FsTool):
         if not result:
             return f"({fp.suffix.upper().lstrip('.')} has no extractable text: {fp})"
 
-        if len(result) > self._MAX_CHARS:
-            result = result[:self._MAX_CHARS] + "\n\n(Document text truncated at ~128K chars)"
+        budget = self._page_budget() - self._FOOTER_ROOM
+        if len(result) > budget:
+            result = (
+                result[:budget]
+                + f"\n\n(Document text cut at {budget:,} of {len(result):,} chars; "
+                "convert_to_markdown returns the whole text, and a result that "
+                "large is saved to a file you can read in pages.)"
+            )
 
         return result
 

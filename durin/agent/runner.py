@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 
 from durin.agent.hook import AgentHook, AgentHookContext
+from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from durin.telemetry.logger import current_telemetry
@@ -485,6 +486,17 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        # Tools that page their own output (read_file, grep) size a page
+        # under this run's per-result cap, so the page arrives whole instead
+        # of being replaced by a preview that drops its "continue" footer.
+        # Tool calls run in tasks spawned from this one, which inherit it.
+        cap_token = set_result_char_cap(spec.max_tool_result_chars)
+        try:
+            return await self._run(spec)
+        finally:
+            reset_result_char_cap(cap_token)
+
+    async def _run(self, spec: AgentRunSpec) -> AgentRunResult:
         # Resolve the per-turn provider snapshot once. A concurrent session's
         # /model swap mutates self.provider; pinning it here makes this turn
         # immune to that mutation.
