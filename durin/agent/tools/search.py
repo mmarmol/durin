@@ -248,6 +248,9 @@ class GrepTool(_SearchTool):
         match_line: int,
         before: int,
         after: int,
+        *,
+        file_path: Path,
+        regex: re.Pattern[str],
     ) -> str:
         start = max(1, match_line - before)
         end = min(len(lines), match_line + after)
@@ -256,11 +259,30 @@ class GrepTool(_SearchTool):
             marker = ">" if line_no == match_line else " "
             text = lines[line_no - 1]
             if len(text) > cls._LINE_CAP:
-                text = (
-                    f"{text[:cls._LINE_CAP]}… [line {line_no} has {len(text):,} chars; "
-                    f'read it with read_file(path="{display_path}", offset={line_no}, '
-                    f"limit=1, char_offset={cls._LINE_CAP})]"
-                )
+                # The pointer names the absolute path: inside a session a
+                # relative path resolves in the session's work area, not
+                # where grep found the file.
+                found = regex.search(text) if line_no == match_line else None
+                begin = 0
+                if found:
+                    # Keep the window around the first match, so a match deep
+                    # inside one long line (a minified or saved one-line
+                    # file) is shown, and point at where that window starts.
+                    begin = max(0, min(found.start() - cls._LINE_CAP // 2, len(text) - cls._LINE_CAP))
+                window = text[begin:begin + cls._LINE_CAP]
+                if begin:
+                    text = (
+                        f"…{window}… [line {line_no} has {len(text):,} chars; this is chars "
+                        f"{begin:,}-{begin + len(window):,}; read it with "
+                        f'read_file(path="{file_path}", offset={line_no}, limit=1, '
+                        f"char_offset={begin})]"
+                    )
+                else:
+                    text = (
+                        f"{window}… [line {line_no} has {len(text):,} chars; "
+                        f'read it with read_file(path="{file_path}", offset={line_no}, '
+                        f"limit=1, char_offset={cls._LINE_CAP})]"
+                    )
             block.append(f"{marker} {line_no}| {text}")
         return "\n".join(block)
 
@@ -432,6 +454,8 @@ class GrepTool(_SearchTool):
                         idx,
                         context_before,
                         context_after,
+                        file_path=file_path,
+                        regex=regex,
                     )
                     extra_sep = 2 if blocks else 0
                     if result_chars + extra_sep + len(block) > budget:

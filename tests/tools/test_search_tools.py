@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -234,6 +235,73 @@ async def test_a_huge_matching_line_is_shown_shortened_not_as_no_match(tmp_path:
     assert "No matches found" not in result
     assert "char_offset=" in result
     assert len(result) < 20_000
+
+
+_LINE_POINTER = re.compile(r'read_file\(path="([^"]+)", offset=(\d+), limit=1, char_offset=(\d+)\)')
+_FACT_AT = 45_001
+
+
+@pytest.fixture()
+def run_cap():
+    from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
+
+    token = set_result_char_cap(16_000)
+    yield 16_000
+    reset_result_char_cap(token)
+
+
+def _one_line_saved_output(workspace: Path) -> Path:
+    """A saved tool output that is one 67,751-char line, its only match deep inside."""
+    saved = workspace / ".durin" / "tool-results" / "slack_T1" / "call_1.txt"
+    saved.parent.mkdir(parents=True)
+    saved.write_text("x" * (_FACT_AT - 1) + " THE_FACT_42 " + "y" * 22_738, encoding="utf-8")
+    return saved
+
+
+def _session_tools(workspace: Path):
+    """grep and read_file as a session calls them: there a relative path
+    resolves inside the session's work area."""
+    from durin.agent.tools.context import RequestContext
+    from durin.agent.tools.filesystem import ReadFileTool
+
+    ctx = RequestContext(channel="slack", chat_id="C1", session_key="slack:T1")
+    grep, read = GrepTool(workspace=workspace), ReadFileTool(workspace=workspace)
+    grep.set_context(ctx)
+    read.set_context(ctx)
+    return grep, read
+
+
+@pytest.mark.asyncio
+async def test_a_long_line_pointer_can_be_followed_from_a_session(tmp_path: Path, run_cap: int) -> None:
+    workspace = tmp_path.resolve()
+    saved = _one_line_saved_output(workspace)
+    grep, read = _session_tools(workspace)
+
+    out = await grep.execute(pattern="THE_FACT_42", path=str(saved), output_mode="content")
+    pointer = _LINE_POINTER.search(out)
+    assert pointer is not None, out[-400:]
+    page = await read.execute(
+        path=pointer.group(1), offset=int(pointer.group(2)), limit=1, char_offset=int(pointer.group(3)),
+    )
+
+    assert page.startswith("1| "), page[:200]
+
+
+@pytest.mark.asyncio
+async def test_a_match_deep_inside_a_long_line_is_shown_with_a_pointer_to_it(tmp_path: Path, run_cap: int) -> None:
+    workspace = tmp_path.resolve()
+    saved = _one_line_saved_output(workspace)
+    grep, read = _session_tools(workspace)
+
+    out = await grep.execute(pattern="THE_FACT_42", path=str(saved), output_mode="content")
+
+    assert "THE_FACT_42" in out
+    pointer = _LINE_POINTER.search(out)
+    assert pointer is not None, out[-400:]
+    window_start = int(pointer.group(3))
+    assert window_start <= _FACT_AT < window_start + 2_000
+    page = await read.execute(path=str(saved), offset=1, limit=1, char_offset=window_start)
+    assert "THE_FACT_42" in page
 
 
 @pytest.mark.asyncio

@@ -367,7 +367,12 @@ limits.
 - A page that cannot hold even one line shows the line's head with the same
   pointer, never an empty page.
 
-`grep` sizes its output the same way and shortens long matching lines. Every
+`grep` sizes its output the same way. A matching or context line over 2,000
+chars is shortened to a 2,000-char window that ends with the `read_file` call
+for the rest of the line. The call names the file by its absolute path: inside
+a session, a relative path resolves in the session's work area. On the matching
+line the window is centered on the first match, so a match deep inside a
+one-line file is shown, and the call starts where the window starts. Every
 note that holds results back gives the offset that shows the next ones, and
 the total when it is known.
 
