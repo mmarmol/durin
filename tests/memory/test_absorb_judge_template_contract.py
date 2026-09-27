@@ -65,8 +65,8 @@ def test_template_keeps_peer_review_framing(template_text: str) -> None:
     'different' when content evidence is thin, not confirm Dream's most recent
     decision (self-consistency bias mitigation). Lock the safety net so a
     future rewrite can't drop it."""
-    # Lenient match — the prompt's exact wording is in Spanish; we
-    # check for one of two semantic anchors that must be present.
+    # Lenient match — tolerates either the current English wording or the
+    # Spanish phrasing the template used before it was translated.
     assert (
         "Default a \"different\"" in template_text
         or "default to \"different\"" in template_text.lower()
