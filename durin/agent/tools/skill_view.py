@@ -23,7 +23,8 @@ _DESCRIPTION = (
     "bundled files (references/scripts/templates/assets) with a resolved "
     "directory, and any missing setup. Prefer this over reading the SKILL.md "
     "file directly. Pass file_path to read one bundled file instead of the "
-    "main instructions."
+    "main instructions. A skill too large for the context comes back as a "
+    "preview with the saved file's path: read the rest with read_file."
 )
 
 _PARAMETERS = tool_parameters_schema(

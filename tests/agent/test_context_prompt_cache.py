@@ -200,6 +200,28 @@ def test_operating_floor_template_contains_execution_rules() -> None:
     assert "## Execution Rules" not in soul
 
 
+def test_operating_floor_teaches_recovering_truncated_output() -> None:
+    """Every prompt says what a truncated/saved/trimmed tool result means and
+    how to get the rest, and to keep findings where trimming can't reach."""
+    floor = (pkg_files("durin") / "templates" / "agent" / "operating_floor.md").read_text(encoding="utf-8")
+    assert "read_file" in floor
+    assert "do not re-run" in floor
+    assert "note_decision" in floor
+
+
+def test_tool_descriptions_say_where_oversized_output_goes() -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    from durin.agent.tools.note_decision import NoteDecisionTool
+    from durin.agent.tools.shell import ExecTool
+    from durin.agent.tools.skill_view import SkillViewTool
+
+    exec_desc = ExecTool().description
+    assert "instead of re-running" in exec_desc
+    for desc in (SkillViewTool.__dict__["description"].fget(None), MemoryDrillTool.__dict__["description"].fget(None)):
+        assert "read_file" in desc
+    assert "later calls of this turn" in NoteDecisionTool.__dict__["description"].fget(None)
+
+
 def test_channel_format_hint_telegram(tmp_path) -> None:
     """Telegram channel should get messaging-app format hint."""
     workspace = _make_workspace(tmp_path)
