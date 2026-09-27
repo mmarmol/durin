@@ -9,10 +9,12 @@ import pytest
 from durin.memory.absorb_judge import (
     JudgeError,
     JudgeResult,
+    _RELATION_GUIDE,
     _build_prompt,
     _load_template,
     _parse_response,
     judge_pair,
+    judge_template_fingerprint,
 )
 from durin.memory.entity_page import EntityPage
 
@@ -28,7 +30,7 @@ def test_template_has_all_placeholders() -> None:
     tpl = _load_template()
     for marker in [
         "{shared_aliases}", "{ref_a}", "{ref_b}",
-        "{page_a_block}", "{page_b_block}",
+        "{page_a_block}", "{page_b_block}", "{relation_guide}",
         "===VERDICT===", "===CONFIDENCE===", "===REASONING===", "===END===",
     ]:
         assert marker in tpl, f"template missing {marker!r}"
@@ -126,7 +128,7 @@ def test_build_prompt_substitutes_all_fields() -> None:
     assert "2026-05-01" in prompt
     # No leftover format placeholders.
     for placeholder in ["{shared_aliases}", "{ref_a}", "{ref_b}",
-                         "{page_a_block}", "{page_b_block}"]:
+                         "{page_a_block}", "{page_b_block}", "{relation_guide}"]:
         assert placeholder not in prompt
 
 
@@ -140,6 +142,39 @@ def test_build_prompt_handles_missing_mtime() -> None:
     )
     assert "(unknown)" in prompt
     assert "(none)" in prompt  # empty shared_aliases label
+
+
+def test_build_prompt_includes_the_shared_relation_guidance() -> None:
+    """The Tier-1 prompt must carry the exact same merge-versus-relate rule
+    and relation-type guide as the Tier-2 judge (pair_resolution.py) — a
+    confident Tier-1 `related` is applied without ever reaching Tier-2, so it
+    needs the same rule for telling is-a apart from composition and usage."""
+    a = EntityPage(type="person", name="A", aliases=[])
+    b = EntityPage(type="person", name="B", aliases=[])
+    prompt = _build_prompt(
+        canonical=a, absorbed=b, shared_aliases=[],
+        canonical_ref="person:a", absorbed_ref="person:b",
+        canonical_mtime=None, absorbed_mtime=None,
+    )
+    assert _RELATION_GUIDE in prompt
+
+
+# ---------------------------------------------------------------------------
+# judge_template_fingerprint — the verdict cache's judge identity
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_changes_when_the_shared_relation_guidance_changes(monkeypatch) -> None:
+    """The fingerprint must cover the injected guidance, not only the template
+    file: the guidance text is not literally part of absorb_judge.md, so a
+    template-only hash would let an edit to the shared text (used by the
+    Tier-2 judge too) rest silently on a stale prompt and never re-judge the
+    cache."""
+    before = judge_template_fingerprint()
+    import durin.memory.absorb_judge as absorb_judge_module
+    monkeypatch.setattr(absorb_judge_module, "_RELATION_GUIDE", _RELATION_GUIDE + "\nmore.\n")
+    after = judge_template_fingerprint()
+    assert before != after
 
 
 # ---------------------------------------------------------------------------

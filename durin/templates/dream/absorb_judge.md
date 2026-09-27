@@ -1,4 +1,4 @@
-# Absorb judge prompt — v2
+# Absorb judge prompt — v3
 
 > LLM-judge para decidir qué hacer con DOS entity pages que colisionan
 > (comparten un alias o están muy cerca en embeddings). Usado por el refine
@@ -15,6 +15,12 @@
 > `related`: identidades distintas donde una es parte, versión o
 > especialización de la otra.
 >
+> v3: incorpora `{relation_guide}` — la regla para no confundir "same" con
+> "related" y la guía de tipos de relación (is-a vs. composición vs. uso),
+> compartida palabra por palabra con el juez Tier-2 (`pair_resolution.py`).
+> Por eso `judge_template_fingerprint()` también hashea ese texto: cambiarlo
+> re-juzga los pares cacheados igual que un cambio al template.
+>
 > Output esperado: `===VERDICT===` (one of `same` / `different` / `related` /
 > `unclear`), `===CONFIDENCE===` (entero 0-100), `===REASONING===` (1-3
 > oraciones), `===RESOLUTION===` (objeto JSON, `{}` si no hay nada que
@@ -25,6 +31,8 @@
 > - `{ref_a}`, `{ref_b}` — entity refs (e.g. `person:marcelo`)
 > - `{page_a_block}`, `{page_b_block}` — cada uno con header de
 >   metadatos temporales + body del page
+> - `{relation_guide}` — la guía de relación compartida con el juez Tier-2
+>   (en inglés; ver arriba), inyectada tal cual en tiempo de render
 
 ---
 
@@ -68,6 +76,7 @@ en archive/ pero el slug se mueve y la búsqueda semántica cambia.
   no superpuestos; solo homonimia.
 - unclear — la evidencia no alcanza para decidir.
 
+{relation_guide}
 2) Propone la resolución (todo opcional; solo lo que el contenido justifique):
 
 - survivor (solo si same): el ref cuya clave es la más clara y canónica.

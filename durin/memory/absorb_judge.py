@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Callable
 
 from durin.memory.entity_page import EntityPage
+from durin.memory.pair_resolution import MERGE_VS_RELATE_RULE, RELATION_TYPE_GUIDE
 
 __all__ = [
     "JudgeError",
@@ -57,6 +58,13 @@ LLMInvoke = Callable[..., str]
 _TEMPLATE_PATH = (
     Path(__file__).parent.parent / "templates" / "dream" / "absorb_judge.md"
 )
+
+# The merge-versus-relate rule and the relation-type guide, shared verbatim
+# with the Tier-2 judge (durin.memory.pair_resolution) and injected into the
+# template's ``{relation_guide}`` placeholder at render time. Kept as one
+# combined constant so the prompt builder and the fingerprint below can never
+# compute it differently from each other.
+_RELATION_GUIDE = MERGE_VS_RELATE_RULE + RELATION_TYPE_GUIDE
 
 # Envelope extraction. Each block is the text between its marker and the
 # next marker (or the end of the reply), so prose between blocks, emphasis
@@ -268,6 +276,7 @@ def _build_prompt(
         ref_b=absorbed_ref,
         page_a_block=page_a_block,
         page_b_block=page_b_block,
+        relation_guide=_RELATION_GUIDE,
     )
 
 
@@ -395,10 +404,15 @@ _RETRY_FEEDBACK = (
 
 
 def judge_template_fingerprint() -> str:
-    """Stable short hash of the judge prompt template.
+    """Stable short hash of the judge prompt template AND the shared relation
+    guidance it injects into ``{relation_guide}``.
 
-    Verdict-cache key component: a template change means every cached verdict
-    was produced by a different judge, so all pairs re-judge."""
+    Verdict-cache key component: a change to either means every cached
+    verdict was produced by a different judge, so all pairs re-judge. The
+    guidance is included on purpose — it is not literally part of the
+    template file, so a template-only hash would let an edit to the shared
+    text rest silently on a stale prompt."""
     import hashlib
 
-    return hashlib.sha256(_load_template().encode("utf-8")).hexdigest()[:12]
+    payload = _load_template() + _RELATION_GUIDE
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
