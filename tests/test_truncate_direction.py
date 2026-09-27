@@ -18,7 +18,7 @@ from durin.utils.helpers import truncate_text
 
 def test_head_direction_keeps_first_chars():
     text = "abcdef" + "X" * 100 + "TAIL_CONTENT"
-    out = truncate_text(text, 10)  # default direction is head
+    out = truncate_text(text, 40)  # default direction is head
     assert out.startswith("abcdef")
     assert "TAIL_CONTENT" not in out
     assert "truncated" in out
@@ -27,10 +27,21 @@ def test_head_direction_keeps_first_chars():
 def test_tail_direction_keeps_last_chars():
     """Errors-at-the-end pattern: tail mode preserves the suffix."""
     text = "HEAD_NOISE" + "X" * 100 + "ERROR_AT_END_OF_BUILD_LOG"
-    out = truncate_text(text, 30, direction="tail")
+    out = truncate_text(text, 60, direction="tail")
     assert "ERROR_AT_END_OF_BUILD_LOG" in out
     assert "HEAD_NOISE" not in out
     assert "truncated" in out
+
+
+def test_truncation_never_exceeds_the_cap_marker_included():
+    """The cap is a ceiling for the whole result: a cut result that came out
+    longer than the cap would be cut again by the next pass that checks it."""
+    text = "0123456789" * 5_000
+    for cap in (20, 50, 200, 16_000):
+        for direction in ("head", "tail"):
+            out = truncate_text(text, cap, direction=direction)
+            assert len(out) <= cap, (cap, direction, len(out))
+            assert truncate_text(out, cap, direction=direction) == out
 
 
 def test_zero_or_negative_cap_disables_truncation():

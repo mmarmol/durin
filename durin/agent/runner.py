@@ -28,6 +28,7 @@ from durin.utils.helpers import (
     find_legal_message_start,
     maybe_persist_tool_result,
     parse_persisted_reference,
+    render_structured_result,
     strip_think,
     truncate_text,
 )
@@ -2185,30 +2186,41 @@ class AgentRunner:
                 tool_call_id,
                 spec.session_key or "default",
             )
+        # Redact first: the spill file below is written from this value, so
+        # a secret redacted any later would already be on disk.
         try:
+            from durin.security.secrets import redact_secrets
+
+            result = redact_secrets(result)
+        except Exception:  # noqa: BLE001
+            logger.exception("Secret redaction failed for {}; using raw result", tool_call_id)
+        # A dict (or untyped list) becomes its JSON text before the size
+        # check, so an oversized one is saved to disk like any other large
+        # result instead of being cut with nothing to recover it from.
+        content = self._coerce_tool_content(result)
+        structured = content is not result
+        try:
+            spill_text = None
+            if (
+                structured
+                and isinstance(content, str)
+                and len(content) > spec.max_tool_result_chars
+            ):
+                spill_text = render_structured_result(result)
             content = maybe_persist_tool_result(
                 spec.workspace,
                 spec.session_key,
                 tool_call_id,
-                result,
+                content,
                 max_chars=spec.max_tool_result_chars,
+                spill_text=spill_text,
             )
         except Exception:
             logger.exception(
-                "Tool result persist failed for {} in {}; using raw result",
+                "Tool result persist failed for {} in {}; keeping the result inline",
                 tool_call_id,
                 spec.session_key or "default",
             )
-            content = result
-        # Redact stored secret values before the result enters the
-        # model context.
-        try:
-            from durin.security.secrets import redact_secrets
-
-            content = redact_secrets(content)
-        except Exception:  # noqa: BLE001
-            logger.exception("Secret redaction failed for {}; using raw result", tool_call_id)
-        content = self._coerce_tool_content(content)
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content

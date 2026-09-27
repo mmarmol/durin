@@ -4072,15 +4072,21 @@ class AgentLoop:
                         logger.exception(
                             "save-time spill failed for session {}", session.key,
                         )
-                    truncated = _truncate_tool_output(
-                        content, self.max_tool_result_chars, tool_name,
+                    # The pointer leads and the whole entry fits the cap: when
+                    # this history is replayed, anything over the cap is
+                    # previewed from its head, so a trailing pointer would be
+                    # the part that disappears.
+                    pointer = (
+                        f"[truncated: full output ({len(content)} chars) "
+                        f"at {spilled}; use read_file to recover]\n"
+                        if spilled is not None else ""
                     )
-                    if spilled is not None:
-                        truncated += (
-                            f"\n[truncated: full output ({len(content)} chars) "
-                            f"at {spilled}; use read_file to recover]"
-                        )
-                    entry["content"] = truncated
+                    entry["content"] = pointer + _truncate_tool_output(
+                        content,
+                        # truncate_text treats a cap <= 0 as "no limit".
+                        max(1, self.max_tool_result_chars - len(pointer)),
+                        tool_name,
+                    )
                 elif isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, should_truncate_text=True)
                     if not filtered:

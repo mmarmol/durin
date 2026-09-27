@@ -218,11 +218,13 @@ def test_save_turn_spills_oversized_tool_result_with_recovery_pointer(tmp_path: 
     persisted_content = session.messages[0]["content"]
     assert isinstance(persisted_content, str)
 
-    # Verify the trailer is present with correct format
-    assert "[truncated: full output (20000 chars) at " in persisted_content
-    assert persisted_content.endswith("; use read_file to recover]")
+    # The pointer leads the saved content: a later preview of this result
+    # shows only its head, so a trailing pointer would be cut off unseen.
+    assert persisted_content.startswith("[truncated: full output (20000 chars) at ")
+    # The saved result fits the cap, so no later pass cuts it again.
+    assert len(persisted_content) <= loop.max_tool_result_chars
 
-    # Extract the path from the trailer
+    # Extract the path from the pointer
     import re
     match = re.search(r"\[truncated: full output \(\d+ chars\) at (.+?); use read_file to recover\]", persisted_content)
     assert match is not None

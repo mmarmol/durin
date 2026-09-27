@@ -578,6 +578,14 @@ def _apply_patterns(text: str) -> str:
     return text
 
 
+# Content-block types a tool result can carry. Only their text fields are
+# redacted: the rest (image and audio payloads) is binary data where a
+# credential-shaped pattern match would corrupt the payload.
+_CONTENT_BLOCK_TYPES = frozenset({
+    "text", "image_url", "image", "input_audio", "audio", "file", "document",
+})
+
+
 class SecretRedactor:
     """Replaces secret values with ``«redacted…»`` markers.
 
@@ -615,26 +623,31 @@ class SecretRedactor:
         return text
 
     def redact(self, content: Any) -> Any:
-        """Redact a tool-result content — a string or a list of blocks."""
+        """Redact a tool-result content: a string, a list of content blocks,
+        or a structured (dict/list) result such as a batch file read.
+
+        Every string inside a structured result is redacted, at any depth.
+        A typed content block only has its text fields redacted, so image
+        and audio payloads pass through byte-for-byte.
+        """
         if not self._items and not self._patterns:
             return content
-        if isinstance(content, str):
-            return self.redact_text(content)
-        if isinstance(content, list):
-            out: list[Any] = []
-            for block in content:
-                if isinstance(block, dict):
-                    b = dict(block)
-                    for key in ("text", "content"):
-                        if isinstance(b.get(key), str):
-                            b[key] = self.redact_text(b[key])
-                    out.append(b)
-                elif isinstance(block, str):
-                    out.append(self.redact_text(block))
-                else:
-                    out.append(block)
-            return out
-        return content
+        return self._redact_value(content)
+
+    def _redact_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.redact_text(value)
+        if isinstance(value, list):
+            return [self._redact_value(item) for item in value]
+        if isinstance(value, dict):
+            if value.get("type") in _CONTENT_BLOCK_TYPES:
+                block = dict(value)
+                for key in ("text", "content"):
+                    if isinstance(block.get(key), str):
+                        block[key] = self.redact_text(block[key])
+                return block
+            return {key: self._redact_value(item) for key, item in value.items()}
+        return value
 
 
 def build_redactor() -> SecretRedactor:
