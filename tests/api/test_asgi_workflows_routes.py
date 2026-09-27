@@ -247,6 +247,49 @@ def test_launch_route_unknown_workflow_is_404(client, token_store):
     assert resp.status_code == 404
 
 
+def _seed_needs_input_run(workspace, name, run_id):
+    from durin.workflow import run_log
+
+    run_log._record_path(workspace, name, run_id).write_text(json.dumps({
+        "schema": run_log.SCHEMA, "run_id": run_id, "workflow": name,
+        "status": "needs_input", "root_session_key": None, "started_at": 1.0,
+        "finished_at": 2.0, "ts": 2.0, "task": "triage",
+        "needs_input_node": "a", "ask_kind": "question",
+        "final_output": "which env?", "runs": [],
+    }))
+
+
+def test_cancel_route_cancels_a_needs_input_run(client, workspace, token_store):
+    _seed_needs_input_run(workspace, "w1", "r1")
+
+    resp = client.post(
+        "/api/v1/workflows/w1/runs/r1/cancel",
+        headers=_issue(token_store, ["workflows:write"]),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"run_id": "r1", "status": "cancelled"}
+
+
+def test_cancel_route_requires_workflows_write_scope(client, workspace, token_store):
+    _seed_needs_input_run(workspace, "w1", "r1")
+
+    resp = client.post(
+        "/api/v1/workflows/w1/runs/r1/cancel",
+        headers=_issue(token_store, ["workflows:read"]),
+    )
+
+    assert resp.status_code == 403
+
+
+def test_cancel_route_unknown_run_is_404(client, token_store):
+    resp = client.post(
+        "/api/v1/workflows/w1/runs/ghost/cancel",
+        headers=_issue(token_store, ["workflows:write"]),
+    )
+    assert resp.status_code == 404
+
+
 def test_seed_dismiss_tombstones_the_pending_entry(client, workspace):
     workflows_dir = workspace / "workflows"
     workflows_dir.mkdir(parents=True)

@@ -440,6 +440,104 @@ async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_t
     fake_run.assert_not_called()
 
 
+# --- cancel_run: finalize a needs_input run in place, no engine call --------
+
+
+def _park_needs_input(tmp_path, name, run_id, *, ask_kind):
+    parked = WorkflowResult(
+        status="needs_input", run_id=run_id, final_output="which env?",
+        needs_input_node="a", ask_kind=ask_kind,
+        runs=[NodeRun(node_id="a", iteration=1, output="asking")],
+    )
+    run_log.finalize_run(
+        tmp_path, name, parked,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="triage the inbox",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_of_a_question_pause_finalizes_cancelled_and_records_the_decider(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+    before = run_log.read_manifest(tmp_path, "wf", "r1")
+
+    manifest = await svc.cancel_run("wf", "r1", p)
+
+    assert manifest["status"] == "cancelled"
+    assert manifest["cancelled_by"] == {"kind": "operator", "channel": "local"}
+    assert manifest["cancelled_at"] is not None
+    assert manifest["needs_input_node"] is None
+    assert manifest["ask_kind"] is None
+    assert [r["node_id"] for r in manifest["runs"]] == [r["node_id"] for r in before["runs"]]
+    assert manifest["work_dir"] == before["work_dir"]
+
+    with pytest.raises(ValidationFailedError):
+        await svc.execute("wf", "prod env", resume_run_id="r1")
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_of_an_approval_pause_finalizes_cancelled_and_records_the_decider(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="approval")
+
+    manifest = await svc.cancel_run("wf", "r1", p)
+
+    assert manifest["status"] == "cancelled"
+    assert manifest["cancelled_by"] == {"kind": "operator", "channel": "local"}
+    assert manifest["ask_kind"] is None
+
+    with pytest.raises(ValidationFailedError):
+        await svc.execute("wf", "approve", resume_run_id="r1")
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_running_run(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0)
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_completed_run(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    completed = WorkflowResult(status="completed", run_id="r1", final_output="done", runs=[])
+    run_log.finalize_run(
+        tmp_path, "wf", completed, root_session_key=None, started_at=1.0, finished_at=2.0,
+    )
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_is_idempotent(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question")
+
+    first = await svc.cancel_run("wf", "r1", p)
+    second = await svc.cancel_run("wf", "r1", p)
+
+    assert first["status"] == second["status"] == "cancelled"
+    assert first["cancelled_at"] == second["cancelled_at"]
+    assert first["cancelled_by"] == second["cancelled_by"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_unknown_run_raises_not_found(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+
+    with pytest.raises(NotFoundError):
+        await svc.cancel_run("wf", "ghost", p)
+
+
 # --- session_runs route: optional session -> global feed (F8) ---------------
 
 

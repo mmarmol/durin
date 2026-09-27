@@ -2668,6 +2668,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{name}/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a run paused for input: finalizes it as cancelled in place, with no engine call. */
+        post: operations["workflows_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -6198,6 +6215,20 @@ export interface components {
              * @default null
              */
             qr: string | null;
+            /** Status */
+            status: string;
+        };
+        /** WorkflowCancelCommand */
+        WorkflowCancelCommand: {
+            /** Name */
+            name: string;
+            /** Run Id */
+            run_id: string;
+        };
+        /** WorkflowCancelResult */
+        WorkflowCancelResult: {
+            /** Run Id */
+            run_id: string;
             /** Status */
             status: string;
         };
@@ -10914,6 +10945,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowRunManifestResult"];
+                };
+            };
+        };
+    };
+    workflows_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCancelCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCancelResult"];
                 };
             };
         };

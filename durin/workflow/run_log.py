@@ -321,6 +321,7 @@ def finalize_run(
 def finalize_short_circuit(
     workspace: str | Path, name: str, run_id: str, *,
     status: str, final_output: str | None, rejected: bool = False,
+    cancelled_by: dict | None = None,
 ) -> dict:
     """Rewrite an existing manifest to a terminal status IN PLACE, preserving every
     field it already has — ``runs``, ``work_dir``, ``work_key``, ``task``,
@@ -337,8 +338,11 @@ def finalize_short_circuit(
     Sets ``status``, ``final_output`` (capped exactly like ``finalize_run`` caps
     it), ``finished_at``/``ts``, ``rejected``, clears ``active_node`` (nothing is
     in flight any more), and drops the pause markers ``needs_input_node`` and
-    ``ask_kind`` to ``None`` — the run is no longer answerable. Returns the
-    rewritten dict."""
+    ``ask_kind`` to ``None`` — the run is no longer answerable. ``cancelled_by``
+    (``durin.service.approvals.decider_of``'s shape) is recorded together with
+    ``cancelled_at`` only when a caller passes it — a person explicitly cancelling
+    a paused run through ``WorkflowsService.cancel_run``, never an approval
+    reject/approve, which leave both fields unset. Returns the rewritten dict."""
     prior = read_manifest(workspace, name, run_id) or {}
     now = time.time()
     record = dict(prior)
@@ -350,6 +354,9 @@ def finalize_short_circuit(
     record["active_node"] = None
     record["needs_input_node"] = None
     record["ask_kind"] = None
+    if cancelled_by is not None:
+        record["cancelled_by"] = cancelled_by
+        record["cancelled_at"] = now
     path = _record_path(workspace, name, run_id)
     path.write_text(json.dumps(record), encoding="utf-8")
     return record
