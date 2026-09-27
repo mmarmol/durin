@@ -16,6 +16,7 @@ import pytest
 
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.providers.base import LLMResponse, ToolCallRequest
+from durin.utils.runtime import FINALIZATION_RETRY_PROMPT
 
 BASE = ["<task-state>", "## Decisions & findings", "- rule 99ce3a72 edited at 21:16", "</task-state>"]
 UPDATED = [
@@ -75,6 +76,54 @@ async def test_a_finding_recorded_mid_turn_reaches_the_next_request() -> None:
     assert not any(
         "rule_executed is the proof" in str(m.get("content")) for m in result.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_the_no_tools_finalization_request_ends_with_its_instruction() -> None:
+    lines = {"lines": BASE}
+    requests: list[tuple[list[dict[str, Any]], Any]] = []
+    calls = {"n": 0}
+
+    async def chat_with_retry(**kwargs: Any) -> LLMResponse:
+        requests.append(([dict(m) for m in kwargs["messages"]], kwargs["tools"]))
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="probe", arguments={})],
+                usage={},
+            )
+        if calls["n"] <= 3:
+            # Blank answers: retried once, then the no-tools finalization.
+            return LLMResponse(content="", tool_calls=[], usage={})
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    async def execute(name: str, params: Any) -> str:
+        lines["lines"] = UPDATED
+        return "ok"
+
+    provider = MagicMock()
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {"name": "probe", "parameters": {"type": "object", "properties": {}}}},
+    ]
+    tools.execute = execute
+    await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go\n" + "\n".join(BASE)}],
+        tools=tools,
+        model="test-model",
+        max_iterations=5,
+        max_tool_result_chars=16_000,
+        task_state_provider=lambda: lines["lines"],
+    ))
+
+    working, working_tools = requests[1]
+    assert working_tools
+    assert "- rule_executed is the proof a rule ran" in str(working[-1]["content"])
+    final, final_tools = requests[-1]
+    assert final_tools is None
+    assert str(final[-1]["content"]).endswith(FINALIZATION_RETRY_PROMPT)
 
 
 @pytest.mark.asyncio

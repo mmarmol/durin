@@ -1468,7 +1468,11 @@ class AgentRunner:
         tools: list[dict[str, Any]] | None,
         max_tokens_override: int | None = None,
     ) -> dict[str, Any]:
-        messages = self._with_task_state(spec, messages)
+        # A request sent without tools (the finalization retry) must end
+        # with its own instruction, so the refreshed task state is not
+        # appended after it.
+        if tools is not None:
+            messages = self._with_task_state(spec, messages)
         # Apply the optional context_transform hook (pi-style). The hook
         # gets a shallow copy of the message list so it can mutate
         # without surprising upstream code. It can return:

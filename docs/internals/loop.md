@@ -497,12 +497,14 @@ than opaque:
 
 **Task state mid-turn.** The prompt built for a turn carries the `<task-state>`
 block: goal, decisions and findings, todos. The loop hands the runner a
-`task_state_provider`. Before each request, the runner compares the current
-block with the conversation. When a `note_decision` or todo update has changed
-it, the new block is appended to the end of that request. Appending at the end
-keeps the cached prefix, and the block never enters the saved transcript. That
-makes a finding recorded mid-investigation survive the trimming of the older
-tool results it came from.
+`task_state_provider`. Before each request that offers tools, the runner
+compares the current block with the conversation. When a `note_decision` or
+todo update has changed it, the new block is appended to the end of that
+request. Appending at the end keeps the cached prefix, and the block never
+enters the saved transcript. That makes a finding recorded mid-investigation
+survive the trimming of the older tool results it came from. The no-tools
+finalization retry is sent without the block, so it ends with its own
+instruction.
 
 Two behaviors connect the runner back to the loop:
 
