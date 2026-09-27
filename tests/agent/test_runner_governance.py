@@ -6,10 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from durin.config.schema import AgentDefaults
 from durin.providers.base import LLMResponse
 
-_MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
+# Several tests call the runner's internals directly, before run() would
+# resolve a window-scaled cap, so specs carry an explicit one.
+_MAX_TOOL_RESULT_CHARS = 16_000
 # Captured at import time, before the autouse fixture below patches it to 0.
 from durin.agent.runner import (  # noqa: E402
     _MICROCOMPACT_MIN_RECLAIM_CHARS as _RECLAIM_FLOOR_DEFAULT,

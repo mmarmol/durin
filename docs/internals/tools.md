@@ -350,7 +350,16 @@ which is how compaction keeps the recovery path.
 
 ### Paging under the run's cap
 
-`AgentRunner.run()` publishes `spec.max_tool_result_chars` through a context
+A run's per-result cap is `spec.max_tool_result_chars`. When the spec leaves
+it unset (the configuration's default), `AgentRunner.run()` resolves it from
+the run's context window with `result_char_cap()`: 16,000 chars below a
+100k-token window, 32,000 from 100k, 64,000 from 200k, never more than 30% of
+the window (at about 4 chars per token), and 16,000 when no window is known.
+An explicit value — in the configuration or from a caller such as the dream
+passes — always wins. The loop saves a turn under the same cap its model
+window gives a run, so a result kept whole in the run is saved whole.
+
+`AgentRunner.run()` publishes the resolved cap through a context
 variable (`set_result_char_cap` / `current_result_char_cap` in
 `durin/agent/tools/context.py`). Tool calls run in tasks spawned from the run
 and inherit it; outside an agent run it is unset and tools keep their own

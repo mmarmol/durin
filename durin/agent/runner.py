@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -88,6 +89,35 @@ _MICROCOMPACT_HEAD_CHARS = 120
 # defaults to 16,000): below that, the pass is not reclaiming even a single
 # result's worth and can wait for the next iteration.
 _MICROCOMPACT_MIN_RECLAIM_CHARS = 10_000
+
+# Per-result cap when nothing sets one explicitly: it follows the model's
+# context window (tiers by window size), and never takes more than 30% of
+# the window at roughly 4 characters per token, so a small local model is
+# not handed results that crowd out the rest of its prompt.
+_RESULT_CAP_DEFAULT_CHARS = 16_000
+_RESULT_CAP_TIERS = ((200_000, 64_000), (100_000, 32_000))
+_RESULT_CAP_MAX_WINDOW_SHARE = 0.3
+
+
+def result_char_cap(configured: int | None, context_window_tokens: int | None) -> int:
+    """The per-result character cap a run uses.
+
+    An explicit setting wins. Otherwise it follows the model's context
+    window: 16,000 below a 100k-token window, 32,000 from 100k, 64,000 from
+    200k, and never more than 30% of the window. Without a known window it
+    is 16,000.
+    """
+    if configured is not None:
+        return configured
+    if not context_window_tokens or context_window_tokens <= 0:
+        return _RESULT_CAP_DEFAULT_CHARS
+    cap = _RESULT_CAP_DEFAULT_CHARS
+    for min_window, tier_cap in _RESULT_CAP_TIERS:
+        if context_window_tokens >= min_window:
+            cap = tier_cap
+            break
+    return max(1, min(cap, int(context_window_tokens * 4 * _RESULT_CAP_MAX_WINDOW_SHARE)))
+
 
 def _output_reservation(max_output: int) -> int:
     """Tokens to hold back for output when sizing the input budget.
@@ -272,7 +302,9 @@ class AgentRunSpec:
     tools: ToolRegistry
     model: str
     max_iterations: int
-    max_tool_result_chars: int
+    # None: the cap follows context_window_tokens (result_char_cap), resolved
+    # once when the run starts.
+    max_tool_result_chars: int | None
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: str | None = None
@@ -505,6 +537,11 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        if spec.max_tool_result_chars is None:
+            spec = dataclasses.replace(
+                spec,
+                max_tool_result_chars=result_char_cap(None, spec.context_window_tokens),
+            )
         # Tools that page their own output (read_file, grep) size a page
         # under this run's per-result cap, so the page arrives whole instead
         # of being replaced by a preview that drops its "continue" footer.

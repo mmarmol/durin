@@ -160,7 +160,7 @@ class SubagentManager:
         provider: LLMProvider,
         workspace: Path,
         bus: MessageBus,
-        max_tool_result_chars: int,
+        max_tool_result_chars: int | None,
         model: str | None = None,
         tools_config: ToolsConfig | None = None,
         restrict_to_workspace: bool = False,
