@@ -991,10 +991,27 @@ class WorkflowsService:
         answering it. Refuses any other status: a running run has its own stop,
         and a finished run is already final. Idempotent — cancelling an
         already-cancelled run returns its existing state unchanged, rather than
-        overwriting who/when it was cancelled."""
+        overwriting who/when it was cancelled.
+
+        Also refuses a run an automation started (``root_session_key`` prefixed
+        ``automation:`` — the same check the Pending service's workflow-run
+        source uses to leave such a run to the Automations inbox instead of
+        listing it twice): that run has its own paused record in
+        ``durin.automations.run_log``, which only that automation's own
+        answer/stop keeps in sync with this one. Finalizing it here instead
+        would leave the automation's record stuck `paused`, so a later answer
+        finds the workflow run already `cancelled` and the automation ends up
+        `failed` rather than resolved."""
         manifest = run_log.read_manifest(self._workspace, name, run_id)
         if manifest is None:
             raise NotFoundError(f"run {run_id!r} of workflow {name!r} not found")
+        root_session_key = str(manifest.get("root_session_key") or "")
+        if root_session_key.startswith("automation:"):
+            raise ValidationFailedError(
+                f"run {run_id!r} of workflow {name!r} was started by automation "
+                f"{root_session_key.split(':', 1)[1]!r} — stop it from that "
+                "automation's own run instead."
+            )
         if manifest.get("status") == "cancelled":
             return manifest
         if manifest.get("status") != "needs_input":

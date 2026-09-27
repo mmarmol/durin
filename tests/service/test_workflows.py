@@ -443,7 +443,7 @@ async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_t
 # --- cancel_run: finalize a needs_input run in place, no engine call --------
 
 
-def _park_needs_input(tmp_path, name, run_id, *, ask_kind):
+def _park_needs_input(tmp_path, name, run_id, *, ask_kind, root_session_key=None):
     parked = WorkflowResult(
         status="needs_input", run_id=run_id, final_output="which env?",
         needs_input_node="a", ask_kind=ask_kind,
@@ -451,7 +451,7 @@ def _park_needs_input(tmp_path, name, run_id, *, ask_kind):
     )
     run_log.finalize_run(
         tmp_path, name, parked,
-        root_session_key=None, started_at=1.0, finished_at=2.0, task="triage the inbox",
+        root_session_key=root_session_key, started_at=1.0, finished_at=2.0, task="triage the inbox",
     )
 
 
@@ -527,6 +527,22 @@ async def test_cancel_run_is_idempotent(tmp_path):
     assert first["status"] == second["status"] == "cancelled"
     assert first["cancelled_at"] == second["cancelled_at"]
     assert first["cancelled_by"] == second["cancelled_by"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_refuses_a_run_started_by_an_automation(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    _park_needs_input(tmp_path, "wf", "r1", ask_kind="question",
+                       root_session_key="automation:cobrar-fac-1042")
+
+    with pytest.raises(ValidationFailedError):
+        await svc.cancel_run("wf", "r1", p)
+
+    # Refused before touching the manifest — the automation's own paused run
+    # record is the one to resolve, and this route must leave this one alone.
+    manifest = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert manifest["status"] == "needs_input"
 
 
 @pytest.mark.asyncio

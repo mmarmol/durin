@@ -471,6 +471,10 @@ export type WorkflowRunResult = {
   // typical_s (which spans every branch prior runs took, while one run takes
   // one). Absent/null when the workflow has no completed-run history yet.
   typical_total_s?: number | null;
+  // The manifest's root session key — an `automation:<name>` origin vs. an
+  // interactive session, same source as WorkflowGlobalRun's `origin` below.
+  // Absent on a manifest written before this field existed.
+  root_session_key?: string | null;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.

@@ -263,6 +263,25 @@ describe("RunsView", () => {
     );
   });
 
+  it("hides the Cancel control for a needs_input run an automation started", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT_AUTOMATION]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "needs_input", final_output: "Send the reminder?",
+      needs_input_node: "enviar-recordatorio", run_id: "run-automation-paused", runs: [],
+      root_session_key: "automation:cobrar-fac-1042",
+    });
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+
+    // This row is excluded from the tray (strandedRuns) but still opens from
+    // the main table/tree, same as the bug report: clicking it there shows
+    // its needs_input detail, resume form included.
+    await user.click(await screen.findByRole("button", { name: /reclamar la factura/ }));
+    await screen.findByText("Send the reminder?");
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Type your answers/i)).toBeInTheDocument();
+  });
+
   it("renders a row per run with its status exposed to assistive tech", async () => {
     vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
     render(wrap(<RunsView />));

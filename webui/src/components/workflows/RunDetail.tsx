@@ -339,6 +339,15 @@ export function RunDetail({
   // Never the sum of the per-node medians — those cover every branch any prior
   // run took, while this run takes one of them.
   const typicalTotalS = result.typical_total_s ?? null;
+  // An automation-started run (root_session_key "automation:<name>") has its
+  // own paused run record in the automation's own store, kept in sync with
+  // this workflow run only through that automation's own answer/stop — never
+  // through this route. Cancelling it here would finalize the workflow run
+  // while leaving the automation's record paused, so the control is hidden
+  // rather than offered and refused: the automation's own Stop is the way to
+  // end it (same origin check the Pending page's workflow-run source uses to
+  // leave such a run to the Automations inbox instead of listing it twice).
+  const isAutomationOrigin = !!result.root_session_key?.startsWith("automation:");
 
   return (
     <div className="flex flex-col gap-3">
@@ -350,7 +359,7 @@ export function RunDetail({
           resuming={resuming}
           onResume={onResume}
           cancelling={cancelling}
-          onCancel={onCancel}
+          onCancel={isAutomationOrigin ? undefined : onCancel}
         />
       )}
       {result.status === "exhausted" && (
