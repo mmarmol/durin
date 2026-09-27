@@ -353,7 +353,9 @@ which is how compaction keeps the recovery path.
 variable (`set_result_char_cap` / `current_result_char_cap` in
 `durin/agent/tools/context.py`). Tool calls run in tasks spawned from the run
 and inherit it; outside an agent run it is unset and tools keep their own
-limits.
+limits. A tool call made from an `execute_code` script runs with it cleared:
+its result goes to the script, not into the model's context, so the tool
+keeps its own limits there too.
 
 `read_file` uses it this way:
 - Its page budget is the cap minus a reserve, and the memory-notes block counts

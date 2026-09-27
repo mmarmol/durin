@@ -100,6 +100,49 @@ async def test_error_result_keeps_stdout_separate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_tool_called_from_a_script_sees_no_result_cap(tmp_path):
+    """A script's tool results go to the script, not into the model's
+    context, so the calling run's per-result cap does not apply to them: a
+    script's grep is not cut to a model-sized page."""
+    from durin.agent.tools.context import (
+        current_result_char_cap,
+        reset_result_char_cap,
+        set_result_char_cap,
+    )
+    from durin.agent.tools.search import GrepTool
+
+    seen: list[int | None] = []
+
+    class RecordingGrep(GrepTool):
+        async def execute(self, **kwargs):
+            seen.append(current_result_char_cap())
+            return await super().execute(**kwargs)
+
+    (tmp_path / "big.log").write_text(
+        "\n".join(f"needle entry {i} " + "pad " * 30 for i in range(200)), encoding="utf-8",
+    )
+    tool = ExecuteCodeTool(
+        tools={"grep": RecordingGrep(workspace=tmp_path)},
+        config=CodeExecutionConfig(),
+        workspace=str(tmp_path),
+    )
+    code = (
+        "from durin_tools import grep\n"
+        "out = grep('needle', 'big.log', output_mode='content')\n"
+        "print('LAST MATCH SHOWN' if 'needle entry 199 ' in out else 'CUT')\n"
+    )
+    token = set_result_char_cap(16_000)
+    try:
+        result = json.loads(await tool.execute(code=code))
+    finally:
+        reset_result_char_cap(token)
+
+    assert result["status"] == "success", result
+    assert seen == [None]
+    assert "LAST MATCH SHOWN" in result["output"]
+
+
+@pytest.mark.asyncio
 async def test_disallowed_tool_rejected(tmp_path):
     tool = _tool(tmp_path)
     code = (
