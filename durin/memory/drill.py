@@ -177,7 +177,44 @@ def drill(workspace: Path, uri: str) -> str:
     if not anchor:
         return text if text.endswith("\n") else text + "\n"
 
+    # A library search hit is addressed as ``<reference>#<chunk index>``;
+    # the number is a position in the document's chunk index, not a heading.
+    chunks = _reference_chunks_for(workspace, full_path) if anchor.isdigit() else []
+    if chunks:
+        idx = int(anchor)
+        rec = next((c for c in chunks if int(c.get("idx", -1)) == idx), None)
+        if rec is not None:
+            return _render_reference_chunk(full_path, rec, len(chunks))
+        try:
+            return extract_section(text, anchor)
+        except DrillError:
+            raise DrillError(
+                f"chunk {idx} not found in {original_uri}: the document has "
+                f"{len(chunks)} chunks (0-{len(chunks) - 1})"
+            ) from None
+
     return extract_section(text, anchor)
+
+
+def _reference_chunks_for(workspace: Path, full_path: Path) -> list[dict]:
+    """The chunk index of a stored reference document, or [] for any other file."""
+    if full_path.suffix != ".md" or full_path.parent.name != "references":
+        return []
+    from durin.memory.reference import reference_chunks
+
+    try:
+        return reference_chunks(workspace, f"reference:{full_path.stem}")
+    except (OSError, ValueError):
+        return []
+
+
+def _render_reference_chunk(full_path: Path, rec: dict, count: int) -> str:
+    breadcrumb = str(rec.get("breadcrumb") or "").strip()
+    header = f"=== reference:{full_path.stem} chunk {rec.get('idx')} of {count} ==="
+    body = str(rec.get("text") or "")
+    parts = [header, breadcrumb, "", body] if breadcrumb else [header, "", body]
+    out = "\n".join(parts)
+    return out if out.endswith("\n") else out + "\n"
 
 
 def extract_section(text: str, anchor: str) -> str:
