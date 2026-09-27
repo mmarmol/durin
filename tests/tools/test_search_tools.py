@@ -166,8 +166,8 @@ async def test_grep_files_with_matches_supports_head_limit_and_offset(tmp_path: 
 
     # Filesystem order is not deterministic across platforms, so just verify:
     # 1. Only one file path is returned (head_limit=1 after offset=1)
-    # 2. The pagination info is correct
-    assert "pagination: limit=1, offset=1" in result
+    # 2. The note gives the position, the total and where to continue
+    assert "(showing 2-2 of 3; use offset=2 to continue)" in result
     # Count non-empty lines that start with src/ (file paths)
     file_lines = [line for line in result.splitlines() if line.startswith("src/")]
     assert len(file_lines) == 1
@@ -210,7 +210,48 @@ async def test_grep_files_with_matches_mode_respects_max_results(tmp_path: Path)
     )
 
     assert result.splitlines()[:2] == ["src/c.py", "src/b.py"]
-    assert "pagination: limit=2, offset=0" in result
+    assert "(showing 1-2 of 3; use offset=2 to continue)" in result
+
+
+@pytest.mark.asyncio
+async def test_content_mode_limit_note_gives_the_next_offset(tmp_path: Path) -> None:
+    for n in range(5):
+        (tmp_path / f"f{n}.txt").write_text("needle here\n", encoding="utf-8")
+
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+    result = await tool.execute(pattern="needle", path=".", output_mode="content", head_limit=2)
+
+    assert "use offset=2" in result
+
+
+@pytest.mark.asyncio
+async def test_a_huge_matching_line_is_shown_shortened_not_as_no_match(tmp_path: Path) -> None:
+    (tmp_path / "min.json").write_text("{" + '"k": "v", ' * 20_000 + '"needle": 1}', encoding="utf-8")
+
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+    result = await tool.execute(pattern="needle", path=".", output_mode="content")
+
+    assert "No matches found" not in result
+    assert "char_offset=" in result
+    assert len(result) < 20_000
+
+
+@pytest.mark.asyncio
+async def test_content_output_fits_the_calling_run_cap(tmp_path: Path) -> None:
+    from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
+
+    (tmp_path / "big.log").write_text(
+        "\n".join(f"needle entry {i} " + "pad " * 20 for i in range(500)), encoding="utf-8",
+    )
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+    token = set_result_char_cap(8_000)
+    try:
+        result = await tool.execute(pattern="needle", path=".", output_mode="content", head_limit=0)
+    finally:
+        reset_result_char_cap(token)
+
+    assert len(result) <= 8_000
+    assert "use offset=" in result
 
 
 @pytest.mark.asyncio
