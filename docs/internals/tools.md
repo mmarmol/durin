@@ -397,13 +397,16 @@ when budget enforcement fires.
 ### Secret redaction
 
 `_normalize_tool_result()` calls `redact_secrets()` on every tool result before
-anything else happens to it, so neither the model context nor a spill file ever
-holds a redacted value in clear. This strips any stored secret value whose
+anything else happens to it, so a secret in a string value reaches neither the
+model context nor a spill file. This strips any stored secret value whose
 `scope` grants access to the tool that produced the result, plus
 credential-shaped patterns. A structured result is walked recursively: every
-string inside a dict or list is redacted, which covers batch reads such as
-`read_file(paths=...)`. A typed content block only has its text fields
-redacted, so image and audio payloads pass through byte-for-byte.
+string value inside a dict or list is redacted, which covers batch reads such
+as `read_file(paths=...)`. Dict keys are not redacted, so a secret used as a
+key stays in the spill file and in the tool message the session saves; the
+model's view of that message is redacted again, as text, before each request.
+A typed content block only has its text fields redacted, so image and audio
+payloads pass through byte-for-byte.
 
 ---
 
