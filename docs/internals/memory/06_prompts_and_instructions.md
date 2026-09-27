@@ -116,6 +116,14 @@ The git history of an entity: who changed it, when, and why (including absorb/me
 Read the original conversation turns an entity was distilled from (its provenance source_refs + derived_from). Use when a fact looks off, or when you need the exact wording and context that produced it, not the summary.
 ```
 
+### 3.9 `memory_source_document`
+
+Offered only to the Dream Tier 2 judge (§5.4), not to the main agent.
+
+```
+Read the reference documents an entity was extracted from (its derived_from documents and [[references/...]] source refs): for each, an excerpt around the places the document names the entity (its name or an alias), or the document's opening when it names it nowhere. Use when a page is thin — a sentence or two, no relations — to see what the document itself says about the entity.
+```
+
 ---
 
 ## 4. Architecture diagram
@@ -174,6 +182,7 @@ The active memory tools and their descriptions:
 | `memory_read_entity` | Active | Full page of one entity (attributes + relations + provenance + body) when the search preview isn't enough |
 | `memory_entity_lineage` | Active | Git history of an entity — established vs fresh, prior merges |
 | `memory_source_session` | Active | The conversation turns an entity was distilled from |
+| `memory_source_document` | Tier 2 judge only | Bounded excerpts, around the entity's name and aliases, of the reference documents a thin page was extracted from |
 
 ### 5.3 Dream pass prompts
 
@@ -230,6 +239,12 @@ same | different | related | unclear
 `_parse_response` is tolerant: it uses regex with `re.DOTALL | re.IGNORECASE` and accepts surrounding prose. A verdict of `same` plus `confidence >= confidence_threshold` triggers a merge into the proposed survivor. `unclear` or low-confidence results are skipped for that run (they may be re-evaluated when more evidence arrives). The reasoning is stored in the absorb commit body so `durin memory history` shows why the merge happened. The Tier-2 investigating judge (`tier2_judge.py`) answers in the same envelope; its re-review variant (`user_kept_separate=True`) is told the user already ruled the pair out as a duplicate and may not answer `same`.
 
 Up to `max_retries` (default 2) re-attempts are made on parse failure; each retry sends the same prompt without feedback (parse failures are usually transient model formatting errors). The function either returns a `JudgeResult` or raises `JudgeError`, giving the caller a single failure mode.
+
+**The Tier-2 judge's prompt** is built in code (`tier2_judge.py`): a task naming the pair and the investigation tools, a guide shared with the tool-free final-answer brief, and the envelope above. It is not part of the verdict cache's judge identity — this template's hash plus the model — so changing it does not re-judge cached pairs. The guide sets three rules this template does not spell out:
+
+- **Merge versus relate.** `same` means both pages describe one real thing and every fact on each page belongs to it. `related` means one page carries a fact, scope or abstraction the other does not share — a part, a specialization, an instance, a configuration, or a pattern and its implementation — so merging would lose or misattribute it. `different` is for homonyms, such as the same class name in two unrelated repos. Before answering `same`, the judge checks each page for a fact that would be false or misplaced on the merged page; a fact one page merely lacks does not count, and neither the names nor the kind of document each page came from decides.
+- **Relation type.** The edge is typed by what links the two: is-a (`specialization_of`, `instance_of`) only when one page IS a kind or an instance of the other; parts (`part_of`, `component_of`, `feature_of`, `subsystem_of`); data nested inside other data (`embeds`, `contains`); usage and implementation (`uses`, `depends_on`, `implements`); and `configures` or `runs_on` where they fit — each family with one generic example. Labels the graph already uses are preferred over new synonyms. The edge points from the more specific page or the part to the more general page or the whole; for nested data, from the record that carries the other.
+- **Thin pages.** A page of one or two sentences with no relations cannot tell two names for one thing from two distinct things, so the task has the judge read its source document (`memory_source_document`, §3.9) before deciding, and answer `unclear` with low confidence rather than guess when the evidence is still insufficient; the final-answer brief says the same.
 
 ### 5.5 Hot layer
 
