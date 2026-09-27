@@ -193,6 +193,19 @@ _DEFAULT_TURN_BUDGET_CHARS = 200_000
 _PERSISTED_MARKER = "[tool output persisted]"
 
 
+def _message_text(message: dict[str, Any]) -> str:
+    """The text of a message's content, whether a string or a block list."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "") for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
 def _turn_budget_chars() -> int:
     raw = os.getenv("DURIN_TURN_BUDGET_CHARS")
     if raw is None:
@@ -299,6 +312,12 @@ class AgentRunSpec:
     # the untransformed list is used (best-effort, never breaks the
     # loop).
     context_transform: Any | None = None  # Callable[[list[dict]], list[dict] | None]
+    # Returns the current task-state block (goal, decisions & findings,
+    # todos) as lines. The block is rendered into the prompt when the turn
+    # starts; when it changes mid-turn (note_decision, a todo update), the
+    # new block is appended to the end of each later request so it is seen
+    # even after older tool results are trimmed. Never saved to history.
+    task_state_provider: Any | None = None  # Callable[[], list[str]]
     # Compaction grace window. Optional callable that returns True iff context
     # consolidation is currently running for the session backing this run.
     # When the outer wall-clock LLM timeout would have fired, the runner
@@ -1408,6 +1427,39 @@ class AgentRunner:
             if mode.is_tool_allowed(ToolRegistry._schema_name(d))
         ]
 
+    def _with_task_state(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Append the current task-state block when the conversation does not
+        already show it (it changed after the prompt was built).
+
+        Appended last, so the cached prompt prefix is untouched; returned as
+        a new list, so the block never enters the saved conversation.
+        """
+        if spec.task_state_provider is None:
+            return messages
+        try:
+            lines = [str(line) for line in (spec.task_state_provider() or [])]
+        except Exception:
+            logger.exception("task_state_provider failed; sending the request without it")
+            return messages
+        if not lines:
+            return messages
+        block = "\n".join(lines)
+        if any(block in _message_text(m) for m in messages):
+            return messages
+        updated = list(messages)
+        self._append_injected_messages(updated, [{
+            "role": "user",
+            "content": (
+                "[Task state, updated during this turn; it supersedes the "
+                "one shown earlier]\n" + block
+            ),
+        }])
+        return updated
+
     def _build_request_kwargs(
         self,
         spec: AgentRunSpec,
@@ -1416,6 +1468,7 @@ class AgentRunner:
         tools: list[dict[str, Any]] | None,
         max_tokens_override: int | None = None,
     ) -> dict[str, Any]:
+        messages = self._with_task_state(spec, messages)
         # Apply the optional context_transform hook (pi-style). The hook
         # gets a shallow copy of the message list so it can mutate
         # without surprising upstream code. It can return:

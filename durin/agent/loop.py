@@ -26,6 +26,7 @@ from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from durin.agent.skill_usage import emit_skill_used, extract_skill_calls
 from durin.agent.subagent import SubagentManager
+from durin.agent.task_state import task_state_runtime_lines
 from durin.agent.tools.context import AuxProviderHandle
 from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from durin.agent.tools.message import MessageTool
@@ -2291,6 +2292,10 @@ class AgentLoop:
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
                 mode_provider=_mode_provider if session is not None else None,
+                task_state_provider=(
+                    (lambda: task_state_runtime_lines(session.metadata))
+                    if session is not None else None
+                ),
                 # Sustained goals may legitimately exceed DURIN_LLM_TIMEOUT_S; idle stall
                 # is still capped by DURIN_STREAM_IDLE_TIMEOUT_S in streaming providers.
                 llm_timeout_s=runner_wall_llm_timeout_s(
