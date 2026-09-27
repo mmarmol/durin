@@ -11,11 +11,15 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.filesystem import ReadFileTool
+from durin.utils.helpers import parse_persisted_reference
 
 
 @pytest.fixture()
@@ -133,6 +137,72 @@ async def test_in_a_two_file_batch_only_the_cut_page_loses_its_dedup(tmp_path: P
     assert "big line 150 " in again_big
     # The small file was shown whole, so a repeat read may say so.
     assert "unchanged since last read" in await tool.execute(path=str(small))
+
+
+def _as_delivered(result: Any, cap: int, workspace: Path) -> Any:
+    """What the model receives of a tool result: the runner's normalization,
+    which saves anything over the cap to disk and sends a preview instead."""
+    spec = AgentRunSpec(
+        initial_messages=[],
+        tools=MagicMock(),
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=cap,
+        workspace=workspace,
+        session_key="test:batch",
+    )
+    return AgentRunner(MagicMock())._normalize_tool_result(spec, "call_1", "read_file", result)
+
+
+async def _batch(paths: list[str], cap: int, workspace: Path) -> dict[str, Any]:
+    token = set_result_char_cap(cap)
+    try:
+        return await ReadFileTool(workspace=workspace).execute(paths=paths)
+    finally:
+        reset_result_char_cap(token)
+
+
+_QUOTED_CSV = "\n".join(",".join(f'"{c}{i}"' for c in "abcdefgh") for i in range(4_000))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cap", "count"), [(16_000, 2), (16_000, 3), (16_000, 5), (8_000, 2)])
+async def test_a_batch_of_quote_heavy_files_arrives_whole(tmp_path: Path, cap: int, count: int) -> None:
+    paths = []
+    for n in range(count):
+        f = tmp_path / f"rows{n}.csv"
+        f.write_text(_QUOTED_CSV, encoding="utf-8")
+        paths.append(str(f))
+
+    result = await _batch(paths, cap, tmp_path)
+    delivered = _as_delivered(result, cap, tmp_path)
+
+    assert parse_persisted_reference(delivered) is None
+    assert len(delivered) <= cap
+    for record in result["results"]:
+        assert re.search(r"Use offset=\d+ to continue", record["content"])
+
+
+@pytest.mark.asyncio
+async def test_a_batch_of_documents_arrives_whole(tmp_path: Path) -> None:
+    docx = pytest.importorskip("docx")
+    paths = []
+    for n in range(2):
+        document = docx.Document()
+        for i in range(600):
+            document.add_paragraph(f'Paragraph {i} of "document {n}": the quick brown fox.')
+        f = tmp_path / f"doc{n}.docx"
+        document.save(str(f))
+        paths.append(str(f))
+
+    result = await _batch(paths, 16_000, tmp_path)
+    delivered = _as_delivered(result, 16_000, tmp_path)
+
+    assert parse_persisted_reference(delivered) is None
+    assert len(delivered) <= 16_000
+    for n, record in enumerate(result["results"]):
+        assert f'Paragraph 0 of "document {n}"' in record["content"]
+        assert "Document text cut at" in record["content"]
 
 
 @pytest.mark.asyncio

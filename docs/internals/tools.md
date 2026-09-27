@@ -358,9 +358,12 @@ limits.
 `read_file` uses it this way:
 - Its page budget is the cap minus a reserve, and the memory-notes block counts
   against the budget.
-- A batch (`paths`) shares that budget across files. A file whose batch page
-  was cut to its share does not count as already read: a later read of it
-  returns its page, not the "unchanged since last read" stub.
+- A batch (`paths`) shares that budget across files. Each file's page, the
+  text of a PDF or office document included, is measured JSON-encoded, the way
+  the batch reaches the model: escaped quotes, backslashes and line breaks
+  count. A file whose batch page was cut to its share does not count as
+  already read: a later read of it returns its page, not the "unchanged since
+  last read" stub.
 - A line over 2,000 chars is shortened with the call that reads the rest of it:
   `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
   saved tool output) is read in character pages through `char_offset`.

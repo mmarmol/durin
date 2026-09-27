@@ -2,6 +2,7 @@
 
 import asyncio
 import difflib
+import json
 import mimetypes
 import os
 from contextlib import suppress
@@ -256,6 +257,26 @@ def _parse_page_range(pages: str, total: int) -> tuple[int, int]:
     return max(0, start - 1), min(end - 1, total - 1)
 
 
+def _json_len(text: str) -> int:
+    """Characters ``text`` takes inside a JSON string, which is how a batch
+    read reaches the model: quotes, backslashes and control characters such
+    as line breaks are escaped to two characters or more."""
+    return len(json.dumps(text, ensure_ascii=False)) - 2
+
+
+def _json_head(text: str, budget: int) -> str:
+    """The longest head of ``text`` that takes at most ``budget`` characters
+    inside a JSON string."""
+    low, high = 0, min(len(text), budget)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if _json_len(text[:mid]) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
+
+
 # Cap on paths per read_file call. Generous: reads are cheap local IO,
 # the cap just bounds how much file content lands in the model's context
 # from a single call.
@@ -377,8 +398,8 @@ class ReadFileTool(_FsTool):
             if char_offset is not None:
                 return "Error: `char_offset` needs a single `path`"
             # The batch comes back as one result, so the files share one
-            # page budget. JSON encoding of the batch escapes every line
-            # break, so part of the budget is left for that growth.
+            # page budget. Each page is measured JSON-encoded, the way it
+            # arrives; the part held back covers each record's keys and path.
             per_file = max(self._MIN_PAGE, int(self._page_budget() * 0.85) // len(paths))
             # Each read is independent local IO touching a distinct file-state
             # key, so awaiting them together is safe; this collapses N reads
@@ -433,11 +454,11 @@ class ReadFileTool(_FsTool):
 
             # PDF support
             if fp.suffix.lower() == ".pdf":
-                return self._read_pdf(fp, pages)
+                return self._read_pdf(fp, pages, budget)
 
             # Office document support
             if fp.suffix.lower() in {".docx", ".xlsx", ".pptx"}:
-                return self._read_office_doc(fp)
+                return self._read_office_doc(fp, budget)
 
             raw = fp.read_bytes()
 
@@ -538,6 +559,9 @@ class ReadFileTool(_FsTool):
             page_budget = budget if budget is not None else self._page_budget()
             if char_offset is not None:
                 return self._read_line_page(fp, all_lines, offset, char_offset, page_budget)
+            # A batch page (``budget`` given) reaches the model inside the
+            # batch's JSON, so it is measured the way it arrives there.
+            measure = len if budget is None else _json_len
 
             # The notes lead the page instead of trailing it, and count against
             # its budget: anything past the calling run's cap is taken out of
@@ -548,7 +572,7 @@ class ReadFileTool(_FsTool):
                 + "\n".join(notes)
                 + "\n\n"
             ) if notes else ""
-            room = max(self._MIN_PAGE, page_budget - len(notes_block)) - self._FOOTER_ROOM
+            room = max(self._MIN_PAGE, page_budget - measure(notes_block)) - self._FOOTER_ROOM
 
             start = offset - 1
             last = min(start + (limit or self._DEFAULT_LIMIT), total)
@@ -558,13 +582,15 @@ class ReadFileTool(_FsTool):
             for index in range(start, last):
                 line_no = index + 1
                 entry_text = self._display_line(line_no, all_lines[index], self._LINE_CAP)
-                cost = len(entry_text) + (1 if numbered else 0)
+                cost = measure(entry_text) + (measure("\n") if numbered else 0)
                 if used + cost > room:
                     cut_by_budget = True
                     if not numbered:
                         # Not even one line fits: show the head of it and
                         # point at the rest, so a page is never empty.
                         keep = max(1, room - len(f"{line_no}| ") - 150)
+                        if budget is not None:
+                            keep = len(_json_head(all_lines[index], keep))
                         numbered.append(self._display_line(line_no, all_lines[index], keep))
                     break
                 numbered.append(entry_text)
@@ -679,7 +705,7 @@ class ReadFileTool(_FsTool):
         except Exception:  # noqa: BLE001
             return []
 
-    def _read_pdf(self, fp: Path, pages: str | None) -> str:
+    def _read_pdf(self, fp: Path, pages: str | None, budget: int | None = None) -> str:
         try:
             from pypdf import PdfReader
         except ImportError:
@@ -718,13 +744,16 @@ class ReadFileTool(_FsTool):
             return f"(PDF has no extractable text: {fp})"
 
         result = "\n\n".join(parts)
-        budget = self._page_budget() - self._FOOTER_ROOM
-        if len(result) > budget:
+        # A batch page's share (``budget``) is measured JSON-encoded, the
+        # way the batch arrives.
+        room = (budget if budget is not None else self._page_budget()) - self._FOOTER_ROOM
+        head = result[:room] if budget is None else _json_head(result, room)
+        if len(head) < len(result):
             # Cut first, then say where to continue: a continuation hint added
             # before the cut would be the part that gets cut.
             result = (
-                result[:budget]
-                + f"\n\n(PDF text of pages {start + 1}-{end + 1} cut at {budget:,} of "
+                head
+                + f"\n\n(PDF text of pages {start + 1}-{end + 1} cut at {len(head):,} of "
                 f"{len(result):,} chars; request fewer pages at a time, e.g. "
                 f"pages='{start + 1}-{start + 1}'.)"
             )
@@ -732,7 +761,7 @@ class ReadFileTool(_FsTool):
             result += f"\n\n(Showing pages {start + 1}-{end + 1} of {total_pages}. Use pages='{end + 2}-{min(end + 1 + self._MAX_PDF_PAGES, total_pages)}' to continue.)"
         return result
 
-    def _read_office_doc(self, fp: Path) -> str:
+    def _read_office_doc(self, fp: Path, budget: int | None = None) -> str:
         from durin.utils.document import extract_text
 
         result = extract_text(fp)
@@ -746,11 +775,14 @@ class ReadFileTool(_FsTool):
         if not result:
             return f"({fp.suffix.upper().lstrip('.')} has no extractable text: {fp})"
 
-        budget = self._page_budget() - self._FOOTER_ROOM
-        if len(result) > budget:
+        # A batch page's share (``budget``) is measured JSON-encoded, the
+        # way the batch arrives.
+        room = (budget if budget is not None else self._page_budget()) - self._FOOTER_ROOM
+        head = result[:room] if budget is None else _json_head(result, room)
+        if len(head) < len(result):
             result = (
-                result[:budget]
-                + f"\n\n(Document text cut at {budget:,} of {len(result):,} chars; "
+                head
+                + f"\n\n(Document text cut at {len(head):,} of {len(result):,} chars; "
                 "convert_to_markdown returns the whole text, and a result that "
                 "large is saved to a file you can read in pages.)"
             )
