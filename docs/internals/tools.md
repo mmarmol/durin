@@ -47,16 +47,40 @@ a second check so that a model using a cached schema from a previous mode gets a
 `BLOCKED` synthetic result rather than a real execution — not a model error or a
 silent no-op.
 
-**3. Result governance — per-tool spill and per-turn budget.**
-Two independent mechanisms protect context:
-- **Per-tool spill (live):** when a single tool result exceeds `max_tool_result_chars`,
-  `truncate_with_spill()` writes the full content to `<workspace>/.durin/spills/`
-  and returns a head+tail rendering that references the spill path. The model can
-  recover any omitted section with `read_file`.
+**3. Result governance — a result arrives whole, or as a working pointer to itself.**
+Every tool result goes through `_normalize_tool_result()` in the runner, in
+this order:
+1. **Redact.** Every string in the result is redacted, at any depth of a dict
+   or list. Only a typed content block keeps its binary payload untouched.
+2. **Coerce.** A dict or untyped list becomes its JSON text, so the size check
+   below sees what the model would receive.
+3. **Spill.** If the text exceeds `max_tool_result_chars`, the whole result is
+   saved to `<workspace>/.durin/tool-results/<session>/<call>.txt` and replaced
+   by a persisted reference, which carries:
+   - the size and line count of the saved file;
+   - a 1,200-char preview;
+   - the exact `read_file` / `grep` call that gets the rest;
+   - a line telling the model not to re-run the call.
+
+   A structured result is saved as a line-pageable rendering: one
+   `key: value` line per scalar and every multi-line string verbatim. Its JSON
+   would be a single line that no line-based reader can page.
+4. **Cut.** Only when the spill is impossible (no workspace), the text is cut
+   within the cap, marker included.
+
+The runner re-applies this to every tool message on each iteration. Because a
+normalized result already fits, the pass leaves it unchanged. Around it:
+- **Self-paging tools:** the runner publishes its per-result cap for the tools
+  it calls (`current_result_char_cap()`), and `read_file` and `grep` size each
+  page under it. A page therefore arrives whole with its "continue at offset=N"
+  footer, instead of being replaced by a preview that drops the footer.
+- **exec's own spill (live):** `truncate_with_spill()` keeps a head and tail
+  within 10,000 chars and saves the full (redacted) output to
+  `<workspace>/.durin/spills/`, naming the `read_file` call.
 - **Per-turn aggregate budget (retroactive):** after all tool results for a turn
   are collected, if their combined size exceeds `DURIN_TURN_BUDGET_CHARS`
-  (default 200 000 chars), `_enforce_turn_budget()` spills the largest not-yet-spilled
-  results to disk in size order until the aggregate fits.
+  (default 200 000 chars), `_enforce_turn_budget()` spills the largest
+  not-yet-spilled results to disk in size order until the aggregate fits.
 
 ---
 
@@ -77,8 +101,9 @@ flowchart TD
     MODE_CHECK -->|allowed| EXEC["tool.execute(**params)"]
 
     EXEC --> RAW["Raw result"]
-    RAW --> SPILL{"result >\nmax_tool_result_chars?"}
-    SPILL -->|yes| TRUNCATE["truncate_with_spill\n→ head+tail + spill ref\n(.durin/spills/)"]
+    RAW --> NORM["_normalize_tool_result\nredact → coerce to text"]
+    NORM --> SPILL{"text >\nmax_tool_result_chars?"}
+    SPILL -->|yes| TRUNCATE["save whole result\n(.durin/tool-results/)\n→ reference: size, preview,\nread_file call"]
     SPILL -->|no| PASS["result as-is"]
 
     TRUNCATE --> RESULTS
@@ -302,8 +327,11 @@ overflow path. When output exceeds `max_chars`:
 2. The full (redacted) content is written atomically to
    `<workspace>/.durin/spills/<tool>_<timestamp>_<hash>.txt`.
 3. The rendered result keeps `head_ratio` (default 70%) of the budget as the
-   head, the remainder as the tail, and inserts a footer with the spill path and
-   a `read_file(path=...)` recovery hint.
+   head, the remainder as the tail, and inserts a footer with:
+   - the omitted and total sizes;
+   - the spill path and line count;
+   - the `read_file(path=...)` call, which pages itself;
+   - "do not re-run the command".
 
 If the spill write fails (unwritable temp dir), the tool falls back to plain
 head+tail truncation with an error note — the tool call never fails because of a
@@ -311,8 +339,35 @@ spill failure.
 
 `ExecTool` uses `truncate_with_spill` directly inside its `execute()` method (cap
 of 10 000 chars) and emits a `tool.exec.spill` telemetry event when truncation
-occurs. The runner also applies `maybe_persist_tool_result()` in
-`_normalize_tool_result()` for the general case.
+occurs. For every other tool, the runner's `maybe_persist_tool_result()` in
+`_normalize_tool_result()` saves an oversized result. The file holds the whole
+result: `spill_text` carries the readable rendering of a structured result, and
+an all-text block list is saved as its text. The persisted reference's first
+three lines (`[tool output persisted]`, `Full output saved to:`,
+`Original size: N chars`) are parsed back by `parse_persisted_reference()`,
+which is how compaction keeps the recovery path.
+
+### Paging under the run's cap
+
+`AgentRunner.run()` publishes `spec.max_tool_result_chars` through a context
+variable (`set_result_char_cap` / `current_result_char_cap` in
+`durin/agent/tools/context.py`). Tool calls run in tasks spawned from the run
+and inherit it; outside an agent run it is unset and tools keep their own
+limits.
+
+`read_file` uses it this way:
+- Its page budget is the cap minus a reserve, and the memory-notes block counts
+  against the budget.
+- A batch (`paths`) shares that budget across files.
+- A line over 2,000 chars is shortened with the call that reads the rest of it:
+  `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
+  saved tool output) is read in character pages through `char_offset`.
+- A page that cannot hold even one line shows the line's head with the same
+  pointer, never an empty page.
+
+`grep` sizes its output the same way and shortens long matching lines. Every
+note that holds results back gives the offset that shows the next ones, and
+the total when it is known.
 
 ### Turn-budget enforcement
 
@@ -328,8 +383,13 @@ when budget enforcement fires.
 ### Secret redaction
 
 `_normalize_tool_result()` calls `redact_secrets()` on every tool result before
-it enters the model context. This strips any stored secret value whose `scope`
-grants access to the tool that produced the result.
+anything else happens to it, so neither the model context nor a spill file ever
+holds a redacted value in clear. This strips any stored secret value whose
+`scope` grants access to the tool that produced the result, plus
+credential-shaped patterns. A structured result is walked recursively: every
+string inside a dict or list is redacted, which covers batch reads such as
+`read_file(paths=...)`. A typed content block only has its text fields
+redacted, so image and audio payloads pass through byte-for-byte.
 
 ---
 
@@ -393,7 +453,7 @@ controls which MCP tools are registered.
 
 | Group | Tools |
 |---|---|
-| Filesystem | `read_file` (text reads open with up to `memory.artifact_recall.max_notes` memory entries that mention the file — a header block, because an over-cap result is truncated from the tail), `write_file`, `edit_file`, `list_dir` |
+| Filesystem | `read_file` (pages sized under the calling run's per-result cap; long lines readable in character pages via `char_offset`; text reads open with up to `memory.artifact_recall.max_notes` memory entries that mention the file — a header block counted against the page budget), `write_file`, `edit_file`, `list_dir` |
 | Document reading | `convert_to_markdown` (local document → markdown via markitdown, with local OCR transcribing scanned PDF pages when enabled; returned into the current turn — transient, persists nothing. A document needing more OCR than the inline budget is not read this way — `memory_ingest` it instead, which enqueues a [background job](jobs.md)) |
 | Search | `grep`, `repo_overview`, `dependents` (what references a skill, a workflow script or a workflow — the reverse edges of the definition graph) |
 | Shell | `exec` (a command the deny list or allowlist refuses is put to the person in a chat for a one-time approval; hard-floor commands never run), `process` |

@@ -466,7 +466,9 @@ mutually exclusive.
 
 The batch form runs drills concurrently via `asyncio.gather` +
 `asyncio.to_thread`. Individual failures in a batch return an `error` field on
-the failing record without aborting the rest.
+the failing record without aborting the rest. A drill result larger than the
+run's per-result cap is saved whole by the runner, rendered so it can be read
+in line pages. The model gets a preview and the `read_file` call for the rest.
 
 **When to call:** when a `memory_search` result block is marked `(preview N/M)`
 — N chars shown, M chars exist (a `(complete)` block returns the same text and
@@ -482,7 +484,7 @@ per-response render budget collapsed to a one-line headline pointer
 | `memory/<class>/<id>` | Memory entries (episodic, stable, corpus, reference). `.md` appended automatically. |
 | `memory/entity_page/<type>:<slug>` | Entity page URI shape that `memory_search` emits. Translated to `memory/entities/<type>/<slug>.md`. |
 | `memory/entities/<type>/<slug>.md` | Direct on-disk entity page path. |
-| `reference:<slug>` (optionally `#<heading>`) | An ingested document — the `derived_from` / `Sources:` form and the `memory/reference/<slug>` form that `scope="library"` emits both resolve to `memory/references/<slug>.md`. |
+| `reference:<slug>` (optionally `#<heading>` or `#<chunk index>`) | An ingested document — the `derived_from` / `Sources:` form and the `memory/reference/<slug>` form that `scope="library"` emits both resolve to `memory/references/<slug>.md`. A numeric anchor, the form a library search hit carries, returns that chunk from the document's `.chunks.jsonl` index. An index the document lacks falls back to a heading of that name, then fails naming the valid range. |
 | `memory/archive/<class>/<id>.md` | Archived content from `scope='archive'` searches. |
 | `sessions/<key>.md` (optionally `#turn-N`) | Session transcript, optionally a specific turn. |
 | `ingested/<id>/source.md` (optionally `#anchor`) | Verbatim ingested document, optionally a markdown section. |

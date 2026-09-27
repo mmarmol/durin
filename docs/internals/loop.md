@@ -425,9 +425,10 @@ The handlers, in order:
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
   the `.meta.json` sidecar), then schedules a background
   `maybe_consolidate_by_tokens`. A tool result too large for the persisted
-  transcript is spilled to a recoverable file *before* it is truncated, so the
-  truncated text left in the transcript carries a pointer back to the full
-  output (`read_file` recovers it) instead of losing it. It also closes out the
+  transcript is spilled to a recoverable file *before* it is truncated, and the
+  pointer back to the full output leads the saved text, whose whole length
+  stays within the cap. A later turn previews an over-cap entry from its head,
+  so a trailing pointer would be the part that disappears. It also closes out the
   turn's memory bookkeeping: the prefetch's dedup binding is released here (a
   turn that never reached SAVE releases it in the state loop's `finally`
   instead), and a `turn.memory_usage` rollup is emitted for every turn.
@@ -486,10 +487,22 @@ that point on, and this pass runs on every iteration, so a pass that could
 reclaim less than `_MICROCOMPACT_MIN_RECLAIM_CHARS` in aggregate leaves the
 messages alone rather than force a cache write that costs more than the freed
 context is worth. When it does fire, the placeholder is informative rather
-than opaque: it names the tool,
-quotes a short head snippet of what the output began with (omitted when the
-content is already a persisted reference, since its head is marker
-boilerplate), and points at the recoverable file via `read_file`.
+than opaque:
+- it names the tool;
+- it quotes a short head snippet of what the output began with (omitted when
+  the content is already a persisted reference, since its head is marker
+  boilerplate);
+- it names the `read_file` call on the recoverable file, "instead of re-running
+  the call".
+
+**Task state mid-turn.** The prompt built for a turn carries the `<task-state>`
+block: goal, decisions and findings, todos. The loop hands the runner a
+`task_state_provider`. Before each request, the runner compares the current
+block with the conversation. When a `note_decision` or todo update has changed
+it, the new block is appended to the end of that request. Appending at the end
+keeps the cached prefix, and the block never enters the saved transcript. That
+makes a finding recorded mid-investigation survive the trimming of the older
+tool results it came from.
 
 Two behaviors connect the runner back to the loop:
 
