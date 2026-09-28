@@ -142,12 +142,22 @@ def test_without_config_a_node_has_no_window(tmp_path) -> None:
     assert nr.runner.run.call_args.args[0].context_window_tokens is None
 
 
+def test_a_node_without_file_tools_gets_no_place_to_save_results(tmp_path) -> None:
+    """A node with only MCP tools cannot open a saved file, so an oversized
+    result is cut inline to the cap instead of becoming a pointer it cannot
+    follow."""
+    nr = _node_runner(tmp_path, _config_with_window("test-model", 150_000))
+    nr(_req(WorkNode(id="a", prompt="Do it.", tools="none", mcps=("docs",), next=None)))
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.workspace is None
+
+
 def test_a_nodes_large_results_are_saved_where_it_can_read_them(tmp_path) -> None:
     """An oversized or pruned result is replaced by a pointer to a saved file
     only when the run knows a workspace and a session key; without them it is
     cut with no way back."""
     nr = _node_runner(tmp_path, _config_with_window("test-model", 150_000))
-    nr(_req(WorkNode(id="a", prompt="Do it.", next=None)))
+    nr(_req(WorkNode(id="a", prompt="Do it.", tools="default", next=None)))
     spec = nr.runner.run.call_args.args[0]
     assert spec.workspace is not None
     assert spec.workspace.resolve() == tmp_path.resolve()

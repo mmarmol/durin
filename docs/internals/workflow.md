@@ -311,15 +311,18 @@ a dedicated provider only when that entry's params actually differ from the run'
 a bare name with nothing configured for it keeps sharing the default client. A persona's own
 `temperature`, when set, overrides whatever the resolved model would otherwise use. Resolved
 providers are cached per run (per node) so repeated nodes on the same ref don't rebuild one.
-A node's agent turn runs under the context window of the model it resolved to (the per-model
-entry, then the catalog, then the default — `AgentNodeRunner._node_context_window`), which gives
-it the runner's input budget: the mid-turn precheck, the pruning of old tool results near the
-limit, and a per-result cap that follows the window. The turn also carries the node's workspace
-(its private copy when writing in parallel) and session key, so an oversized or pruned result is
-saved where the node's own file tools can read it back. A node with tools gets a "Tool results"
-section in its system prompt with the rule for doing so — read a trimmed or saved result back
-before using it, and state findings as they come — since it has neither the chat's operating
-floor nor `note_decision`.
+A node's agent turn runs under the context window of the model it resolved to, taken from the
+same preset as its provider (the default preset, a named preset, a pair or a plain model name)
+and capped by the fallback models' windows, as the chat's is
+(`AgentNodeRunner._node_context_window`). That gives it the runner's input budget: the mid-turn
+precheck, the pruning of old tool results near the limit, and a per-result cap that follows the
+window. A node with the file tools (`tools: default`) also carries its workspace (its private copy
+when writing in parallel) and session key, so an oversized or pruned result is saved where its own
+`read_file` and `grep` can read it back, and it gets a "Tool results" section in its system prompt
+with the rule for doing so — read a trimmed or saved result back before using it, and state
+findings as they come — since it has neither the chat's operating floor nor `note_decision`. A
+node with only MCP tools cannot open a saved file, so its oversized results are cut inline to the
+cap instead.
 This resolution is also what `reuse: "if-unchanged"` compares against: an unresolvable ref logs
 a warning, runs the node against the default provider/model anyway (a workflow run never dies
 on a bad ref), but reports an unknown producer identity so that node's reuse gate never fires.

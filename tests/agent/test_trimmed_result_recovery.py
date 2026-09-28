@@ -47,14 +47,14 @@ def test_without_a_workspace_the_placeholder_says_it_was_not_saved() -> None:
     assert "not saved" in placeholder
 
 
-def _node_system(tmp_path: Path, tools: str) -> str:
+def _node_system(tmp_path: Path, tools: str, mcps: tuple[str, ...] = ()) -> str:
     provider = MagicMock(spec=LLMProvider)
     provider.get_default_model.return_value = "test-model"
     runner = AgentRunner(provider)
     runner.run = AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))
     nr = AgentNodeRunner(runner, SessionManager(workspace=tmp_path), default_model="test-model")
     nr(NodeRunRequest(
-        node=WorkNode(id="a", prompt="Do it.", tools=tools, next=None),
+        node=WorkNode(id="a", prompt="Do it.", tools=tools, mcps=mcps, next=None),
         task="t", upstream_output=None, shared_context=[],
         run_id="r1", iteration=1, root_session_key=None,
     ))
@@ -70,6 +70,12 @@ def test_a_node_with_tools_is_told_how_to_recover_trimmed_results(tmp_path: Path
 
 def test_a_node_without_tools_gets_no_tool_rule(tmp_path: Path) -> None:
     assert _node_system(tmp_path, "none") == "Do it."
+
+
+def test_a_node_with_only_mcp_tools_gets_no_read_back_rule(tmp_path: Path) -> None:
+    """Without read_file or grep it could not follow the rule; its large
+    results are cut inline instead of saved."""
+    assert _node_system(tmp_path, "none", mcps=("docs",)) == "Do it."
 
 
 def test_a_subagent_is_told_how_to_recover_trimmed_results(tmp_path: Path) -> None:

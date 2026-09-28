@@ -686,10 +686,12 @@ class AgentNodeRunner:
         skills_text = self._load_skills(getattr(req.node, "skills", ()))
         if skills_text:
             system = f"{system}\n\n# Skills\n\n{skills_text}" if system else f"# Skills\n\n{skills_text}"
-        # A node with tools can have old results pruned from view or large
-        # ones saved to a file; without the chat's operating floor it needs
-        # the rule for getting them back, or it answers from memory.
-        if getattr(req.node, "tools", "none") == "default" or getattr(req.node, "mcps", ()):
+        # A node with the file tools can have old results pruned from view or
+        # large ones saved to a file; without the chat's operating floor it
+        # needs the rule for reading them back, or it answers from memory. A
+        # node with only MCP tools cannot read a saved file, so its results
+        # are never saved (see node_workspace below) and it gets no rule.
+        if getattr(req.node, "tools", "none") == "default":
             recovery = render_template("agent/_snippets/tool_result_recovery.md").strip()
             system = f"{system}\n\n# Tool results\n\n{recovery}" if system else f"# Tool results\n\n{recovery}"
         # The node's work mode (AgentMode) appends its posture to the prompt so the model
@@ -751,14 +753,19 @@ class AgentNodeRunner:
         # The node's runs get its model's window (their input budget) and a
         # place to save oversized or pruned results: the workspace its own
         # file tools read, under the node's session key, so every pointer to
-        # a saved result can be followed from inside the node.
+        # a saved result can be followed from inside the node. A node without
+        # the file tools gets no such place: its oversized results are cut
+        # inline rather than replaced by a pointer it could not open.
         node_ref = persona_model_ref or req.node.model
         if node_ref is not None and node_ref not in self._node_providers:
             # The ref did not resolve, so the node runs on the default
             # provider and model (see _resolve_node_call): use their window.
             node_ref = None
         node_window = self._node_context_window(node_ref)
-        node_workspace = Path(req.workspace_override or self.sessions.workspace)
+        node_workspace = (
+            Path(req.workspace_override or self.sessions.workspace)
+            if getattr(req.node, "tools", "none") == "default" else None
+        )
         node_session_key = self._session_key(req)
 
         node_max_turns = getattr(req.node, "max_turns", None)
