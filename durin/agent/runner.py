@@ -811,7 +811,14 @@ class AgentRunner:
                         break
                 effective_max_tokens = self._effective_max_tokens(spec, estimate_tokens, provider)
 
-            self._notify_results_left_context(spec, messages, messages_for_model, prune_state)
+            try:
+                self._notify_results_left_context(spec, messages, messages_for_model, prune_state)
+            except Exception:
+                logger.exception(
+                    "Tool-result notice failed on turn {} for {}",
+                    iteration,
+                    spec.session_key or "default",
+                )
 
             context = AgentHookContext(
                 iteration=iteration,
@@ -2766,9 +2773,10 @@ class AgentRunner:
     ) -> None:
         """Tell a tool, once per call, when its result stops reaching the
         model whole: a batch replaced it with a pointer, a size check cut it,
-        or old history was dropped. A tool can hold state that assumes the
-        model still has the result — read_file answers a repeat read with
-        "unchanged since last read" — and must reset it."""
+        the turn budget saved it to disk (in the run's own messages, so both
+        copies match), or old history was dropped. A tool can hold state that
+        assumes the model still has the result — read_file answers a repeat
+        read with "unchanged since last read" — and must reset it."""
         shown = {m.get("tool_call_id"): m.get("content") for m in view if m.get("role") == "tool"}
         missing = object()
         left = [
@@ -2777,7 +2785,10 @@ class AgentRunner:
             if m.get("role") == "tool"
             and m.get("tool_call_id")
             and m["tool_call_id"] not in state.left_context
-            and shown.get(m["tool_call_id"], missing) != m.get("content")
+            and (
+                shown.get(m["tool_call_id"], missing) != m.get("content")
+                or parse_persisted_reference(m.get("content")) is not None
+            )
         ]
         if not left:
             return
@@ -2786,7 +2797,9 @@ class AgentRunner:
             if message.get("role") != "assistant":
                 continue
             for call in message.get("tool_calls") or []:
-                function = call.get("function") or {}
+                if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                    continue
+                function = call["function"]
                 arguments = function.get("arguments")
                 if isinstance(arguments, str):
                     try:

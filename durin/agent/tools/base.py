@@ -179,8 +179,9 @@ class Tool(ABC):
 
     def result_left_context(self, arguments: dict[str, Any]) -> None:
         """Called once when a result of this tool stops reaching the model
-        whole — pruned by a batch, cut to fit, or dropped with old history —
-        with the arguments of the call that produced it. A tool that keeps
+        whole — pruned by a batch, cut to fit, saved to disk by the turn
+        budget, or dropped with old history — with the arguments of the call
+        that produced it. A tool that keeps
         state assuming the model still has that result resets it here.
         Default: nothing to reset."""
         return None

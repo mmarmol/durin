@@ -13,12 +13,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from durin.agent.loop import AgentLoop
-from durin.agent.runner import AgentRunner, AgentRunSpec
+from durin.agent.runner import AgentRunner, AgentRunSpec, _PruneState
 from durin.agent.tools.filesystem import ReadFileTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.bus.queue import MessageBus
 from durin.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
-from durin.utils.helpers import estimate_prompt_tokens
+from durin.utils.helpers import estimate_prompt_tokens, parse_persisted_reference
 
 FILLER = "".join(str(i % 10) for i in range(1_500))
 _STUB = "File unchanged since last read"
@@ -97,6 +97,79 @@ async def test_a_read_still_in_view_keeps_its_stub(tmp_path: Path) -> None:
 
     assert "alpha line 3 of the file" in _result(last, "call_1")
     assert _STUB in _result(last, "call_2")
+
+
+@pytest.mark.asyncio
+async def test_a_read_the_turn_budget_saved_is_read_again_in_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The turn budget saves results in place, in the run's own messages, so
+    the model-facing copy matches them; the model still only has a preview."""
+    monkeypatch.setenv("DURIN_TURN_BUDGET_CHARS", "3000")
+    a = _file(tmp_path)
+    b = tmp_path / "b.txt"
+    b.write_text("\n".join(f"beta line {i} of the other file" for i in range(60)), encoding="utf-8")
+    seen: list[list[dict[str, Any]]] = []
+
+    async def chat_with_retry(**kwargs: Any) -> LLMResponse:
+        seen.append([dict(m) for m in kwargs["messages"]])
+        if len(seen) == 1:
+            calls = [
+                ToolCallRequest(id="r_a", name="read_file", arguments={"path": str(a)}),
+                ToolCallRequest(id="r_b", name="read_file", arguments={"path": str(b)}),
+            ]
+        elif len(seen) == 2:
+            calls = [ToolCallRequest(id="r_a2", name="read_file", arguments={"path": str(a)})]
+        else:
+            return LLMResponse(content="done", tool_calls=[])
+        return LLMResponse(content="", tool_calls=calls)
+
+    provider = MagicMock()
+    provider.chat_with_retry = chat_with_retry
+    tools = ToolRegistry()
+    tools.register(ReadFileTool(workspace=tmp_path))
+    await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "go"}],
+        tools=tools,
+        model="m",
+        max_iterations=5,
+        max_tool_result_chars=16_000,
+        context_window_tokens=40_000,
+        workspace=tmp_path,
+        session_key="sess",
+    ))
+
+    assert parse_persisted_reference(_result(seen[1], "r_a")) is not None
+    again = _result(seen[2], "r_a2")
+    assert _STUB not in again
+    assert "alpha line 3 of the file" in again
+
+
+def test_a_malformed_tool_call_entry_does_not_stop_the_notice(tmp_path: Path) -> None:
+    """History can hold a tool_calls entry that is not a dict; the notice must
+    skip it, as the orphan pass does, and still reach the valid calls."""
+    heard: list[dict[str, Any]] = []
+
+    class _Listener:
+        def result_left_context(self, arguments: dict[str, Any]) -> None:
+            heard.append(arguments)
+
+    tools = MagicMock()
+    tools.get.return_value = _Listener()
+    spec = AgentRunSpec(
+        initial_messages=[], tools=tools, model="m", max_iterations=1, max_tool_result_chars=16_000,
+    )
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            "not a call",
+            {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "the whole file"},
+    ]
+
+    AgentRunner._notify_results_left_context(spec, messages, messages[:1], _PruneState())
+
+    assert heard == [{"path": "a.txt"}]
 
 
 @pytest.mark.asyncio

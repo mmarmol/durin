@@ -408,9 +408,9 @@ keeps its own limits there too.
   sees. Each run starts without stubs (the chat loop calls
   `FileStates.forget_reads()` when it binds the session's read state), since
   the history it sends may have been compacted, saved cut or trimmed. Within a
-  run, a read whose result a batch pruned, the precheck cut or the history snip
-  dropped is forgotten through `result_left_context`. Read-before-edit tracking
-  is unaffected.
+  run, a read whose result a batch pruned, the precheck cut, the history snip
+  dropped or the turn budget saved to disk is forgotten through
+  `result_left_context`. Read-before-edit tracking is unaffected.
 - A line over 2,000 chars is shortened with the call that reads the rest of it:
   `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
   saved tool output) is read in character pages through `char_offset`.
