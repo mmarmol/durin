@@ -258,6 +258,22 @@ def test_declared_secret_injected(monkeypatch, tmp_path):
     assert resp.output == "set"
 
 
+def test_inherit_env_leaves_out_stored_secrets_the_gateway_holds(monkeypatch, tmp_path):
+    """The gateway's environment carries the provider keys it loaded from the
+    secret store for its model clients. ``inherit`` passes the ambient rest
+    of it, but a stored secret reaches a script only when declared."""
+    _store_with(monkeypatch, {"OPENAI_KEY": ("sk-stored-value-12345", ["providers"])})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stored-value-12345")
+    monkeypatch.setenv("DURIN_TEST_SENTINEL", "visible")
+    node = ScriptNode(
+        id="s",
+        command='echo "key=${OPENAI_API_KEY:-absent}"; echo "ambient=$DURIN_TEST_SENTINEL"',
+        env="inherit",
+    )
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.output.strip().splitlines() == ["key=absent", "ambient=visible"]
+
+
 def test_undeclared_secret_not_injected(monkeypatch, tmp_path):
     _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["exec"])})
     node = ScriptNode(id="s", command='printf "%s" "${MY_TOKEN:-absent}"')

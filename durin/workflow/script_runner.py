@@ -117,13 +117,21 @@ class ScriptNodeRunner:
 
     def _base_env(self, node) -> dict[str, str]:
         if node.env == "inherit":
-            return dict(os.environ)
+            # The gateway's environment also holds credentials it loaded from
+            # the secret store for its own clients (provider API keys). A
+            # stored secret reaches a script only when declared, so a
+            # variable carrying a stored value is left out of the ambient rest.
+            stored = {
+                entry.value for entry in get_secret_store().all().values()
+                if isinstance(entry.value, str) and entry.value
+            }
+            return {k: v for k, v in os.environ.items() if v not in stored}
         return {k: os.environ[k] for k in _CLEAN_ENV_ALLOWLIST if k in os.environ}
 
     def _declared_secrets(self, req: NodeRunRequest) -> dict[str, str]:
         """Resolve the node's declared secret names for env injection. Neither env
-        mode carries stored secrets (they live in the secret store, not the gateway
-        environment), so a script authenticates only via this explicit manifest. A
+        mode carries stored secrets (``inherit`` leaves out any variable holding a
+        stored value), so a script authenticates only via this explicit manifest. A
         name absent from the store, or whose scope does not authorize the ``exec``
         consumer, is the author's error: fail the node naming it instead of running
         the script with a silently missing credential."""
