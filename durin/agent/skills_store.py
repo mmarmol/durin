@@ -320,6 +320,22 @@ def _lint_script(relpath: str, content: str) -> dict | None:
     return None
 
 
+def _lint_bundle(files: dict[str, str]) -> dict | None:
+    """The first file in ``files`` that does not parse, as a refusal, or None.
+
+    Every write path runs it — a person's save, and the dream's create, edit,
+    restructure and fuse — so no path ships a script or config file that
+    fails before it can even run."""
+    for rel, text in files.items():
+        bad = _lint_script(rel, str(text))
+        if bad is not None:
+            where = f", line {bad['line']}" if bad.get("line") else ""
+            return {"error": f"bundled file {rel} does not parse "
+                             f"({bad.get('lang')}{where}): {bad.get('detail')}",
+                    "lint": {**bad, "path": rel}}
+    return None
+
+
 def _skill_md_integrity(content: str) -> str | None:
     """Tier-1 integrity floor for a whole SKILL.md body: reject a structurally
     broken / truncated body so no author — a webui full-save, an import, or a
@@ -748,6 +764,9 @@ def plan_skill_edit(workspace: Path, name: str, *, old: str, new: str,
     edit = _edit_text(root, file, old, new)
     if "error" in edit:
         return edit
+    bad = _lint_bundle({file: edit["after"]})
+    if bad is not None:
+        return bad
     return {"mode": read_mode(workspace, name, loader), "skill_dir": root,
             "file": file, **edit}
 
@@ -1116,6 +1135,9 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     files = files or {}
     if not all(_safe_bundle_path(p) for p in files):
         return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    bad = _lint_bundle(files)
+    if bad is not None:
+        return bad
     md = _skill_md(workspace, name)
     if md.exists():
         return {"error": f"skill already exists: {name}"}
@@ -1194,6 +1216,9 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
     files = files or {}
     if not all(_safe_bundle_path(p) for p in files):
         return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    bad = _lint_bundle(files)
+    if bad is not None:
+        return bad
     loader = _loader(workspace)
     if loader.load_skill(name) is None:
         return {"error": f"skill not found: {name}"}
@@ -1312,6 +1337,9 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         for rel, text in read_bundle_files(sdir).items():
             merged_files.setdefault(rel, text)
     merged_files.update(files)
+    bad = _lint_bundle(merged_files)
+    if bad is not None:
+        return bad
 
     store = _store_init(workspace)
     md = _skill_md(workspace, target)
