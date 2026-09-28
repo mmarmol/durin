@@ -365,6 +365,12 @@ def _bucket_mtime(path: Path) -> float:
         return 0.0
 
 
+def _bucket_kind(path: Path) -> str:
+    """The kind of session a bucket belongs to: its channel prefix
+    (``websocket``, ``slack``, ``workflow``, …)."""
+    return path.name.split("_", 1)[0]
+
+
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     siblings = [path for path in root.iterdir() if path.is_dir() and path != current_bucket]
     cutoff = time.time() - _TOOL_RESULT_RETENTION_SECS
@@ -372,7 +378,12 @@ def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
         if _bucket_mtime(path) < cutoff:
             shutil.rmtree(path, ignore_errors=True)
     keep = max(_TOOL_RESULT_MAX_BUCKETS - 1, 0)
-    siblings = [path for path in siblings if path.exists()]
+    # Each kind of session keeps its own most recent buckets, so a burst of
+    # one kind — a wide workflow fan-out, where every node and worker saves
+    # into its own bucket — cannot push out a chat's saved results and leave
+    # its read-it-back pointers leading nowhere.
+    kind = _bucket_kind(current_bucket)
+    siblings = [path for path in siblings if path.exists() and _bucket_kind(path) == kind]
     if len(siblings) <= keep:
         return
     siblings.sort(key=_bucket_mtime, reverse=True)

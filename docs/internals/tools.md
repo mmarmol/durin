@@ -68,6 +68,13 @@ this order:
    A structured result is saved as a line-pageable rendering: one
    `key: value` line per scalar and every multi-line string verbatim. Its JSON
    would be a single line that no line-based reader can page.
+
+   Saved results are cleaned up by age (`_TOOL_RESULT_RETENTION_SECS`, a week)
+   and by count: each kind of session — the channel prefix of its folder,
+   `websocket`, `slack`, `workflow`, … — keeps its `_TOOL_RESULT_MAX_BUCKETS`
+   most recent session folders, so a wide workflow fan-out, where every node
+   and worker saves into its own folder, never pushes out a chat's saved
+   results.
 4. **Cut.** Only when the spill is impossible (no workspace), the text is cut
    within the cap, marker included.
 
