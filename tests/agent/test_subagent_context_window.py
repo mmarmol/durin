@@ -72,6 +72,17 @@ async def test_child_spec_carries_the_managers_window(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_saves_its_large_and_pruned_results_where_its_tools_read(tmp_path: Path) -> None:
+    """With a window the child prunes old results near the limit. Without a
+    workspace they would be cut with no saved copy — and re-running a read to
+    get one back only answers "unchanged since last read"."""
+    manager = _manager(tmp_path, context_window_tokens=32_000)
+    spec = await _spawn_and_capture(manager)
+    assert spec.workspace == tmp_path
+    assert spec.session_key == "cli:test"
+
+
+@pytest.mark.asyncio
 async def test_set_provider_moves_the_window_with_the_model(tmp_path: Path) -> None:
     manager = _manager(tmp_path, context_window_tokens=32_000)
     manager.set_provider(_provider(), "bigger-model", context_window_tokens=200_000)

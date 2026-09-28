@@ -244,6 +244,16 @@ def provider_signature(
     )
 
 
+def preset_context_window(config: Config, preset: ModelPresetConfig) -> int:
+    """The context window a run on *preset* gets: the preset's own, capped by
+    every fallback model's, since a failover must fit the same prompt."""
+    fallback_windows = [
+        fallback.context_window_tokens
+        for fallback in _resolve_fallback_presets(config, preset)
+    ]
+    return min([preset.context_window_tokens, *fallback_windows])
+
+
 def build_provider_snapshot(
     config: Config,
     *,
@@ -251,14 +261,10 @@ def build_provider_snapshot(
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
-    fallback_windows = [
-        fallback.context_window_tokens
-        for fallback in _resolve_fallback_presets(config, resolved)
-    ]
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
-        context_window_tokens=min([resolved.context_window_tokens, *fallback_windows]),
+        context_window_tokens=preset_context_window(config, resolved),
         signature=provider_signature(config, preset=resolved),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
     )

@@ -67,7 +67,11 @@ _PARAMETERS = tool_parameters_schema(
         "the visible content seems truncated.\n\n"
         "Prefer the ``uris`` form whenever 2+ URIs from one search "
         "all need follow-up. Drill on URIs never expands the "
-        "candidate set — use memory_search to find new candidates."
+        "candidate set — use memory_search to find new candidates.\n\n"
+        "A library hit's uri ends in ``#<chunk>``: drilling it returns "
+        "that chunk; drop the ``#<chunk>`` for the whole document. A "
+        "result too large for the context comes back as a preview with "
+        "the saved file's path: read the rest with read_file."
     ),
 )
 

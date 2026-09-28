@@ -47,16 +47,54 @@ a second check so that a model using a cached schema from a previous mode gets a
 `BLOCKED` synthetic result rather than a real execution — not a model error or a
 silent no-op.
 
-**3. Result governance — per-tool spill and per-turn budget.**
-Two independent mechanisms protect context:
-- **Per-tool spill (live):** when a single tool result exceeds `max_tool_result_chars`,
-  `truncate_with_spill()` writes the full content to `<workspace>/.durin/spills/`
-  and returns a head+tail rendering that references the spill path. The model can
-  recover any omitted section with `read_file`.
+**3. Result governance — a result arrives whole, or as a working pointer to itself.**
+Every tool result goes through `_normalize_tool_result()` in the runner, in
+this order:
+1. **Redact.** Every string in the result is redacted, at any depth of a dict
+   or list. Only a typed content block keeps its binary payload untouched.
+2. **Coerce.** A dict or untyped list becomes its JSON text, so the size check
+   below sees what the model would receive.
+3. **Spill.** If the text exceeds the run's per-result cap (`max_tool_result_chars`,
+   which follows the model's context window when unset — see
+   [Paging under the run's cap](#paging-under-the-runs-cap)), the whole result is
+   saved to `<workspace>/.durin/tool-results/<session>/<call>.txt` and replaced
+   by a persisted reference, which carries:
+   - the size and line count of the saved file;
+   - a 1,200-char preview;
+   - the exact `read_file` call that gets the rest, and the `grep` call
+     (`output_mode="content"`) that returns the matching lines;
+   - a line telling the model not to re-run the call.
+
+   A structured result is saved as a line-pageable rendering: one
+   `key: value` line per scalar and every multi-line string verbatim. Its JSON
+   would be a single line that no line-based reader can page.
+
+   Saved results are cleaned up by age (`_TOOL_RESULT_RETENTION_SECS`, a week)
+   and by count: each kind of session — the channel prefix of its folder,
+   `websocket`, `slack`, `workflow`, … — keeps its `_TOOL_RESULT_MAX_BUCKETS`
+   most recent session folders, so a wide workflow fan-out, where every node
+   and worker saves into its own folder, never pushes out a chat's saved
+   results.
+4. **Cut.** Only when the spill is impossible (no workspace), the text is cut
+   within the cap, marker included.
+
+The runner re-applies this to every tool message on each iteration. Because a
+normalized result already fits, the pass leaves it unchanged. Around it:
+- **Self-paging tools:** the runner publishes its per-result cap for the tools
+  it calls (`current_result_char_cap()`), and `read_file` and `grep` size each
+  page under it. A page therefore arrives whole with its "continue at offset=N"
+  footer, instead of being replaced by a preview that drops the footer.
+- **exec's own spill (live):** `truncate_with_spill()` keeps a head and tail
+  within 10,000 chars and saves the full (redacted) output to
+  `<workspace>/.durin/spills/`, naming the `read_file` call.
 - **Per-turn aggregate budget (retroactive):** after all tool results for a turn
   are collected, if their combined size exceeds `DURIN_TURN_BUDGET_CHARS`
-  (default 200 000 chars), `_enforce_turn_budget()` spills the largest not-yet-spilled
-  results to disk in size order until the aggregate fits.
+  (default 200 000 chars), `_enforce_turn_budget()` spills the largest
+  not-yet-spilled results to disk in size order until the aggregate fits.
+- **Pruning near the window limit (later in the run):** once the prompt nears
+  the input budget, old results are replaced in one batch by a placeholder
+  that keeps the same saved-file recovery path (see [loop.md](loop.md),
+  Microcompaction).
 
 ---
 
@@ -77,8 +115,9 @@ flowchart TD
     MODE_CHECK -->|allowed| EXEC["tool.execute(**params)"]
 
     EXEC --> RAW["Raw result"]
-    RAW --> SPILL{"result >\nmax_tool_result_chars?"}
-    SPILL -->|yes| TRUNCATE["truncate_with_spill\n→ head+tail + spill ref\n(.durin/spills/)"]
+    RAW --> NORM["_normalize_tool_result\nredact → coerce to text"]
+    NORM --> SPILL{"text >\nmax_tool_result_chars?"}
+    SPILL -->|yes| TRUNCATE["save whole result\n(.durin/tool-results/)\n→ reference: size, preview,\nread_file call"]
     SPILL -->|no| PASS["result as-is"]
 
     TRUNCATE --> RESULTS
@@ -302,8 +341,11 @@ overflow path. When output exceeds `max_chars`:
 2. The full (redacted) content is written atomically to
    `<workspace>/.durin/spills/<tool>_<timestamp>_<hash>.txt`.
 3. The rendered result keeps `head_ratio` (default 70%) of the budget as the
-   head, the remainder as the tail, and inserts a footer with the spill path and
-   a `read_file(path=...)` recovery hint.
+   head, the remainder as the tail, and inserts a footer with:
+   - the omitted and total sizes;
+   - the spill path and line count;
+   - the `read_file(path=...)` call, which pages itself;
+   - "do not re-run the command".
 
 If the spill write fails (unwritable temp dir), the tool falls back to plain
 head+tail truncation with an error note — the tool call never fails because of a
@@ -311,8 +353,59 @@ spill failure.
 
 `ExecTool` uses `truncate_with_spill` directly inside its `execute()` method (cap
 of 10 000 chars) and emits a `tool.exec.spill` telemetry event when truncation
-occurs. The runner also applies `maybe_persist_tool_result()` in
-`_normalize_tool_result()` for the general case.
+occurs. For every other tool, the runner's `maybe_persist_tool_result()` in
+`_normalize_tool_result()` saves an oversized result. The file holds the whole
+result: `spill_text` carries the readable rendering of a structured result, and
+an all-text block list is saved as its text. The persisted reference's first
+three lines (`[tool output persisted]`, `Full output saved to:`,
+`Original size: N chars`) are parsed back by `parse_persisted_reference()`,
+which is how compaction keeps the recovery path.
+
+### Paging under the run's cap
+
+A run's per-result cap is `spec.max_tool_result_chars`. When the spec leaves
+it unset (the configuration's default), `AgentRunner.run()` resolves it from
+the run's context window with `result_char_cap()`: 16,000 chars below a
+100k-token window, 32,000 from 100k, 64,000 from 200k, never more than 30% of
+the window (at about 4 chars per token), and 16,000 when no window is known.
+An explicit value — in the configuration or from a caller such as the dream
+passes — always wins. The loop saves a turn under the same cap its model
+window gives a run, so a result kept whole in the run is saved whole. A turn
+that runs on a per-turn model override with a larger window can keep larger
+results; those are saved cut, with a pointer to the full copy.
+
+`AgentRunner.run()` publishes the resolved cap through a context
+variable (`set_result_char_cap` / `current_result_char_cap` in
+`durin/agent/tools/context.py`). Tool calls run in tasks spawned from the run
+and inherit it; outside an agent run it is unset and tools keep their own
+limits. A tool call made from an `execute_code` script runs with it cleared:
+its result goes to the script, not into the model's context, so the tool
+keeps its own limits there too.
+
+`read_file` uses it this way:
+- Its page budget is the cap minus a reserve, and the memory-notes block counts
+  against the budget.
+- A batch (`paths`) shares that budget across files. Each file's page, the
+  text of a PDF or office document included, is measured JSON-encoded, the way
+  the batch reaches the model: escaped quotes, backslashes and line breaks
+  count. A file whose batch page was cut to its share does not count as
+  already read: a later read of it returns its page, not the "unchanged since
+  last read" stub.
+- A line over 2,000 chars is shortened with the call that reads the rest of it:
+  `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
+  saved tool output) is read in character pages through `char_offset`.
+  `char_offset=0` on a line of 2,000 chars or less reads the normal page.
+- A page that cannot hold even one line shows the line's head with the same
+  pointer, never an empty page.
+
+`grep` sizes its output the same way. A matching or context line over 2,000
+chars is shortened to a 2,000-char window that ends with the `read_file` call
+for the rest of the line. The call names the file by its absolute path: inside
+a session, a relative path resolves in the session's work area. On the matching
+line the window is centered on the first match, so a match deep inside a
+one-line file is shown, and the call starts where the window starts. Every
+note that holds results back gives the offset that shows the next ones, and
+the total when it is known.
 
 ### Turn-budget enforcement
 
@@ -328,8 +421,16 @@ when budget enforcement fires.
 ### Secret redaction
 
 `_normalize_tool_result()` calls `redact_secrets()` on every tool result before
-it enters the model context. This strips any stored secret value whose `scope`
-grants access to the tool that produced the result.
+anything else happens to it, so a secret in a string value reaches neither the
+model context nor a spill file. This strips any stored secret value whose
+`scope` grants access to the tool that produced the result, plus
+credential-shaped patterns. A structured result is walked recursively: every
+string value inside a dict or list is redacted, which covers batch reads such
+as `read_file(paths=...)`. Dict keys are not redacted, so a secret used as a
+key stays in the spill file and in the tool message the session saves; the
+model's view of that message is redacted again, as text, before each request.
+A typed content block only has its text fields redacted, so image and audio
+payloads pass through byte-for-byte.
 
 ---
 
@@ -393,7 +494,7 @@ controls which MCP tools are registered.
 
 | Group | Tools |
 |---|---|
-| Filesystem | `read_file` (text reads open with up to `memory.artifact_recall.max_notes` memory entries that mention the file — a header block, because an over-cap result is truncated from the tail), `write_file`, `edit_file`, `list_dir` |
+| Filesystem | `read_file` (pages sized under the calling run's per-result cap; long lines readable in character pages via `char_offset`; text reads open with up to `memory.artifact_recall.max_notes` memory entries that mention the file — a header block counted against the page budget), `write_file`, `edit_file`, `list_dir` |
 | Document reading | `convert_to_markdown` (local document → markdown via markitdown, with local OCR transcribing scanned PDF pages when enabled; returned into the current turn — transient, persists nothing. A document needing more OCR than the inline budget is not read this way — `memory_ingest` it instead, which enqueues a [background job](jobs.md)) |
 | Search | `grep`, `repo_overview`, `dependents` (what references a skill, a workflow script or a workflow — the reverse edges of the definition graph) |
 | Shell | `exec` (a command the deny list or allowlist refuses is put to the person in a chat for a one-time approval; hard-floor commands never run), `process` |

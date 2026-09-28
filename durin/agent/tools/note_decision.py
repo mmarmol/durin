@@ -84,12 +84,14 @@ class NoteDecisionTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Record a key decision or critical finding for the current task "
-            "(one sentence; include the why). It is echoed in your runtime "
-            "context every turn and survives compaction, so you won't lose "
-            "track of *why* you did things when older messages scroll out of "
-            "context. Use it when you make a non-obvious choice, discover an "
-            "important constraint/fact, or hit a blocker — not for routine "
-            "progress (that's the todo list)."
+            "(one sentence; include the why). It is shown to you again on "
+            "later calls of this turn and on every later turn, and survives "
+            "compaction and the trimming of old tool results, so you won't "
+            "lose a finding or *why* you did things when older messages "
+            "scroll out of context. Use it when you make a non-obvious "
+            "choice, discover an important constraint/fact (e.g. the key "
+            "evidence of an investigation), or hit a blocker — not for "
+            "routine progress (that's the todo list)."
         )
 
     def _session(self) -> Any | None:

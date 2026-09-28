@@ -291,8 +291,11 @@ at construction and re-points the window on every provider snapshot swap; a
 configured aux subagent model overrides it per spawn with that model's window
 (capped by its fallbacks' windows, as the main loop's snapshot is). The window
 goes on the child's `AgentRunSpec`, which is what turns on the runner's
-mid-turn precheck, history snip and pressure-gated microcompact for the child —
-without it the child had no input budget at all and a long research task ended
+mid-turn precheck, history snip, pruning of old tool results near the limit and
+the window-scaled per-result cap for the child. The spec also carries the
+workspace the child's own tools read, so an oversized or pruned result is saved
+where the child can read it back —
+without the window the child had no input budget at all and a long research task ended
 in the provider's context-length error instead of durin's own compaction. Each
 finished child writes one `subagent.run` telemetry row (task id, label, model,
 window, stop reason, iterations, summed prompt/completion tokens, duration) into
@@ -425,9 +428,10 @@ The handlers, in order:
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
   the `.meta.json` sidecar), then schedules a background
   `maybe_consolidate_by_tokens`. A tool result too large for the persisted
-  transcript is spilled to a recoverable file *before* it is truncated, so the
-  truncated text left in the transcript carries a pointer back to the full
-  output (`read_file` recovers it) instead of losing it. It also closes out the
+  transcript is spilled to a recoverable file *before* it is truncated, and the
+  pointer back to the full output leads the saved text, whose whole length
+  stays within the cap. A later turn previews an over-cap entry from its head,
+  so a trailing pointer would be the part that disappears. It also closes out the
   turn's memory bookkeeping: the prefetch's dedup binding is released here (a
   turn that never reached SAVE releases it in the state loop's `finally`
   instead), and a `turn.memory_usage` rollup is emitted for every turn.
@@ -476,20 +480,71 @@ consolidator, whose history carries no stamps) it is a tiktoken estimate of the
 messages plus the tool definitions — the same basis on both sides, which is what
 the iteration-0 overflow invariant above relies on.
 
-**Microcompaction** is gated on pressure: results beyond the most recent
-`_MICROCOMPACT_KEEP_RECENT` are only collapsed when the estimated prompt
-already exceeds `_MICROCOMPACT_PRESSURE_RATIO` of the input budget, so a
-turn with headroom to spare keeps stale tool results in full — they may
-still hold the answer to a question the user hasn't asked yet. A second gate
-is economic: rewriting a message invalidates every cached prompt prefix from
-that point on, and this pass runs on every iteration, so a pass that could
-reclaim less than `_MICROCOMPACT_MIN_RECLAIM_CHARS` in aggregate leaves the
-messages alone rather than force a cache write that costs more than the freed
-context is worth. When it does fire, the placeholder is informative rather
-than opaque: it names the tool,
-quotes a short head snippet of what the output began with (omitted when the
-content is already a persisted reference, since its head is marker
-boilerplate), and points at the recoverable file via `read_file`.
+**Microcompaction** replaces old tool results by a pointer to their saved
+file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
+- **When.** A batch fires only when the prompt about to be sent is over
+  `_MICROCOMPACT_PRESSURE_RATIO` (80%) of the input budget. Below it every
+  result stays in full — it may still hold the answer to a question the user
+  hasn't asked yet.
+- **What.** Every result of `read_file`, `exec`, `grep`, `web_search`,
+  `web_fetch` or `list_dir` older than the protected recent ones, at once.
+  Skills, memory and other tools' results are never pruned, nor are results
+  shorter than `_MICROCOMPACT_MIN_CHARS` or ones made of content blocks.
+- **Protected.** The most recent prunable results — at most
+  `_MICROCOMPACT_KEEP_RECENT`, and only while together they fit in
+  `_MICROCOMPACT_PROTECT_RATIO` (20%) of the budget; the newest always.
+- **Worth it.** A batch rewrites the prompt from its first pruned result on,
+  which costs a prompt-cache write of everything after it, so it only fires
+  when it frees at least `_MICROCOMPACT_MIN_FREED_RATIO` (5%) of the budget.
+- **Sticky.** What a batch replaced stays replaced, with the same placeholder
+  byte for byte, for the rest of the run. Between batches a request is the
+  previous one plus new messages, which keeps the provider's prompt cache and
+  the usage-anchored size estimate valid; a result never reappears after it
+  was pruned. A new run starts with nothing pruned, so it prunes again only
+  if it is over the threshold.
+- **Which usage stamps to trust.** Size estimates anchor on the latest usage
+  stamp, but a run trusts only the stamps it produced after its last batch.
+  The stamps on the messages it starts from measured another run's requests
+  — possibly pruned ones: a workflow node's synthesis, re-entry or persistent
+  revisit starts from an earlier run's messages, stamps included — and the
+  stamps from before a batch measured prompts that still held the pruned
+  results. Those are dropped from the model-facing copy (they are never
+  sent), so the request is counted from scratch: the pruning check, the
+  history snip and the mid-turn precheck see the prompt actually sent, never
+  one that looks smaller or larger than it is.
+- **No window, no pruning.** A run without a known context window has no
+  budget to measure against and prunes nothing.
+- **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,
+  estimate, budget, pruned and protected counts, freed tokens).
+
+The placeholder is informative rather than opaque:
+- it names the tool;
+- it quotes a short head snippet of what the output began with (omitted when
+  the content is already a persisted reference, since its head is marker
+  boilerplate);
+- it says the content is no longer shown and names the `read_file` call on the
+  recoverable file, to read it back "before you use anything from it, instead
+  of re-running the call" — a model that only sees "trimmed" can take it for a
+  partial view and answer from memory. A result that was never saved is saved
+  on the spot; a run without a workspace keeps an honest "no longer shown here
+  and not saved" marker instead.
+
+Runs that have tools but not the chat's operating floor — subagents and
+workflow nodes — carry the same recovery rule (`agent/_snippets/tool_result_recovery.md`,
+in the subagent system prompt and in a node's "Tool results" section): read a
+trimmed or saved result back before using it, and state findings in your own
+words as they come, since those runs have no `note_decision`.
+
+**Task state mid-turn.** The prompt built for a turn carries the `<task-state>`
+block: goal, decisions and findings, todos. The loop hands the runner a
+`task_state_provider`. Before each request that offers tools, the runner
+compares the current block with the conversation. When a `note_decision` or
+todo update has changed it, the new block is appended to the end of that
+request. Appending at the end keeps the cached prefix, and the block never
+enters the saved transcript. That makes a finding recorded mid-investigation
+survive the trimming of the older tool results it came from. The no-tools
+finalization retry is sent without the block, so it ends with its own
+instruction.
 
 Two behaviors connect the runner back to the loop:
 
@@ -924,7 +979,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
-| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. |
+| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns in flight at once, across all sessions. `DURIN_MAX_CONCURRENT_REQUESTS` overrides this at runtime. |
 | `concurrency_ceiling` | `12` | Global ceiling: total in-flight turns *and* subagents across all lanes (see [Concurrency](concurrency.md)). |
 | `max_concurrent_subagents` | `3` | Process-wide subagent-lane cap, checked at spawn time (`spawn.py`); independent of the global ceiling above. |

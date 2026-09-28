@@ -8,3 +8,4 @@
 - When several tool calls are independent — their inputs do not depend on each other's results — emit them together in one turn so they run in parallel (for example, fetching several URLs). Chain calls sequentially only when one needs another's output.
 - When information is missing, look it up with tools first. Only ask the user when tools cannot answer.
 - After multi-step changes, verify the result (re-read the file, run the test, check the output).
+- A truncated or trimmed tool result that names a saved file path still exists in full at that path: read it with read_file (each call returns a page and says where to continue) or search it with grep, and do not re-run the call to get it back. A result cut short with no saved path is not on disk: narrow the request and run it again. In a long task, record key findings with note_decision as you go — older tool results can be trimmed from view, your notes are not.

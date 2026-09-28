@@ -1,12 +1,35 @@
 """Runtime context for tool construction."""
 from __future__ import annotations
 
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from durin.providers.base import LLMProvider
+
+
+# The per-result character cap of the agent run that is calling a tool. The
+# runner takes anything larger out of the model's context and leaves a short
+# preview, which drops a tool's own "continue from here" footer. Tools that
+# page their own output (read_file, grep) size each page under this cap so a
+# page arrives whole. Unset outside an agent run (direct calls, tests): those
+# callers apply no such cap, so tools keep their own limits.
+_RESULT_CHAR_CAP: ContextVar[int | None] = ContextVar("result_char_cap", default=None)
+
+
+def set_result_char_cap(cap: int | None) -> Token:
+    """Publish the calling run's per-result cap; returns the reset token."""
+    return _RESULT_CHAR_CAP.set(cap if cap and cap > 0 else None)
+
+
+def reset_result_char_cap(token: Token) -> None:
+    _RESULT_CHAR_CAP.reset(token)
+
+
+def current_result_char_cap() -> int | None:
+    """The calling run's per-result cap, or None outside an agent run."""
+    return _RESULT_CHAR_CAP.get()
 
 
 @dataclass(frozen=True)

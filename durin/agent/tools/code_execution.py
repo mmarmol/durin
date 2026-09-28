@@ -33,6 +33,7 @@ from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.config.schema import Base
 from durin.utils.subprocess_cleanup import aclose_subprocess
@@ -339,10 +340,16 @@ class ExecuteCodeTool(Tool):
                          "No more tool calls allowed in this execution.",
             }).encode()
         tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
+        # The result goes to the script, not into the model's context, so
+        # the calling run's per-result cap does not apply: the tool keeps its
+        # own limits (a script's grep is not cut to a model-sized page).
+        cap_token = set_result_char_cap(None)
         try:
             result = await self._tools[tool_name].execute(**args)
         except Exception as e:  # noqa: BLE001 — tool errors flow back to the script
             return json.dumps({"ok": False, "error": str(e)[:500]}).encode()
+        finally:
+            reset_result_char_cap(cap_token)
         if not isinstance(result, str):
             result = "(non-text tool result omitted in execute_code)"
         return json.dumps({"ok": True, "result": result}, ensure_ascii=False).encode()

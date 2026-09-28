@@ -248,12 +248,24 @@ def truncate_text(text: str, max_chars: int, direction: str = "head") -> str:
     tail for bash) is the design inspiration here — keeping the
     semantically valuable end of shell output saved many wasted
     re-runs in their telemetry.
+
+    ``max_chars`` bounds the whole result, marker included: callers
+    re-check sizes (the agent runner re-normalizes every tool result on
+    each iteration), and a cut result longer than the cap would be cut
+    again as if it were new oversized output. A cap too small to hold the
+    marker gets a bare cut.
     """
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     if direction == "tail":
-        return "... (truncated) ...\n" + text[-max_chars:]
-    return text[:max_chars] + "\n... (truncated)"
+        marker = "... (truncated) ...\n"
+        if max_chars <= len(marker):
+            return text[-max_chars:]
+        return marker + text[-(max_chars - len(marker)):]
+    marker = "\n... (truncated)"
+    if max_chars <= len(marker):
+        return text[:max_chars]
+    return text[: max_chars - len(marker)] + marker
 
 
 def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
@@ -298,17 +310,28 @@ def _render_tool_result_reference(
     filepath: Path,
     *,
     original_size: int,
+    line_count: int,
     preview: str,
     truncated_preview: bool,
 ) -> str:
+    # The first three lines are parsed back by ``parse_persisted_reference``
+    # (compaction keeps the recovery path from them); keep their format.
+    # The instructions name the exact call because a model that is only
+    # told "saved to a file" tends to re-run the original call instead.
     result = (
         f"{_PERSISTED_REFERENCE_MARKER}\n"
         f"{_PERSISTED_PATH_PREFIX}{filepath}\n"
         f"{_PERSISTED_SIZE_PREFIX}{original_size}{_PERSISTED_SIZE_SUFFIX}\n"
+        f"Lines: {line_count}\n"
+        "This result was too large for the context, so only a preview is shown. "
+        "The whole result is on disk: do not re-run the call to get it back. "
+        f'Read it with read_file(path="{filepath}"): each call returns one page '
+        "that fits and ends with the offset to continue from. To find something "
+        f'specific, use grep(pattern=..., path="{filepath}", output_mode="content").\n'
         f"Preview:\n{preview}"
     )
     if truncated_preview:
-        result += "\n...\n(Read the saved file if you need the full output.)"
+        result += "\n..."
     return result
 
 
@@ -342,6 +365,12 @@ def _bucket_mtime(path: Path) -> float:
         return 0.0
 
 
+def _bucket_kind(path: Path) -> str:
+    """The kind of session a bucket belongs to: its channel prefix
+    (``websocket``, ``slack``, ``workflow``, …)."""
+    return path.name.split("_", 1)[0]
+
+
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     siblings = [path for path in root.iterdir() if path.is_dir() and path != current_bucket]
     cutoff = time.time() - _TOOL_RESULT_RETENTION_SECS
@@ -349,7 +378,12 @@ def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
         if _bucket_mtime(path) < cutoff:
             shutil.rmtree(path, ignore_errors=True)
     keep = max(_TOOL_RESULT_MAX_BUCKETS - 1, 0)
-    siblings = [path for path in siblings if path.exists()]
+    # Each kind of session keeps its own most recent buckets, so a burst of
+    # one kind — a wide workflow fan-out, where every node and worker saves
+    # into its own bucket — cannot push out a chat's saved results and leave
+    # its read-it-back pointers leading nowhere.
+    kind = _bucket_kind(current_bucket)
+    siblings = [path for path in siblings if path.exists() and _bucket_kind(path) == kind]
     if len(siblings) <= keep:
         return
     siblings.sort(key=_bucket_mtime, reverse=True)
@@ -391,6 +425,51 @@ def persist_full_tool_result(
     return path
 
 
+def render_structured_result(value: Any) -> str:
+    """Render a dict/list tool result as text that can be read in line pages.
+
+    A structured result reaches the model as compact JSON, where every line
+    break inside a string is escaped, so a large result is one physical
+    line that a line-based reader cannot page. This rendering is what gets
+    saved to disk when the result is too large for the context: one
+    ``key: value`` line per scalar, nesting by indentation, and every
+    multi-line string written out verbatim between a header naming its line
+    count and an end marker. (YAML literal blocks were not an option: one
+    line with a trailing space forces the whole string back into a single
+    escaped line.)
+    """
+    out: list[str] = []
+    _render_structured_value(out, value, "", None)
+    return "\n".join(out) + "\n"
+
+
+def _render_structured_value(out: list[str], value: Any, indent: str, label: str | None) -> None:
+    head = f"{indent}{label}:" if label is not None else None
+    if isinstance(value, (dict, list)):
+        if not value:
+            empty = "{}" if isinstance(value, dict) else "[]"
+            out.append(f"{head} {empty}" if head else f"{indent}{empty}")
+            return
+        if head:
+            out.append(head)
+            indent += "  "
+        items = value.items() if isinstance(value, dict) else (
+            (f"[{i}]", item) for i, item in enumerate(value)
+        )
+        for key, item in items:
+            _render_structured_value(out, item, indent, str(key))
+        return
+    if isinstance(value, str) and "\n" in value:
+        name = label or "text"
+        body = value.splitlines()
+        out.append(f"{indent}{name}: ({len(body)} lines follow)")
+        out.extend(body)
+        out.append(f"{indent}--- end of {name} ---")
+        return
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    out.append(f"{head} {text}" if head else f"{indent}{text}")
+
+
 def maybe_persist_tool_result(
     workspace: Path | None,
     session_key: str | None,
@@ -398,20 +477,26 @@ def maybe_persist_tool_result(
     content: Any,
     *,
     max_chars: int,
+    spill_text: str | None = None,
 ) -> Any:
-    """Persist oversized tool output and replace it with a stable reference string."""
+    """Persist oversized tool output and replace it with a stable reference string.
+
+    The size check is on ``content`` — what the model would receive. What
+    is written to disk is ``spill_text`` when given (a readable rendering
+    of the same result), otherwise the text of ``content``; the reference
+    reports the size of what was written, since that is what the model
+    pages through.
+    """
     if workspace is None or max_chars <= 0:
         return content
 
     text_payload: str | None = None
-    suffix = "txt"
     if isinstance(content, str):
         text_payload = content
     elif isinstance(content, list):
         text_payload = stringify_text_blocks(content)
         if text_payload is None:
             return content
-        suffix = "json"
     else:
         return content
 
@@ -424,21 +509,19 @@ def maybe_persist_tool_result(
         _cleanup_tool_result_buckets(root, bucket)
     except Exception:
         logger.exception("Failed to clean stale tool result buckets in {}", root)
-    path = bucket / f"{safe_filename(tool_call_id)}.{suffix}"
+    path = bucket / f"{safe_filename(tool_call_id)}.txt"
     # Always write unconditionally: the current call's content is authoritative.
     # Skipping when the file exists leaves stale bytes when tool_call_id is reused
     # (e.g. the positional tool_0 fallback in runner.py).
-    if suffix == "json" and isinstance(content, list):
-        _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
-    else:
-        _write_text_atomic(path, text_payload)
+    file_text = spill_text if spill_text is not None else text_payload
+    _write_text_atomic(path, file_text)
 
-    preview = text_payload[:_TOOL_RESULT_PREVIEW_CHARS]
     return _render_tool_result_reference(
         path,
-        original_size=len(text_payload),
-        preview=preview,
-        truncated_preview=len(text_payload) > _TOOL_RESULT_PREVIEW_CHARS,
+        original_size=len(file_text),
+        line_count=len(file_text.splitlines()),
+        preview=file_text[:_TOOL_RESULT_PREVIEW_CHARS],
+        truncated_preview=len(file_text) > _TOOL_RESULT_PREVIEW_CHARS,
     )
 
 

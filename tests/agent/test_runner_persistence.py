@@ -81,6 +81,28 @@ def test_persist_tool_result_prunes_old_session_buckets(tmp_path):
     assert (root / "current_session" / "call_big.txt").exists()
 
 
+def test_a_wide_workflow_fan_out_does_not_evict_a_chats_saved_results(tmp_path):
+    """Each workflow node and fan-out worker saves into its own bucket. A
+    burst of them must not push out a chat's bucket: the chat's "read it back"
+    pointers would then lead nowhere."""
+    from durin.utils.helpers import maybe_persist_tool_result
+
+    root = tmp_path / ".durin" / "tool-results"
+    maybe_persist_tool_result(tmp_path, "websocket:chat", "call_chat", "c" * 5000, max_chars=64)
+    chat_file = root / "websocket_chat" / "call_chat.txt"
+    assert chat_file.exists()
+
+    for worker in range(40):
+        maybe_persist_tool_result(
+            tmp_path, f"workflow:run1:worker:{worker}", f"call_{worker}", "w" * 5000, max_chars=64,
+        )
+
+    assert chat_file.exists()
+    # The workflow buckets still keep to their own cap.
+    workflow_buckets = [p for p in root.iterdir() if p.name.startswith("workflow_")]
+    assert len(workflow_buckets) <= 32
+
+
 def test_persist_tool_result_leaves_no_temp_files(tmp_path):
     from durin.utils.helpers import maybe_persist_tool_result
 

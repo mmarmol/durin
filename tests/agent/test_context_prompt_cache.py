@@ -200,6 +200,33 @@ def test_operating_floor_template_contains_execution_rules() -> None:
     assert "## Execution Rules" not in soul
 
 
+def test_operating_floor_teaches_recovering_truncated_output() -> None:
+    """Every prompt says how to get the rest of a tool result that names the
+    file it was saved to, that a result cut with no saved file can be
+    narrowed and re-run, and to keep findings where trimming can't reach."""
+    floor = (pkg_files("durin") / "templates" / "agent" / "operating_floor.md").read_text(encoding="utf-8")
+    rule = next(line for line in floor.splitlines() if "do not re-run" in line)
+    assert "read_file" in rule
+    # Several tools cut their own output and keep no file (web_fetch,
+    # execute_code, session_search): the no-re-run rule must not cover them.
+    assert "names a saved file path" in rule
+    assert "narrow" in rule
+    assert "note_decision" in floor
+
+
+def test_tool_descriptions_say_where_oversized_output_goes() -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    from durin.agent.tools.note_decision import NoteDecisionTool
+    from durin.agent.tools.shell import ExecTool
+    from durin.agent.tools.skill_view import SkillViewTool
+
+    exec_desc = ExecTool().description
+    assert "instead of re-running" in exec_desc
+    for desc in (SkillViewTool.__dict__["description"].fget(None), MemoryDrillTool.__dict__["description"].fget(None)):
+        assert "read_file" in desc
+    assert "later calls of this turn" in NoteDecisionTool.__dict__["description"].fget(None)
+
+
 def test_channel_format_hint_telegram(tmp_path) -> None:
     """Telegram channel should get messaging-app format hint."""
     workspace = _make_workspace(tmp_path)

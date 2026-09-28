@@ -80,6 +80,8 @@ Use this ONLY when the corresponding memory_search result block is marked ``prev
 Do NOT drill when the block is marked ``complete``: the search already showed you the entire body and drill will return the same text, wasting tokens and an LLM round-trip. Blocks without an explicit completeness qualifier (rare; legacy / lexical-only hits) are best-guess — drill only if the visible content seems truncated.
 
 Prefer the ``uris`` form whenever 2+ URIs from one search all need follow-up. Drill on URIs never expands the candidate set — use memory_search to find new candidates.
+
+A library hit's uri ends in ``#<chunk>``: drilling it returns that chunk; drop the ``#<chunk>`` for the whole document. A result too large for the context comes back as a preview with the saved file's path: read the rest with read_file.
 ```
 
 ### 3.4 `memory_upsert_entity`

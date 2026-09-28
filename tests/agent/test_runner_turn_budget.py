@@ -15,10 +15,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from durin.config.schema import AgentDefaults
 from durin.providers.base import LLMResponse, ToolCallRequest
 
-_MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
+# These tests call the runner's internals directly, before run() would
+# resolve a window-scaled cap, so the spec carries an explicit one.
+_MAX_TOOL_RESULT_CHARS = 16_000
 
 
 class _RecordingTelemetry:

@@ -308,3 +308,38 @@ def test_drill_reference_with_section_anchor(tmp_path: Path) -> None:
 def test_drill_missing_reference_raises(tmp_path: Path) -> None:
     with pytest.raises(DrillError):
         drill(tmp_path, "reference:ghost-doc")
+
+
+def _three_chunk_doc(tmp_path: Path) -> list[dict]:
+    from durin.memory.reference import ingest_reference, reference_chunks
+
+    ingest_reference(
+        tmp_path,
+        "Flow Logs",
+        "# Flow Logs\n\nOverview text.\n\n## Search\n\nSearch by sender.\n\n## Details\n\nRecipient details.\n",
+    )
+    chunks = reference_chunks(tmp_path, "reference:flow-logs")
+    assert len(chunks) >= 3
+    return chunks
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["reference:flow-logs#1", "memory/reference/reference:flow-logs#1"],
+)
+def test_drill_a_chunk_uri_returns_that_chunk(tmp_path: Path, uri: str) -> None:
+    """memory_search shows library hits as ``<ref>#<chunk index>`` and tells
+    the model to drill that uri for the full chunk."""
+    chunks = _three_chunk_doc(tmp_path)
+
+    out = drill(tmp_path, uri)
+
+    assert chunks[1]["text"] in out
+    assert chunks[2]["text"] not in out
+
+
+def test_drill_an_unknown_chunk_names_the_valid_range(tmp_path: Path) -> None:
+    chunks = _three_chunk_doc(tmp_path)
+
+    with pytest.raises(DrillError, match=f"0-{len(chunks) - 1}"):
+        drill(tmp_path, "reference:flow-logs#99")

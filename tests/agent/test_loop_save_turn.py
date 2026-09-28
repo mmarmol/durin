@@ -24,6 +24,7 @@ def _mk_loop() -> AgentLoop:
     from durin.config.schema import AgentDefaults
 
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
+    loop.context_window_tokens = AgentDefaults().context_window_tokens
     return loop
 
 
@@ -183,6 +184,24 @@ def test_save_turn_keeps_tool_results_under_16k() -> None:
     assert session.messages[0]["content"] == content
 
 
+def test_save_turn_cap_follows_the_loops_window(tmp_path: Path) -> None:
+    """With no explicit cap, a result the run kept whole under a large
+    window's cap is saved whole too, not cut back to the small default."""
+    loop = _mk_loop()
+    loop.context_window_tokens = 231_072  # the window's cap is 64,000 chars
+    loop.workspace = tmp_path
+    session = Session(key="test:window-cap")
+    content = "x" * 30_000
+
+    loop._save_turn(
+        session,
+        [{"role": "tool", "tool_call_id": "call_1", "name": "read_file", "content": content}],
+        skip=0,
+    )
+
+    assert session.messages[0]["content"] == content
+
+
 def test_save_turn_stamps_latency_on_last_assistant() -> None:
     loop = _mk_loop()
     session = Session(key="test:latency")
@@ -218,11 +237,15 @@ def test_save_turn_spills_oversized_tool_result_with_recovery_pointer(tmp_path: 
     persisted_content = session.messages[0]["content"]
     assert isinstance(persisted_content, str)
 
-    # Verify the trailer is present with correct format
-    assert "[truncated: full output (20000 chars) at " in persisted_content
-    assert persisted_content.endswith("; use read_file to recover]")
+    # The pointer leads the saved content: a later preview of this result
+    # shows only its head, so a trailing pointer would be cut off unseen.
+    assert persisted_content.startswith("[truncated: full output (20000 chars) at ")
+    # The saved result fits the cap, so no later pass cuts it again.
+    from durin.agent.runner import result_char_cap
 
-    # Extract the path from the trailer
+    assert len(persisted_content) <= result_char_cap(loop.max_tool_result_chars, loop.context_window_tokens)
+
+    # Extract the path from the pointer
     import re
     match = re.search(r"\[truncated: full output \(\d+ chars\) at (.+?); use read_file to recover\]", persisted_content)
     assert match is not None

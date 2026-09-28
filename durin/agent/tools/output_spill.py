@@ -92,19 +92,22 @@ def truncate_with_spill(
         spill_path = None
 
     head_budget = max(0, int(max_chars * head_ratio))
-    # Reserve room for the footer (~200 chars) within the budget.
-    tail_budget = max(0, max_chars - head_budget - 200)
+    # Reserve room for the footer (~400 chars) within the budget.
+    tail_budget = max(0, max_chars - head_budget - 400)
     head = content[:head_budget]
     tail = content[-tail_budget:] if tail_budget > 0 else ""
     omitted = n - len(head) - len(tail)
 
     if spill_path is not None:
-        # Use absolute path for the reference so it's unambiguous.
+        # Use absolute path for the reference so it's unambiguous. The read
+        # call is named outright: told only that output was "saved", a model
+        # tends to re-run the command to see it again.
         ref = str(spill_path)
         footer = (
-            f"\n\n... ({omitted:,} chars omitted; full output spilled to disk) ...\n"
-            f"Full output: {ref}\n"
-            f"Read with: read_file(path={ref!r})\n\n"
+            f"\n\n... ({omitted:,} of {n:,} chars omitted; the full output is saved on disk) ...\n"
+            f"Full output ({n:,} chars, {len(content.splitlines()):,} lines): {ref}\n"
+            f"Read it with read_file(path={ref!r}): each call returns one page "
+            "and says where to continue. Do not re-run the command to see it.\n\n"
         )
     else:
         footer = (

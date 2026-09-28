@@ -21,3 +21,18 @@ def test_build_messages_includes_task_state_block(tmp_path):
     assert "<task-state>" in blob
     assert "## Decisions & findings" in blob
     assert "decision survives compaction" in blob
+
+
+def test_the_built_prompt_holds_the_task_state_block_verbatim(tmp_path):
+    """The runner re-sends the block mid-turn only when the conversation does
+    not already contain it as one contiguous text; the built prompt must hold
+    it exactly that way, or an unchanged block would be re-sent every call."""
+    from durin.agent.task_state import task_state_runtime_lines
+
+    meta: dict = {}
+    add_decision(meta, "rule 99ce3a72 edited after the mail", source="tool", ts="t1")
+    messages = ContextBuilder(workspace=tmp_path).build_messages(
+        history=[], current_message="hello", session_metadata=meta,
+    )
+    block = "\n".join(task_state_runtime_lines(meta))
+    assert any(block in str(m.get("content")) for m in messages)

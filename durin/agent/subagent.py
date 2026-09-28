@@ -160,7 +160,7 @@ class SubagentManager:
         provider: LLMProvider,
         workspace: Path,
         bus: MessageBus,
-        max_tool_result_chars: int,
+        max_tool_result_chars: int | None,
         model: str | None = None,
         tools_config: ToolsConfig | None = None,
         restrict_to_workspace: bool = False,
@@ -450,6 +450,10 @@ class SubagentManager:
                     fail_on_tool_error=True,
                     checkpoint_callback=_on_checkpoint,
                     session_key=sess_key,
+                    # Where an oversized or pruned result is saved: the
+                    # workspace the child's own read_file reads, so its
+                    # pointers can be followed from inside the child.
+                    workspace=self.workspace,
                     llm_timeout_s=llm_timeout,
                     mode_provider=_subagent_mode_provider,
                     # Subagents are read/search-heavy (Explore, research). Run

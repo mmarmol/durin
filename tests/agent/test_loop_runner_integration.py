@@ -48,6 +48,59 @@ async def test_loop_max_iterations_message_stays_stable(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_finding_noted_mid_turn_is_in_front_of_the_model_on_the_next_call(tmp_path):
+    """A decision recorded during the turn (note_decision writes the session's
+    decision log) reaches the very next request, not only the next turn."""
+    from durin.agent.tools.base import Tool
+    from durin.session.decision_log import add_decision
+    from durin.session.manager import Session
+
+    loop = _make_loop(tmp_path)
+    session = Session(key="test:task-state")
+    requests: list[list[dict]] = []
+    calls = {"n": 0}
+
+    class _NoteFinding(Tool):
+        """Writes the session's decision log the way note_decision does."""
+
+        @property
+        def name(self) -> str:
+            return "note_finding"
+
+        @property
+        def description(self) -> str:
+            return "Record a finding."
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            add_decision(session.metadata, "rule 99ce3a72 was edited at 21:16, after the mail", source="tool")
+            return "Recorded."
+
+    loop.tools.register(_NoteFinding())
+
+    async def chat_with_retry(**kwargs):
+        requests.append(list(kwargs["messages"]))
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="note_finding", arguments={})],
+                usage={},
+            )
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    loop.provider.chat_with_retry = chat_with_retry
+
+    await loop._run_agent_loop([{"role": "user", "content": "go"}], session=session)
+
+    assert "rule 99ce3a72 was edited at 21:16" not in str(requests[0])
+    assert "rule 99ce3a72 was edited at 21:16" in str(requests[1][-1]["content"])
+
+
+@pytest.mark.asyncio
 async def test_loop_stream_filter_handles_think_only_prefix_without_crashing(tmp_path):
     loop = _make_loop(tmp_path)
     deltas: list[str] = []

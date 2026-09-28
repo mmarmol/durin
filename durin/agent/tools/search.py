@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, TypeVar
 
+from durin.agent.tools.context import current_result_char_cap
 from durin.agent.tools.filesystem import ListDirTool, _FsTool
 
 _DEFAULT_HEAD_LIMIT = 250
@@ -70,6 +71,19 @@ def _paginate(items: list[T], limit: int | None, offset: int) -> tuple[list[T], 
     return sliced, truncated
 
 
+def _fit_lines(lines: list[str], budget: int) -> list[str]:
+    """The leading lines whose newline-joined text fits ``budget`` chars."""
+    fitted: list[str] = []
+    used = 0
+    for line in lines:
+        cost = len(line) + (1 if fitted else 0)
+        if used + cost > budget:
+            break
+        fitted.append(line)
+        used += cost
+    return fitted
+
+
 def _matches_type(name: str, file_type: str | None) -> bool:
     if not file_type:
         return True
@@ -107,6 +121,19 @@ class GrepTool(_SearchTool):
 
     _MAX_RESULT_CHARS = 128_000
     _MAX_FILE_BYTES = 2_000_000
+    # A matching or context line longer than this is shortened, with a
+    # pointer to read the rest of it: one minified line must not crowd out
+    # every other match.
+    _LINE_CAP = 2_000
+    # Held back from the calling run's per-result cap for the notes, so the
+    # output arrives whole instead of as a preview without them.
+    _RESULT_RESERVE = 600
+
+    def _result_budget(self) -> int:
+        cap = current_result_char_cap()
+        if cap is None:
+            return self._MAX_RESULT_CHARS
+        return max(1_000, min(self._MAX_RESULT_CHARS, cap - self._RESULT_RESERVE))
 
     @property
     def name(self) -> str:
@@ -213,20 +240,50 @@ class GrepTool(_SearchTool):
             "required": ["pattern"],
         }
 
-    @staticmethod
+    @classmethod
     def _format_block(
+        cls,
         display_path: str,
         lines: list[str],
         match_line: int,
         before: int,
         after: int,
+        *,
+        file_path: Path,
+        regex: re.Pattern[str],
     ) -> str:
         start = max(1, match_line - before)
         end = min(len(lines), match_line + after)
         block = [f"{display_path}:{match_line}"]
         for line_no in range(start, end + 1):
             marker = ">" if line_no == match_line else " "
-            block.append(f"{marker} {line_no}| {lines[line_no - 1]}")
+            text = lines[line_no - 1]
+            if len(text) > cls._LINE_CAP:
+                # The pointer names the absolute path: inside a session a
+                # relative path resolves in the session's work area, not
+                # where grep found the file.
+                found = regex.search(text) if line_no == match_line else None
+                begin = 0
+                if found:
+                    # Keep the window around the first match, so a match deep
+                    # inside one long line (a minified or saved one-line
+                    # file) is shown, and point at where that window starts.
+                    begin = max(0, min(found.start() - cls._LINE_CAP // 2, len(text) - cls._LINE_CAP))
+                window = text[begin:begin + cls._LINE_CAP]
+                if begin:
+                    text = (
+                        f"…{window}… [line {line_no} has {len(text):,} chars; this is chars "
+                        f"{begin:,}-{begin + len(window):,}; read it with "
+                        f'read_file(path="{file_path}", offset={line_no}, limit=1, '
+                        f"char_offset={begin})]"
+                    )
+                else:
+                    text = (
+                        f"{window}… [line {line_no} has {len(text):,} chars; "
+                        f'read it with read_file(path="{file_path}", offset={line_no}, '
+                        f"limit=1, char_offset={cls._LINE_CAP})]"
+                    )
+            block.append(f"{marker} {line_no}| {text}")
         return "\n".join(block)
 
     _RG_TIMEOUT_SECONDS = 30
@@ -324,6 +381,7 @@ class GrepTool(_SearchTool):
                 limit = max_results
             else:
                 limit = _DEFAULT_HEAD_LIMIT
+            budget = self._result_budget()
             blocks: list[str] = []
             result_chars = 0
             seen_content_matches = 0
@@ -396,9 +454,18 @@ class GrepTool(_SearchTool):
                         idx,
                         context_before,
                         context_after,
+                        file_path=file_path,
+                        regex=regex,
                     )
                     extra_sep = 2 if blocks else 0
-                    if result_chars + extra_sep + len(block) > self._MAX_RESULT_CHARS:
+                    if result_chars + extra_sep + len(block) > budget:
+                        if not blocks:
+                            # One block alone is larger than the whole output
+                            # may be: show its head rather than report that
+                            # nothing matched.
+                            cut = block[: max(200, budget - 200)]
+                            blocks.append(cut + "\n… [match block cut to fit the output]")
+                            result_chars += len(blocks[-1])
                         size_truncated = True
                         break
                     blocks.append(block)
@@ -424,8 +491,10 @@ class GrepTool(_SearchTool):
                     )
                     total_count_before_pagination = len(ordered_files)
                     paged, truncated = _paginate(ordered_files, limit, offset)
-                    displayed_count = len(paged)
-                    result = "\n".join(paged)
+                    fitted = _fit_lines(paged, budget)
+                    truncated = truncated or len(fitted) < len(paged)
+                    displayed_count = len(fitted)
+                    result = "\n".join(fitted)
             elif output_mode == "count":
                 if not counts:
                     result = f"No matches found for pattern '{pattern}' in {path}"
@@ -436,9 +505,11 @@ class GrepTool(_SearchTool):
                     )
                     total_count_before_pagination = len(ordered_files)
                     ordered, truncated = _paginate(ordered_files, limit, offset)
-                    displayed_count = len(ordered)
                     lines = [f"{name}: {counts[name]}" for name in ordered]
-                    result = "\n".join(lines)
+                    fitted = _fit_lines(lines, budget)
+                    truncated = truncated or len(fitted) < len(lines)
+                    displayed_count = len(fitted)
+                    result = "\n".join(fitted)
             else:
                 if not blocks:
                     result = f"No matches found for pattern '{pattern}' in {path}"
@@ -447,21 +518,38 @@ class GrepTool(_SearchTool):
                     total_count_before_pagination = seen_content_matches
                     result = "\n\n".join(blocks)
 
+            # Every note that says results were held back gives the offset
+            # that shows the next ones, so paging never needs a guess.
             notes: list[str] = []
-            if output_mode == "content" and truncated:
+            if output_mode == "content":
+                shown_to = offset + len(blocks)
+                if truncated:
+                    notes.append(
+                        f"(showing matches {offset + 1}-{shown_to}; more exist — "
+                        f"use offset={shown_to} to see the next ones)"
+                    )
+                elif size_truncated:
+                    notes.append(
+                        f"(output reached its size limit after {len(blocks)} matches — "
+                        f"use offset={shown_to} to continue, or narrow the pattern or path)"
+                    )
+                elif offset > 0 and blocks:
+                    notes.append(f"(showing matches {offset + 1}-{shown_to})")
+            elif displayed_count:
+                shown_to = offset + displayed_count
+                if truncated:
+                    notes.append(
+                        f"(showing {offset + 1}-{shown_to} of {total_count_before_pagination}; "
+                        f"use offset={shown_to} to continue)"
+                    )
+                elif offset > 0:
+                    notes.append(
+                        f"(showing {offset + 1}-{shown_to} of {total_count_before_pagination})"
+                    )
+            elif offset > 0 and total_count_before_pagination:
                 notes.append(
-                    f"(pagination: limit={limit}, offset={offset})"
+                    f"(offset {offset} is past the last of {total_count_before_pagination} results)"
                 )
-            elif output_mode == "content" and size_truncated:
-                notes.append("(output truncated due to size)")
-            elif truncated and output_mode in {"count", "files_with_matches"}:
-                notes.append(
-                    f"(pagination: limit={limit}, offset={offset})"
-                )
-            elif output_mode in {"count", "files_with_matches"} and offset > 0:
-                notes.append(f"(pagination: offset={offset})")
-            elif output_mode == "content" and offset > 0 and blocks:
-                notes.append(f"(pagination: offset={offset})")
             if skipped_binary:
                 notes.append(f"(skipped {skipped_binary} binary/unreadable files)")
             if skipped_large:

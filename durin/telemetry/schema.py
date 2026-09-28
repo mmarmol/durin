@@ -334,6 +334,20 @@ class HistoryMediaPrunedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class ToolResultsPrunedEvent(TypedDict):
+    """Old tool results were replaced by pointers to their saved files in one
+    batch: the prompt about to be sent was over the pruning threshold of the
+    input budget and the batch freed enough of it. Between batches the
+    replaced results stay replaced, so each event marks one prompt rewrite."""
+    iteration: int
+    session_key: NotRequired[str | None]
+    estimated_tokens: int
+    budget_tokens: int
+    pruned_count: int
+    protected_count: int
+    freed_tokens: int
+
+
 class ContextCompositionEvent(TypedDict):
     """Per-turn breakdown of the prompt we send to the LLM.
 
@@ -451,11 +465,12 @@ class ToolReadFileEvent(TypedDict):
     """Agent read a file.
 
     ``result_chars`` measures the returned file content only.
-    ``memory_notes`` counts the artifact-recall notes appended after it (0
+    ``memory_notes`` counts the artifact-recall notes that open the page (0
     when none matched or the feature is off) — the field that measures
     artifact recall, since the lookup itself emits no search event.
     ``verbatim`` marks the raw-content path used by scripts; no numbered
-    view, no notes.
+    view, no notes. ``kind == "line_window"`` is a character page of one
+    long line, starting at ``char_offset``.
     """
 
     path: str
@@ -469,6 +484,7 @@ class ToolReadFileEvent(TypedDict):
     memory_notes: NotRequired[int]
     truncated: NotRequired[bool]
     verbatim: NotRequired[bool]
+    char_offset: NotRequired[int]
 
 
 class ToolEditFileEvent(TypedDict):
@@ -1950,6 +1966,7 @@ EVENTS: dict[str, type] = {
     "context.composition": ContextCompositionEvent,
     "turn.memory_usage": TurnMemoryUsageEvent,
     "history_media.pruned": HistoryMediaPrunedEvent,
+    "tool_results.pruned": ToolResultsPrunedEvent,
     # Agent mode
     "agent_mode.turn_start": AgentModeTurnStartEvent,
     "agent_mode.switch": AgentModeSwitchEvent,

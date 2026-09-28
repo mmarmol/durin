@@ -25,6 +25,15 @@ from durin.telemetry.logger import (
 
 class TestTruncateWithSpill:
 
+    def test_the_footer_gives_the_total_and_how_to_read_it_without_rerunning(self, tmp_path: Path):
+        content = "\n".join(f"line {i} " + "x" * 40 for i in range(2_000))
+        rendered, meta = truncate_with_spill(content, "exec", tmp_path, max_chars=10_000)
+
+        spill_path = meta["spill_path"]
+        assert f"{len(content):,} chars" in rendered
+        assert f"read_file(path={spill_path!r})" in rendered
+        assert "Do not re-run" in rendered
+
     def test_short_content_returns_unchanged(self, tmp_path: Path):
         content = "small"
         rendered, meta = truncate_with_spill(content, "tool", tmp_path, max_chars=100)

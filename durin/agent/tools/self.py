@@ -95,6 +95,10 @@ class MyTool(Tool, ContextAware):
     RESTRICTED: dict[str, dict[str, Any]] = {
         "max_iterations":        {"type": int, "min": 1,   "max": 100},
         "context_window_tokens": {"type": int, "min": 4096, "max": 1_000_000},
+        # Unset by default (each run's cap follows the model's window), so its
+        # type cannot be read off the current value: a non-number set here
+        # would reach every tool result and crash the run.
+        "max_tool_result_chars": {"type": int, "min": 2_000, "max": 1_000_000},
         "model":                 {"type": str, "min_len": 1},
     }
 
@@ -341,15 +345,26 @@ class MyTool(Tool, ContextAware):
             return f"Error: '{key}' not found"
         return self._format_value(obj, key)
 
+    @staticmethod
+    def _value_in_use(state: Any, key: str) -> Any:
+        """A setting's value as runs use it: an unset per-result cap shows the
+        cap the current model window gives."""
+        value = getattr(state, key, None)
+        if key == "max_tool_result_chars" and value is None:
+            from durin.agent.runner import result_char_cap
+
+            return result_char_cap(None, getattr(state, "context_window_tokens", None))
+        return value
+
     def _inspect_all(self) -> str:
         state = self._runtime_state
         parts: list[str] = []
         # RESTRICTED keys
         for k in self.RESTRICTED:
-            parts.append(self._format_value(getattr(state, k, None), k))
+            parts.append(self._format_value(self._value_in_use(state, k), k))
         parts.append(self._format_value(state.model_preset, "model_preset"))
         # Other useful top-level keys shown in description
-        for k in ("workspace", "provider_retry_mode", "max_tool_result_chars", "_current_iteration", "web_config", "exec_config", "subagents"):
+        for k in ("workspace", "provider_retry_mode", "_current_iteration", "web_config", "exec_config", "subagents"):
             if _has_real_attr(state, k):
                 parts.append(self._format_value(getattr(state, k, None), k))
         # Token usage

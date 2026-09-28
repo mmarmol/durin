@@ -117,6 +117,7 @@ def _make_minimal_loop(tmp_path):
 
     loop = AgentLoop.__new__(AgentLoop)
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
+    loop.context_window_tokens = AgentDefaults().context_window_tokens
     loop.sessions = SessionManager(tmp_path)
     return loop
 

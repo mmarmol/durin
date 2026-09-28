@@ -23,9 +23,15 @@ from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator
 from durin.agent.progress_hook import AgentProgressHook
-from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
+from durin.agent.runner import (
+    _MAX_INJECTIONS_PER_TURN,
+    AgentRunner,
+    AgentRunSpec,
+    result_char_cap,
+)
 from durin.agent.skill_usage import emit_skill_used, extract_skill_calls
 from durin.agent.subagent import SubagentManager
+from durin.agent.task_state import task_state_runtime_lines
 from durin.agent.tools.context import AuxProviderHandle
 from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from durin.agent.tools.message import MessageTool
@@ -2291,6 +2297,10 @@ class AgentLoop:
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
                 mode_provider=_mode_provider if session is not None else None,
+                task_state_provider=(
+                    (lambda: task_state_runtime_lines(session.metadata))
+                    if session is not None else None
+                ),
                 # Sustained goals may legitimately exceed DURIN_LLM_TIMEOUT_S; idle stall
                 # is still capped by DURIN_STREAM_IDLE_TIMEOUT_S in streaming providers.
                 llm_timeout_s=runner_wall_llm_timeout_s(
@@ -3986,6 +3996,7 @@ class AgentLoop:
         drop_runtime: bool = False,
     ) -> list[dict[str, Any]]:
         """Strip volatile multimodal payloads before writing session history."""
+        cap = self._saved_result_cap()
         filtered: list[dict[str, Any]] = []
         for block in content:
             if not isinstance(block, dict):
@@ -4009,14 +4020,20 @@ class AgentLoop:
 
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 text = block["text"]
-                if should_truncate_text and len(text) > self.max_tool_result_chars:
-                    text = truncate_text_fn(text, self.max_tool_result_chars)
+                if should_truncate_text and len(text) > cap:
+                    text = truncate_text_fn(text, cap)
                 filtered.append({**block, "text": text})
                 continue
 
             filtered.append(block)
 
         return filtered
+
+    def _saved_result_cap(self) -> int:
+        """The per-result cap applied when a turn is saved: the configured
+        one, or the cap the loop's model window gives a run (a result the
+        run kept whole under that cap is saved whole)."""
+        return result_char_cap(self.max_tool_result_chars, self.context_window_tokens)
 
     def _save_turn(
         self,
@@ -4050,6 +4067,7 @@ class AgentLoop:
                 events_by_id[tc_id] = ev
 
         meta_events_to_write: list[dict[str, Any]] = []
+        cap = self._saved_result_cap()
 
         last_assistant_idx: int | None = None
         for m in messages[skip:]:
@@ -4059,7 +4077,7 @@ class AgentLoop:
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
                 tool_name = entry.get("name")
-                if isinstance(content, str) and len(content) > self.max_tool_result_chars:
+                if isinstance(content, str) and len(content) > cap:
                     spilled: Path | None = None
                     try:
                         spilled = persist_full_tool_result(
@@ -4072,15 +4090,21 @@ class AgentLoop:
                         logger.exception(
                             "save-time spill failed for session {}", session.key,
                         )
-                    truncated = _truncate_tool_output(
-                        content, self.max_tool_result_chars, tool_name,
+                    # The pointer leads and the whole entry fits the cap: when
+                    # this history is replayed, anything over the cap is
+                    # previewed from its head, so a trailing pointer would be
+                    # the part that disappears.
+                    pointer = (
+                        f"[truncated: full output ({len(content)} chars) "
+                        f"at {spilled}; use read_file to recover]\n"
+                        if spilled is not None else ""
                     )
-                    if spilled is not None:
-                        truncated += (
-                            f"\n[truncated: full output ({len(content)} chars) "
-                            f"at {spilled}; use read_file to recover]"
-                        )
-                    entry["content"] = truncated
+                    entry["content"] = pointer + _truncate_tool_output(
+                        content,
+                        # truncate_text treats a cap <= 0 as "no limit".
+                        max(1, cap - len(pointer)),
+                        tool_name,
+                    )
                 elif isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, should_truncate_text=True)
                     if not filtered:

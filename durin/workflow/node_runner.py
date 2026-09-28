@@ -18,6 +18,7 @@ import contextvars
 import dataclasses
 import json
 import threading
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -33,6 +34,7 @@ from durin.config.schema import ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
+from durin.utils.prompt_templates import render_template
 from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
@@ -228,7 +230,8 @@ class AgentNodeRunner:
         *,
         default_model: str,
         max_iterations: int = 50,
-        max_tool_result_chars: int = 16000,
+        # None: the runner scales the per-result cap from the node's window.
+        max_tool_result_chars: int | None = None,
         tools_config: ToolsConfig | None = None,
         live_tool_registry: ToolRegistry | None = None,
         main_loop=None,
@@ -437,6 +440,37 @@ class AgentNodeRunner:
         except Exception:  # noqa: BLE001 - a bare/test-double provider may carry no generation; params degrade to None
             generation = None
         return provider, model, generation
+
+    def _node_context_window(self, ref: str | None) -> int | None:
+        """The context window of the model a node runs on, resolved from the
+        same preset its provider comes from (see ``_build_node_provider``):
+        the default preset when the node names no model, a named preset, a
+        "provider model" pair, or a plain model name under the default
+        provider — capped by the fallback models' windows, as the chat's is.
+        It gives the node's run an input budget: the mid-turn precheck,
+        pruning near the limit and a per-result cap that follows the window.
+        None without a config or for a ref that cannot be resolved."""
+        config = self._app_config
+        if config is None:
+            return None
+        from durin.command.builtin import adhoc_preset_config
+        from durin.providers.factory import preset_context_window
+
+        try:
+            if ref is None:
+                preset = config.resolve_default_preset()
+            elif len(ref.split()) == 2:
+                provider_name, model = ref.split()
+                preset = adhoc_preset_config(config, provider_name, model)
+            else:
+                try:
+                    preset = config.resolve_preset(ref)
+                except Exception:  # noqa: BLE001 - not a registered preset: a plain model name
+                    provider_key = getattr(getattr(self.runner, "provider", None), "provider_key", None)
+                    preset = adhoc_preset_config(config, provider_key or "auto", ref)
+            return preset_context_window(config, preset)
+        except Exception:  # noqa: BLE001 - an unresolvable window must not fail the node
+            return None
 
     @staticmethod
     def _pass_note(req: NodeRunRequest) -> str:
@@ -652,6 +686,14 @@ class AgentNodeRunner:
         skills_text = self._load_skills(getattr(req.node, "skills", ()))
         if skills_text:
             system = f"{system}\n\n# Skills\n\n{skills_text}" if system else f"# Skills\n\n{skills_text}"
+        # A node with the file tools can have old results pruned from view or
+        # large ones saved to a file; without the chat's operating floor it
+        # needs the rule for reading them back, or it answers from memory. A
+        # node with only MCP tools cannot read a saved file, so its results
+        # are never saved (see node_workspace below) and it gets no rule.
+        if getattr(req.node, "tools", "none") == "default":
+            recovery = render_template("agent/_snippets/tool_result_recovery.md").strip()
+            system = f"{system}\n\n# Tool results\n\n{recovery}" if system else f"# Tool results\n\n{recovery}"
         # The node's work mode (AgentMode) appends its posture to the prompt so the model
         # adopts the right stance (e.g. read-only in plan/explore).
         from durin.agent.agent_mode import get_mode
@@ -708,6 +750,23 @@ class AgentNodeRunner:
         provider_key = getattr(node_provider, "provider_key", None)
         resolved_params_hash = (
             params_hash(node_generation) if node_generation is not None else None)
+        # The node's runs get its model's window (their input budget) and a
+        # place to save oversized or pruned results: the workspace its own
+        # file tools read, under the node's session key, so every pointer to
+        # a saved result can be followed from inside the node. A node without
+        # the file tools gets no such place: its oversized results are cut
+        # inline rather than replaced by a pointer it could not open.
+        node_ref = persona_model_ref or req.node.model
+        if node_ref is not None and node_ref not in self._node_providers:
+            # The ref did not resolve, so the node runs on the default
+            # provider and model (see _resolve_node_call): use their window.
+            node_ref = None
+        node_window = self._node_context_window(node_ref)
+        node_workspace = (
+            Path(req.workspace_override or self.sessions.workspace)
+            if getattr(req.node, "tools", "none") == "default" else None
+        )
+        node_session_key = self._session_key(req)
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
@@ -781,6 +840,9 @@ class AgentNodeRunner:
                 temperature=persona_temperature,
                 max_iterations=run_max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
+                context_window_tokens=node_window,
+                workspace=node_workspace,
+                session_key=node_session_key,
                 # Nodes are read/search-heavy (gather, review, verify): run independent
                 # concurrency-safe tool calls in parallel, same as the main loop and
                 # subagents; the runner keeps mutations serial.
@@ -843,6 +905,9 @@ class AgentNodeRunner:
                     temperature=persona_temperature,
                     max_iterations=run_max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
+                    context_window_tokens=node_window,
+                    workspace=node_workspace,
+                    session_key=node_session_key,
                     concurrent_tools=True,
                     hook=hook,
                 ), req.cancel_check)
@@ -895,6 +960,9 @@ class AgentNodeRunner:
                     temperature=persona_temperature,
                     max_iterations=1,
                     max_tool_result_chars=self.max_tool_result_chars,
+                    context_window_tokens=node_window,
+                    workspace=node_workspace,
+                    session_key=node_session_key,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
                 raise self._on_failure(req, list(result.messages), exc) from exc

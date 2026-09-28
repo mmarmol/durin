@@ -392,6 +392,23 @@ class TestModifyFree:
         assert "Error" in result
         assert tool._runtime_state.max_tool_result_chars == 16000
 
+    @pytest.mark.asyncio
+    async def test_the_result_cap_is_typed_even_when_it_follows_the_window(self):
+        """By default the cap is unset (it follows the model's window). A
+        non-number set then would reach every tool result and crash the run."""
+        tool = _make_tool(_make_mock_loop(max_tool_result_chars=None))
+        result = await tool.execute(action="set", key="max_tool_result_chars", value="big")
+        assert "Error" in result
+        assert tool._runtime_state.max_tool_result_chars is None
+        result = await tool.execute(action="set", key="max_tool_result_chars", value=32_000)
+        assert tool._runtime_state.max_tool_result_chars == 32_000
+
+    @pytest.mark.asyncio
+    async def test_check_shows_the_result_cap_in_use_when_it_follows_the_window(self):
+        tool = _make_tool(_make_mock_loop(max_tool_result_chars=None, context_window_tokens=231_072))
+        result = await tool.execute(action="check")
+        assert "max_tool_result_chars: 64000" in result
+
 
 # ---------------------------------------------------------------------------
 # set — previously BLOCKED/READONLY now open
