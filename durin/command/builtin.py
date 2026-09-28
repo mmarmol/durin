@@ -1589,13 +1589,31 @@ async def cmd_name(ctx: CommandContext) -> OutboundMessage:
 
 
 async def cmd_hotkeys(ctx: CommandContext) -> OutboundMessage:
-    """List keyboard shortcuts available in interactive mode."""
+    """List keyboard shortcuts available in interactive mode: the terminal
+    UI's, read from its own bindings so the list cannot drift, then the
+    legacy prompt's."""
+    from durin.cli.tui.app import DurinApp
+
+    tui_rows = "".join(
+        f"| `{'+'.join(part.capitalize() for part in key.split('+'))}` | {label} |\n"
+        for key, _action, label in DurinApp.BINDINGS
+    )
     text = (
-        "## Keyboard shortcuts (interactive CLI)\n"
+        "## Keyboard shortcuts\n"
+        "\n"
+        "### Terminal UI (`durin agent`)\n"
         "\n"
         "| Key | Action |\n"
         "|---|---|\n"
         "| `Enter` | Send message |\n"
+        f"{tui_rows}"
+        "\n"
+        "### Legacy prompt (`durin agent --legacy`)\n"
+        "\n"
+        "| Key | Action |\n"
+        "|---|---|\n"
+        "| `Enter` | Send message |\n"
+        "| `Ctrl+L` | Pick a model (`/model`) |\n"
         "| `Ctrl+C` | Cancel input |\n"
         "| `Ctrl+D` / `exit` / `:q` / `/quit` | Quit |\n"
         "\n"
