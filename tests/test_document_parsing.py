@@ -568,3 +568,20 @@ def test_extract_documents_leaves_audio_for_the_content_builder(tmp_path):
 
     assert media == [str(voice)]
     assert text == "hello"
+
+
+def test_extract_documents_tells_audio_by_extension_on_any_platform(tmp_path, monkeypatch):
+    # A dashboard recording is saved as .weba; a platform whose mimetypes
+    # table does not know it (Linux) must still keep it as audio.
+    import mimetypes
+
+    from durin.utils.document import extract_documents
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: (None, None))
+    voice = tmp_path / "voice.weba"
+    voice.write_bytes(b"\x1aE\xdf\xa3" + b"\x00" * 32)
+
+    text, media = extract_documents("hello", [str(voice)])
+
+    assert media == [str(voice)]
+    assert text == "hello"

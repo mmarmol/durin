@@ -282,12 +282,14 @@ def _transcription(mode: str, text: str) -> Any:
     )
 
 
-async def _send_audio(channel: WebSocketChannel, tmp_path: Path) -> None:
+async def _send_audio(
+    channel: WebSocketChannel, tmp_path: Path, mime: str = "audio/wav",
+) -> None:
     envelope = {
         "type": "message",
         "chat_id": "abc123",
         "content": "about this",
-        "media": [{"data_url": _data_url("audio/wav", b"RIFF----WAVE"), "name": "v.wav"}],
+        "media": [{"data_url": _data_url(mime, b"RIFF----WAVE"), "name": "v.wav"}],
     }
     with patch("durin.channels.websocket.get_media_dir", return_value=tmp_path):
         await channel._dispatch_envelope(AsyncMock(), "client-1", envelope)
@@ -301,6 +303,25 @@ async def test_attached_audio_reaches_the_agent_as_its_transcript(tmp_path) -> N
     channel.transcription = _transcription("auto", "hello there")
 
     await _send_audio(channel, tmp_path)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["content"] == "about this\n\nhello there"
+    assert not kwargs["media"]
+
+
+@pytest.mark.asyncio
+async def test_a_browser_recording_is_transcribed_on_any_platform(tmp_path, monkeypatch) -> None:
+    """MediaRecorder's audio/webm is saved as .weba; a platform whose
+    mimetypes table does not know that extension (Linux) still treats the
+    file as audio."""
+    import mimetypes
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: (None, None))
+    monkeypatch.setattr(mimetypes, "guess_extension", lambda *a, **k: None)
+    channel = _make_channel()
+    channel.transcription = _transcription("auto", "hello there")
+
+    await _send_audio(channel, tmp_path, mime="audio/webm")
 
     kwargs = channel._handle_message.call_args.kwargs
     assert kwargs["content"] == "about this\n\nhello there"

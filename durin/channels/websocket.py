@@ -38,7 +38,7 @@ from durin.service.types import (
     ValidationFailedError,
 )
 from durin.session.goal_state import goal_state_ws_blob
-from durin.utils.helpers import safe_filename
+from durin.utils.helpers import is_audio_path, safe_filename
 from durin.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
@@ -1809,7 +1809,7 @@ class WebSocketChannel(BaseChannel):
         parts = [content] if content else []
         kept: list[str] = []
         for path in media_paths:
-            if not (mimetypes.guess_type(path)[0] or "").startswith("audio/"):
+            if not is_audio_path(path):
                 kept.append(path)
                 continue
             text = (await self.transcribe_audio(path)).strip()

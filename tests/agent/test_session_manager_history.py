@@ -534,3 +534,18 @@ def test_get_history_labels_an_attached_audio_as_audio():
         "role": "user",
         "content": "listen\n[audio: /m/voice.ogg]\n[image: /m/a.png]",
     }
+
+
+def test_get_history_labels_audio_without_the_platform_mimetypes(monkeypatch):
+    """The label follows durin's own audio extensions, not a mimetypes table
+    that differs by platform (Linux's knows no ``.weba``)."""
+    import mimetypes
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: (None, None))
+    session = Session(key="test:audio-weba")
+    session.messages.append({"role": "user", "content": "", "media": ["/m/rec.weba"]})
+    session.messages.append({"role": "assistant", "content": "ok"})
+
+    history = session.get_history(max_messages=500)
+
+    assert history[0] == {"role": "user", "content": "[audio: /m/rec.weba]"}

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from durin.utils.helpers import detect_image_mime
+from durin.utils.helpers import detect_image_mime, is_audio_path
 
 # Supported file extensions for text extraction
 SUPPORTED_EXTENSIONS: set[str] = {
@@ -204,7 +204,7 @@ def extract_documents(
         with open(p, "rb") as f:
             header = f.read(16)
         mime = detect_image_mime(header) or mimetypes.guess_type(path_str)[0]
-        if mime and mime.startswith(("image/", "audio/")):
+        if (mime and mime.startswith("image/")) or is_audio_path(path_str):
             kept_paths.append(path_str)
         else:
             extracted = extract_text(p)

@@ -24,11 +24,18 @@ MAX_FILE_SIZE = DEFAULT_MAX_BYTES
 _DATA_URL_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,(.+)$", re.DOTALL)
 
 
-# Audio MIME types ``mimetypes.guess_extension`` has no answer for. Saved as
-# ``.bin``, a recording would no longer read as audio to the agent loop.
+# The extension each accepted audio MIME type is saved with. The platform's
+# ``mimetypes.guess_extension`` has no answer for some of them, and its answer
+# for others varies; saved as ``.bin`` (or ``.webm``, read as video), a
+# recording would no longer read as audio to the agent loop.
 _AUDIO_EXTENSIONS = {
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
     "audio/wav": ".wav",
+    "audio/webm": ".weba",
     "audio/x-m4a": ".m4a",
+    "audio/aac": ".aac",
     "audio/flac": ".flac",
 }
 
