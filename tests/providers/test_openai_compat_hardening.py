@@ -1,6 +1,7 @@
 """Hardening of the OpenAI-compatible request path.
 
-Covers three fixes shaped by how real providers (GLM/Z.AI, DeepSeek) behave:
+Covers fixes shaped by how real providers (GLM/Z.AI, DeepSeek, Groq, Mistral)
+behave:
 
 1. Assistant ``content`` is kept alongside ``tool_calls`` — blanking it hid the
    model's own narration across tool steps, so models like GLM re-narrated the
@@ -9,6 +10,9 @@ Covers three fixes shaped by how real providers (GLM/Z.AI, DeepSeek) behave:
    before the request is UTF-8 encoded (they would otherwise crash the call).
 3. DeepSeek thinking-mode ``reasoning_content`` is padded with a single space,
    not an empty string (DeepSeek V4 Pro rejects ``""``).
+4. Strict message schemas: tool results go out without ``name``, earlier
+   reasoning goes under the provider's own field or nowhere, and an endpoint
+   that rejects ``reasoning_content`` is retried without it.
 """
 
 from unittest.mock import patch
@@ -211,3 +215,90 @@ def test_omitted_temperature_and_max_tokens_are_not_sent() -> None:
     assert "temperature" not in kwargs
     assert "max_tokens" not in kwargs
     assert "max_completion_tokens" not in kwargs
+
+
+# ── 4. strict message schemas ────────────────────────────────────────────
+
+
+_REASONED_TOOL_TURN = [
+    {"role": "user", "content": "look it up"},
+    {"role": "assistant", "content": "", "reasoning_content": "I should search.",
+     "tool_calls": [{"id": "c1", "type": "function",
+                     "function": {"name": "web_search", "arguments": "{}"}}]},
+    {"role": "tool", "tool_call_id": "c1", "name": "web_search", "content": "found"},
+    {"role": "user", "content": "and?"},
+]
+
+
+def _kwargs_for(spec_name: str) -> dict:
+    from durin.providers.registry import find_by_name
+
+    with patch("durin.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider(api_key="k", spec=find_by_name(spec_name))
+    return provider._build_kwargs(
+        [dict(m) for m in _REASONED_TOOL_TURN], tools=None, model="some-model",
+        max_tokens=100, temperature=0.7, reasoning_effort=None, tool_choice=None,
+    )
+
+
+def test_tool_results_go_out_without_a_name() -> None:
+    """The Chat Completions tool message has no ``name``; strict endpoints
+    (Groq documents a 400) reject it, and the call id already ties the result
+    to its call."""
+    out = _provider()._sanitize_messages([dict(m) for m in _REASONED_TOOL_TURN])
+
+    tool = next(m for m in out if m["role"] == "tool")
+    assert "name" not in tool
+    assert tool["tool_call_id"]
+    assistant = next(m for m in out if m["role"] == "assistant")
+    assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
+
+
+def test_groq_takes_earlier_reasoning_in_its_own_field() -> None:
+    assistant = _kwargs_for("groq")["messages"][1]
+
+    assert assistant["reasoning"] == "I should search."
+    assert "reasoning_content" not in assistant
+
+
+def test_mistral_gets_no_reasoning_on_earlier_turns() -> None:
+    """Mistral's assistant message schema forbids extra fields."""
+    assistant = _kwargs_for("mistral")["messages"][1]
+
+    assert "reasoning_content" not in assistant
+    assert "reasoning" not in assistant
+
+
+def test_other_providers_keep_reasoning_content() -> None:
+    assistant = _kwargs_for("zhipu")["messages"][1]
+
+    assert assistant["reasoning_content"] == "I should search."
+
+
+def test_an_endpoint_that_rejects_reasoning_content_is_retried_without_it() -> None:
+    """A custom endpoint whose schema has no reasoning_content (Cerebras,
+    for one) gets the request once more without it."""
+    provider = _provider()
+    kw = {"messages": [dict(m) for m in _REASONED_TOOL_TURN], "temperature": 0.7}
+    resp = _error("Error: 'messages.1.assistant.reasoning_content' is unsupported")
+
+    recovered = provider._recover_request_for_error(kw, resp)
+
+    assert recovered is not None
+    assert all("reasoning_content" not in m for m in recovered["messages"])
+    assert recovered["messages"][1]["content"] == ""  # not the content-blanking recovery
+    assert kw["messages"][1]["reasoning_content"] == "I should search."
+
+
+def test_a_provider_asking_for_reasoning_content_is_not_stripped_of_it() -> None:
+    """Kimi and DeepSeek name the field when it is missing; stripping it
+    there would only repeat the failure."""
+    provider = _provider()
+    kw = {"messages": [dict(m) for m in _REASONED_TOOL_TURN], "temperature": 0.7}
+    resp = _error("thinking is enabled but reasoning_content is missing in "
+                  "assistant tool call message at index 1")
+
+    recovered = provider._recover_request_for_error(kw, resp)
+
+    assert recovered is None or all(
+        "reasoning_content" in m for m in recovered["messages"] if m["role"] == "assistant")

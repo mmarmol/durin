@@ -251,6 +251,31 @@ def _blank_assistant_tool_call_content(
     return out if changed else None
 
 
+# How endpoints word "this message field is not part of my schema" (Groq,
+# Cerebras: unsupported; Mistral: extra inputs are not permitted).
+_FIELD_REJECTED_MARKERS = (
+    "unsupported", "not supported", "not permitted", "not allowed",
+    "unknown", "unrecognized",
+)
+
+
+def _strip_reasoning_content(
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of *messages* without ``reasoning_content``, or ``None``
+    when no message carries it."""
+    if not isinstance(messages, list):
+        return None
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and "reasoning_content" in msg:
+            msg = {k: v for k, v in msg.items() if k != "reasoning_content"}
+            changed = True
+        out.append(msg)
+    return out if changed else None
+
+
 def _openai_compat_timeout_s() -> float:
     """Return the bounded request timeout used for OpenAI-compatible providers."""
     return _float_env("DURIN_OPENAI_COMPAT_TIMEOUT_S", _OPENAI_COMPAT_REQUEST_TIMEOUT_S)
@@ -665,6 +690,11 @@ class OpenAICompatProvider(LLMProvider):
                 # _recover_request_for_error, not by muting every model.
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
+            if clean.get("role") == "tool":
+                # The Chat Completions tool message has no ``name`` (the call
+                # id ties the result to its call) and strict endpoints reject
+                # it; ``name`` stays valid on user and assistant messages.
+                clean.pop("name", None)
             if (
                 force_string_content
                 and not (clean.get("role") == "assistant" and clean.get("tool_calls"))
@@ -685,6 +715,17 @@ class OpenAICompatProvider(LLMProvider):
         ship new models. Returns a mutated copy of *kw* or ``None``.
         """
         text = (response.content or "").lower()
+        # Endpoint whose message schema has no reasoning_content (a custom
+        # base URL the registry knows nothing about): send the history without
+        # it. Checked first because the field name also contains "content". An
+        # error saying the field is missing (Kimi, DeepSeek) is the opposite
+        # case and keeps it.
+        if "reasoning_content" in text and any(
+            marker in text for marker in _FIELD_REJECTED_MARKERS
+        ):
+            stripped = _strip_reasoning_content(kw.get("messages"))
+            if stripped is not None:
+                return {**kw, "messages": stripped}
         # Gateway rejects assistant content sent alongside tool_calls: blank it
         # (the old unconditional behavior, now applied only where it's needed).
         if ("tool_call" in text or "tool call" in text) and "content" in text:
@@ -867,6 +908,15 @@ class OpenAICompatProvider(LLMProvider):
                     # without fabricating chain-of-thought. Covers both the
                     # absent key and a legacy "" persisted before this fix.
                     msg["reasoning_content"] = " "
+
+        # Earlier reasoning goes back under the field this provider reads, or
+        # not at all where its message schema forbids extra fields.
+        reasoning_field = spec.reasoning_input_field if spec else "reasoning_content"
+        if reasoning_field != "reasoning_content":
+            for msg in kwargs["messages"]:
+                value = msg.pop("reasoning_content", None)
+                if reasoning_field and value is not None:
+                    msg[reasoning_field] = value
 
         # Non-standard sampling params ride in extra_body: ollama / LM Studio
         # read top_k and repeat_penalty there (the OpenAI schema has no
