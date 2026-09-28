@@ -1,30 +1,21 @@
 """Tool result middleware validation: enforces size and format constraints.
 
-Provider-level caps protect against the *aggregate* size of a tool result
-(``max_tool_result_chars`` + disk spillover via :func:`maybe_persist_tool_result`).
-Those caps work well for textual outputs but leave two gaps for multimodal /
-structured content:
+The aggregate ``max_tool_result_chars`` cap and the disk spill
+(:func:`maybe_persist_tool_result`) handle text: a long result is saved
+whole and replaced by a pointer the model pages. They cannot save an image
+or audio payload — a list holding one is not text (``stringify_text_blocks``
+returns ``None``) — so a vision/image-gen tool returning a 30 MB base64
+image would put 30 MB straight into the LLM context.
 
-1. **Image blocks** — When a tool returns a list of content blocks containing
-   ``image_url`` or ``input_audio`` payloads, the existing spillover path
-   bails out (``stringify_text_blocks`` returns ``None`` for non-text blocks)
-   and forwards the content raw. A vision/image-gen tool that returns a
-   30 MB base64 image therefore injects 30 MB straight into the LLM context.
+This module caps each block of a list-of-blocks result:
 
-2. **Oversized individual text blocks** — Even when content is a list of text
-   blocks, the aggregate cap catches the total but a single block can still
-   be 10 MB on its own, distorting context positioning before any other
-   block is preserved. Per-block trim makes the survivors more useful.
-
-This module enforces per-block caps BEFORE the aggregate path runs:
-
-- Text block longer than ``MAX_BLOCK_TEXT_CHARS`` (100 KB) → truncated with
-  a clear marker. The full content can still spill to disk if the aggregate
-  cap is also exceeded.
 - ``image_url`` data URL whose base64 payload exceeds
   ``MAX_IMAGE_BLOCK_BYTES`` (5 MB) → replaced with a text placeholder.
 - ``input_audio`` block whose ``data`` field exceeds
   ``MAX_AUDIO_BLOCK_BYTES`` (10 MB) → replaced with a text placeholder.
+- Text block longer than ``MAX_BLOCK_TEXT_CHARS`` (100 KB) → truncated with
+  a clear marker. The runner applies this cap last, only to text the spill
+  could not save; nothing cut here is on disk.
 
 Defaults are constants here, not config, because they're protective limits
 not policy. Callers can pass overrides if they have a specific reason.
@@ -109,7 +100,7 @@ def _validate_audio_block(
 def validate_tool_result_blocks(
     content: Any,
     *,
-    max_block_chars: int = MAX_BLOCK_TEXT_CHARS,
+    max_block_chars: int | None = MAX_BLOCK_TEXT_CHARS,
     max_image_bytes: int = MAX_IMAGE_BLOCK_BYTES,
     max_audio_bytes: int = MAX_AUDIO_BLOCK_BYTES,
 ) -> Any:
@@ -118,7 +109,8 @@ def validate_tool_result_blocks(
     Pass-through for non-list content (the aggregate ``max_tool_result_chars``
     cap and disk spillover handle string/dict results). For lists, returns a
     new list with offending blocks replaced or truncated. Returns the
-    original object if no block needed modification.
+    original object if no block needed modification. ``max_block_chars=None``
+    leaves text blocks whole and caps only image and audio payloads.
     """
     if not isinstance(content, list):
         return content
@@ -130,7 +122,10 @@ def validate_tool_result_blocks(
             continue
         btype = block.get("type")
         if btype == "text":
-            new_block = _truncate_text_block(block, max_block_chars)
+            new_block = (
+                block if max_block_chars is None
+                else _truncate_text_block(block, max_block_chars)
+            )
         elif btype == "image_url":
             new_block = _validate_image_block(block, max_image_bytes)
         elif btype == "input_audio":

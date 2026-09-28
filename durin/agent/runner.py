@@ -31,6 +31,7 @@ from durin.utils.helpers import (
     maybe_persist_tool_result,
     parse_persisted_reference,
     render_structured_result,
+    stringify_text_blocks,
     strip_think,
     truncate_text,
 )
@@ -2368,12 +2369,13 @@ class AgentRunner:
         result: Any,
     ) -> Any:
         result = ensure_nonempty_tool_result(tool_name, result)
-        # Per-block validation runs FIRST so the aggregate cap below sees a
-        # list whose blocks each fit. This caps single image/audio payloads
-        # before they distort the rest of the context, and trims runaway
-        # text blocks before they crowd out their siblings.
+        # Image and audio payloads are capped FIRST, before they reach the
+        # redaction and the spill below or distort the rest of the context.
+        # Text blocks stay whole here: the spill saves long text for the
+        # model to page, and the text-block cap at the end only covers text
+        # that could not be saved.
         try:
-            result = validate_tool_result_blocks(result)
+            result = validate_tool_result_blocks(result, max_block_chars=None)
         except Exception:
             logger.exception(
                 "Tool result block validation failed for {} in {}; using raw result",
@@ -2388,6 +2390,8 @@ class AgentRunner:
             result = redact_secrets(result)
         except Exception:  # noqa: BLE001
             logger.exception("Secret redaction failed for {}; using raw result", tool_call_id)
+        if isinstance(result, list):
+            result = self._persist_long_text_blocks(spec, tool_call_id, result)
         # A dict (or untyped list) becomes its JSON text before the size
         # check, so an oversized one is saved to disk like any other large
         # result instead of being cut with nothing to recover it from.
@@ -2415,9 +2419,57 @@ class AgentRunner:
                 tool_call_id,
                 spec.session_key or "default",
             )
+        if isinstance(content, list):
+            # Text still in a list could not be saved (no workspace, a
+            # failed write, a cap above the block cap): cut runaway blocks
+            # before they crowd out their siblings.
+            try:
+                content = validate_tool_result_blocks(content)
+            except Exception:
+                logger.exception(
+                    "Tool result text-block cap failed for {} in {}; keeping the result",
+                    tool_call_id,
+                    spec.session_key or "default",
+                )
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content
+
+    @staticmethod
+    def _persist_long_text_blocks(
+        spec: AgentRunSpec, tool_call_id: str, blocks: list[Any],
+    ) -> list[Any]:
+        """Save each over-cap text block of a mixed list on its own.
+
+        A list with an image or audio block cannot be saved as one text, so
+        without this its long text would stay inline past the cap, or be cut
+        with nothing to page. An all-text list is left to the whole-result
+        spill, which saves it as one file.
+        """
+        if stringify_text_blocks(blocks) is not None:
+            return blocks
+        out: list[Any] = []
+        for index, block in enumerate(blocks):
+            text = block.get("text") if isinstance(block, dict) and block.get("type") == "text" else None
+            if isinstance(text, str) and len(text) > spec.max_tool_result_chars:
+                try:
+                    saved = maybe_persist_tool_result(
+                        spec.workspace,
+                        spec.session_key,
+                        f"{tool_call_id}_block{index}",
+                        text,
+                        max_chars=spec.max_tool_result_chars,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Tool result block persist failed for {} in {}; keeping it inline",
+                        tool_call_id,
+                        spec.session_key or "default",
+                    )
+                    saved = text
+                block = {**block, "text": saved}
+            out.append(block)
+        return out
 
     @staticmethod
     def _coerce_tool_content(content: Any) -> Any:
