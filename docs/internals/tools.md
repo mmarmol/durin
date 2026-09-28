@@ -54,7 +54,9 @@ this order:
    or list. Only a typed content block keeps its binary payload untouched.
 2. **Coerce.** A dict or untyped list becomes its JSON text, so the size check
    below sees what the model would receive.
-3. **Spill.** If the text exceeds `max_tool_result_chars`, the whole result is
+3. **Spill.** If the text exceeds the run's per-result cap (`max_tool_result_chars`,
+   which follows the model's context window when unset — see
+   [Paging under the run's cap](#paging-under-the-runs-cap)), the whole result is
    saved to `<workspace>/.durin/tool-results/<session>/<call>.txt` and replaced
    by a persisted reference, which carries:
    - the size and line count of the saved file;
@@ -82,6 +84,10 @@ normalized result already fits, the pass leaves it unchanged. Around it:
   are collected, if their combined size exceeds `DURIN_TURN_BUDGET_CHARS`
   (default 200 000 chars), `_enforce_turn_budget()` spills the largest
   not-yet-spilled results to disk in size order until the aggregate fits.
+- **Pruning near the window limit (later in the run):** once the prompt nears
+  the input budget, old results are replaced in one batch by a placeholder
+  that keeps the same saved-file recovery path (see [loop.md](loop.md),
+  Microcompaction).
 
 ---
 

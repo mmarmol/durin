@@ -465,7 +465,7 @@ class ToolReadFileEvent(TypedDict):
     """Agent read a file.
 
     ``result_chars`` measures the returned file content only.
-    ``memory_notes`` counts the artifact-recall notes appended after it (0
+    ``memory_notes`` counts the artifact-recall notes that open the page (0
     when none matched or the feature is off) — the field that measures
     artifact recall, since the lookup itself emits no search event.
     ``verbatim`` marks the raw-content path used by scripts; no numbered

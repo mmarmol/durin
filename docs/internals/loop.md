@@ -973,7 +973,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
-| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. |
+| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns in flight at once, across all sessions. `DURIN_MAX_CONCURRENT_REQUESTS` overrides this at runtime. |
 | `concurrency_ceiling` | `12` | Global ceiling: total in-flight turns *and* subagents across all lanes (see [Concurrency](concurrency.md)). |
 | `max_concurrent_subagents` | `3` | Process-wide subagent-lane cap, checked at spawn time (`spawn.py`); independent of the global ceiling above. |
