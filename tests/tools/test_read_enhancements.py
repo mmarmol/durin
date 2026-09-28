@@ -437,9 +437,11 @@ class TestOfficeDocTruncation:
             f.write_bytes(b"PK")
             result = await tool.execute(path=str(f))
         assert len(result) <= ReadFileTool._MAX_CHARS
-        # The marker gives the real sizes and how to get the whole text.
+        # The marker gives the real sizes and the read_file call that pages
+        # through the whole text, saved to a file.
         assert "of 200,000 chars" in result
-        assert "convert_to_markdown" in result
+        assert 'read_file(path="' in result
+        assert "convert_to_markdown" not in result
 
     @pytest.mark.asyncio
     async def test_small_document_not_truncated(self, tool, tmp_path):
