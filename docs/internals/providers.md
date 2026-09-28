@@ -369,21 +369,36 @@ Provider rules the serialization honors:
   unchanged and in its original order. A redacted block is opaque — its
   `data` is replayed as received and never shown as reasoning text.
 - **Current Claude models** (anything after Opus 4.6; `_is_current_claude`,
-  which matches the closed set of older names, so a new model needs no code
+  which matches the closed set of older names — Vertex-style `@date` ids and
+  dotted versions read as Anthropic's own form — so a new model needs no code
   change):
   - no `temperature` is sent, since any non-default value is rejected;
   - an effort level becomes adaptive thinking plus `output_config.effort`,
     because the `budget_tokens` mode is rejected;
-  - a forced tool is sent as `auto`, since these models think by default.
-  - When thinking is configured, the request also sets
-    `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta
-    `thinking-binding-controls-2026-08-01`). On models that bind thinking to
-    everything before it, an earlier tool result the runner trimmed then drops
-    the later thinking instead of failing the request.
-- **Recovery.** `AnthropicProvider._recover_request_for_error` retries once
-  without every thinking block when the API rejects one (a signature, or
-  content that changed before it), which Anthropic always allows, and without
-  `temperature` when that is what it rejected.
+  - effort `none` sends `thinking: {"type": "disabled"}`, since some of these
+    models think when the field is omitted;
+  - a forced tool is sent as requested.
+  - When thinking is configured and the request goes to Anthropic's own API,
+    it also sets `thinking.block_binding.prefix_mismatch_behavior:
+    "drop_block"` (beta `thinking-binding-controls-2026-08-01`). On models
+    that bind thinking to everything before it, an earlier tool result the
+    runner trimmed then drops the later thinking instead of failing the
+    request. A proxy or gateway in front of the API may drop the beta header
+    and then reject the field, so another base URL does not get it.
+- **Recovery.** `AnthropicProvider._recover_request_for_error` retries once,
+  and remembers what a model or endpoint refused so later requests do not
+  fail the same way:
+  - the binding field on an endpoint without it is left out from then on;
+  - a forced tool on a model that refuses one (Opus 5.5, Fable 5.1, Mythos
+    5.1) becomes `auto` for that model;
+  - a disabled thinking on a model that always thinks is left out for that
+    model;
+  - a thinking block the API no longer accepts (a signature, or content that
+    changed before it) drops every thinking block from the history. Adaptive
+    thinking accepts a turn without one; budget thinking requires the last
+    assistant turn to start with one, so on those models the retry also runs
+    without thinking;
+  - a rejected `temperature` is omitted.
 - **DeepSeek.** Its API thinks by default and rejects a tool request whose
   earlier assistant turns lack `reasoning_content`, so a turn stored without
   reasoning gets the single-space pad above. The pad follows DeepSeek's API —

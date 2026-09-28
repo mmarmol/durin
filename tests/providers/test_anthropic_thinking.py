@@ -124,11 +124,108 @@ def test_a_current_model_without_effort_sends_no_sampling_or_thinking_config() -
     assert "output_config" not in kw
 
 
-def test_a_current_model_never_forces_a_tool() -> None:
-    kw = _build(_make_provider("claude-opus-5-5"), None,
-                tools=[{"type": "function", "function": {"name": "route", "parameters": {}}}],
-                tool_choice={"type": "function", "function": {"name": "route"}})
-    assert kw["tool_choice"] == {"type": "auto"}
+_ROUTE_TOOL = [{"type": "function", "function": {"name": "route", "parameters": {}}}]
+_FORCE_ROUTE = {"type": "function", "function": {"name": "route"}}
+
+
+def _error(text: str):
+    from durin.providers.base import LLMResponse
+    return LLMResponse(content=f"Error: {text}", finish_reason="error")
+
+
+def test_a_forced_tool_is_kept_until_the_model_refuses_it() -> None:
+    """Opus 4.7/4.8, Opus 5 and Fable 5 accept a forced tool; Opus 5.5,
+    Fable 5.1 and Mythos 5.1 refuse it. A refusal is retried with auto and
+    remembered for that model."""
+    provider = _make_provider("claude-opus-5-5")
+    kw = _build(provider, None, tools=_ROUTE_TOOL, tool_choice=_FORCE_ROUTE)
+    assert kw["tool_choice"] == {"type": "tool", "name": "route"}
+
+    chat_kw = {"model": None, "tool_choice": _FORCE_ROUTE, "messages": []}
+    recovered = provider._recover_request_for_error(chat_kw, _error(
+        'tool_choice: type "tool" and "any" are not supported for this model.'))
+
+    assert recovered is not None and recovered["tool_choice"] == "auto"
+    later = _build(provider, None, tools=_ROUTE_TOOL, tool_choice=_FORCE_ROUTE)
+    assert later["tool_choice"] == {"type": "auto"}
+    assert _build(_make_provider("claude-opus-4-7"), None, tools=_ROUTE_TOOL,
+                  tool_choice=_FORCE_ROUTE)["tool_choice"] == {"type": "tool", "name": "route"}
+
+
+def test_effort_none_turns_thinking_off_where_it_is_on_by_default() -> None:
+    """Sonnet 5 and Opus 5 think when the field is omitted; "none" must say
+    disabled. A model where thinking cannot be disabled refuses it once and
+    is not sent it again."""
+    provider = _make_provider("claude-opus-5-5")
+    assert _build(provider, "none")["thinking"] == {"type": "disabled"}
+
+    recovered = provider._recover_request_for_error(
+        {"model": None, "reasoning_effort": "none", "messages": []},
+        _error("thinking: disabled is not supported for this model"))
+
+    assert recovered is not None
+    assert "thinking" not in _build(provider, "none")
+
+
+def test_binding_controls_go_only_to_anthropics_own_api() -> None:
+    """Other hosts (a proxy, a gateway) may drop the beta header and then
+    reject the field."""
+    with patch("anthropic.AsyncAnthropic"):
+        proxied = AnthropicProvider(api_key="k", api_base="https://llm-proxy.example.com",
+                                    default_model="claude-opus-5-5")
+        direct = AnthropicProvider(api_key="k", api_base="https://api.anthropic.com",
+                                   default_model="claude-opus-5-5")
+
+    kw = _build(proxied, "high")
+    assert "block_binding" not in kw["thinking"]
+    assert _BINDING_BETA not in (kw.get("extra_headers") or {}).get("anthropic-beta", "")
+    assert _build(direct, "high")["thinking"]["block_binding"] == {
+        "prefix_mismatch_behavior": "drop_block"}
+
+
+def test_a_rejected_binding_field_is_retried_without_it() -> None:
+    provider = _make_provider("claude-opus-5-5")
+    chat_kw = {"model": None, "reasoning_effort": "high", "messages": []}
+
+    recovered = provider._recover_request_for_error(
+        chat_kw, _error("thinking.block_binding: Extra inputs are not permitted"))
+
+    assert recovered is not None
+    kw = _build(provider, "high")
+    assert "block_binding" not in kw["thinking"]
+    assert _BINDING_BETA not in (kw.get("extra_headers") or {}).get("anthropic-beta", "")
+
+
+def test_proxy_and_vertex_names_of_older_models_are_recognised() -> None:
+    from durin.providers.anthropic_provider import _is_current_claude
+
+    for older in ("claude-sonnet-4@20250514", "claude-sonnet-4.5",
+                  "claude-opus-4-6-think", "claude-3.7-sonnet"):
+        assert not _is_current_claude(older), older
+    for current in ("claude-opus-4.7", "claude-opus-4-7@20260115", "claude-fable-5-1"):
+        assert _is_current_claude(current), current
+
+
+def test_a_rejected_signature_on_a_budget_model_retries_without_thinking() -> None:
+    """With budget thinking on, the last assistant turn must start with a
+    thinking block, so dropping the blocks also turns thinking off for the
+    retry."""
+    provider = _make_provider("claude-sonnet-4-5-20250929")
+    chat_kw = {"model": None, "reasoning_effort": "high", "messages": [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "thinking_blocks": [
+            {"type": "thinking", "thinking": "x", "signature": "s"}],
+         "tool_calls": [{"id": "t1", "type": "function",
+                         "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+    ]}
+
+    recovered = provider._recover_request_for_error(
+        chat_kw, _error("messages.1.content.0: Invalid `signature` in `thinking` block"))
+
+    assert recovered is not None
+    assert all("thinking_blocks" not in m for m in recovered["messages"])
+    assert recovered["reasoning_effort"] is None
 
 
 def test_older_models_keep_their_temperature_and_budget() -> None:
