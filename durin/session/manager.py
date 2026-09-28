@@ -23,7 +23,7 @@ from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
     find_legal_message_start,
-    image_placeholder_text,
+    media_placeholder_text,
     safe_filename,
 )
 from durin.utils.subagent_channel_display import scrub_subagent_announce_body
@@ -243,15 +243,15 @@ class Session:
             role = message.get("role")
             if role == "assistant" and isinstance(content, str):
                 content = _sanitize_assistant_replay_text(content)
-            # Synthesize an ``[image: path]`` breadcrumb from the persisted
-            # ``media`` kwarg so LLM replay still sees *something* where the
-            # image used to be. Without this, an image-only user turn
-            # replays as an empty user message — the assistant's reply then
-            # looks like it's responding to nothing.
+            # Synthesize an ``[image: path]`` / ``[audio: path]`` breadcrumb
+            # from the persisted ``media`` kwarg so LLM replay still sees
+            # *something* where the attachment used to be. Without this, an
+            # image-only user turn replays as an empty user message — the
+            # assistant's reply then looks like it's responding to nothing.
             media = message.get("media")
             if role == "user" and isinstance(media, list) and media and isinstance(content, str):
                 breadcrumbs = "\n".join(
-                    image_placeholder_text(p) for p in media if isinstance(p, str) and p
+                    media_placeholder_text(p) for p in media if isinstance(p, str) and p
                 )
                 content = f"{content}\n{breadcrumbs}" if content else breadcrumbs
             if include_timestamps:

@@ -517,3 +517,20 @@ def test_retain_recent_legal_suffix_hard_cap_with_long_non_user_chain():
     session.retain_recent_legal_suffix(6)
 
     assert len(session.messages) <= 6
+
+
+def test_get_history_labels_an_attached_audio_as_audio():
+    """An audio attachment replays as ``[audio: path]``: labelled an image,
+    the model would describe a picture that was never sent."""
+    session = Session(key="test:audio")
+    session.messages.append(
+        {"role": "user", "content": "listen", "media": ["/m/voice.ogg", "/m/a.png"]}
+    )
+    session.messages.append({"role": "assistant", "content": "ok"})
+
+    history = session.get_history(max_messages=500)
+
+    assert history[0] == {
+        "role": "user",
+        "content": "listen\n[audio: /m/voice.ogg]\n[image: /m/a.png]",
+    }

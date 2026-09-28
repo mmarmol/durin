@@ -208,4 +208,68 @@ describe("ThreadComposer — document attachments", () => {
     expect(kinds).toContain("data:image/png");
     expect(kinds).toContain("data:application/pdf");
   });
+
+  it("sends the recording itself when transcription is off", async () => {
+    // With transcription off there is no transcript to insert: the audio is
+    // the attachment, for a model that takes audio.
+    const onSend = vi.fn();
+    const onTranscribeAudio = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={onSend}
+        onTranscribeAudio={onTranscribeAudio}
+        audioMode="off"
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.change(fileInputOf(), {
+        target: {
+          files: [new File([new Uint8Array(16)], "note.wav", { type: "audio/wav" })],
+        },
+      });
+    });
+
+    const textarea = screen.getByLabelText(/message input/i);
+    await waitFor(() => {
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledTimes(1);
+    });
+    expect(onTranscribeAudio).not.toHaveBeenCalled();
+    const payload = onSend.mock.calls[0][1];
+    expect(payload).toHaveLength(1);
+    expect(payload[0].media.data_url).toMatch(/^data:audio\/wav;base64,/);
+    expect(payload[0].media.name).toBe("note.wav");
+  });
+
+  it("keeps the draft when the attachments are too large to send together", async () => {
+    // Each file fits its own limit, but together they exceed the size one
+    // message may have on the wire; sending would close the connection and
+    // lose the draft.
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} maxMessageBytes={4096} />);
+
+    await act(async () => {
+      fireEvent.change(fileInputOf(), {
+        target: {
+          files: [
+            docFile("a.pdf", "application/pdf", 2000),
+            docFile("b.pdf", "application/pdf", 2000),
+          ],
+        },
+      });
+    });
+    await waitForDocsReady(2);
+
+    const textarea = screen.getByLabelText(/message input/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "read both" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent ?? "").toMatch(
+      /too large to send together/i,
+    );
+    expect(textarea.value).toBe("read both");
+    expect(screen.getAllByTestId("document-chip")).toHaveLength(2);
+  });
 });

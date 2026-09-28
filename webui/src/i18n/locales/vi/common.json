@@ -2112,6 +2112,7 @@
         "too_large": "Tài liệu quá lớn — tối đa 25 MB",
         "io": "Không thể đọc tệp này"
       },
+      "tooLargeToSend": "Các tệp đính kèm này quá lớn để gửi cùng nhau (tổng cộng khoảng {{max}} MB). Hãy bỏ bớt một tệp rồi gửi lại.",
       "planMode": "Chế độ kế hoạch (chỉ đọc)",
       "awaitingAnswer": "Đang chờ câu trả lời của bạn"
     },

@@ -35,6 +35,20 @@ def test_returns_none_for_broken_base64(tmp_path) -> None:
     assert save_base64_data_url("data:image/png;base64,not-valid-base64!!!", tmp_path) is None
 
 
+@pytest.mark.parametrize("mime", [
+    "audio/mpeg", "audio/ogg", "audio/opus", "audio/wav",
+    "audio/webm", "audio/x-m4a", "audio/aac", "audio/flac",
+])
+def test_every_accepted_audio_is_saved_as_audio(tmp_path, mime) -> None:
+    """The saved extension is how the agent loop tells audio from other
+    files; saved as ``.bin``, a recording would read as an unknown file."""
+    import mimetypes
+
+    result = save_base64_data_url(_data_url(b"sound", mime=mime), tmp_path)
+    assert result is not None
+    assert (mimetypes.guess_type(result)[0] or "").startswith("audio/")
+
+
 def test_unknown_mime_falls_back_to_bin(tmp_path) -> None:
     result = save_base64_data_url(_data_url(b"xyz", mime="unknown/type"), tmp_path)
     assert result is not None

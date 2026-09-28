@@ -9,6 +9,9 @@ interface ClientContextValue {
   // Active preset name (e.g. "default", "glm-5.2", "default:high"). The effort
   // suffix is what the composer's reasoning-effort picker reflects.
   modelPreset: string | null;
+  // The size one message and its attachments may have on the wire (the
+  // server's frame cap); absent or null when the server did not say.
+  maxMessageBytes?: number | null;
 }
 
 const ClientContext = createContext<ClientContextValue | null>(null);
@@ -18,16 +21,18 @@ export function ClientProvider({
   token,
   modelName = null,
   modelPreset = null,
+  maxMessageBytes = null,
   children,
 }: {
   client: DurinClient;
   token: string;
   modelName?: string | null;
   modelPreset?: string | null;
+  maxMessageBytes?: number | null;
   children: ReactNode;
 }) {
   return (
-    <ClientContext.Provider value={{ client, token, modelName, modelPreset }}>
+    <ClientContext.Provider value={{ client, token, modelName, modelPreset, maxMessageBytes }}>
       {children}
     </ClientContext.Provider>
   );

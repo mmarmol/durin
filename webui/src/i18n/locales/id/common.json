@@ -2112,6 +2112,7 @@
         "too_large": "Dokumen terlalu besar — maksimal 25 MB",
         "io": "Tidak dapat membaca file ini"
       },
+      "tooLargeToSend": "Lampiran ini terlalu besar untuk dikirim bersama (sekitar {{max}} MB total). Hapus satu lalu kirim lagi.",
       "planMode": "Mode rencana (hanya-baca)",
       "awaitingAnswer": "Menunggu jawaban Anda"
     },

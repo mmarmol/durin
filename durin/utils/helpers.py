@@ -2,6 +2,7 @@
 
 import base64
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -229,6 +230,15 @@ def safe_filename(name: str) -> str:
 def image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
     """Build an image placeholder string."""
     return f"[image: {path}]" if path else empty
+
+
+def media_placeholder_text(path: str) -> str:
+    """Placeholder for an attachment kept as a path: ``[audio: path]`` for
+    audio, ``[image: path]`` for the images that are the rest of it."""
+    mime = mimetypes.guess_type(path)[0] or ""
+    if mime.startswith("audio/"):
+        return f"[audio: {path}]"
+    return image_placeholder_text(path)
 
 
 def truncate_text(text: str, max_chars: int, direction: str = "head") -> str:

@@ -1778,6 +1778,7 @@
         "too_large": "Documento demasiado grande — 25 MB máx.",
         "io": "No se pudo leer este archivo"
       },
+      "tooLargeToSend": "Estos adjuntos son demasiado grandes para enviarlos juntos (unos {{max}} MB en total). Quita uno y vuelve a enviar.",
       "slash": {
         "ariaLabel": "Comandos slash",
         "label": "comandos",

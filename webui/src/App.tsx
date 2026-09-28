@@ -47,6 +47,8 @@ type BootState =
       expiresIn: number;
       modelName: string | null;
       modelPreset: string | null;
+      // The size one message and its attachments may have on the wire.
+      maxMessageBytes: number | null;
       // True when this deploy gates bootstrap on a setup secret. The
       // shell uses this to decide whether to surface the Logout
       // affordance — see Shell + SettingsView.
@@ -167,6 +169,7 @@ export default function App() {
             expiresIn: boot.expires_in,
             modelName: boot.model_name ?? null,
             modelPreset: boot.model_preset ?? null,
+            maxMessageBytes: boot.max_message_bytes ?? null,
             requiresSecret: Boolean(boot.requires_secret),
           });
         } catch (e) {
@@ -306,6 +309,7 @@ export default function App() {
       token={state.token}
       modelName={state.modelName}
       modelPreset={state.modelPreset}
+      maxMessageBytes={state.maxMessageBytes}
     >
       <Shell
         onModelNameChange={handleModelNameChange}

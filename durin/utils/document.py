@@ -158,12 +158,13 @@ def extract_documents(
     *,
     max_file_size: int | None = None,
 ) -> tuple[str, list[str]]:
-    """Separate images from documents in *media_paths*.
+    """Separate images and audio from documents in *media_paths*.
 
     Documents (PDF, DOCX, XLSX, PPTX, plain-text, …) have their text
-    extracted and appended to *text*.  Only image paths are kept in the
-    returned list so that downstream layers only need to handle vision
-    blocks.
+    extracted and appended to *text*. Image and audio paths are kept in the
+    returned list for the content builder: images become vision blocks, and
+    audio follows the transcription mode. Every other file is named in
+    *text* with its path, so no attachment leaves the turn unmentioned.
 
     Files larger than *max_file_size* bytes are skipped, and reported in
     *text* rather than dropped silently, to avoid unbounded memory / CPU
@@ -173,7 +174,7 @@ def extract_documents(
     if max_file_size is None:
         max_file_size = _configured_max_file_size()
 
-    image_paths: list[str] = []
+    kept_paths: list[str] = []
     doc_texts: list[str] = []
 
     for path_str in media_paths:
@@ -203,11 +204,20 @@ def extract_documents(
         with open(p, "rb") as f:
             header = f.read(16)
         mime = detect_image_mime(header) or mimetypes.guess_type(path_str)[0]
-        if mime and mime.startswith("image/"):
-            image_paths.append(path_str)
+        if mime and mime.startswith(("image/", "audio/")):
+            kept_paths.append(path_str)
         else:
             extracted = extract_text(p)
-            if extracted and not extracted.startswith("[error:"):
+            if extracted is None:
+                # No converter reads this format (a legacy .doc, a video, an
+                # archive). The file is still on disk, and the agent can only
+                # tell the user so, or convert it, if it hears about it.
+                doc_texts.append(
+                    f"[File: {p.name} — could not be read inline: "
+                    f"{p.suffix.lower() or 'this file type'} is not a format "
+                    f"durin reads. Saved on disk at {p}]"
+                )
+            elif not extracted.startswith("[error:"):
                 # Surface the on-disk path, not just the name: the file IS
                 # persisted, and the agent needs the path to `memory_ingest` it
                 # when the user asks to remember an attached document. Without it
@@ -215,7 +225,7 @@ def extract_documents(
                 # file "isn't on disk", then asks the user for a path they don't
                 # have (they attached it in chat).
                 doc_texts.append(f"[File: {p.name} — saved on disk at {p}]\n{extracted}")
-            elif extracted and extracted.startswith("[error:"):
+            else:
                 # An extraction failure used to be dropped here silently — the
                 # model saw neither the file nor a reason, so an attachment it
                 # was just given would vanish as if never sent. That is a
@@ -247,7 +257,7 @@ def extract_documents(
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)
 
-    return text, image_paths
+    return text, kept_paths
 
 
 def _configured_max_file_size() -> int:

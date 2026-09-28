@@ -2112,6 +2112,7 @@
         "too_large": "Document trop volumineux — 25 Mo max",
         "io": "Impossible de lire ce fichier"
       },
+      "tooLargeToSend": "Ces pièces jointes sont trop volumineuses pour être envoyées ensemble (environ {{max}} Mo au total). Retirez-en une et renvoyez.",
       "planMode": "Mode plan (lecture seule)",
       "awaitingAnswer": "En attente de votre réponse"
     },

@@ -2112,6 +2112,7 @@
         "too_large": "Document is too large — 25 MB max",
         "io": "Couldn't read this file"
       },
+      "tooLargeToSend": "These attachments are too large to send together (about {{max}} MB in all). Remove one and send again.",
       "planMode": "Plan mode (read-only)",
       "awaitingAnswer": "Waiting for your answer"
     },

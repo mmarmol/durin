@@ -2112,6 +2112,7 @@
         "too_large": "文件太大——上限為 25 MB",
         "io": "無法讀取這個檔案"
       },
+      "tooLargeToSend": "這些附件合計過大，無法一起傳送（總計約 {{max}} MB）。請移除一個後重新傳送。",
       "planMode": "計畫模式（唯讀）",
       "awaitingAnswer": "等待您的回答"
     },

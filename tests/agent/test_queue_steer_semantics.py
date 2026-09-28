@@ -562,3 +562,35 @@ async def test_no_queued_ack_for_chat_channels(tmp_path):
         channel="telegram", sender_id="u", chat_id="123", content="follow-up",
     ))
     assert acks == []
+
+
+@pytest.mark.asyncio
+async def test_drain_pending_passes_queued_audio_per_the_transcription_mode(tmp_path):
+    """A message queued mid-turn gets the same audio handling as one that
+    starts a turn: with transcription off and an audio-capable model, its
+    audio reaches the model as audio instead of being skipped."""
+    from durin.agent.loop import AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+    loop._audio_build_args = lambda: ("off", True)
+
+    voice = tmp_path / "voice.wav"
+    voice.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 16)
+
+    callback, pending = await _capture_injection_callback(loop)
+    await pending.deferred.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1",
+        content="what does this say?", media=[str(voice)],
+    ))
+
+    final = await callback()
+
+    assert len(final) == 1
+    content = final[0]["content"]
+    assert isinstance(content, list)
+    assert any(block.get("type") == "input_audio" for block in content)

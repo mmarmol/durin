@@ -386,9 +386,7 @@ _DOCUMENT_MIME_ALLOWED: frozenset[str] = frozenset({
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/msword",
     "application/vnd.ms-excel",
-    "application/vnd.ms-powerpoint",
     "application/epub+zip",
     "text/html",
     "text/csv",
@@ -1082,6 +1080,10 @@ class WebSocketChannel(BaseChannel):
             "expires_in": self.config.token_ttl_s,
             "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
             "model_preset": _resolve_bootstrap_model_preset(self._runtime_model_preset),
+            # The frame cap a message and its attachments must fit in. The
+            # webui checks a message against it before sending, so one that
+            # does not fit keeps its draft instead of closing the connection.
+            "max_message_bytes": self.config.max_message_bytes,
             # True when this deploy gates bootstrap on a setup secret
             # (token_issue_secret or static token). The webui uses this to decide
             # whether to expose a "Logout" affordance — without a secret in play,
@@ -1769,6 +1771,7 @@ class WebSocketChannel(BaseChannel):
         ``origin`` names a non-person sender (``"api"`` for an API token); the
         agent treats a turn with such input as having no person to approve
         privileged actions."""
+        content, media_paths = await self._transcribe_attached_audio(content, media_paths)
         metadata: dict[str, Any] = {"remote": remote}
         if webui:
             metadata["webui"] = True
@@ -1788,6 +1791,34 @@ class WebSocketChannel(BaseChannel):
             metadata=metadata,
             is_dm=False,
         )
+
+    async def _transcribe_attached_audio(
+        self, content: str, media_paths: list[str],
+    ) -> tuple[str, list[str]]:
+        """Speech attached to a message reaches the agent as text.
+
+        As on every channel's voice path, a transcript joins the message text
+        and its recording leaves the media. With transcription off the
+        recording stays, for the agent loop to send to a model that takes
+        audio. A failed transcription keeps it too, named in the text so the
+        agent can still hand it to ``interpret_audio``.
+        """
+        service = getattr(self, "transcription", None)
+        if getattr(service, "mode", "auto") == "off":
+            return content, media_paths
+        parts = [content] if content else []
+        kept: list[str] = []
+        for path in media_paths:
+            if not (mimetypes.guess_type(path)[0] or "").startswith("audio/"):
+                kept.append(path)
+                continue
+            text = (await self.transcribe_audio(path)).strip()
+            if text:
+                parts.append(text)
+            else:
+                kept.append(path)
+                parts.append(f"[audio: {path} — could not be transcribed]")
+        return "\n\n".join(parts), kept
 
     async def _dispatch_envelope(
         self,

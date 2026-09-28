@@ -141,6 +141,19 @@ def test_bootstrap_model_preset_null_without_resolver(
     assert client.get("/webui/bootstrap").json()["model_preset"] is None
 
 
+def test_bootstrap_carries_the_message_size_cap(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dashboard checks a message against the configured frame cap before
+    sending it, so a message too large to send keeps its draft instead of
+    being cut off by a closed connection."""
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    client = _make_client(
+        bus, session_manager=_seed_session(tmp_path), maxMessageBytes=2_000_000,
+    )
+    assert client.get("/webui/bootstrap").json()["max_message_bytes"] == 2_000_000
+
+
 def test_sessions_routes_require_bearer_token(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

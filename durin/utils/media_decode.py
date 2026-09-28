@@ -24,6 +24,15 @@ MAX_FILE_SIZE = DEFAULT_MAX_BYTES
 _DATA_URL_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,(.+)$", re.DOTALL)
 
 
+# Audio MIME types ``mimetypes.guess_extension`` has no answer for. Saved as
+# ``.bin``, a recording would no longer read as audio to the agent loop.
+_AUDIO_EXTENSIONS = {
+    "audio/wav": ".wav",
+    "audio/x-m4a": ".m4a",
+    "audio/flac": ".flac",
+}
+
+
 class FileSizeExceeded(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """Raised when a decoded payload exceeds the caller's size limit."""
 
@@ -61,7 +70,11 @@ def save_base64_data_url(
     if filename_hint:
         ext = Path(filename_hint).suffix.lower()
     if not ext:
-        ext = mimetypes.guess_extension(mime_type) or ".bin"
+        ext = (
+            _AUDIO_EXTENSIONS.get(mime_type)
+            or mimetypes.guess_extension(mime_type)
+            or ".bin"
+        )
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = media_dir / safe_filename(filename)
     dest.write_bytes(raw)

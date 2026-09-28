@@ -80,6 +80,23 @@ def test_off_mode_audio_dropped_when_model_lacks_audio(
         assert "audio" in out.lower()
 
 
+def test_off_mode_note_carries_the_audio_path(builder: ContextBuilder, tmp_path: Path):
+    """The note names where the audio is, so the agent can hand it to
+    ``interpret_audio`` — a bare file name leads nowhere."""
+    wav = tmp_path / "v.wav"
+    _make_wav(wav)
+    out = builder._build_user_content(
+        "describe this",
+        [str(wav)],
+        audio_mode="off",
+        supports_audio_input=False,
+    )
+    text = out if isinstance(out, str) else " ".join(
+        b["text"] for b in out if b.get("type") == "text"
+    )
+    assert str(wav) in text
+
+
 def test_auto_mode_audio_not_inlined(builder: ContextBuilder, tmp_path: Path):
     """In the default 'auto' mode, audio is transcribed upstream — the builder
     must NOT inline it as input_audio (that's the whole point: save tokens)."""

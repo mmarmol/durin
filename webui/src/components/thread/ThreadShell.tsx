@@ -111,7 +111,7 @@ export function ThreadShell({
     loadOlder: loadOlderHistory,
     adoptPrevCursor,
   } = useSessionHistory(historyKey);
-  const { client, modelName, modelPreset, token } = useClient();
+  const { client, modelName, modelPreset, token, maxMessageBytes } = useClient();
   const activeEffort = effortFromPreset(modelPreset);
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
@@ -576,6 +576,8 @@ export function ThreadShell({
           onSend={handleThreadSend}
           onTranscribeAudio={transcribeAudio}
           audioInputAllowed={transcriptionStatus.available}
+          audioMode={transcriptionStatus.mode}
+          maxMessageBytes={maxMessageBytes ?? undefined}
           disabled={!chatId || isReadOnlyChannel}
           isStreaming={isStreaming}
           placeholder={
@@ -611,6 +613,8 @@ export function ThreadShell({
           onSend={handleWelcomeSend}
           onTranscribeAudio={transcribeAudio}
           audioInputAllowed={transcriptionStatus.available}
+          audioMode={transcriptionStatus.mode}
+          maxMessageBytes={maxMessageBytes ?? undefined}
           disabled={booting}
           isStreaming={isStreaming}
           placeholder={
