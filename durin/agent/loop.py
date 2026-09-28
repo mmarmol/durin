@@ -2079,6 +2079,8 @@ class AgentLoop:
             if pending_queues is None:
                 return []
 
+            audio_mode, supports_audio = self._audio_build_args()
+
             def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
                 content = pending_msg.content
                 media = pending_msg.media if pending_msg.media else None
@@ -2087,7 +2089,11 @@ class AgentLoop:
                     media = media or None
                 if pending_msg.metadata.get("steer") is True:
                     content = f"{_STEER_FRAMING}\n\n{content}"
-                user_content = self.context._build_user_content(content, media)
+                user_content = self.context._build_user_content(
+                    content, media,
+                    audio_mode=audio_mode,
+                    supports_audio_input=supports_audio,
+                )
                 return {"role": "user", "content": user_content}
 
             def _to_user_message_or_error(pending_msg: InboundMessage) -> dict[str, Any]:

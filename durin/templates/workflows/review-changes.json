@@ -4,7 +4,6 @@
   "improvement_mode": "manual",
   "input": {
     "text": true,
-    "files": true,
     "description": "a set of changes to review (a diff, or the changed files), plus optional context on intent"
   },
   "output": {

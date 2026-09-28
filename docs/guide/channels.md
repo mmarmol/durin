@@ -4,19 +4,25 @@ A **channel** is how durin receives messages and sends replies. Every channel
 runs inside the gateway process. You can enable multiple channels at once —
 each one listens independently on its platform.
 
-Channels are configured under the `channels` key in `~/.durin/config.toml`.
-Per-channel settings live as sub-tables (e.g. `[channels.telegram]`); each
-channel adapter reads its own keys from that table.
+Channels are configured under the `channels` key of durin's config;
+per-channel settings are nested objects (e.g. `channels.telegram`), and each
+channel adapter reads its own keys from its object. Edit them from the
+dashboard's **Channels** tab, with `durin config set channels.<name>.<key> …`,
+or with `durin config edit`, which opens the whole config. On disk the section
+lives in `config.json.d/channels.json` in the durin home; `config.json` itself
+only marks that layout, so edits made there are not read.
 
 > **Quick start.** Run `durin onboard channels` to get an interactive wizard
-> that toggles channels on and off and prompts for the required credentials.
+> that toggles channels on and off and asks for a channel's token when its
+> config has one (e.g. Telegram's `token`, Slack's `bot_token`). Set every other
+> credential (email, Matrix, DingTalk, WeCom…) in the dashboard or with
+> `durin config set`.
 
 ---
 
 ## Shared options
 
-These keys apply across all channels. Set them at the top level of
-`[channels]`:
+These keys apply across all channels. Set them directly under `channels`:
 
 | Key | Default | What it does |
 |---|---|---|
@@ -24,30 +30,26 @@ These keys apply across all channels. Set them at the top level of
 | `send_tool_hints` | `false` | Also stream tool-call hints (e.g. "reading file …") as text |
 | `show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `send_max_retries` | `3` | Total delivery attempts per message (initial send included) |
-| `transcription_provider` | `"groq"` | Transcription backend for channel audio (`"groq"` or `"openai"`); override per channel in its own table |
-| `transcription_language` | _(inherits)_ | Per-channel ISO 639-1 override (e.g. `"en"`) for the transcription engine |
 
 Per-channel sections can override `send_progress`, `send_tool_hints`, and
-`show_reasoning` by setting the same key inside the channel's table.
+`show_reasoning` by setting the same key inside the channel's object.
 
-> **Primary transcription config.** `transcription_provider` and
-> `transcription_language` in `[channels]` or a per-channel table are
-> _per-channel overrides_. The global transcription backend — including the
-> primary `provider` (default `"local"`) and its engine settings — is
-> configured under the top-level `[transcription]` section. See the
-> [configuration reference](configuration.md) for the full key list.
+> **Transcription.** Voice messages on every channel are transcribed by the
+> global backend under the top-level `transcription` section; there is no
+> per-channel override. See the [configuration reference](configuration.md)
+> for the full key list.
 
 ---
 
 ## Credentials and the secret store
 
-Never put raw tokens or passwords in `config.toml`. Store them in durin's
-encrypted secret store and reference them with `${secret:NAME}`:
+Never put raw tokens or passwords in the config. Store them in durin's
+secret store (`secrets.json` in the durin home, readable only by your user)
+and reference them with `${secret:NAME}`:
 
 ```sh
 durin secret set TELEGRAM_BOT_TOKEN --service channel:telegram
-# then in config.toml:
-# token = "${secret:TELEGRAM_BOT_TOKEN}"
+durin config set channels.telegram.token '${secret:TELEGRAM_BOT_TOKEN}'
 ```
 
 The reference format is `${secret:NAME}` where `NAME` must match
@@ -73,9 +75,12 @@ their persona per-conversation in the chat composer). Precedence: cron-job
 override > persona picked in the conversation > per-chat mapping > channel
 default > global default.
 
-When `allow_from` is omitted or a sender is not on the list, durin enters
-**pairing mode**: the unknown sender receives a time-limited code (valid for
-10 minutes), and you approve or deny it from any active channel:
+When a sender is not on `allow_from`, a direct message from them on Telegram,
+Slack, Discord, WhatsApp or Feishu gets a **pairing code** (valid for 10
+minutes); what they post in a group is ignored. Email, Matrix, DingTalk,
+Microsoft Teams, QQ, WeCom and Weixin have no pairing — list senders (or
+`["*"]`) in `allow_from`. You approve or deny a code with `/pairing` from the
+dashboard chat, the TUI, or an account listed in `allow_from`:
 
 ```
 /pairing list                        # see pending codes
@@ -92,9 +97,10 @@ Approved senders persist in `~/.durin/pairing.json` across restarts.
 ## Web / dashboard (WebSocket)
 
 The built-in dashboard and all browser-based clients connect via the
-WebSocket channel. This channel is **always on while the dashboard is
-enabled** (`gateway.webui_enabled = true`) — there is no separate enable
-toggle for it.
+WebSocket channel. It is **turned on automatically while the dashboard is
+enabled** (`gateway.webui_enabled`, `true` by default); only an explicit
+`"enabled": false` in `channels.websocket` keeps it off, and with it the
+dashboard and the HTTP API.
 
 The dashboard authenticates with short-lived tokens it mints at page load
 (`GET /webui/bootstrap`). With no setup secret configured, only localhost may
@@ -111,15 +117,20 @@ integrations) that connect without the bootstrap flow — but, as above, it also
 becomes the dashboard's sign-in secret when `token_issue_secret` is empty.
 When set, store it as a durin secret and reference it with `${secret:…}`.
 
-```toml
-[channels.websocket]
-host = "127.0.0.1"      # bind address; use "0.0.0.0" only with a token set
-port = 8765
-path = "/"
-token = "${secret:WEBUI_TOKEN}"          # optional; external clients only
-token_issue_secret = ""                  # reverse-proxy auth (optional)
-websocket_requires_token = true
-streaming = true
+```json
+{
+  "channels": {
+    "websocket": {
+      "host": "127.0.0.1",
+      "port": 8765,
+      "path": "/",
+      "token": "${secret:WEBUI_TOKEN}",
+      "token_issue_secret": "",
+      "websocket_requires_token": true,
+      "streaming": true
+    }
+  }
+}
 ```
 
 **Key fields:**
@@ -128,11 +139,14 @@ streaming = true
 |---|---|---|
 | `host` | `127.0.0.1` | Binding to `0.0.0.0` or `::` requires either `token` or `token_issue_secret` to be set |
 | `port` | `8765` | WebSocket listen port |
-| `path` | `"/"` | URL path prefix |
+| `path` | `"/"` | Path of the WebSocket chat endpoint; the dashboard and `/api/v1` keep their fixed paths |
 | `token` | _(empty)_ | Optional static secret for external clients; stored as a durin secret. Also the dashboard sign-in secret when `token_issue_secret` is empty |
 | `token_issue_secret` | _(empty)_ | Dashboard sign-in secret for `GET /webui/bootstrap` (required from every client, localhost included, once set); use it behind a reverse proxy or on a non-loopback bind |
-| `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `[channels.websocket]` section, the gateway creates one for the dashboard with this set to `false`; whenever no token is required, a connection without one is then accepted only from this machine (a browser page must be served as `localhost`, `127.0.0.1` or `[::1]`), whether or not `token_issue_secret` is set. A set `token` always requires a valid token, whatever this says |
+| `token_ttl_s` | `300` | Lifetime, in seconds, of the short-lived tokens `GET /webui/bootstrap` mints |
+| `webui_session_ttl_s` | `604800` | Lifetime, in seconds, of the dashboard's sign-in session cookie (7 days) |
+| `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `channels.websocket` object, the gateway creates one for the dashboard with this set to `false`; whenever no token is required, a connection without one is then accepted only from this machine (a browser page must be served as `localhost`, `127.0.0.1` or `[::1]`), whether or not `token_issue_secret` is set. A set `token` always requires a valid token, whatever this says |
 | `streaming` | `true` | Send incremental text deltas while the model is generating |
+| `max_message_bytes` | `37748736` | Largest message a client may send, in bytes (36 MiB): a WebSocket frame, or the body of a `POST /api/v1/sessions/{key}/messages` |
 | `ssl_certfile` / `ssl_keyfile` | _(empty)_ | Paths to TLS certificate and key for direct TLS |
 | `allow_from` | `["*"]` | Client IDs that may connect |
 
@@ -146,28 +160,29 @@ after starting the gateway.
 Telegram uses **long polling** — no public IP or webhook is required.
 
 The bot token is **always stored as a durin secret**, never as plaintext in
-`config.toml`. Both the guided and manual setup paths write a `${secret:…}`
+the config. Both the guided and manual setup paths write a `${secret:…}`
 reference into the config automatically.
 
 ### Guided setup (recommended)
 
-Open the dashboard **Channels** tab, expand the Telegram section, and click
-**Set up Telegram**. The panel walks you through:
+Open the dashboard **Channels** tab and expand the Telegram section; its
+guided panel walks you through:
 
 1. **Create a bot** — follow the link to
    [t.me/BotFather](https://t.me/BotFather), send `/newbot`, and copy the
    token BotFather gives you.
-2. **Validate** — paste the token into the panel and click **Test**. durin
-   calls the Telegram `getMe` API to confirm the token is valid and shows
-   the bot's username. Nothing is written at this step.
-3. **Save** — click **Connect**. The token is saved to the secret store and
-   the config is updated to reference it as `${secret:TELEGRAM_BOT_TOKEN}`.
-   The gateway picks up the change on its next reload.
+2. **Validate** — paste the token into the panel and click **Validate**.
+   durin calls the Telegram `getMe` API to confirm the token is valid and
+   shows the bot's username. Nothing is written at this step.
+3. **Save and enable** — click **Save and enable**. The token is saved to
+   the secret store and referenced as `${secret:TELEGRAM_TOKEN}`, and the
+   channel is enabled and started right away.
 
 Once connected, any Telegram user who DMs the bot triggers **pairing mode**
-unless their numeric user ID is already in `allow_from`. The dashboard
-displays pending pairing requests; approve or deny them there, or from any
-active channel:
+unless their user ID or username is already in `allow_from`. The dashboard
+displays pending pairing requests; approve or deny them there, or with
+`/pairing` from the dashboard chat, the TUI, or an account listed in
+`allow_from`:
 
 ```
 /pairing list
@@ -192,29 +207,35 @@ referencing it:
 durin secret set TELEGRAM_BOT_TOKEN --service channel:telegram
 ```
 
-```toml
-[channels.telegram]
-enabled = true
-token = "${secret:TELEGRAM_BOT_TOKEN}"
-allow_from = []          # leave empty to use pairing, or list numeric user IDs
-group_policy = "mention" # "open" or "mention"
-streaming = true
+```json
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "${secret:TELEGRAM_BOT_TOKEN}",
+      "allow_from": [],
+      "group_policy": "mention",
+      "streaming": true
+    }
+  }
+}
 ```
 
-Set `allow_from` to a list of numeric Telegram user IDs to grant access
-without pairing, or leave it empty to require pairing for every new user.
+Set `allow_from` to Telegram user IDs or usernames to grant access without
+pairing, or leave it empty to require pairing for every new user.
 
 **Key fields (from `TelegramConfig`):**
 
 | Key | Default | Notes |
 |---|---|---|
 | `token` | _(required)_ | Bot API token from BotFather; always stored as a durin secret |
-| `allow_from` | `[]` | Telegram user IDs or usernames; empty = pairing mode for DMs. Entries are bare numeric IDs (`"123456"`) or `"<id>\|<username>"` (written by the pairing flow). The numeric ID is permanent; the username part can go stale if the user renames their account. |
-| `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
+| `allow_from` | `[]` | Numeric user IDs (`"123456"`) or usernames, with or without the `@`; `["*"]` allows anyone; empty = pairing mode for DMs. Approvals from pairing are kept in `pairing.json`, not here. A numeric ID is permanent; a username stops matching if the user renames their account. |
+| `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned or when a message replies to the bot) |
 | `proxy` | _(none)_ | HTTP proxy URL for outbound connections |
 | `reply_to_message` | `false` | Quote the original message in replies |
 | `react_emoji` | `"👀"` | Reaction added while processing |
 | `streaming` | `true` | Edit the message in-place as the model streams |
+| `stream_edit_interval` | `0.6` | Min seconds between streaming edits |
 | `inline_keyboards` | `false` | Render choice buttons as inline keyboards |
 | `drop_pending_updates` | `true` | Drop messages queued while the bot was offline. Set to `false` to replay them on (re)start. |
 
@@ -234,18 +255,25 @@ at [api.slack.com/apps](https://api.slack.com/apps?new_app=1) via
 secrets, and enables the channel. Once active, the same panel manages DM
 pairing (approve/deny/revoke senders) and lets you join the bot to public
 workspace channels directly (private channels still need a manual
-`/invite @bot` from inside Slack). A *Manual* toggle exposes every config
-field for advanced setups; both modes write the same config keys.
+`/invite @bot` from inside Slack). A *Manual* toggle exposes the tokens and
+the access, threading and streaming fields; `react_emoji`, `done_emoji`,
+`thread_context_limit` and `stream_edit_interval` are set in the config file.
+Both modes write the same config keys.
 
 **Manual setup:**
 
-```toml
-[channels.slack]
-enabled = true
-bot_token = "${secret:SLACK_BOT_TOKEN}"
-app_token = "${secret:SLACK_APP_TOKEN}"
-allow_from = []           # leave empty for pairing on DMs
-group_policy = "mention"  # "open", "mention", or "allowlist"
+```json
+{
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "bot_token": "${secret:SLACK_BOT_TOKEN}",
+      "app_token": "${secret:SLACK_APP_TOKEN}",
+      "allow_from": [],
+      "group_policy": "mention"
+    }
+  }
+}
 ```
 
 1. Fetch the app manifest from a running gateway
@@ -254,10 +282,10 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
    subscribe to the `app_mention` and `message.*` bot events, grant the
    bot scopes the channel uses (`app_mentions:read`, `chat:write`,
    `im:history`, `im:read`, `im:write`, `files:read`, `files:write`,
-   `reactions:write`, `channels:history`, `channels:read`, `groups:history`,
-   `groups:read`, `mpim:history`, `mpim:read`, `users:read`), and under
-   **App Home → Messages Tab** allow users to send messages — without it
-   Slack blocks all DMs to the bot.
+   `reactions:write`, `channels:history`, `channels:join`, `channels:read`,
+   `groups:history`, `groups:read`, `mpim:history`, `mpim:read`,
+   `users:read`), and under **App Home → Messages Tab** allow users to send
+   messages — without it Slack blocks all DMs to the bot.
 2. Under **Basic Information → App-Level Tokens**, generate a token with the
    `connections:write` scope. This is your `app_token`.
 3. Under **Install App**, install to your workspace and copy the
@@ -305,6 +333,13 @@ Content quoted or forwarded with Slack's *Share message* — which Slack omits
 from the plain message text — is extracted from the rich-text blocks and
 attachments and passed to the agent as `[quoted]` / `[shared]` context lines.
 
+Slack's markup is turned back into what the person typed before the agent or
+a trigger sees it: a link shows its label (plus the URL when they differ), a
+date its fallback text, `<!here>` reads `@here`, and `&amp;`, `&lt;`, `&gt;`
+their characters. Mentions keep Slack's id form (`<@U…>`, `<#C…|name>`,
+`<!subteam^…>`), since the id is what a reply, a post to that channel or an
+automation needs.
+
 ---
 
 ## Discord
@@ -314,7 +349,7 @@ Portal. durin derives its gateway intents from the events it handles — there i
 no raw bitfield to configure by hand.
 
 The bot token is **always stored as a durin secret**, never as plaintext in
-`config.toml`. Both the guided and manual setup paths write a `${secret:…}`
+the config. Both the guided and manual setup paths write a `${secret:…}`
 reference into the config automatically.
 
 ### Guided setup (recommended)
@@ -341,11 +376,13 @@ whether the channel is running, and manages the rest:
 
 - **DM pairing** — any Discord user who DMs the bot triggers pairing mode
   unless their user ID is already in `allow_from`; approve, deny, or revoke
-  senders directly from the panel (or from any active channel with the
-  `/pairing` commands).
+  senders directly from the panel (or with `/pairing` from the dashboard
+  chat, the TUI, or an account listed in `allow_from`).
 - **Where durin answers** — reply everywhere the bot can see, or narrow it to a
   chosen allowlist of channels picked by name from the servers the bot is in
-  (writes `allow_channels`).
+  (writes `allow_channels`). DMs are channels too: while the list is
+  non-empty, direct messages — and pairing — are dropped unless their channel
+  ID is listed.
 
 A **Manual** toggle exposes every config field for advanced setups; both modes
 write the same config keys.
@@ -359,12 +396,17 @@ referencing it:
 durin secret set DISCORD_TOKEN --service channel:discord
 ```
 
-```toml
-[channels.discord]
-enabled = true
-token = "${secret:DISCORD_TOKEN}"
-allow_from = []          # empty = pairing mode for DMs; or list Discord user IDs
-group_policy = "mention" # "open" or "mention"
+```json
+{
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": "${secret:DISCORD_TOKEN}",
+      "allow_from": [],
+      "group_policy": "mention"
+    }
+  }
+}
 ```
 
 Discord requires the `discord` pip extra; durin installs it automatically and
@@ -375,9 +417,9 @@ logs a restart note if it was missing.
 | Key | Default | Notes |
 |---|---|---|
 | `token` | _(required)_ | Bot token from the Developer Portal; always stored as a durin secret |
-| `allow_from` | `[]` | Discord user IDs allowed to DM durin; `["*"]` allows anyone. Empty = pairing mode for DMs |
-| `allow_channels` | `[]` | Routing, not auth: empty = every channel the bot can see; a non-empty list is a closed allowlist of channel IDs |
-| `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
+| `allow_from` | `[]` | Discord user IDs allowed to talk to durin, in DMs and server channels; `["*"]` allows anyone. Empty = pairing mode for DMs |
+| `allow_channels` | `[]` | Routing, not auth: empty = every channel the bot can see; a non-empty list is a closed allowlist of channel IDs, DM channels included |
+| `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned or when a message replies to the bot) |
 | `read_receipt_emoji` | `"👀"` | Reaction added on receipt |
 | `working_emoji` | `"🔧"` | Reaction added while processing |
 | `working_emoji_delay` | `2.0` | Seconds to wait before adding the working reaction |
@@ -410,15 +452,20 @@ session identically.
 **Connect**. durin launches the bridge and renders the pairing QR code right in
 the browser; scan it from your phone (**WhatsApp → Linked devices → Link a
 device**) and durin enables and starts the channel automatically once the phone
-confirms. A **Relink** action shows a fresh QR to move to a different number.
+confirms. A **Re-pair** action shows a fresh QR to move to a different number.
 The ban-risk caution above is shown before you scan.
 
 **Terminal.** Enable the channel in config:
 
-```toml
-[channels.whatsapp]
-enabled = true
-group_policy = "open"   # "open" responds to all group messages, "mention" only when @-mentioned
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "group_policy": "open"
+    }
+  }
+}
 ```
 
 Then log in:
@@ -461,7 +508,7 @@ transport, frame protocol, and supervision details.
 
 Email uses **IMAP polling** for inbound and **SMTP** for outbound. The full
 channel can be configured from the webui **Channels** tab without editing
-`config.toml` directly.
+the config by hand.
 
 The IMAP and SMTP passwords are stored as durin secrets. When configuring
 via the webui, the password fields save directly to the secret store and
@@ -473,26 +520,28 @@ durin secret set EMAIL_IMAP_PASSWORD --service channel:email
 durin secret set EMAIL_SMTP_PASSWORD --service channel:email
 ```
 
-```toml
-[channels.email]
-enabled = true
-consent_granted = true   # must be explicitly set to true
-
-imap_host = "imap.example.com"
-imap_port = 993
-imap_username = "agent@example.com"
-imap_password = "${secret:EMAIL_IMAP_PASSWORD}"
-imap_mailbox = "INBOX"
-imap_use_ssl = true
-
-smtp_host = "smtp.example.com"
-smtp_port = 587
-smtp_username = "agent@example.com"
-smtp_password = "${secret:EMAIL_SMTP_PASSWORD}"
-smtp_use_tls = true
-from_address = "agent@example.com"
-
-allow_from = ["trusted@example.com"]
+```json
+{
+  "channels": {
+    "email": {
+      "enabled": true,
+      "consent_granted": true,
+      "imap_host": "imap.example.com",
+      "imap_port": 993,
+      "imap_username": "agent@example.com",
+      "imap_password": "${secret:EMAIL_IMAP_PASSWORD}",
+      "imap_mailbox": "INBOX",
+      "imap_use_ssl": true,
+      "smtp_host": "smtp.example.com",
+      "smtp_port": 587,
+      "smtp_username": "agent@example.com",
+      "smtp_password": "${secret:EMAIL_SMTP_PASSWORD}",
+      "smtp_use_tls": true,
+      "from_address": "agent@example.com",
+      "allow_from": ["trusted@example.com"]
+    }
+  }
+}
 ```
 
 **Key fields (from `EmailConfig`):**
@@ -508,12 +557,17 @@ allow_from = ["trusted@example.com"]
 | `smtp_username` / `smtp_password` | _(required)_ | SMTP credentials; password stored as a durin secret |
 | `smtp_use_tls` | `true` | Use STARTTLS |
 | `smtp_use_ssl` | `false` | Use direct SSL (mutually exclusive with `smtp_use_tls`) |
-| `from_address` | _(required)_ | The `From:` address on replies |
-| `allow_from` | `[]` | Allowed sender addresses (glob patterns supported); must be set for the channel to authorize mail |
+| `from_address` | _(empty)_ | `From:` on replies; empty uses `smtp_username` (then `imap_username`) |
+| `subject_prefix` | `"Re: "` | Prefix added to a reply's subject, unless the subject already starts with `Re:` |
+| `auto_reply_enabled` | `true` | Send the agent's reply to incoming mail; `false` stops those replies (an automation's reply to its counterpart still goes out) |
+| `allow_from` | `[]` | Exact sender addresses, in lowercase (no wildcards; `["*"]` allows anyone); must be set for the channel to authorize mail |
 | `poll_interval_seconds` | `30` | How often to poll IMAP (minimum 5 s) |
+| `mark_seen` | `true` | Mark processed mail as read, including mail dropped for an unlisted sender; mail that fails SPF or DKIM stays unread |
 | `verify_dkim` | `true` | Require `dkim=pass` in `Authentication-Results` |
 | `verify_spf` | `true` | Require `spf=pass` in `Authentication-Results` |
 | `allowed_attachment_types` | `[]` | MIME types to accept (e.g. `["image/*", "application/pdf"]`); empty = no attachments |
+| `max_attachment_size` | `2000000` | Largest attachment saved, in bytes; a bigger one is skipped |
+| `max_attachments_per_email` | `5` | Most attachments saved from one mail |
 | `max_body_chars` | `12000` | Truncate message body beyond this length |
 | `threading_mode` | `"thread"` | `"thread"` gives each mail conversation its own session; `"sender"` keeps one session per address regardless of subject/thread |
 
@@ -529,19 +583,17 @@ With `threading_mode = "thread"` (the default), each mail conversation gets
 its own durin session — a reply in one email thread never sees context from
 an unrelated thread with the same sender, even if the subject repeats. With
 `threading_mode = "sender"`, every message from a given address shares one
-session regardless of subject or thread, matching the channel's original
-behaviour. Switching between the two modes at any time is safe: nothing needs
-to be migrated or reset.
+session regardless of subject or thread. Switching between the two modes at
+any time is safe: nothing needs to be migrated or reset.
 
 Replies are stitched into the mail client's own thread view — durin tracks
 the References/In-Reply-To chain (and Outlook's Thread-Index, for Exchange
 clients) so a reply shows up as part of the original conversation instead of
 arriving as a disconnected new message.
 
-Auto-submitted mail — bounces, out-of-office replies, vacation autoresponders,
-and other automated mail (per RFC 3834) — is always dropped before it reaches
-the agent, in both threading modes. Durin never auto-replies to an
-autoresponder.
+Mail whose `Auto-Submitted` header (RFC 3834) is anything but `no` is dropped
+before it reaches the agent, in both threading modes; automated mail without
+that header is handled like any other message.
 
 After durin sends a reply, it also appends a copy to the mailbox's own Sent
 folder (detected automatically over IMAP), so a reply sent through durin
@@ -564,17 +616,21 @@ interactively.
 | Channel | Module | Notes |
 |---|---|---|
 | Matrix | `matrix.py` | Requires the `matrix` pip extra (auto-installed) |
-| Microsoft Teams | `msteams.py` | |
+| Microsoft Teams | `msteams.py` | Needs `PyJWT` with `cryptography` (both arrive with the `mcp` extra; otherwise `pip install 'PyJWT[crypto]'`) |
 | Feishu | `feishu.py` | |
-| DingTalk | `dingtalk.py` | |
-| WeCom | `wecom.py` | |
+| DingTalk | `dingtalk.py` | Needs `dingtalk-stream` |
+| WeCom | `wecom.py` | Needs `wecom-aibot-sdk` |
 | Weixin | `weixin.py` | |
-| QQ | `qq.py` | |
+| QQ | `qq.py` | Needs `qq-botpy` |
 
-All of them follow the same pattern: add an `enabled = true` key under
-`[channels.<name>]`, supply the credentials as `${secret:…}` references, and
-optionally list `allow_from` IDs. See the module's config class for the exact
-key names.
+The packages named for Microsoft Teams, DingTalk, WeCom and QQ are not
+installed automatically: add them to the environment durin runs in.
+
+All of them follow the same pattern: set `enabled` to `true` under
+`channels.<name>`, supply the credentials as `${secret:…}` references, and
+list the senders allowed to reach durin in `allow_from`; channels without
+pairing ignore everyone while it is empty. See the module's config class for
+the exact key names.
 
 Matrix rooms with end-to-end encryption enabled are not supported: the
 `matrix` extra ships without `olm` (the `[e2e]` extra of the underlying SDK),

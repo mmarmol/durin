@@ -32,6 +32,8 @@ class SubworkflowRunner:
         max_depth: int = 5,
         parallel_llm_concurrency: int = 2,
         parallel_script_concurrency: int = 4,
+        max_node_visits: int = 1000,
+        prune_keep: int = 20,
         _depth: int = 0,
         _stack: tuple[str, ...] = (),
     ) -> None:
@@ -42,6 +44,10 @@ class SubworkflowRunner:
         self.max_depth = max_depth
         self.parallel_llm_concurrency = parallel_llm_concurrency
         self.parallel_script_concurrency = parallel_script_concurrency
+        # The caller's workflow.max_node_visits and workflow.keep_runs: a nested
+        # run is bound by the same visit ceiling and manifest retention.
+        self.max_node_visits = max_node_visits
+        self.prune_keep = prune_keep
         self._depth = _depth
         self._stack = _stack
 
@@ -71,6 +77,8 @@ class SubworkflowRunner:
             max_depth=self.max_depth,
             parallel_llm_concurrency=self.parallel_llm_concurrency,
             parallel_script_concurrency=self.parallel_script_concurrency,
+            max_node_visits=self.max_node_visits,
+            prune_keep=self.prune_keep,
             _depth=self._depth + 1, _stack=self._stack + (name,),
         )
 
@@ -107,6 +115,8 @@ class SubworkflowRunner:
             hard_cancel_check=hard_cancel_check,
             parallel_llm_concurrency=self.parallel_llm_concurrency,
             parallel_script_concurrency=self.parallel_script_concurrency,
+            max_node_visits=self.max_node_visits,
+            prune_keep=self.prune_keep,
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).

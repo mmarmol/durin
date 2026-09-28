@@ -261,6 +261,10 @@ export interface BootstrapResponse {
   /** Active preset name (carries the effort suffix, e.g. "default:high") so the
    *  composer's reasoning-effort picker is correct on first load. */
   model_preset?: string | null;
+  /** The size one message and its attachments may have on the wire (the
+   *  WebSocket frame cap). The composer checks a message against it before
+   *  sending, so one that does not fit keeps its draft. */
+  max_message_bytes?: number;
   /** True when this deploy gates bootstrap on a setup secret. When
    *  false, the gateway auto-mints tokens for localhost — there's
    *  nothing for the user to "log out from", so the webui hides the

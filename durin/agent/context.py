@@ -892,7 +892,7 @@ class ContextBuilder:
             from durin.agent.tools.interpret_audio import _detect_audio_format
             fmt = _detect_audio_format(raw)
             if fmt is None:
-                dropped_audio.append(p.name)
+                dropped_audio.append(str(p))
                 continue
             if supports_audio_input:
                 b64 = base64.b64encode(raw).decode()
@@ -902,7 +902,7 @@ class ContextBuilder:
                     "_meta": {"path": str(p)},
                 })
             else:
-                dropped_audio.append(p.name)
+                dropped_audio.append(str(p))
 
         if not blocks:
             # Text-only fallback; surface any dropped audio so it's not silent.

@@ -25,7 +25,7 @@ try:
     from slackify_markdown import slackify_markdown
 
     SLACK_AVAILABLE = True
-except ImportError:  # optional extra `durin-ai[slack]` not installed
+except ImportError:  # optional extra `durin-agent[slack]` not installed
     SLACK_AVAILABLE = False
 
 from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage, SendReceipt
@@ -186,7 +186,7 @@ class SlackChannel(BaseChannel):
         """Start the Slack Socket Mode client and keep it connected."""
         if not SLACK_AVAILABLE:
             self.logger.error(
-                "Slack dependencies not installed. Run: pip install 'durin-ai[slack]' "
+                "Slack dependencies not installed. Run: pip install 'durin-agent[slack]' "
                 "(or enable channels.slack and let auto_install_extras handle it)."
             )
             return

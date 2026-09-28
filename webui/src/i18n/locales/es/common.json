@@ -1778,6 +1778,7 @@
         "too_large": "Documento demasiado grande — 25 MB máx.",
         "io": "No se pudo leer este archivo"
       },
+      "tooLargeToSend": "Estos adjuntos son demasiado grandes para enviarlos juntos (unos {{max}} MB en total). Quita uno y vuelve a enviar.",
       "slash": {
         "ariaLabel": "Comandos slash",
         "label": "comandos",
@@ -2384,7 +2385,7 @@
     "timeoutHint": "usa el valor por defecto configurado",
     "scriptEnv": "Entorno",
     "scriptEnvClean": "Limpio (mínimo + DURIN_*)",
-    "scriptEnvInherit": "Heredar entorno completo",
+    "scriptEnvInherit": "Heredar entorno del gateway (sin secretos guardados)",
     "scriptSecrets": "Secrets",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Nombres de secrets guardados que se inyectan como variables de entorno. Cada uno debe permitir el scope 'exec'.",

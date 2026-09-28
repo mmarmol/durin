@@ -135,7 +135,7 @@ class MSTeamsChannel(BaseChannel):
     async def start(self) -> None:
         """Start the Teams webhook listener."""
         if not MSTEAMS_AVAILABLE:
-            self.logger.error("PyJWT not installed. Run: pip install durin-ai[msteams]")
+            self.logger.error("PyJWT or cryptography not installed. Run: pip install 'PyJWT[crypto]'")
             return
 
         if not self.config.app_id or not self.config.app_password:
@@ -442,7 +442,7 @@ class MSTeamsChannel(BaseChannel):
     async def _validate_inbound_auth(self, auth_header: str, activity: dict[str, Any]) -> None:
         """Validate inbound Bot Framework bearer token."""
         if not MSTEAMS_AVAILABLE:
-            raise RuntimeError("PyJWT not installed. Run: pip install durin-ai[msteams]")
+            raise RuntimeError("PyJWT or cryptography not installed. Run: pip install 'PyJWT[crypto]'")
 
         if not auth_header.lower().startswith("bearer "):
             raise ValueError("missing bearer token")

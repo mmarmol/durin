@@ -413,6 +413,42 @@ def test_stream_chunks_then_done(tmp_path, monkeypatch):
     assert finish["choices"][0]["finish_reason"] == "stop"
 
 
+def test_a_streamed_reply_asks_proxies_not_to_buffer_it(tmp_path, monkeypatch):
+    """A buffering reverse proxy (nginx) would hold every chunk until the
+    turn ends; the header tells it to pass them through."""
+    async def _fake_process(**kwargs):
+        await kwargs["on_stream"]("Hi")
+        return SimpleNamespace(content="Hi")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_fake_process)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    with client.stream(
+        "POST", "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(_mint(["chat:write"])),
+    ) as r:
+        assert r.headers.get("x-accel-buffering") == "no"
+        "".join(r.iter_text())
+
+
+def test_v1_follows_a_model_switched_at_runtime(tmp_path, monkeypatch):
+    """The dashboard's model picker switches the agent's model without a
+    restart; /v1 reported and accepted only the model it started with."""
+    loop = _make_loop()
+    loop.model = "switched-model"
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+
+    listed = client.get("/v1/models", headers=_hdr(tok)).json()
+    reply = client.post("/v1/chat/completions", headers=_hdr(tok), json={
+        "model": "switched-model", "messages": [{"role": "user", "content": "a"}]})
+
+    assert listed["data"][0]["id"] == "switched-model"
+    assert reply.status_code == 200
+    assert reply.json()["model"] == "switched-model"
+
+
 def test_stream_final_chunk_reports_usage(tmp_path, monkeypatch):
     async def _fake_process(**kwargs):
         await kwargs["on_stream"]("Hello")

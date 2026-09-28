@@ -95,10 +95,10 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             # finish() — the very failure this cap makes MORE likely, being
             # now the one thing standing between "one worker" and the
             # resource pressure that kills workers. Left alone, that row
-            # stays "running" forever and the cap's own COUNT keeps counting
-            # it, wedging every later job of this kind — reconcile has
-            # exactly one other call site, gateway startup, which could be
-            # hours away. So a refused claim runs the same probe right here,
+            # stays "running" and the cap's own COUNT keeps counting it,
+            # blocking every later job of this kind until the gateway's
+            # periodic job sweep reconciles it — and without a running
+            # gateway, nothing does. So a refused claim runs the same probe right here,
             # at the moment someone is actually being blocked by a stale
             # holder, and retries once if it requeued anything: a dead
             # holder is cleaned at exactly the moment its absence matters. A
@@ -106,8 +106,8 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             # refuses again for the ordinary reason — walk away exactly as
             # before.
             #
-            # Accepted edge, same one gateway startup's own reconcile call
-            # already accepts: the 6h age fallback can requeue a holder that
+            # Accepted edge, same one the gateway's own reconcile calls
+            # already accept: the 6h age fallback can requeue a holder that
             # is genuinely alive but slow, briefly letting two workers hold
             # one job. finish()'s pid guard and record_unit's idempotence
             # are what keep that window safe, not this retry.

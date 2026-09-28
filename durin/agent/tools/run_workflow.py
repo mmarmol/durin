@@ -489,6 +489,8 @@ class RunWorkflowTool(Tool, ContextAware):
             self._workspace, node_runner, judge_runner, script_runner=script_runner,
             parallel_llm_concurrency=app_config.workflow.parallel_llm_concurrency,
             parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
+            max_node_visits=app_config.workflow.max_node_visits,
+            prune_keep=app_config.workflow.keep_runs,
         )
         bus = self._bus
         run_chat_id = self._chat_id.get()

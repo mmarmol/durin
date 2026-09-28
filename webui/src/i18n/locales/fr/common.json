@@ -1310,7 +1310,7 @@
     "timeoutHint": "utilise le délai configuré par défaut",
     "scriptEnv": "Environnement",
     "scriptEnvClean": "Propre (minimal + DURIN_*)",
-    "scriptEnvInherit": "Hériter de l’environnement complet",
+    "scriptEnvInherit": "Hériter de l'environnement du gateway (sans secrets stockés)",
     "scriptSecrets": "Secrets",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Noms de secrets stockés, injectés comme variables d’environnement. Chacun doit autoriser le scope 'exec'.",
@@ -2112,6 +2112,7 @@
         "too_large": "Document trop volumineux — 25 Mo max",
         "io": "Impossible de lire ce fichier"
       },
+      "tooLargeToSend": "Ces pièces jointes sont trop volumineuses pour être envoyées ensemble (environ {{max}} Mo au total). Retirez-en une et renvoyez.",
       "planMode": "Mode plan (lecture seule)",
       "awaitingAnswer": "En attente de votre réponse"
     },

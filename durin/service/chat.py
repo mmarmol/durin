@@ -134,7 +134,7 @@ class ChatService:
         # answered 202; refuse up front so the caller learns why.
         if not channel.is_allowed(sender_id):
             raise ForbiddenError(
-                "this token's sender is not in channels.websocket.allowFrom",
+                "this token's sender is not in channels.websocket.allow_from",
                 details={"sender_id": sender_id},
             )
         raw_media = [m.model_dump() for m in cmd.media] if cmd.media is not None else None

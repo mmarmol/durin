@@ -945,9 +945,12 @@ class WorkflowsService:
             subworkflow_runner=SubworkflowRunner(
                 ws, node_runner, judge, script_runner=script_runner,
                 parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
-                parallel_script_concurrency=wf_cfg.parallel_script_concurrency),
+                parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
+                max_node_visits=wf_cfg.max_node_visits,
+                prune_keep=wf_cfg.keep_runs),
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=wf_cfg.max_node_visits,
+            prune_keep=wf_cfg.keep_runs,
             parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
             parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
             run_id_factory=lambda: rid,

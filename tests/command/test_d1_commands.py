@@ -341,3 +341,32 @@ async def test_hotkeys_shows_table(tmp_path: Path) -> None:
     out = await cmd_hotkeys(ctx)
     assert "Keyboard shortcuts" in out.content
     assert "Ctrl+C" in out.content
+
+
+@pytest.mark.asyncio
+async def test_hotkeys_lists_every_terminal_ui_binding(tmp_path: Path) -> None:
+    """The terminal UI is the default interactive mode; /hotkeys listed only
+    the legacy prompt's keys, and not all of those either (Ctrl+L)."""
+    from durin.cli.tui.app import DurinApp
+
+    out = await cmd_hotkeys(_ctx(_make_loop(tmp_path), "/hotkeys"))
+
+    for key, _action, label in DurinApp.BINDINGS:
+        shown = "+".join(part.capitalize() for part in key.split("+"))
+        assert shown in out.content, key
+        assert label in out.content, label
+    assert "--legacy" in out.content and "Ctrl+L" in out.content
+
+
+@pytest.mark.asyncio
+async def test_hotkeys_lists_the_input_box_keys(tmp_path: Path) -> None:
+    """The input box has its own keys — a newline, completion, history — that
+    a user needs as much as the app's."""
+    from durin.cli.tui.widgets.input_area import InputArea
+
+    out = await cmd_hotkeys(_ctx(_make_loop(tmp_path), "/hotkeys"))
+
+    for key, _action, label in InputArea.BINDINGS:
+        shown = "+".join(part.capitalize() for part in key.split("+"))
+        assert shown in out.content, key
+        assert label in out.content, label

@@ -90,9 +90,7 @@ const ACCEPT_ATTR = [
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/msword",
   "application/vnd.ms-excel",
-  "application/vnd.ms-powerpoint",
   "application/epub+zip",
   "text/html",
   "text/csv",
@@ -105,9 +103,7 @@ const ACCEPT_ATTR = [
   ".docx",
   ".pptx",
   ".xlsx",
-  ".doc",
   ".xls",
-  ".ppt",
   ".epub",
   ".html",
   ".htm",
@@ -177,6 +173,32 @@ interface ThreadComposerProps {
   onPersonaPick?: (name: string) => void;
   /** Currently active persona name, if any. */
   activePersona?: string | null;
+  /** The size one message and its attachments may have on the wire (the
+   *  server's frame cap). A message over it is not sent: its draft stays. */
+  maxMessageBytes?: number;
+  /** The transcription mode. ``off`` sends attached or recorded audio as it
+   *  is instead of transcribing it into the input. */
+  audioMode?: "auto" | "preview" | "off";
+}
+
+/** The server's default frame cap, used until the bootstrap says otherwise. */
+const DEFAULT_MAX_MESSAGE_BYTES = 37_748_736;
+/** Room for the frame fields sent beside the text and media (type, chat id,
+ *  message id, flags). */
+const FRAME_ENVELOPE_BYTES = 1024;
+
+/** Bytes a message takes on the wire: its JSON-encoded text and media plus
+ *  the envelope. A data URL is ASCII, one byte per character. */
+function messageWireBytes(
+  content: string,
+  media: { data_url: string; name?: string }[],
+): number {
+  const encoder = new TextEncoder();
+  let bytes = FRAME_ENVELOPE_BYTES + encoder.encode(JSON.stringify(content)).length;
+  for (const item of media) {
+    bytes += item.data_url.length + encoder.encode(JSON.stringify(item.name ?? "")).length + 32;
+  }
+  return bytes;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -549,6 +571,8 @@ export function ThreadComposer({
   onDismissApiStatus,
   onPersonaPick,
   activePersona = null,
+  maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES,
+  audioMode = "auto",
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -588,6 +612,7 @@ export function ThreadComposer({
     audio: audioAttachments,
     enqueue: enqueueAudio,
     setStatus: setAudioStatus,
+    setDataUrl: setAudioDataUrl,
     remove: removeAudio,
     clear: clearAudio,
   } = useAttachedAudio();
@@ -647,15 +672,42 @@ export function ThreadComposer({
     [onTranscribeAudio, setAudioStatus, removeAudio],
   );
 
-  // Enqueue an audio file (from attach or mic) and kick off transcription.
+  // With transcription off the recording itself is the attachment: read it
+  // into a data URL and send it with the message, for a model that takes
+  // audio.
+  const attachAudio = useCallback(
+    async (id: string, file: File) => {
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+        setAudioDataUrl(id, dataUrl);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setInlineError(`Could not read the audio: ${msg}`);
+        setAudioStatus(id, "error");
+      }
+    },
+    [setAudioDataUrl, setAudioStatus],
+  );
+
+  // Enqueue an audio file (from attach or mic) and kick off transcription,
+  // or attach it as it is when transcription is off.
   const handleAudioFile = useCallback(
     (file: File) => {
       const { accepted, rejected } = enqueueAudio([file]);
       if (rejected.length === 0 && accepted.length > 0) {
-        void transcribeAndAppend(accepted[0].id, file);
+        if (audioMode === "off") {
+          void attachAudio(accepted[0].id, file);
+        } else {
+          void transcribeAndAppend(accepted[0].id, file);
+        }
       }
     },
-    [enqueueAudio, transcribeAndAppend],
+    [attachAudio, audioMode, enqueueAudio, transcribeAndAppend],
   );
 
   const formatRejection = useCallback(
@@ -754,6 +806,14 @@ export function ThreadComposer({
       ),
     [documents],
   );
+  const readyAudio = useMemo(
+    () =>
+      audioAttachments.filter(
+        (clip): clip is AttachedAudio & { dataUrl: string } =>
+          clip.status === "ready" && typeof clip.dataUrl === "string",
+      ),
+    [audioAttachments],
+  );
   const documentsReading = documents.some((doc) => doc.status === "reading");
   const hasErrors =
     images.some((img) => img.status === "error") ||
@@ -766,7 +826,8 @@ export function ThreadComposer({
     && !hasErrors
     && (value.trim().length > 0
       || readyImages.length > 0
-      || readyDocuments.length > 0);
+      || readyDocuments.length > 0
+      || readyAudio.length > 0);
 
   const slashQuery = useMemo(() => {
     if (disabled || slashMenuDismissed || !value.startsWith("/")) return null;
@@ -1044,7 +1105,27 @@ export function ThreadComposer({
       media: { data_url: doc.dataUrl, name: doc.name },
       previewFile: { kind: "file", name: doc.name },
     }));
-    const combined = [...imageItems, ...documentItems];
+    // Only a recording kept as an attachment (transcription off) is ready
+    // with a data URL; a transcribed one became text in the input.
+    const audioItems: SendImage[] = readyAudio.map((clip) => ({
+      media: { data_url: clip.dataUrl, name: clip.file.name },
+      previewFile: { kind: "file", name: clip.file.name },
+    }));
+    const combined = [...imageItems, ...documentItems, ...audioItems];
+    // Each file fits its own limit, but a message travels as one frame: over
+    // the frame cap the server closes the connection and the draft is lost.
+    if (
+      combined.length > 0 &&
+      messageWireBytes(trimmed, combined.map((item) => item.media)) > maxMessageBytes
+    ) {
+      setInlineError(
+        t("thread.composer.tooLargeToSend", {
+          // Base64 takes 4 bytes for every 3 of a file.
+          max: Math.floor((maxMessageBytes * 3) / 4 / (1024 * 1024)),
+        }),
+      );
+      return;
+    }
     const payload: SendImage[] | undefined =
       combined.length > 0 ? combined : undefined;
     onSend(trimmed, payload);
@@ -1061,7 +1142,7 @@ export function ThreadComposer({
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 2500);
     }
-  }, [canSend, clear, clearAudio, clearDocuments, isStreaming, onModelPick, onSend, promptHistory, readyDocuments, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, clearAudio, clearDocuments, isStreaming, maxMessageBytes, onModelPick, onSend, promptHistory, readyAudio, readyDocuments, readyImages, resizeTextarea, t, value]);
 
   const steer = useCallback(() => {
     const trimmed = value.trim();

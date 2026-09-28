@@ -294,9 +294,9 @@ goes on the child's `AgentRunSpec`, which is what turns on the runner's
 mid-turn precheck, history snip, pruning of old tool results near the limit and
 the window-scaled per-result cap for the child. The spec also carries the
 workspace the child's own tools read, so an oversized or pruned result is saved
-where the child can read it back —
-without the window the child had no input budget at all and a long research task ended
-in the provider's context-length error instead of durin's own compaction. Each
+where the child can read it back. Without a window a child has no input budget,
+and a long task would end in the provider's context-length error instead of
+durin's own compaction. Each
 finished child writes one `subagent.run` telemetry row (task id, label, model,
 window, stop reason, iterations, summed prompt/completion tokens, duration) into
 the spawning session's telemetry file, where the child's `provider.call` rows
@@ -453,8 +453,11 @@ that core it layers guards and context governance — loop detection on repeated
 failed calls, an unknown-tool breaker, an idle-timeout breaker, message
 sanitization (dropping orphan tool results, backfilling missing ones),
 per-result and per-turn tool-output budgets with spill-to-disk, and microcompact
-/ media pruning of the in-flight message list. Crucially these reshape only the
-copy sent to the model — the persisted transcript is untouched.
+/ media pruning of the in-flight message list. Message sanitization,
+microcompaction, media pruning and the precheck's trim reshape only the copy
+sent to the model; the per-result and per-turn budgets replace an oversized
+result in the run's own messages, so the saved transcript keeps the pointer to
+the full copy.
 
 **Context budget.** The input budget reserves only a *capped* output headroom
 (`_output_reservation`, not the full configured `max_tokens` ceiling), so a high
@@ -869,9 +872,9 @@ Two metadata splits matter:
   append that could only fit by evicting a manual anchor is rejected instead —
   still counted as a drop, so `decision_log.capped` records the loss.
 - **A finished goal still leaves a trace in the anchor.** A session rarely ends
-  when its goal does, and rendering only `status == "active"` erased the
-  session's stated purpose the moment it succeeded — work continued with no
-  objective in context at all. A completed goal now renders a compact
+  when its goal does, and rendering only `status == "active"` would erase the
+  session's stated purpose the moment it succeeded, leaving the work that
+  continues with no objective in context at all. A completed goal renders a compact
   `Goal (completed)` / `Outcome` pair (capped, `ui_summary` preferred over the
   full objective), and `complete_goal` additionally folds objective and recap
   into the decision log so they survive a later `long_task` overwriting the
@@ -889,10 +892,10 @@ distinct:
 | `_preemptive_ceiling` | `window − min(max_completion_tokens, cap) − 2×buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. |
 | `_preemptive_trigger_tokens` | `min(window × effective_ratio, ceiling)` | Where compaction actually fires. |
 
-Clamping the trigger against `_input_token_budget` instead of the ceiling is
-what made `preemptive_compact_ratio` inert: a model whose catalog `max_tokens`
-is a large fraction of its window (131,072 on a 231,072 window) pinned every
-ratio above ~0.43 to the same trigger, and raising the knob changed nothing.
+The trigger is clamped against `_preemptive_ceiling`, not
+`_input_token_budget`: the budget reserves the full completion ceiling, so on a
+model whose catalog `max_tokens` is a large fraction of its window it would pin
+every ratio above a low value to the same trigger.
 
 `effective_ratio` applies a **raise-only** floor below
 `_SMALL_CTX_WINDOW_LIMIT`. On a small window the incompressible part of a

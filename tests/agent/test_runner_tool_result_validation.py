@@ -123,6 +123,113 @@ async def test_runner_truncates_oversized_text_block_in_tool_result(tmp_path):
     assert "block truncated" in content[1]["text"]
 
 
+@pytest.mark.asyncio
+async def test_runner_saves_a_long_text_block_beside_an_image_whole(tmp_path):
+    """A result mixing an image with a long text cannot be saved as one text,
+    so its long text block is saved on its own: the model gets a pointer to
+    all of it, not a text cut at the block cap with the rest gone."""
+    from pathlib import Path
+
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import parse_persisted_reference
+
+    long_text = "".join(f"line {i}\n" for i in range(MAX_BLOCK_TEXT_CHARS // 5))
+    assert len(long_text) > MAX_BLOCK_TEXT_CHARS
+    tool_output = [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "text", "text": long_text},
+    ]
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="some_tool", arguments={})],
+                usage={},
+            )
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value=tool_output)
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=16_000,
+        workspace=tmp_path,
+    ))
+
+    content = next(m for m in result.messages if m.get("role") == "tool")["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "image_url"
+    reference = parse_persisted_reference(content[1]["text"])
+    assert reference is not None
+    saved = Path(reference[0]).read_text()
+    assert "line 0\n" in saved
+    assert f"line {MAX_BLOCK_TEXT_CHARS // 5 - 1}\n" in saved
+    assert len(content[1]["text"]) <= 16_000
+
+
+@pytest.mark.asyncio
+async def test_runner_saves_an_all_text_list_whole_past_the_block_cap(tmp_path):
+    """An all-text list over the cap is saved as one text, including a block
+    longer than the block cap: nothing is cut before the save."""
+    from pathlib import Path
+
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import parse_persisted_reference
+
+    long_text = "".join(f"line {i}\n" for i in range(MAX_BLOCK_TEXT_CHARS // 5))
+    tool_output = [
+        {"type": "text", "text": "small"},
+        {"type": "text", "text": long_text},
+    ]
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="some_tool", arguments={})],
+                usage={},
+            )
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value=tool_output)
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=16_000,
+        workspace=tmp_path,
+    ))
+
+    content = next(m for m in result.messages if m.get("role") == "tool")["content"]
+    reference = parse_persisted_reference(content)
+    assert reference is not None
+    saved = Path(reference[0]).read_text()
+    assert f"line {MAX_BLOCK_TEXT_CHARS // 5 - 1}\n" in saved
+    assert "block truncated" not in saved
+
+
 # ---------------------------------------------------------------------------
 # _coerce_tool_content — a dict result must not become an untyped block
 # (regression: z.ai 1214 `content[0].type: cannot be empty`).

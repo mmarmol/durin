@@ -231,8 +231,8 @@ anything.
 
 ### Optional extras and channel availability
 
-Some built-in channels depend on a third-party SDK that is not installed by
-default (Slack, Discord, Matrix today). Matrix and Slack both guard the SDK
+Some built-in channels depend on a third-party SDK that ships as a pip extra
+(Slack, Discord, Matrix). Matrix and Slack both guard the SDK
 import in a `try`/`except ImportError` block and set a module-level
 availability flag (`MATRIX_AVAILABLE`, `SLACK_AVAILABLE`) rather than letting
 the import fail. Discord instead probes with `importlib.util.find_spec`
@@ -311,10 +311,8 @@ The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
 `is_allowed`/pairing in its handlers. **Telegram, Slack, Discord, and
 WhatsApp are the reference implementations of this contract.** Several other
-channels still pre-filter with their own `is_allowed` check and early-`return`
-in their handlers (legacy behaviour, unchanged here — those messages never
-reach the gate); migrating them to pure transport so they route through the
-central gate is a follow-up. New channels should follow the
+channels pre-filter with their own `is_allowed` check and early-`return`, so
+those messages never reach the gate. New channels should follow the
 Telegram/Slack/Discord/WhatsApp model.
 
 Pure transport applies to *sender authorization* only — the gate owns who is
@@ -642,6 +640,15 @@ apply the same idiom: on transcription success, return an empty `media` list
 and the transcript as the bare user message text; on failure, return the audio
 path so the `interpret_audio` tool remains a usable fallback.
 
+The WebSocket channel applies it to audio attached to a message, the one path
+the dashboard's WebSocket frames and the HTTP send route share
+(`publish_chat_message` → `_transcribe_attached_audio`): the transcript joins
+the message text and the recording leaves `media`, and a failed transcription
+keeps the recording and names it in the text (`[audio: <path> — could not be
+transcribed]`). With `transcription.mode` set to `off` the recording is left in
+`media` untouched: the agent loop sends it as an `input_audio` block to a model
+that takes audio input, or tells the model where it was saved.
+
 ### WhatsApp bridge transport
 
 Unlike every other channel, WhatsApp's `start()` does not talk to the platform
@@ -875,8 +882,8 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `channels.send_tool_hints` | bool | `false` | Deliver tool-call hint messages (e.g. `read_file("…")`). Per-channel override allowed. |
 | `channels.show_reasoning` | bool | `true` | Route model reasoning content to channels that implement the reasoning primitives. Per-channel override allowed. |
 | `channels.send_max_retries` | int | `3` | Total delivery attempts (includes initial send). Range 0–10. |
-| `channels.transcription_provider` | str | `"groq"` | Voice transcription backend (`"groq"` or `"openai"`). Overridden by the `transcription.*` section for local/HTTP modes. |
-| `channels.transcription_language` | str or null | `null` | ISO-639-1 language hint for audio transcription (e.g. `"en"`). |
+| `channels.transcription_provider` | str | `"groq"` | Unused by the gateway: every channel transcribes with the one service built from the top-level `transcription` section. |
+| `channels.transcription_language` | str or null | `null` | Unused by the gateway: set the language under `transcription`. |
 
 ### Per-channel settings
 
@@ -892,7 +899,8 @@ keys accepted by most adapters:
 
 Channel-specific extensions:
 
-- **Telegram**: no additional permission fields beyond `allow_from`.
+- **Telegram**: no additional permission fields beyond `allow_from`, which
+  takes numeric user IDs or usernames (a leading `@` is ignored).
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
   trigger the bot (empty means all; a thread also matches its parent channel,
   so allowing a forum covers its posts). `group_policy` (`mention`/`open`),
@@ -1014,14 +1022,13 @@ the same from a worktree with no `PYTHONPATH` needed.
 ### Viewing non-websocket sessions in the webui
 
 The webui sidebar lists sessions from all channels (Telegram, CLI, subagent,
-etc.). Historically, clicking one returned a 404 because the rich per-session
-JSONL transcript used by the thread endpoint is written only by the websocket
-channel (through the batching `TranscriptWriter` in
-`durin/utils/webui_transcript.py`, fed from `durin/channels/websocket.py`).
-
-The thread endpoint (`GET /api/v1/sessions/{key}/webui-thread`) now falls back
-to the **universal session history** when no JSONL exists: it reads the
-OpenAI-format messages via `SessionManager.read_session_file` and converts them
+etc.). The rich JSONL transcript the thread endpoint reads is written only by
+the websocket channel (through the batching `TranscriptWriter` in
+`durin/utils/webui_transcript.py`, fed from `durin/channels/websocket.py`), so
+for any other session the thread endpoint
+(`GET /api/v1/sessions/{key}/webui-thread`) falls back to the **universal
+session history**: it reads the OpenAI-format messages via
+`SessionManager.read_session_file` and converts them
 to the webui `UIMessage` shape with `session_messages_to_ui_messages`
 (`durin/utils/webui_transcript.py`). The payload carries `"readOnly": true` so
 the frontend knows the session cannot be continued from the webui (the webui
@@ -1075,10 +1082,9 @@ Putting the gate at `MessageBus.publish_inbound` gives a single enforcement
 point that runs for every message a channel publishes — a pure-transport channel
 cannot publish an unauthorized message past it, even if it gets its own DM
 detection wrong, and the pairing logic lives in one place instead of being
-re-implemented per channel. (A channel that still pre-filters with its own
+re-implemented per channel. (A channel that pre-filters with its own
 `is_allowed` and early-returns short-circuits before publishing, so it never
-reaches the gate; that is the legacy pattern the pure-transport migration
-removes — Telegram first, then Slack and Discord.)
+reaches the gate.)
 
 **Why does stream coalescing key on `_stream_id` and not just `(channel,
 chat_id)`?** Channels like Telegram forum topics or Discord threads can have

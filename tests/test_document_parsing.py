@@ -534,3 +534,54 @@ def test_extract_documents_still_inlines_an_ordinary_pdf(tmp_path):
     assert "[error:" not in text
     assert "could not be read inline" not in text
     assert images == []
+
+
+def test_extract_documents_names_a_file_in_a_format_it_cannot_read(tmp_path):
+    # A legacy Word file, a video or any other format nothing converts used
+    # to vanish from the turn: the model never learned it had been sent.
+    from durin.utils.document import extract_documents
+
+    legacy = tmp_path / "report.doc"
+    legacy.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32)
+
+    text, media = extract_documents("hello", [str(legacy), str(clip)])
+
+    assert media == []
+    for f in (legacy, clip):
+        assert f"[File: {f.name} — could not be read inline" in text
+        assert f"Saved on disk at {f}]" in text
+    assert "not a format durin reads" in text
+
+
+def test_extract_documents_leaves_audio_for_the_content_builder(tmp_path):
+    # Audio is the content builder's to handle — sent to an audio-capable
+    # model as audio when transcription is off, or left to the transcript
+    # that replaced it. Dropping it here meant the builder never saw it.
+    from durin.utils.document import extract_documents
+
+    voice = tmp_path / "voice.wav"
+    voice.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 16)
+
+    text, media = extract_documents("hello", [str(voice)])
+
+    assert media == [str(voice)]
+    assert text == "hello"
+
+
+def test_extract_documents_tells_audio_by_extension_on_any_platform(tmp_path, monkeypatch):
+    # A dashboard recording is saved as .weba; a platform whose mimetypes
+    # table does not know it (Linux) must still keep it as audio.
+    import mimetypes
+
+    from durin.utils.document import extract_documents
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: (None, None))
+    voice = tmp_path / "voice.weba"
+    voice.write_bytes(b"\x1aE\xdf\xa3" + b"\x00" * 32)
+
+    text, media = extract_documents("hello", [str(voice)])
+
+    assert media == [str(voice)]
+    assert text == "hello"

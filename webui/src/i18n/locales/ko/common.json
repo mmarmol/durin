@@ -1310,7 +1310,7 @@
     "timeoutHint": "설정된 기본값을 사용합니다",
     "scriptEnv": "환경 변수",
     "scriptEnvClean": "정리됨 (최소 + DURIN_*)",
-    "scriptEnvInherit": "전체 환경 변수 상속",
+    "scriptEnvInherit": "게이트웨이 환경 상속(저장된 시크릿 제외)",
     "scriptSecrets": "시크릿",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "저장된 시크릿 이름이 환경 변수로 주입됩니다. 각각 'exec' 범위를 허용해야 합니다.",
@@ -2112,6 +2112,7 @@
         "too_large": "문서가 너무 큽니다 — 최대 25MB",
         "io": "이 파일을 읽을 수 없습니다"
       },
+      "tooLargeToSend": "첨부 파일이 너무 커서 함께 보낼 수 없습니다(합계 약 {{max}}MB까지). 하나를 제거한 뒤 다시 보내세요.",
       "planMode": "계획 모드 (읽기 전용)",
       "awaitingAnswer": "답변 대기 중"
     },

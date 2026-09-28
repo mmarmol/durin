@@ -279,8 +279,8 @@ class ExecToolConfig(Base):
     path_append: str = Field(default="", description="Directories appended to PATH for executed commands")
     sandbox: str = Field(default="", description="Optional sandbox wrapper command that executed commands run through; empty = no sandbox")
     allowed_env_keys: list[str] = Field(default_factory=list, description="Env var names passed into the subprocess in addition to the safe defaults")
-    allow_patterns: list[str] = Field(default_factory=list, description="Command patterns allowed to run")
-    deny_patterns: list[str] = Field(default_factory=list, description="Command patterns refused; deny wins over allow")
+    allow_patterns: list[str] = Field(default_factory=list, description="Regex patterns searched in the lowercased command; a match exempts it from the deny list, and while any are set a command matching none is refused")
+    deny_patterns: list[str] = Field(default_factory=list, description="Regex patterns added to the built-in deny list; a match refuses the command unless an allow pattern matches it")
 
 
 @tool_parameters(

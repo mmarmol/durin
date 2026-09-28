@@ -29,6 +29,35 @@ def test_runs_named_workflow_and_returns_final_output(tmp_path):
     assert out.final_output == "child-result"
 
 
+def test_a_nested_run_obeys_the_callers_visit_ceiling(tmp_path):
+    """workflow.max_node_visits is a ceiling no node exceeds; a nested run
+    took the engine's own default (1000) instead."""
+    _write(tmp_path, "child", {"name": "child", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "max_visits": 50, "next": "a"}]})
+    calls = []
+
+    def nr(req):
+        calls.append(req)
+        return NodeRunResponse(output="again", session_key=None, messages=[])
+
+    out = SubworkflowRunner(tmp_path, nr, judge_runner=None, max_node_visits=3)("child", "t")
+
+    assert out.status == "exhausted"
+    assert len(calls) == 3
+
+
+def test_a_nested_run_keeps_the_configured_number_of_manifests(tmp_path):
+    from durin.workflow import run_log
+
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None, prune_keep=2)
+    for _ in range(4):
+        assert runner("child", "t").status == "completed"
+
+    assert len(run_log.list_runs(tmp_path, "child")) == 2
+
+
 def test_missing_subworkflow_returns_error_not_raise(tmp_path):
     runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
     out = runner("ghost", "t")

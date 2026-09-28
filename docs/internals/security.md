@@ -652,14 +652,14 @@ private-URL guard — delays its own call while the event loop keeps serving
 other chats between the guard's steps. A single regex call holds the GIL for
 its duration, so the loop runs between pattern calls, not during one, and
 cannot be preempted mid-call. Several hard-floor/deny/memory-vault patterns
-used to be quadratic under an adversarial repeat of a common anchor word
+are quadratic under an adversarial repeat of a common anchor word
 ("rm "/"cp "/"sudo -x "/... thousands of times) with no trigger literal
-anywhere: each occurrence made the pattern rescan the rest of the command
+anywhere: each occurrence makes the pattern rescan the rest of the command
 before failing. A cheap literal pre-check (`_cheap_prefilter_ok`'s tables,
-`_guard_memory_mutation`'s own `"memory/"` check) now rules a pattern out in
+`_guard_memory_mutation`'s own `"memory/"` check) rules a pattern out in
 one linear pass whenever the literal its match requires is provably absent,
 without changing the pattern itself or what it refuses — that common-anchor
-case is cheap now, at any length. But the pre-check literal is only
+case is cheap at any length. But the pre-check literal is only
 necessary, not sufficient: for two of these patterns it is trivial to
 satisfy without a real match ever forming — `"rm -"` repeated (the
 rm-recursive hard-floor pattern needs only a literal `-` ahead) and one
@@ -756,10 +756,12 @@ same instinct: by default (`env: "clean"`, the node's default) the subprocess ge
 minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`,
 `TERM`, `TMPDIR`, `DURIN_HOME` — only those present) plus the `DURIN_*` run-metadata vars, keeping
 ambient provider keys and other gateway-process secrets out of the subprocess. A node
-can opt into `env: "inherit"` to get the full gateway process environment
-(`dict(os.environ)`) instead — consistent with the same local-trust model, but a
-per-node choice rather than the default. Neither mode carries **stored secrets** —
-those live in the secret store, never the gateway environment. A node that must
+can opt into `env: "inherit"` to get the gateway process environment instead —
+consistent with the same local-trust model, but a per-node choice rather than the
+default. Neither mode carries **stored secrets**: the gateway's environment also
+holds credentials it loaded from the store for its own clients (provider API keys
+set by the provider setup), so `inherit` leaves out every variable whose value is
+a stored secret. A node that must
 authenticate declares the names it needs in `secrets`: each is injected only when
 the store entry's `scope` allows the `exec` consumer (the same grant `ExecTool`'s
 auto-injection honours), an unknown or scope-denied name aborts the run pre-flight,

@@ -223,6 +223,13 @@ def build_openai_routes(
     # Strong references: a detached turn must not be garbage-collected.
     running: set[asyncio.Task] = set()
 
+    def _live_model() -> str:
+        """The model the agent runs now. The dashboard's model picker switches
+        it without a restart; ``model_name`` (the one at gateway start) is the
+        fallback when the loop reports none."""
+        live = getattr(agent_loop, "model", None)
+        return live if isinstance(live, str) and live else model_name
+
     async def _no_progress(*_a: Any, **_kw: Any) -> None:
         # The OpenAI format has no place for progress. Without a callback the
         # loop would publish it for a nonexistent "api" channel, which logs a
@@ -326,7 +333,7 @@ def build_openai_routes(
                 "object": "list",
                 "data": [
                     {
-                        "id": model_name,
+                        "id": _live_model(),
                         "object": "model",
                         "created": 0,
                         "owned_by": "durin",
@@ -378,7 +385,7 @@ def build_openai_routes(
             usage = _add_usage(usage, _response_usage(retry))
             if not response_text.strip():
                 response_text = EMPTY_FINAL_RESPONSE_MESSAGE
-        return JSONResponse(_chat_completion_response(response_text, model_name, usage))
+        return JSONResponse(_chat_completion_response(response_text, _live_model(), usage))
 
     def _stream_response(
         text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
@@ -430,7 +437,7 @@ def build_openai_routes(
                         continue
                     if token is None:
                         break
-                    yield _sse_chunk(token, model_name, chunk_id)
+                    yield _sse_chunk(token, _live_model(), chunk_id)
                 err = _turn_error(task, state, session_key)
                 if err is not None:
                     _status, message, err_type = err
@@ -438,7 +445,7 @@ def build_openai_routes(
                     yield f"data: {json.dumps(frame)}\n\n".encode()
                 else:
                     yield _sse_chunk(
-                        "", model_name, chunk_id, finish_reason="stop", usage=usage,
+                        "", _live_model(), chunk_id, finish_reason="stop", usage=usage,
                     )
                     yield _SSE_DONE
                 finished = True
@@ -450,7 +457,9 @@ def build_openai_routes(
         return StreamingResponse(
             _gen(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache"},
+            # X-Accel-Buffering: a buffering reverse proxy (nginx) would
+            # otherwise hold every chunk until the turn ends.
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def _parse_multipart(
@@ -507,9 +516,10 @@ def build_openai_routes(
         except FileSizeExceeded as e:
             return _error_json(413, str(e))
 
-        if requested_model and requested_model != model_name:
+        current_model = _live_model()
+        if requested_model and requested_model != current_model:
             return _error_json(
-                400, f"Only configured model '{model_name}' is available"
+                400, f"Only configured model '{current_model}' is available"
             )
 
         session_key = (

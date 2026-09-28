@@ -29,7 +29,7 @@ The distribution name on PyPI is **`durin-agent`** — the CLI command stays
 ### From PyPI (recommended for users)
 
 durin supports **Python 3.11–3.13** (`requires-python = ">=3.11,<3.14"`).
-Its heavy extras (`local`, `memory`, `cross-encoder`) pull packages whose
+Its heavy extras (`memory`, `cross-encoder`, `ocr`) pull packages whose
 prebuilt wheels lag new Python releases, so installing under a too-new
 interpreter can fail or silently compile from source. **`uv` handles that
 for you** — it reads `requires-python` and picks (or downloads) a
@@ -102,16 +102,16 @@ pip install -e ".[memory,mcp,web]"
 | `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
 | `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. On slim Linux images the bundled OpenCV needs libGL at runtime — `apt install libgl1` (or your distro's equivalent). A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
-| `mcp` | `mcp` | Use durin as an MCP server. |
+| `mcp` | `mcp` | Connect to MCP servers (durin is the MCP client). |
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
 | `discord` | `discord.py` | Discord channel. |
 | `matrix` | `matrix-nio`, `mistune`, `nh3` | Matrix channel (unencrypted rooms only). |
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
-| `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
 | `stt` | `sherpa-onnx`, `av` (PyAV), `numpy` | Local audio transcription. PyAV bundles ffmpeg — no system ffmpeg required. Two engines selectable via config (see below). Models download on first use and are cached under `<durin_home>/models/stt/`. Prebuilt wheels for macOS arm64, Linux x86_64/aarch64, Windows x86_64. |
 | `voice` | `sounddevice` (PortAudio) | TUI microphone recording (`/voice`). macOS/Windows bundle PortAudio; Linux needs `apt install libportaudio2` (or your distro's equivalent). |
 | `tts` | `supertonic`, `onnxruntime` | Local on-CPU text-to-speech (Supertonic, ONNX). Self-downloads the model (~260 MB) on first use. |
+| `api` | `starlette`, `uvicorn`, `python-multipart` | Adds nothing: these packages are already base dependencies of the gateway. |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
 
 #### Audio transcription
@@ -123,10 +123,12 @@ minimal and the transcript is editable before you send.
 The default provider is **local** (`[stt]` extra, no API key, works offline).
 Two local engines are available:
 
-| Engine | Model | Languages | Speed |
-|---|---|---|---|
-| `parakeet` (default) | Parakeet TDT 0.6B v3 | 25 European languages incl. English and Spanish | ~30× real-time on CPU |
-| `sensevoice` | SenseVoice-Small | Chinese, Japanese, Korean, Cantonese, English | Very fast |
+| Engine | Model | Languages |
+|---|---|---|
+| `parakeet` (default) | Parakeet TDT 0.6B v3 | European languages, including English and Spanish |
+| `sensevoice` | SenseVoice-Small | Chinese, Japanese, Korean, Cantonese, English |
+
+Both run on the CPU.
 
 > **Note:** `parakeet` does not support Japanese or Chinese. Use `sensevoice`
 > or a cloud provider for those languages.
@@ -159,8 +161,11 @@ HTTP server via the `transcription` config section:
 - `auto` (default) — transcribe and insert the text into the input; you can
   edit it before sending.
 - `preview` — show the transcript with Accept/Re-try/Discard.
-- `off` — attach the audio raw (no transcription); use this if you want the
-  agent's `interpret_audio` tool to send it natively to a multimodal aux model.
+- `off` — no transcription: a recorded or attached clip is sent as it is. It
+  reaches the chat model as audio when the model accepts audio input.
+  Otherwise the model is told the audio was not transcribed and where it was
+  saved, so it can hand the file to its `interpret_audio` tool, which sends it
+  to a multimodal aux model (the tool exists when `aux_models.audio` is set).
 
 Run `durin doctor` to verify your STT setup (`stt.installed`,
 `stt.cloud_keys` checks).

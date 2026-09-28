@@ -42,6 +42,19 @@ describe("resolveDocumentMime", () => {
     expect(isDocumentFile(file("a.png", "image/png"))).toBe(false);
     expect(isDocumentFile(file("a.pdf", ""))).toBe(true);
   });
+
+  it("rejects the legacy Word and PowerPoint formats no converter reads", () => {
+    expect(resolveDocumentMime(file("old.doc", "application/msword"))).toBeNull();
+    expect(resolveDocumentMime(file("old.doc", ""))).toBeNull();
+    expect(
+      resolveDocumentMime(file("deck.ppt", "application/vnd.ms-powerpoint")),
+    ).toBeNull();
+    expect(resolveDocumentMime(file("deck.ppt", ""))).toBeNull();
+    // Legacy Excel is read (markitdown's xls converter).
+    expect(resolveDocumentMime(file("sheet.xls", ""))).toBe(
+      "application/vnd.ms-excel",
+    );
+  });
 });
 
 describe("useAttachedDocuments", () => {

@@ -1310,7 +1310,7 @@
     "timeoutHint": "使用已設定的預設值",
     "scriptEnv": "環境變數",
     "scriptEnvClean": "乾淨（僅基本 + DURIN_*）",
-    "scriptEnvInherit": "繼承完整環境",
+    "scriptEnvInherit": "繼承閘道環境（不含已儲存的密鑰）",
     "scriptSecrets": "密鑰",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "已儲存的密鑰名稱會作為環境變數注入。每一個都必須允許 'exec' 範圍。",
@@ -2112,6 +2112,7 @@
         "too_large": "文件太大——上限為 25 MB",
         "io": "無法讀取這個檔案"
       },
+      "tooLargeToSend": "這些附件合計過大，無法一起傳送（總計約 {{max}} MB）。請移除一個後重新傳送。",
       "planMode": "計畫模式（唯讀）",
       "awaitingAnswer": "等待您的回答"
     },

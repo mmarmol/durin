@@ -180,9 +180,9 @@ is now the one thing standing between "one worker" and the resource pressure
 that kills workers. Left alone, that row would stay `running` forever and the
 cap's own `COUNT` would keep counting it, wedging every later job of this
 kind behind a row nothing is ever going to finish; gateway startup's
-`reconcile` sweep ([below](#restart-reconciliation)) is the only other place
-that would ever clean it, and that could be hours away. So a cap-refused
-claim runs the same `reconcile(alive=pid_alive)` probe right where it is —
+`reconcile` sweep ([below](#restart-reconciliation)) and the [periodic
+sweep](#the-periodic-sweep) are the other places that clean it. A cap-refused
+claim also runs the same `reconcile(alive=pid_alive)` probe right where it is —
 inside `ocr_worker.run_job`, at the exact moment someone is actually being
 blocked by a stale holder — and retries the claim once if reconcile requeued
 anything. A dead holder is cleaned at exactly the moment its absence matters;
@@ -191,17 +191,10 @@ for the ordinary reason. This accepts the same edge gateway startup's own
 `reconcile` call already does: the 6h age fallback can requeue a holder that
 is genuinely alive but slow, briefly letting two workers hold one job —
 `finish`'s `pid` guard and `record_unit`'s idempotence are what keep that
-window safe, not this retry. The edge's *likelihood* has since changed twice,
-while nothing about its safety has. `reconcile` used to run only at gateway
-startup, so a job running past 6h tripped the fallback only if a restart
-happened to land during that window. This self-heal made every cap refusal
-run it too, so a >6h job with a sibling queued behind it trips the fallback
-the moment that sibling's worker is spawned and refused. The [periodic
-sweep](#the-periodic-sweep) then removed the last of the conditionality: it
-runs `reconcile` on a 60-second timer regardless of what else is happening, so
-*any* job crossing 6h is requeued within a minute of doing so — no sibling, no
-refusal and no restart required. Plan for a legitimately >6h job to be taken
-over, not for it to be rare.
+window safe, not this retry. `reconcile` runs at gateway startup, on every
+cap refusal, and on the periodic sweep's timer, so *any* job crossing 6h is
+requeued within a minute. Plan for a legitimately >6h job to be taken over,
+not for it to be rare.
 
 A worker looks for more work before it exits, from each exit where the slot
 it held is plausibly nobody else's to hand off: its own `finish()`
@@ -280,9 +273,9 @@ way. Failing at the check says so before spending the OCR, and leaves
 
 ### Restart reconciliation
 
-A gateway restart used to strand a `process_registry.py`-tracked background
-`exec` forever (documented there as a known limitation); jobs fix this for
-their own rows. On every gateway start, `AgentLoop.run()`
+A gateway restart orphans a `process_registry.py`-tracked background `exec`
+(a limitation documented there); jobs recover their own rows. On every gateway
+start, `AgentLoop.run()`
 (`durin/agent/loop.py`) calls `JobRegistry.reconcile(alive=pid_alive)` before
 serving any traffic. `reconcile` finds every `running` row and requeues it
 (clearing `pid`/`started_at`, keeping its finished units) when either:
@@ -345,15 +338,15 @@ capped `queued_jobs` pickup — every `_JOB_SWEEP_INTERVAL_S` (60 seconds,
 event-loop thread: the pass opens SQLite and may `Popen` a worker, and the
 same process is serving chat.
 
-It exists because the concurrency cap turned one hard kill into a stalled
+It exists because the concurrency cap would turn one hard kill into a stalled
 queue. A worker killed outright — SIGKILL, an OOM kill, a `kill -9` — never
 reaches its chain call, so nothing launches the next job; its row keeps
 `running` with a dead `pid`, which holds the cap's only slot, so a worker that
-does get launched has its claim refused; and neither of the two self-heals
-covers that state, because `run_job`'s inline `reconcile` fires only when a
+does get launched has its claim refused; and the other two self-heals do not
+cover that state, because `run_job`'s inline `reconcile` fires only when a
 *new* worker is refused a claim, and the startup one fires only at startup.
-Until a fresh ingest arrived or someone restarted the gateway, the whole
-queue behind that dead holder waited. One sweep tick undoes it: `reconcile`
+Without the sweep, the whole queue behind that dead holder would wait for a
+fresh ingest or a gateway restart. One sweep tick undoes it: `reconcile`
 requeues the dead holder and the pickup launches workers again.
 
 Each tick is guarded on its own, and a failure is logged (`periodic job sweep

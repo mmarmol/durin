@@ -21,6 +21,9 @@ export interface AttachedAudio {
    * ``remove`` / ``clear`` / unmount. */
   previewUrl: string;
   status: AudioAttachmentStatus;
+  /** The recording as a base64 ``data:`` URL, set when it is sent as an
+   * attachment (transcription off) rather than transcribed. */
+  dataUrl?: string;
   /** Duration in seconds, populated lazily by the player if needed. */
   durationS?: number;
   error?: string;
@@ -39,6 +42,8 @@ export interface UseAttachedAudioApi {
   /** Update the status of a specific attachment by id. Used to reflect
    * server-side transcription progress phases. */
   setStatus: (id: string, status: AudioAttachmentStatus) => void;
+  /** Store the recording's data URL, for sending it as an attachment. */
+  setDataUrl: (id: string, dataUrl: string) => void;
   remove: (id: string) => void;
   /** Revoke every staged blob URL and drop all attachments. Called after a
    * successful submit. */
@@ -180,6 +185,17 @@ export function useAttachedAudio(): UseAttachedAudioApi {
     });
   }, []);
 
+  const setDataUrl = useCallback((id: string, dataUrl: string) => {
+    setAudio((prev) => {
+      const idx = prev.findIndex((a) => a.id === id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], dataUrl };
+      audioRef.current = next;
+      return next;
+    });
+  }, []);
+
   const full = audio.length >= MAX_AUDIO_PER_MESSAGE;
-  return { audio, enqueue, setStatus, remove, clear, full };
+  return { audio, enqueue, setStatus, setDataUrl, remove, clear, full };
 }

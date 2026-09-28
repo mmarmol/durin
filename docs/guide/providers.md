@@ -260,6 +260,12 @@ simply uses the same model as regular chat.
 
 No `api_base` needed — the native Anthropic SDK uses its built-in endpoint.
 
+Claude models newer than the 4.6 generation (any `claude-*` id other than
+Claude 2, 3 or Instant and Opus/Sonnet/Haiku 4.0–4.6) take no `temperature`
+(durin does not send one) and think adaptively: `reasoning_effort` `low`, `medium`, `high`,
+`xhigh` or `max` sets the effort level, `adaptive` leaves it to the model, and
+`none` turns thinking off unless the model always thinks.
+
 ### OpenAI
 
 ```json
@@ -415,5 +421,5 @@ python -c "from durin.config.schema import ProvidersConfig; print(list(Providers
 The most common starting points are `anthropic`, `openai`, `openrouter`,
 `gemini`, and `ollama` for local inference. The full set also includes
 `deepseek`, `groq`, `zhipu`, `dashscope`, `moonshot`, `mistral`, `minimax`,
-`gemini`, `bedrock`, `azure_openai`, `huggingface`, `vllm`, `lm_studio`, and
+`bedrock`, `azure_openai`, `huggingface`, `vllm`, `lm_studio`, and
 several others — run the command above for the complete current list.

@@ -273,6 +273,116 @@ async def test_message_with_document_forwards_saved_path(tmp_path) -> None:
     assert saved.suffix == ".pdf"
 
 
+def _transcription(mode: str, text: str) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        mode=mode,
+        transcribe_and_cache=AsyncMock(return_value=SimpleNamespace(text=text)),
+    )
+
+
+async def _send_audio(
+    channel: WebSocketChannel, tmp_path: Path, mime: str = "audio/wav",
+) -> None:
+    envelope = {
+        "type": "message",
+        "chat_id": "abc123",
+        "content": "about this",
+        "media": [{"data_url": _data_url(mime, b"RIFF----WAVE"), "name": "v.wav"}],
+    }
+    with patch("durin.channels.websocket.get_media_dir", return_value=tmp_path):
+        await channel._dispatch_envelope(AsyncMock(), "client-1", envelope)
+
+
+@pytest.mark.asyncio
+async def test_attached_audio_reaches_the_agent_as_its_transcript(tmp_path) -> None:
+    """Like every channel's voice path: the transcript joins the message and
+    the recording leaves the media, so the agent reads what was said."""
+    channel = _make_channel()
+    channel.transcription = _transcription("auto", "hello there")
+
+    await _send_audio(channel, tmp_path)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["content"] == "about this\n\nhello there"
+    assert not kwargs["media"]
+
+
+@pytest.mark.asyncio
+async def test_a_browser_recording_is_transcribed_on_any_platform(tmp_path, monkeypatch) -> None:
+    """MediaRecorder's audio/webm is saved as .weba; a platform whose
+    mimetypes table does not know that extension (Linux) still treats the
+    file as audio."""
+    import mimetypes
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: (None, None))
+    monkeypatch.setattr(mimetypes, "guess_extension", lambda *a, **k: None)
+    channel = _make_channel()
+    channel.transcription = _transcription("auto", "hello there")
+
+    await _send_audio(channel, tmp_path, mime="audio/webm")
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["content"] == "about this\n\nhello there"
+    assert not kwargs["media"]
+
+
+@pytest.mark.asyncio
+async def test_untranscribed_audio_is_named_for_the_agent(tmp_path) -> None:
+    """A failed transcription leaves the recording in the media and names it
+    in the text, so the agent can still hand it to interpret_audio."""
+    channel = _make_channel()
+    channel.transcription = _transcription("auto", "")
+
+    await _send_audio(channel, tmp_path)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    (saved,) = kwargs["media"]
+    assert saved.endswith(".wav")
+    assert f"[audio: {saved} — could not be transcribed]" in kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_audio_is_left_whole_with_transcription_off(tmp_path) -> None:
+    """With transcription off the recording stays as it is: the agent loop
+    sends it to a model that takes audio."""
+    channel = _make_channel()
+    service = _transcription("off", "")
+    channel.transcription = service
+
+    await _send_audio(channel, tmp_path)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["content"] == "about this"
+    assert len(kwargs["media"]) == 1
+    service.transcribe_and_cache.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mime", ["application/msword", "application/vnd.ms-powerpoint"])
+@pytest.mark.asyncio
+async def test_message_rejected_on_a_legacy_office_mime(tmp_path, mime) -> None:
+    """A legacy .doc/.ppt is refused at the door: no converter reads it, so
+    accepting it would hand the agent a file it cannot open."""
+    channel = _make_channel()
+    mock_conn = AsyncMock()
+    envelope = {
+        "type": "message",
+        "chat_id": "abc123",
+        "content": "read this",
+        "media": [{"data_url": _data_url(mime, b"\xd0\xcf\x11\xe0"), "name": "old.doc"}],
+    }
+
+    with patch(
+        "durin.channels.websocket.get_media_dir", return_value=tmp_path
+    ):
+        await channel._dispatch_envelope(mock_conn, "client-1", envelope)
+
+    channel._handle_message.assert_not_awaited()
+    err = json.loads(mock_conn.send_text.call_args[0][0])
+    assert err["reason"] == "mime"
+
+
 @pytest.mark.asyncio
 async def test_message_rejected_on_svg_mime(tmp_path) -> None:
     """SVG is explicitly rejected — XSS surface inside embedded scripts."""

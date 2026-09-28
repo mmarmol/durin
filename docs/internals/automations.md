@@ -12,19 +12,12 @@ what makes that graph *stand*: it keeps re-firing on events or a clock after the
 conversation that defined it has ended, until its own life condition (if any) says
 it's done.
 
-Automations replace the **loops** subsystem, which has been deleted from this
-codebase (`docs/internals/loop.md` is the unrelated per-turn agent-loop doc; there is
-no loops document any more). The shape carries over — triggers bound to a workflow
-body, a delivery/help lane, an optional goal condition, chaining, single-concurrency
-queueing, claim-based conversation resumption — but three things changed at the
-cutover: outcome classification is now **deterministic**, derived straight from the
-workflow's own `WorkflowResult` (`durin.automations.classify`) instead of a
-separate LLM goal-judge call; the trigger vocabulary (channel filters, `semantic`,
-`correlate`) is shared verbatim with **webhook** triggers instead of being
-channel-only; and the object itself is named for what it *is* (a binding, "an
-automation") rather than for its execution shape ("a loop"). A workspace that still
-has an on-disk `loops/` directory when the gateway boots is migrated automatically —
-see §4f — so no manual conversion step exists.
+Automations bind triggers to a workflow body, with a delivery/help lane, an optional
+goal condition, chaining, single-concurrency queueing and claim-based resumption.
+Outcomes are classified deterministically from the workflow's own `WorkflowResult`
+(`durin.automations.classify`), and webhook triggers share `semantic` and
+`correlate` with channel triggers (`filters` and `match` stay channel-only). A workspace that still has a
+`loops/` directory is migrated automatically at gateway boot — see §4f.
 
 For *when* an automation earns its place over a plain cron job, a `run_workflow`
 call, or just doing the task now, see the `automations` skill
@@ -508,10 +501,10 @@ runs directory is renamed into place verbatim. `run_log` therefore normalizes
 legacy records at read time — `loop` becomes `automation`, a `cause` is
 synthesized from the old `source`/`task` pair, and the loops status
 vocabulary maps onto the automations one (`done`/`no_goal` → `completed`,
-`error` → `failed`, the operator-parked states → `interrupted`, since the
-system that could resume them no longer exists). Disk is never rewritten, so
-records restored from old backups normalize the same way, and the orphan
-sweep sees legacy `running` records it previously skipped.
+`error` → `failed`, the operator-parked states → `interrupted`, since
+nothing resumes them). Disk is never rewritten, so records restored from old
+backups normalize the same way, and the orphan sweep also sees legacy
+`running` records.
 
 A pre-existing `loops/*.json` is parsed by
 `durin.automations._legacy_loop_spec.parse_loop` — a frozen copy of the deleted
@@ -601,7 +594,7 @@ See `docs/internals/observability.md` for the telemetry pipeline these events fe
 
 ### Config keys
 
-`agents.automations` (`AutomationsConfig`):
+`automations` (`AutomationsConfig`):
 
 | Key | Default | Description |
 |---|---|---|
@@ -609,10 +602,10 @@ See `docs/internals/observability.md` for the telemetry pipeline these events fe
 | `automations.queue_ttl_s` | `3600` | How long a queued channel/webhook event stays fresh before the drain hook drops it unfired |
 | `agents.aux_models.automations` | unset | Model preset for the `semantic` trigger-filter judge; unset rides whatever model is live in the interactive session by default rather than a separately resolved default preset |
 
-**Legacy, migration-only.** `agents.loops` (`LoopsConfig`) and
-`agents.aux_models.loops` no longer configure anything at runtime — the subsystem
-they governed is deleted. Their `keep_runs`/`queue_ttl_s`/model fields are read
-exactly once, at config load, to populate the matching `automations.*` field when a
+**Legacy, migration-only.** `loops` (`LoopsConfig`, a root field) and
+`agents.aux_models.loops` configure nothing at runtime. Their
+`keep_runs`/`queue_ttl_s`/model fields are read exactly once, at config load, to
+populate the matching `automations.*` field when a
 config file sets the legacy key and leaves the new one unset; `loops.check_timeout_s`
 has no automations equivalent (automations classifies a run's outcome from the
 workflow's own result, not a separately timed goal-check pass) and is never
@@ -627,11 +620,10 @@ legitimate, but a definition can only be written through the door that validates
 and versions it: the
 `automations` tool's `create`/`enable`/`pause` actions, the webui's automations
 editor, or a script calling the HTTP API directly — see the guide's "Managing
-automations today". All three ultimately call the same `save_automation()` store
+automations". All three ultimately call the same `save_automation()` store
 function (directly for the agent tool; through `AutomationsService.save` /
 `PUT /api/v1/automations/{name}` for the webui editor and direct API callers), so
-validation and versioning happen exactly once regardless of the door. This closes
-the same gap that once let workflow edits land unvalidated and unversioned.
+validation and versioning happen exactly once regardless of the door.
 `.approvals/` and `.durin/import-quarantine/` sit in the same denied list for a
 different reason: neither owns a write door at all. Approval records are written
 only by the server, and the quarantine only by `skill_import`'s fetch step; a

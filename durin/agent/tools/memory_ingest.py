@@ -201,8 +201,8 @@ class MemoryIngestTool(Tool, ContextAware):
             ref = await asyncio.to_thread(
                 self._create_reference, source_path=source, content=result["content"])
 
-        # C1: emit `id` + `reference` FIRST so they survive the 16 KB head
-        # truncation on large docs — the agent (and the dream) read the
+        # Emit `id` + `reference` FIRST so they stay in view when a large doc's
+        # result is capped to its head — the agent (and the dream) read the
         # `reference:<slug>` to link the entity back to its source. `content`
         # (the whole doc) goes last for the same reason. The pending-job keys
         # lead for the same reason: they are what the agent must act on.

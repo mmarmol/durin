@@ -24,6 +24,22 @@ MAX_FILE_SIZE = DEFAULT_MAX_BYTES
 _DATA_URL_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,(.+)$", re.DOTALL)
 
 
+# The extension each accepted audio MIME type is saved with. The platform's
+# ``mimetypes.guess_extension`` has no answer for some of them, and its answer
+# for others varies; saved as ``.bin`` (or ``.webm``, read as video), a
+# recording would no longer read as audio to the agent loop.
+_AUDIO_EXTENSIONS = {
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
+    "audio/wav": ".wav",
+    "audio/webm": ".weba",
+    "audio/x-m4a": ".m4a",
+    "audio/aac": ".aac",
+    "audio/flac": ".flac",
+}
+
+
 class FileSizeExceeded(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """Raised when a decoded payload exceeds the caller's size limit."""
 
@@ -61,7 +77,11 @@ def save_base64_data_url(
     if filename_hint:
         ext = Path(filename_hint).suffix.lower()
     if not ext:
-        ext = mimetypes.guess_extension(mime_type) or ".bin"
+        ext = (
+            _AUDIO_EXTENSIONS.get(mime_type)
+            or mimetypes.guess_extension(mime_type)
+            or ".bin"
+        )
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = media_dir / safe_filename(filename)
     dest.write_bytes(raw)

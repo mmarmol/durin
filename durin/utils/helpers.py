@@ -2,6 +2,7 @@
 
 import base64
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -229,6 +230,30 @@ def safe_filename(name: str) -> str:
 def image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
     """Build an image placeholder string."""
     return f"[image: {path}]" if path else empty
+
+
+# Extensions durin saves and reads as audio. The platform's mimetypes table
+# varies (Linux's knows no ``.weba``, the extension a browser recording is
+# saved with), so whether a file is audio must not depend on it alone.
+AUDIO_SUFFIXES = frozenset({
+    ".mp3", ".ogg", ".oga", ".opus", ".wav", ".weba", ".m4a", ".aac", ".flac",
+})
+
+
+def is_audio_path(path: str) -> bool:
+    """True for a file durin treats as audio: one of :data:`AUDIO_SUFFIXES`,
+    or any extension the platform's mimetypes table calls audio."""
+    if Path(path).suffix.lower() in AUDIO_SUFFIXES:
+        return True
+    return (mimetypes.guess_type(path)[0] or "").startswith("audio/")
+
+
+def media_placeholder_text(path: str) -> str:
+    """Placeholder for an attachment kept as a path: ``[audio: path]`` for
+    audio, ``[image: path]`` for the images that are the rest of it."""
+    if is_audio_path(path):
+        return f"[audio: {path}]"
+    return image_placeholder_text(path)
 
 
 def truncate_text(text: str, max_chars: int, direction: str = "head") -> str:

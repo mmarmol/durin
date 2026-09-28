@@ -110,6 +110,24 @@ def test_file_input_workflow_with_files_keeps_task_unchanged(tmp_path):
     assert calls and calls[0].task == "the task"
 
 
+def test_the_seeds_declare_only_io_descriptors_durin_reads():
+    """An I/O descriptor key nothing reads is a promise the workflow does not
+    keep: debug and review-changes declared "files", which neither the engine
+    (it reads "file", as required input) nor the launch form sees."""
+    import json
+    from pathlib import Path
+
+    import durin
+
+    known = {"text", "file", "description", "artifacts"}
+    seeds = Path(durin.__file__).parent / "templates" / "workflows"
+    for path in sorted(seeds.glob("*.json")):
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        for side in ("input", "output"):
+            unknown = set(spec.get(side) or {}) - known
+            assert not unknown, f"{path.name} {side}: {sorted(unknown)}"
+
+
 def test_per_node_max_visits_overrides_workflow_default():
     # workflow default max_visits=5, but node 'a' caps itself at 2.
     wf = parse_workflow({

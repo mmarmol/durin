@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from durin.providers.capabilities import (
     ModelCapabilities,
     _candidate_keys,
     _heuristic_capabilities,
+    _load_capabilities_snapshot,
     get_model_capabilities,
     known_models_count,
 )
@@ -63,25 +66,47 @@ def test_candidate_keys_empty_for_empty_model():
 # ---------------------------------------------------------------------------
 
 
+def _snapshot_model(prefix: str, **flags: bool) -> str:
+    """A snapshot model named ``prefix…`` whose entry has ``flags``.
+
+    Read from the vendored snapshot at test time: the weekly refresh adds and
+    drops models, so a pinned id would turn a data refresh into a red build.
+    Skips when this snapshot has no such model.
+    """
+    snap = _load_capabilities_snapshot()
+    for key in sorted(snap):
+        entry = snap[key]
+        if key.startswith(prefix) and all(
+            bool(entry.get(flag)) is value for flag, value in flags.items()
+        ):
+            return key
+    pytest.skip(f"no {prefix}* model with {flags} in this snapshot")
+
+
 def test_lookup_claude_opus_has_vision():
-    caps = get_model_capabilities("claude-opus-4-5", "anthropic")
+    model = _snapshot_model("claude-opus-", supports_vision=True, supports_function_calling=True)
+    caps = get_model_capabilities(model, "anthropic")
     assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_function_calling is True
     assert caps.max_input_tokens and caps.max_input_tokens > 100_000
 
 
-def test_lookup_gpt4o_has_vision():
-    caps = get_model_capabilities("gpt-4o", "openai")
+def test_lookup_gpt_has_vision():
+    model = _snapshot_model("gpt-", supports_vision=True, supports_function_calling=True)
+    caps = get_model_capabilities(model, "openai")
     assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_function_calling is True
 
 
 def test_lookup_gemini_picks_up_full_multimodal_set():
-    """Gemini 2.0 Flash should surface vision + audio + video from the
-    consensus snapshot (Gemini publishes all three input modalities)."""
-    caps = get_model_capabilities("gemini-2.0-flash", "google")
+    """A Gemini model publishing vision + audio + video input surfaces all
+    three from the consensus snapshot."""
+    model = _snapshot_model(
+        "gemini-", supports_vision=True, supports_audio_input=True, supports_video_input=True,
+    )
+    caps = get_model_capabilities(model, "google")
     assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_audio_input is True
@@ -92,21 +117,28 @@ def test_lookup_glm_primary_reports_no_vision():
     """The user's primary pain point: regular GLM models don't do vision.
     The consensus snapshot must confirm so callers can choose to wire
     a vision aux model."""
-    caps = get_model_capabilities("glm-5.1", "custom")
+    model = _snapshot_model("glm-", supports_vision=False)
+    caps = get_model_capabilities(model, "custom")
     assert caps.source == "snapshot"
     assert caps.supports_vision is False
 
 
 def test_lookup_glm_vision_variant_reports_vision():
-    """And the vision variant must report ``vision=True`` — that's the
+    """And a vision variant must report ``vision=True`` — that's the
     bridge target the user configures as ``aux_models.vision``."""
-    caps = get_model_capabilities("glm-5v-turbo", "custom")
+    model = _snapshot_model("glm-", supports_vision=True)
+    caps = get_model_capabilities(model, "custom")
     assert caps.source == "snapshot"
     assert caps.supports_vision is True
-    # Also: audio remains False after aggregator filtering — historically
-    # 302ai erroneously declared audio on this model; the vendor filter
-    # excludes 302ai so we get the honest answer.
-    assert caps.supports_audio_input is False
+
+
+def test_an_aggregators_false_audio_claim_stays_out_of_the_snapshot():
+    """302ai once declared audio for glm-5v-turbo, a Zhipu model without it.
+    Only first-party vendor publications feed the snapshot, so the honest
+    answer survives while the model is in it."""
+    if "glm-5v-turbo" not in _load_capabilities_snapshot():
+        pytest.skip("glm-5v-turbo is not in this snapshot")
+    assert get_model_capabilities("glm-5v-turbo", "custom").supports_audio_input is False
 
 
 def test_aggregator_keys_resolve_via_underlying_model():
@@ -115,18 +147,19 @@ def test_aggregator_keys_resolve_via_underlying_model():
     canonical-key fallback strips the prefix so the underlying model
     still resolves correctly. This means consumers don't need to
     pre-strip aggregator prefixes themselves."""
-    caps = get_model_capabilities("kilo/z-ai/glm-5v-turbo", None)
-    # Resolves via the canonical glm-5v-turbo entry from the snapshot.
+    model = _snapshot_model("glm-", supports_vision=True)
+    caps = get_model_capabilities(f"kilo/z-ai/{model}", None)
+    # Resolves via the canonical bare entry from the snapshot.
     assert caps.source == "snapshot"
     assert caps.supports_vision is True
     # And the snapshot itself does NOT have the aggregator slug as a
     # direct key — verify by querying the loader.
-    from durin.providers.capabilities import _load_capabilities_snapshot
     snap = _load_capabilities_snapshot()
-    assert "kilo/z-ai/glm-5v-turbo" not in snap
+    assert f"kilo/z-ai/{model}" not in snap
     assert "kilo" not in snap  # not even the top-level prefix
+    assert not any(key.startswith("kilo/") for key in snap)
     # But the canonical bare name IS there.
-    assert "glm-5v-turbo" in snap
+    assert model in snap
 
 
 # ---------------------------------------------------------------------------

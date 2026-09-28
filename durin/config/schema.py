@@ -42,8 +42,8 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = Field(default=False, description='Stream tool-call hints (e.g. read_file("…")) to the channel')
     show_reasoning: bool = Field(default=True, description="Surface model reasoning when the channel implements it")
     send_max_retries: int = Field(default=3, ge=0, le=10, description="Max delivery attempts per message (initial send included)")
-    transcription_provider: str = Field(default="groq", description='Voice transcription backend: "groq" or "openai"')
-    transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint for audio transcription (e.g. 'en', 'es')")
+    transcription_provider: str = Field(default="groq", description='Unused by the gateway: channels transcribe with the top-level "transcription" settings')
+    transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description='Unused by the gateway: set the language under the top-level "transcription" settings')
 
 
 class InlineFallbackConfig(Base):
@@ -100,8 +100,8 @@ class TranscriptionProviderKeysConfig(Base):
 class TranscriptionConfig(Base):
     """Global transcription settings.
 
-    Channel-level ``transcription_provider`` / ``transcription_api_key`` /
-    ``transcription_language`` override these per-channel.
+    Voice messages on every channel go through the one transcription service
+    built from these settings; there is no per-channel override.
     """
 
     enabled: bool = Field(default=True, description="Master toggle for voice transcription")
@@ -1178,8 +1178,8 @@ class ProvidersConfig(Base):
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="VolcEngine Coding Plan")
     byteplus: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus (VolcEngine international)")
     byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus Coding Plan")
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="OpenAI Codex (OAuth; managed by `durin login`, not persisted)")
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="GitHub Copilot (OAuth; managed by `durin login`, not persisted)")
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="OpenAI Codex (OAuth; managed by `durin oauth login`, not persisted)")
+    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="GitHub Copilot (OAuth; managed by `durin oauth login`, not persisted)")
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig, description="Baidu Qianfan (百度千帆)")
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig, description="NVIDIA NIM (nvapi- keys)")
 
@@ -1196,7 +1196,7 @@ class CronConfig(Base):
 class WorkflowConfig(Base):
     """Workflow engine configuration."""
 
-    max_node_visits: int = Field(default=25, ge=1, description="Cap on total node visits per workflow run, bounding loops")
+    max_node_visits: int = Field(default=25, ge=1, description="Ceiling on how many times one node may run in a workflow run, bounding loops; a workflow's own max_visits cannot exceed it")
     parallel_llm_concurrency: int = Field(default=2, ge=1, description="Global cap on simultaneous LLM branches (work/subworkflow) in a parallel node without its own max_concurrency")
     parallel_script_concurrency: int = Field(default=4, ge=1, description="Global cap on simultaneous script branches in a parallel node without its own max_concurrency (scripts are cheap — safe to run wider than LLM branches)")
     keep_runs: int = Field(default=20, ge=1, description="How many recent runs' working folders (.workflow/<run_id>/) to keep on disk")
@@ -1225,7 +1225,7 @@ class AutomationsConfig(Base):
     run's outcome from the workflow's own result instead of a separately
     timed goal-check pass, so there is no per-check timeout to bound."""
 
-    keep_runs: int = Field(default=20, ge=1, description="Finalized automation-run manifests kept per automation (needs_operator runs are never pruned).")
+    keep_runs: int = Field(default=20, ge=1, description="Finalized automation-run manifests kept per automation (paused runs are never pruned).")
     queue_ttl_s: int = Field(default=3600, ge=60, description="How long a queued channel event stays fresh before the drain hook drops it unfired.")
 
 
@@ -1572,7 +1572,7 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig, description="Agent loop: active model, generation parameters, session behavior, concurrency caps, auxiliary models")
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig, description="Visual theme (palette + light/dark mode) shared by the TUI and the web dashboard")
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Global chat-channel defaults; channel-specific config lives as extra keys under this section")
-    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig, description="Global voice transcription settings; channel-level keys override per-channel")
+    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig, description="Voice transcription settings, shared by every channel")
     tts: TtsConfig = Field(default_factory=TtsConfig, description="Text-to-speech for spoken replies in conversational voice mode")
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Hands-free conversational voice mode (the gateway loop)")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem: vector retrieval, dream passes, file watcher, health checks")

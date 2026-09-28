@@ -48,7 +48,8 @@ export type WorkflowNodeDef = {
   script?: string;
   timeout?: number;
   // script node: subprocess env — undefined = backend default "clean" (minimal
-  // allowlist + DURIN_*); "inherit" = full gateway process environment.
+  // allowlist + DURIN_*); "inherit" = gateway process environment minus any
+  // variable holding a stored secret.
   env?: "clean" | "inherit";
   // script node: stored secret names injected into the subprocess env
   // (each must allow the 'exec' scope; validated backend-side).

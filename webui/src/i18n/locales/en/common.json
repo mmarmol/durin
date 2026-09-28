@@ -1310,7 +1310,7 @@
     "timeoutHint": "uses the configured default",
     "scriptEnv": "Environment",
     "scriptEnvClean": "Clean (minimal + DURIN_*)",
-    "scriptEnvInherit": "Inherit full environment",
+    "scriptEnvInherit": "Inherit gateway environment (no stored secrets)",
     "scriptSecrets": "Secrets",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Stored secret names injected as environment variables. Each must allow the 'exec' scope.",
@@ -2112,6 +2112,7 @@
         "too_large": "Document is too large — 25 MB max",
         "io": "Couldn't read this file"
       },
+      "tooLargeToSend": "These attachments are too large to send together (about {{max}} MB in all). Remove one and send again.",
       "planMode": "Plan mode (read-only)",
       "awaitingAnswer": "Waiting for your answer"
     },

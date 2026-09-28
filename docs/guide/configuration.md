@@ -35,10 +35,14 @@ interference (see `durin/config/home.py` for the resolution logic).
 
 ### The config file
 
-The configuration file is `config.json` inside the durin home. A split-directory
-layout is also supported: if `config.json.d/` exists next to `config.json`,
-topic-specific overrides are stored there and merged at load time. Both layouts
-are transparent to the CLI commands.
+The configuration lives in the durin home, split by section: on first load
+durin saves each top-level section as its own file under `config.json.d/`
+(`agents.json`, `channels.json`, …), keeps the original as
+`config.json.legacy`, and turns `config.json` into a small marker naming that
+layout. Edit it with `durin config set`, with `durin config edit` (which opens
+the whole config in your editor and validates it before saving), or from the
+dashboard. A hand edit belongs in the section's file under `config.json.d/`;
+edits to `config.json` itself are not read.
 
 To see the exact path for the active instance:
 
@@ -140,8 +144,9 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `aux_models.vision` | `null` | Aux model for vision inputs (`preset` or `model`+`provider`) |
 | `aux_models.audio` | `null` | Aux model for audio inputs |
 | `aux_models.memory` | `null` | Highest-priority model for memory dream passes; overrides `dream.model_override` and the bundled default |
+| `aux_models.subagents` | `null` | Model for spawned subagents; unset = the subagent inherits the parent session's model |
 | `aux_models.automations` | `null` | Model for automations' semantic trigger-filter calls; unset rides the agent's own live model instead of falling back to a separate default preset |
-| `aux_models.loops` | `null` | LEGACY — populates `aux_models.automations` above when set and `automations` isn't; the loops subsystem itself no longer exists |
+| `aux_models.loops` | `null` | Legacy key: populates `aux_models.automations` above when set and `automations` isn't. Set `automations` instead |
 
 **`model_presets`** — named sets of model + generation parameters for quick switching.
 Each entry under `model_presets` is a `ModelPresetConfig`:
@@ -154,6 +159,10 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 | `context_window_tokens` | `65536` | Context window hint |
 | `temperature` | `0.1` | Temperature |
 | `reasoning_effort` | `null` | Thinking effort hint |
+| `request_timeout_s` | `null` | HTTP timeout in seconds for an OpenAI-compatible provider; overrides `DURIN_OPENAI_COMPAT_TIMEOUT_S` |
+| `top_p` | `null` | Nucleus sampling, sent to OpenAI-compatible providers and Azure OpenAI; `null` = not sent |
+| `top_k` | `null` | Top-k sampling; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
+| `repeat_penalty` | `null` | Repetition penalty; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `preemptive_compact_ratio` | `null` | Per-preset compaction trigger; `null` inherits from `agents.defaults` |
 
 **`model_capabilities`** — user-declared capability overrides keyed by model name
@@ -216,17 +225,18 @@ under this section.
 | `send_tool_hints` | `false` | Stream tool-call hints (e.g. `read_file("…")`) |
 | `show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `send_max_retries` | `3` | Maximum delivery attempts (initial send included) |
-| `transcription_provider` | `groq` | Per-channel voice transcription backend override: `groq` or `openai` |
-| `transcription_language` | `null` | Optional ISO-639-1 language hint for audio transcription (e.g. `en`, `es`) |
+| `transcription_provider` | `groq` | Unused: voice messages on every channel are transcribed with the top-level [`transcription`](#transcription) settings |
+| `transcription_language` | `null` | Unused: set the language hint in `transcription.language` |
 
-See [providers.md](../internals/providers.md) for wiring transcription API keys.
-For channel-specific setup see the [channels guide](../internals/channels.md).
+Transcription API keys are set in the [`transcription`](#transcription) section
+below. For channel-specific setup see the [channels guide](channels.md).
 
 ---
 
 ### `transcription`
 
-Global voice transcription settings. Channel-level keys override these per-channel.
+Global voice transcription settings, used for voice messages on every channel;
+there is no per-channel override.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -236,6 +246,7 @@ Global voice transcription settings. Channel-level keys override these per-chann
 | `language` | `null` | ISO-639-1 language hint |
 | `max_duration_s` | `600` | Maximum audio clip duration in seconds |
 | `cache_transcripts` | `true` | Cache transcript results to avoid re-transcribing |
+| `idle_unload_s` | `900` | Unload the loaded engine after this many idle seconds; `0` keeps it resident |
 
 **`transcription.local`** — on-device ASR via sherpa-onnx:
 
@@ -273,6 +284,7 @@ Text-to-speech for spoken replies in conversational voice mode. See
 | `provider` | `local` | Backend: `local` (Supertonic) or `openai` (cloud) |
 | `language` | `null` | ISO-639-1 language hint; `null` = auto |
 | `fallback` | `none` | `openai` to fall through to cloud when local synthesis fails |
+| `idle_unload_s` | `900` | Unload the loaded engine after this many idle seconds; `0` keeps it resident |
 
 **`tts.local`** — on-device TTS via Supertonic (ONNX, self-downloading):
 
@@ -338,8 +350,11 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `batch_size` | `32` | Texts per ONNX run inside one embed call; bounds peak activation memory |
 | `isolation` | `service` | `service` routes embeds to the gateway-supervised standing embedding server — one warm model shared by every durin process, falling back to `process` when none is reachable; `process` runs them in a recyclable worker subprocess so the ONNX arena is reclaimed with the child; `inline` keeps them in the calling process |
 | `worker_recycle_batches` | `64` | With `isolation: process`, recycle the worker after this many embed calls |
+| `service_port` | `0` | Loopback port of the standing embedding server; `0` = OS-assigned |
+| `service_max_rss_mb` | `0` | RSS cap in MB for the embedding server; the gateway restarts it above the cap. `0` = automatic (a fraction of total RAM) |
 | `base_url` | `null` | HTTP provider base URL (reserved for future adapters) |
 | `api_key` | `null` | HTTP provider API key (reserved for future adapters) |
+| `lazy_eviction` | `false` | Reserved; the model stays resident |
 
 **`memory.dream`** — entity-centric extract / refine / skill passes and their triggers:
 
@@ -362,6 +377,8 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `max_seconds_per_run` | `3600` | Wall-clock cap per extract and refine pass; the pass yields and resumes on the next run; `0` = run to completion |
 | `session_summaries_enabled` | `true` | Nightly pass that writes a session summary for conversations that went idle without compacting or `/new`, so every conversation leaves a searchable record |
 | `session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor |
+| `max_rss_mb` | `0` | RSS cap in MB for the dream worker's process tree; above it the tree is stopped and the dream retries on the next trigger. `0` = automatic (a fraction of total RAM) |
+| `min_available_mb` | `1024` | Skip spawning a reactive dream while available system memory is below this many MB (the next trigger or the nightly run picks the work up); `0` disables |
 | `always_on_token_budget` | `1500` | Token budget for the always-on guidance pin injected into every prompt; `0` disables |
 
 **`memory.dream.auto_absorb`** — post-dream automatic entity deduplication (ON by default):
@@ -451,9 +468,10 @@ How to see it: `/status` names the turn a frozen block was actually taken on —
 a `read_file` text result opens with the memory entries that mention the file
 (lexical lookup only, no embedding), and a `memory_drill` on a `reference:<slug>`
 document opens with the entities distilled from it. Both blocks lead the result
-rather than trailing it because a result over the agent loop's per-result
-character cap is truncated from the tail, which would drop a trailing block
-before the model read it:
+rather than trailing it: `read_file` counts its block against the page it
+returns, and a result over the agent loop's per-result character cap reaches the
+model as a preview of its head (the whole result is saved to a file), so a
+trailing block is the part the model would not see.
 
 What it costs: roughly a millisecond on a text `read_file` — one lexical index
 lookup, no embedding call and no LLM call — whether or not it finds anything. A
@@ -499,7 +517,14 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat, or later on the dashboard's Pending page or with `durin approvals`; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
+| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat, or later on the dashboard's Pending page or with `durin approvals`; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill, an install that replaces an existing skill, or one that brings back a retired skill — those always ask you), `never` (dependency installs are only reported; skill installs behave as with `approve`) |
+
+A skill you remove, or one the dream retires or folds into another, is recorded
+as retired (`skills/.retired.jsonl`). The dream never re-creates it; the agent
+brings it back only when you explicitly ask, after telling you why it was
+retired and what replaces it (its `skill_write` or `skill_publish` call then
+carries `override_retired`); importing it again always asks you, whatever
+`install_policy` says.
 
 **`skills.security`** — import security floor:
 
@@ -518,6 +543,7 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 | `trigger` | `off` | When to auto-run: `off` (never; it never clears approvals), `uncertain` (only when gate is already unsure), or `always`; when not `off` it is also consulted for the approvals it may clear |
 | `max_severity` | `caution` | Cap on how high the judge may raise the verdict: `caution` or `dangerous` |
 | `model` | `""` | Aux model name; empty = default |
+| `provider` | `auto` | Provider for the judge model; `auto` detects it from the model name |
 
 **`skills.discovery`** — which registries to search:
 
@@ -552,7 +578,7 @@ Each `SkillRegistryConfig`:
 
 API credentials and per-model parameter overrides for every LLM provider.
 All fields are optional; only configure the providers you use.
-See [providers.md](../internals/providers.md) for the full provider list and setup steps.
+See [providers.md](providers.md) for the full provider list and setup steps.
 
 Each provider entry (`anthropic`, `openai`, `openrouter`, etc.) is a `ProviderConfig`:
 
@@ -562,7 +588,7 @@ Each provider entry (`anthropic`, `openai`, `openrouter`, etc.) is a `ProviderCo
 | `api_base` | `null` | Custom base URL (local models, proxies, corporate endpoints) |
 | `extra_headers` | `null` | Custom request headers (e.g. `APP-Code` for AiHubMix) |
 | `extra_body` | `null` | Extra fields merged into every request body |
-| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort}` |
+| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort, request_timeout_s, top_p, top_k, repeat_penalty}` |
 
 Supported providers (all use `ProviderConfig` unless noted):
 
@@ -618,10 +644,10 @@ See [docs/internals/tools.md](../internals/tools.md) for architecture details.
 | `path_append` | `""` | Directories appended to `PATH` for executed commands |
 | `sandbox` | `""` | Optional sandbox wrapper command |
 | `allowed_env_keys` | `[]` | Env vars passed into the subprocess (in addition to the safe defaults) |
-| `allow_patterns` | `[]` | Shell command glob-allow patterns |
-| `deny_patterns` | `[]` | Shell command glob-deny patterns |
+| `allow_patterns` | `[]` | Regex patterns (searched in the lowercased command); a match exempts the command from the deny list, and when any are set a command matching none is refused |
+| `deny_patterns` | `[]` | Regex patterns added to durin's built-in deny list; a match refuses the command unless an allow pattern matches it |
 
-When you chat with the agent and a command is refused by `deny_patterns` or
+When you chat with the agent and a command is refused by the deny list or
 missing from `allow_patterns`, you are shown the exact command and asked to
 approve it; approving runs that command once. A short list of commands never
 runs, even when approved: recursively removing `/` or your home directory,
@@ -663,7 +689,7 @@ file with `write_file` and run that file instead.
 | `enable` | `true` | Run a linter after write/edit operations |
 | `timeout_s` | `10` | Linter timeout in seconds |
 | `max_lines` | `20` | Max finding lines returned to the model |
-| `checkers` | `{py: ruff check …}` | Extension → command template map; `{file}` is replaced with the edited file's path |
+| `checkers` | `{py: ruff check …, json: python3 -m json.tool …}` | Extension → command template map; `{file}` is replaced with the edited file's path |
 
 **`tools.code_execution`** — `execute_code` sandboxed Python tool:
 
@@ -705,6 +731,8 @@ Each entry is an `MCPServerConfig`:
 | `allow_private_url` | `false` | Opt this server out of the SSRF private-IP block |
 | `spawn_egress_policy` | `warn` | stdio: action on shell-interpreter+egress-tool spawn shape: `warn`, `refuse`, or `off` |
 | `malware_check` | `true` | Query OSV API for MAL-* advisories before spawning stdio servers; fail-open on network error |
+| `version` | `""` | Pinned package version from the registry's `server.json`; `""` = unpinned |
+| `source_ref` | `""` | Registry ref the server was installed from; drives the update check |
 
 `oauth` can be `true` (DCR defaults) or an `MCPOAuthConfig` object with `scope`,
 `client_id`, `client_secret`, and `callback_port` (default `1456`) for static
@@ -730,6 +758,7 @@ MCP server sampling (server-initiated LLM calls) is governed by `sampling` under
 | `quality` | `official` | Default discovery view: `official` (star/first-party gate) or `all` |
 | `min_stars` | `100` | Star floor for the `official` gate |
 | `search_limit` | `10` | Max results per search |
+| `registries` | `[official]` | MCP registries to search, in order; each entry is `{name, kind, enabled, api_key_secret}`, with `kind` `official` or `mpak` |
 
 **`tools.mcp_deferral`** — defer MCP tool definitions behind a discovery bridge
 when the aggregate schema size is large:
@@ -802,7 +831,9 @@ Workflow-engine lifecycle: node-visit caps and run-folder retention.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `max_node_visits` | `25` | Cap on total node visits per workflow run (bounds loops) |
+| `max_node_visits` | `25` | Ceiling on how many times one node may run in a workflow run (bounds loops); a workflow's own `max_visits` cannot exceed it |
+| `parallel_llm_concurrency` | `2` | Cap on simultaneous work-node branches and dynamic workers in a parallel node without its own `max_concurrency` |
+| `parallel_script_concurrency` | `4` | The same cap for script branches |
 | `keep_runs` | `20` | Recent run working-folders (`.workflow/<run_id>/`) kept on disk |
 | `script_timeout` | `300` | Default per-node timeout (seconds) for script nodes; a node's own `timeout` overrides it |
 | `script_output_max_chars` | `16000` | Cap on a script node's captured stdout (the edge text); excess is truncated |
@@ -816,18 +847,17 @@ Automations subsystem lifecycle.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `keep_runs` | `20` | Finalized automation-run manifests kept per automation (`needs_operator` runs are never pruned) |
-| `queue_ttl_s` | `3600` | How long a queued channel event stays fresh before the drain hook drops it unfired |
+| `keep_runs` | `20` | Finalized automation-run manifests kept per automation (a `paused` run is never pruned) |
+| `queue_ttl_s` | `3600` | How long a queued event (channel, webhook or chain) stays fresh before the drain hook drops it unfired |
 
 ---
 
 ### `loops` (legacy)
 
-The loops subsystem itself no longer exists. `keep_runs`/`queue_ttl_s` set
-here populate the matching `automations.*` key above when `automations`
-doesn't set it explicitly (with a deprecation log); `check_timeout_s` has no
-automations equivalent and is never migrated. Set `automations.*` directly
-instead.
+A legacy section. `keep_runs`/`queue_ttl_s` set here populate the matching
+`automations.*` key above when `automations` doesn't set it explicitly (with a
+deprecation log); `check_timeout_s` has no automations equivalent and is
+never migrated. Set `automations.*` directly instead.
 
 ---
 
@@ -903,7 +933,7 @@ Or define a named preset and activate it:
 }
 ```
 
-See [providers.md](../internals/providers.md) for provider-specific setup.
+See [providers.md](providers.md) for provider-specific setup.
 
 ### Wire a provider API key
 
@@ -991,7 +1021,7 @@ durin secret set TELEGRAM_TOKEN --service channel:telegram
 durin config set channels.telegram.token '${secret:TELEGRAM_TOKEN}'
 ```
 
-See [channels.md](../internals/channels.md) for the full per-channel setup guide.
+See [channels.md](channels.md) for the full per-channel setup guide.
 
 ### Run as a daemon
 

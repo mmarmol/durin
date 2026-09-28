@@ -1716,27 +1716,30 @@ class MemoryUpsertEntityEvent(TypedDict):
 
 
 class SkillUsedEvent(TypedDict):
-    """The agent touched a skill during a turn (view/read/edit).
+    """The agent touched a skill during a turn (view/read/edit/run).
 
     Emitted once per entry in ``extract_skill_calls`` output, right after
     ``_state_save`` records it into ``session.metadata["skill_calls"]``.
     """
 
     skill: str
-    op: str  # "view" | "read" | "edit"
+    op: str  # "view" | "read" | "edit" | "run"
     turn: int
+    ok: NotRequired[bool]  # run only: the script's exit code was 0
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
 
 class SkillObservationLoggedEvent(TypedDict):
-    """A live skill observation was appended, or bumped an existing OPEN
-    record (dedup). ``count`` is the record's count after this call."""
+    """A live skill observation was appended, bumped an existing OPEN record
+    (dedup), or reopened an APPLIED one whose issue came back. ``count`` is
+    the record's count after this call."""
 
     skill: str
     kind: str
     dedup_bumped: bool
     count: int
+    reopened: NotRequired[bool]
 
 
 class SkillAuthoredEvent(TypedDict):

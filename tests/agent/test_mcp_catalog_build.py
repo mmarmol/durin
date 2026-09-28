@@ -322,7 +322,54 @@ def test_pagination_gives_up_after_attempts():
     except httpx.ReadTimeout:
         pass
 
-    assert call_count == 4, f"Expected 4 attempts (default), got {call_count}"
+    from durin.agent.mcp_catalog_build import _RETRY_ATTEMPTS
+    assert call_count == _RETRY_ATTEMPTS, f"Expected every attempt used, got {call_count}"
+
+
+def test_the_registry_http_client_waits_as_long_as_it_is_told():
+    """The official registry answers a page in up to about a minute; a client
+    built with a timeout waits that long and no longer."""
+    import asyncio
+    import threading
+    import time as _time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import httpx
+    import pytest
+
+    from durin.agent.mcp_registry import _DefaultHTTP
+
+    class _Slow(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            _time.sleep(0.6)
+            body = b'{"servers": []}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Slow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/v0/servers"
+    try:
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(_DefaultHTTP(timeout=0.2).get_json(url))
+        assert asyncio.run(_DefaultHTTP(timeout=5).get_json(url)) == {"servers": []}
+    finally:
+        server.shutdown()
+
+
+def test_the_catalog_crawl_gives_each_registry_page_a_minute_or_more():
+    from durin.agent.mcp_catalog_build import crawl_registries
+
+    official, github = crawl_registries()
+
+    assert official._http._timeout >= 60
+    assert github._http._timeout >= 60
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +478,7 @@ def test_with_retry_gives_up_on_persistent_5xx():
     """Persistent 503 exhausts all attempts and re-raises."""
     import pytest
 
-    from durin.agent.mcp_catalog_build import _with_retry
+    from durin.agent.mcp_catalog_build import _RETRY_ATTEMPTS, _with_retry
 
     calls = {"n": 0}
 
@@ -441,7 +488,7 @@ def test_with_retry_gives_up_on_persistent_5xx():
 
     with pytest.raises(Exception):  # noqa: B017 — httpx.HTTPStatusError
         _with_retry(fn, sleep=lambda _: None)
-    assert calls["n"] == 4  # default attempts
+    assert calls["n"] == _RETRY_ATTEMPTS  # every attempt used
 
 
 def test_min_resolved_fraction_guard():
