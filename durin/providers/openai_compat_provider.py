@@ -262,6 +262,34 @@ _FIELD_REJECTED_MARKERS = (
 _FIELD_REQUIRED_MARKERS = ("missing", "required", "must", "empty")
 
 
+def _with_tool_result_names(
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of *messages* whose tool results carry the name of the
+    call they answer, or ``None`` when none was missing."""
+    if not isinstance(messages, list):
+        return None
+    names: dict[str, str] = {}
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if isinstance(fn, dict) and tc.get("id") and fn.get("name"):
+                    names[tc["id"]] = fn["name"]
+        elif (
+            isinstance(msg, dict)
+            and msg.get("role") == "tool"
+            and not msg.get("name")
+            and msg.get("tool_call_id") in names
+        ):
+            msg = {**msg, "name": names[msg["tool_call_id"]]}
+            changed = True
+        out.append(msg)
+    return out if changed else None
+
+
 def _strip_reasoning_content(
     messages: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]] | None:
@@ -487,6 +515,9 @@ class OpenAICompatProvider(LLMProvider):
         # Models whose endpoint rejected reasoning_content on input messages;
         # their later requests leave it out instead of failing once per call.
         self._reasoning_rejected_models: set[str] = set()
+        # Models whose endpoint needs the function name on each tool result
+        # (a proxy that translates to Gemini's native API).
+        self._tool_names_required_models: set[str] = set()
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -737,6 +768,14 @@ class OpenAICompatProvider(LLMProvider):
                 if isinstance(kw.get("model"), str):
                     self._reasoning_rejected_models.add(kw["model"])
                 return {**kw, "messages": stripped}
+        # Endpoint that needs the function name on each tool result, which
+        # durin leaves out by default (Gemini's native API, behind a proxy).
+        if "function_response.name" in text:
+            named = _with_tool_result_names(kw.get("messages"))
+            if named is not None:
+                if isinstance(kw.get("model"), str):
+                    self._tool_names_required_models.add(kw["model"])
+                return {**kw, "messages": named}
         # Gateway rejects assistant content sent alongside tool_calls: blank it
         # (the old unconditional behavior, now applied only where it's needed).
         if ("tool_call" in text or "tool call" in text) and "content" in text:
@@ -928,6 +967,10 @@ class OpenAICompatProvider(LLMProvider):
         ):
             for msg in kwargs["messages"]:
                 msg.pop("reasoning_content", None)
+        if model_name in self._tool_names_required_models:
+            named = _with_tool_result_names(kwargs["messages"])
+            if named is not None:
+                kwargs["messages"] = named
 
         # Non-standard sampling params ride in extra_body: ollama / LM Studio
         # read top_k and repeat_penalty there (the OpenAI schema has no

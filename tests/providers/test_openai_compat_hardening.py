@@ -325,6 +325,28 @@ def test_an_error_about_an_empty_reasoning_content_does_not_strip_it() -> None:
         "reasoning_content" in m for m in recovered["messages"] if m["role"] == "assistant")
 
 
+def test_an_endpoint_that_needs_tool_result_names_gets_them_back() -> None:
+    """A proxy that translates to Gemini's native API needs the function name
+    on each result; it is restored from the matching call, now and on that
+    model's later requests."""
+    provider = _provider()
+
+    def build() -> dict:
+        return provider._build_kwargs(
+            [dict(m) for m in _REASONED_TOOL_TURN], tools=None, model="gemini-proxy",
+            max_tokens=100, temperature=0.7, reasoning_effort=None, tool_choice=None)
+
+    first = build()
+    assert "name" not in first["messages"][2]
+    recovered = provider._recover_request_for_error(first, _error(
+        "* GenerateContentRequest.contents[2].parts[0].function_response.name: "
+        "Name cannot be empty."))
+
+    assert recovered is not None
+    assert recovered["messages"][2]["name"] == "web_search"
+    assert build()["messages"][2]["name"] == "web_search"
+
+
 def test_a_provider_asking_for_reasoning_content_is_not_stripped_of_it() -> None:
     """Kimi and DeepSeek name the field when it is missing; stripping it
     there would only repeat the failure."""

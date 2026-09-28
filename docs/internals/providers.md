@@ -416,7 +416,10 @@ Provider rules the serialization honors:
 - **Tool results carry no `name`.** The Chat Completions tool message is
   `role`, `tool_call_id` and `content`; strict endpoints (Groq documents a 400)
   reject a `name` there, so it is dropped on the way out. The runner keeps it
-  in the stored history.
+  in the stored history. An endpoint that needs it — a proxy that translates
+  to Gemini's native API rejects an empty `function_response.name` — gets each
+  result's name back from the call it answers, on the retry and on that
+  model's later requests.
 
 ---
 
