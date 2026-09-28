@@ -441,19 +441,34 @@ class AgentNodeRunner:
             generation = None
         return provider, model, generation
 
-    def _node_context_window(self, provider: Any, model: str) -> int | None:
-        """The context window of the model a node runs on, resolved the way a
-        /model pick resolves it: the user's per-model entry, then the catalog,
-        then the default. It gives the node's run an input budget — the
-        mid-turn precheck, pruning near the limit and a per-result cap that
-        follows the window. None without a config to resolve against."""
-        if self._app_config is None:
+    def _node_context_window(self, ref: str | None) -> int | None:
+        """The context window of the model a node runs on, resolved from the
+        same preset its provider comes from (see ``_build_node_provider``):
+        the default preset when the node names no model, a named preset, a
+        "provider model" pair, or a plain model name under the default
+        provider — capped by the fallback models' windows, as the chat's is.
+        It gives the node's run an input budget: the mid-turn precheck,
+        pruning near the limit and a per-result cap that follows the window.
+        None without a config or for a ref that cannot be resolved."""
+        config = self._app_config
+        if config is None:
             return None
         from durin.command.builtin import adhoc_preset_config
+        from durin.providers.factory import preset_context_window
 
         try:
-            provider_key = getattr(provider, "provider_key", None) or "auto"
-            return adhoc_preset_config(self._app_config, provider_key, model).context_window_tokens
+            if ref is None:
+                preset = config.resolve_default_preset()
+            elif len(ref.split()) == 2:
+                provider_name, model = ref.split()
+                preset = adhoc_preset_config(config, provider_name, model)
+            else:
+                try:
+                    preset = config.resolve_preset(ref)
+                except Exception:  # noqa: BLE001 - not a registered preset: a plain model name
+                    provider_key = getattr(getattr(self.runner, "provider", None), "provider_key", None)
+                    preset = adhoc_preset_config(config, provider_key or "auto", ref)
+            return preset_context_window(config, preset)
         except Exception:  # noqa: BLE001 - an unresolvable window must not fail the node
             return None
 
@@ -737,7 +752,12 @@ class AgentNodeRunner:
         # place to save oversized or pruned results: the workspace its own
         # file tools read, under the node's session key, so every pointer to
         # a saved result can be followed from inside the node.
-        node_window = self._node_context_window(node_provider, model)
+        node_ref = persona_model_ref or req.node.model
+        if node_ref is not None and node_ref not in self._node_providers:
+            # The ref did not resolve, so the node runs on the default
+            # provider and model (see _resolve_node_call): use their window.
+            node_ref = None
+        node_window = self._node_context_window(node_ref)
         node_workspace = Path(req.workspace_override or self.sessions.workspace)
         node_session_key = self._session_key(req)
 
