@@ -165,7 +165,9 @@ Each event payload is the call dict itself: `{skill, op, turn}`, optionally
 carrying `iteration` and `session_key`. Because this fires per call rather than
 per turn, a turn that views two skills and edits one emits three separate
 `skill.used` events. `emit_skill_used` is best-effort and a no-op on an empty
-call list.
+call list. `_state_save` runs after the turn's run has released its telemetry
+binding, so the loop passes the session key and the events go to that
+session's own log.
 
 ### `skill.observation_logged` — the feedback signal
 

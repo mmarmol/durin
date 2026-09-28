@@ -33,18 +33,34 @@ def _tool_name_and_args(tc: Any) -> tuple[str, dict]:
     return name, raw if isinstance(raw, dict) else {}
 
 
-def emit_skill_used(calls: list[dict]) -> None:
+def emit_skill_used(calls: list[dict], session_key: str | None = None) -> None:
     """Emit one ``skill.used`` event per skill call (best-effort).
 
     Called from ``AgentLoop._state_save`` right after ``calls`` are recorded
-    into ``session.metadata["skill_calls"]``.
+    into ``session.metadata["skill_calls"]``. That runs after the turn's run
+    has released its telemetry binding, so with no binding current the events
+    go to ``session_key``'s own logger instead of being dropped.
     """
     if not calls:
         return
     try:
         from durin.agent.tools._telemetry import emit_tool_event
-        for call in calls:
-            emit_tool_event("skill.used", dict(call))
+        from durin.telemetry.logger import (
+            bind_telemetry,
+            current_telemetry,
+            get_session_logger,
+            reset_telemetry,
+        )
+
+        token = None
+        if current_telemetry() is None and session_key:
+            token = bind_telemetry(get_session_logger(session_key))
+        try:
+            for call in calls:
+                emit_tool_event("skill.used", dict(call))
+        finally:
+            if token is not None:
+                reset_telemetry(token)
     except Exception:  # noqa: BLE001 — telemetry must never break the loop
         pass
 
