@@ -831,10 +831,13 @@ class OpenAICompatProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Backfill reasoning_content="" on assistants missing it: DeepSeek
-        # thinking mode rejects history otherwise (#3554, #3584); "" reads
-        # as "no thinking that turn". DeepSeek-V4/reasoner reason natively,
-        # so backfill even without explicit reasoning_effort.
+        # Backfill reasoning_content on assistants missing it: DeepSeek
+        # thinking mode rejects a tool request whose earlier assistant turns
+        # lack it (#3554, #3584). DeepSeek's API thinks by default on every
+        # current model, so the backfill follows the API (the deepseek spec or
+        # its host) and runs without an explicit effort; only deepseek-chat,
+        # the legacy non-thinking alias, is left alone. Other hosts serving
+        # DeepSeek weights keep their own contract.
         explicit_thinking = (
             reasoning_effort is not None
             and semantic_effort not in ("none", "minimal")
@@ -845,10 +848,12 @@ class OpenAICompatProvider(LLMProvider):
             )
         )
         implicit_deepseek_thinking = (
-            spec is not None
-            and spec.name == "deepseek"
+            (
+                (spec is not None and spec.name == "deepseek")
+                or _host_of(self._effective_base) == "api.deepseek.com"
+            )
             and semantic_effort not in ("none", "minimal", "minimum")
-            and any(t in model_name.lower() for t in ("deepseek-v4", "deepseek-reasoner"))
+            and "deepseek-chat" not in model_name.lower()
         )
         if explicit_thinking or implicit_deepseek_thinking:
             for msg in kwargs["messages"]:

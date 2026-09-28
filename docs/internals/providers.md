@@ -382,7 +382,14 @@ Provider rules the serialization honors:
   without every thinking block when the API rejects one (a signature, or
   content that changed before it), which Anthropic always allows, and without
   `temperature` when that is what it rejected.
-- **DeepSeek.** See the reasoning pad above.
+- **DeepSeek.** Its API thinks by default and rejects a tool request whose
+  earlier assistant turns lack `reasoning_content`, so a turn stored without
+  reasoning gets the single-space pad above. The pad follows DeepSeek's API —
+  the `deepseek` provider, or a base URL on `api.deepseek.com` — rather than
+  the model name, so a new DeepSeek model is covered without a code change. It
+  is skipped when the effort is `none` and for `deepseek-chat`, the legacy
+  non-thinking alias. Other hosts serving DeepSeek weights keep their own
+  contract.
 
 ---
 
