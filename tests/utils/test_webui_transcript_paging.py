@@ -16,8 +16,6 @@ import functools
 import json
 from pathlib import Path
 
-import pytest
-
 from durin.utils import webui_transcript as wt
 
 

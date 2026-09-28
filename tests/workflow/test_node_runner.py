@@ -336,6 +336,7 @@ def test_no_tool_node_is_not_told_about_folders(tmp_path):
 def test_cross_loop_tool_marshals_to_owner_loop():
     import asyncio
     import threading
+
     from durin.workflow.node_runner import _CrossLoopTool
 
     owner = asyncio.new_event_loop()
@@ -819,13 +820,13 @@ def _hanging_runner(sessions, *, rounds_before_hang=0):
 def test_hard_cancel_interrupts_the_in_flight_turn(tmp_path):
     """With req.cancel_check true (a force-stop), a turn that never finishes is
     aborted within the watcher's poll interval and surfaces as a typed node
-    failure whose cause is WorkInterrupted — the engine ends such a run
+    failure whose cause is WorkInterruptedError — the engine ends such a run
     'cancelled' rather than 'aborted'."""
     import time as _time
 
     import pytest
 
-    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+    from durin.workflow.engine import NodeExecutionError, WorkInterruptedError
 
     nr = _hanging_runner(SessionManager(workspace=tmp_path))
     req = _req(
@@ -837,7 +838,7 @@ def test_hard_cancel_interrupts_the_in_flight_turn(tmp_path):
     with pytest.raises(NodeExecutionError) as ei:
         nr(req)
 
-    assert isinstance(ei.value.cause, WorkInterrupted)
+    assert isinstance(ei.value.cause, WorkInterruptedError)
     assert _time.monotonic() - t0 < 10, "the watcher must abort promptly, not wait out the turn"
 
 
@@ -915,7 +916,7 @@ def test_a_force_stop_does_not_wait_out_work_handed_to_a_thread(tmp_path):
 
     import pytest
 
-    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+    from durin.workflow.engine import NodeExecutionError, WorkInterruptedError
 
     entered = _threading.Event()
     release = _threading.Event()
@@ -940,7 +941,7 @@ def test_a_force_stop_does_not_wait_out_work_handed_to_a_thread(tmp_path):
         elapsed = _time.monotonic() - t0
 
         assert entered.is_set(), "the turn must really have been inside a to_thread call"
-        assert isinstance(ei.value.cause, WorkInterrupted)
+        assert isinstance(ei.value.cause, WorkInterruptedError)
         assert elapsed < 5, f"the force-stop waited out the thread ({elapsed:.1f}s)"
     finally:
         release.set()

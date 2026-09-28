@@ -23,8 +23,8 @@ def _add_running(home: str, jobs_dir: str, name: str, ready_file: str) -> None:
     both processes have loaded, maximising the race window.
     """
     os.environ["DURIN_HOME"] = home
-    from durin.cron.types import CronSchedule
     from durin.cron.service import CronService
+    from durin.cron.types import CronSchedule
 
     store_path = Path(jobs_dir) / "jobs.json"
     svc = CronService(store_path)

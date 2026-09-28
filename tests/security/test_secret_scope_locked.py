@@ -11,10 +11,7 @@ both tags survive.
 from __future__ import annotations
 
 import multiprocessing
-import os
 from pathlib import Path
-
-import pytest
 
 from durin.security.secrets import SecretStore
 

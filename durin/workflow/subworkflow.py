@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from durin.workflow.engine import WorkflowEngine
-from durin.workflow.loader import WorkflowNotFound, load_workflow
+from durin.workflow.loader import WorkflowNotFoundError, load_workflow
 from durin.workflow.result import WorkflowResult
 
 
@@ -63,7 +63,7 @@ class SubworkflowRunner:
             return _config_abort(f"Error: sub-workflow nesting exceeded max depth {self.max_depth}")
         try:
             workflow = load_workflow(self.workspace, name)
-        except WorkflowNotFound as exc:
+        except WorkflowNotFoundError as exc:
             return _config_abort(f"Error: {exc}")
         nested = SubworkflowRunner(
             self.workspace, self.node_runner, self.judge_runner,

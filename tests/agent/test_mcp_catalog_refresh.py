@@ -17,7 +17,6 @@ import pytest
 import durin.agent.mcp_catalog_store as store
 from durin.agent import mcp_catalog_refresh as cr
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

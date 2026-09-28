@@ -2,7 +2,12 @@
 
 import pytest
 
-from durin.config.schema import Config, TranscriptionConfig, TranscriptionLocalConfig, WorkflowConfig
+from durin.config.schema import (
+    Config,
+    TranscriptionConfig,
+    TranscriptionLocalConfig,
+    WorkflowConfig,
+)
 
 
 def test_transcription_defaults():

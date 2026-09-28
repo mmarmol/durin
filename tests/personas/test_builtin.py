@@ -1,6 +1,6 @@
-from durin.personas.builtin import SEED_PERSONAS, seed_example_personas
-from durin.config.schema import PersonaConfig
 from durin.config.loader import get_config_path, load_config, mutate_config
+from durin.config.schema import PersonaConfig
+from durin.personas.builtin import SEED_PERSONAS, seed_example_personas
 
 
 def test_seed_personas_reference_soul_slugs():

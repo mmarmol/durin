@@ -9,7 +9,6 @@ from durin.utils.webui_transcript import (
 )
 
 
-
 def test_append_and_read_roundtrip(writer_env) -> None:
     key = "websocket:t1"
     _lay_down(key, {"event": "user", "chat_id": "t1", "text": "hello"})

@@ -5,12 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from durin.config.schema import TranscriptionConfig
 from durin.service.transcription import (
-    TranscriptResult,
     TranscriptionService,
     _resolve_model_name,
 )
-from durin.config.schema import TranscriptionConfig
 
 
 class FakeProvider:

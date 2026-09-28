@@ -6,7 +6,7 @@ from durin.automations import claims
 from durin.automations import run_log as rl
 from durin.automations.channel_meta import InboundFacts
 from durin.automations.matcher import TriggerMatcher
-from durin.automations.runtime import AutomationBusy
+from durin.automations.runtime import AutomationBusyError
 from durin.automations.spec import parse_automation
 from durin.automations.store import save_automation
 
@@ -77,7 +77,7 @@ def _whatsapp_msg(*, sender="alice", chat_id="12345", content="hello there", is_
 
 
 class FakeRuntime:
-    """Records fire/answer calls; fire() raises AutomationBusy for names in `busy`."""
+    """Records fire/answer calls; fire() raises AutomationBusyError for names in `busy`."""
 
     def __init__(self, busy: set[str] | None = None):
         self.fire_calls: list[tuple] = []
@@ -87,7 +87,7 @@ class FakeRuntime:
     async def fire(self, name, *, source, task=None, origin=None):
         self.fire_calls.append((name, source, task, origin))
         if name in self._busy:
-            raise AutomationBusy(name)
+            raise AutomationBusyError(name)
         return {"status": "done"}
 
     async def answer_nowait(self, name, run_id, answer):
@@ -401,7 +401,7 @@ async def test_claim_wake_default_when_spec_missing(tmp_path):
     honoring the claim and attempts the wake — mirroring current behavior
     rather than silently dropping a message a human might be counting on. If
     the wake itself then fails (runtime.answer_nowait needs the same spec and
-    raises AutomationNotFound), the matcher must not leave the claim stuck:
+    raises AutomationNotFoundError), the matcher must not leave the claim stuck:
     it releases it so a later message on that thread isn't captured by a
     dead claim forever."""
     _park(tmp_path, "ghost", "run1")
@@ -410,8 +410,8 @@ async def test_claim_wake_default_when_spec_missing(tmp_path):
     class MissingSpecRuntime(FakeRuntime):
         async def answer_nowait(self, name, run_id, answer):
             self.answer_calls.append((name, run_id, answer))
-            from durin.automations.spec import AutomationNotFound
-            raise AutomationNotFound(f"automation '{name}' not found")
+            from durin.automations.spec import AutomationNotFoundError
+            raise AutomationNotFoundError(f"automation '{name}' not found")
 
     rt = MissingSpecRuntime()
     matcher = TriggerMatcher(tmp_path, runtime=rt)
@@ -472,7 +472,7 @@ async def test_sequential_messages_single_automation_second_queues(tmp_path):
     automation, with no active run yet: the pending-fires guard must make
     the second message see the automation as busy synchronously (before the
     first message's scheduled `_fire` task has even run), so it queues
-    instead of racing into runtime.fire() and hitting AutomationBusy."""
+    instead of racing into runtime.fire() and hitting AutomationBusyError."""
     _save(tmp_path, concurrency="single",
           triggers=[{"source": "channel", "channel": "email", "filters": {}}])
     rt = FakeRuntime()
@@ -496,7 +496,7 @@ async def test_sequential_messages_single_automation_second_queues(tmp_path):
 async def test_sequential_messages_no_enqueue_passthrough(tmp_path):
     """Same race, but with no queue wired: the second message must be
     rejected (passed through as a normal turn) at decision time via the
-    pending-fires guard — never by losing an AutomationBusy race inside the
+    pending-fires guard — never by losing an AutomationBusyError race inside the
     scheduled fire task."""
     _save(tmp_path, concurrency="single",
           triggers=[{"source": "channel", "channel": "email", "filters": {}}])
@@ -516,7 +516,7 @@ async def test_sequential_messages_no_enqueue_passthrough(tmp_path):
 async def test_automationbusy_fallback_enqueues(tmp_path):
     """Belt-and-braces: if the pending-fires guard somehow misses (e.g. the
     fire task already started/finished its own bookkeeping) and
-    runtime.fire() itself raises AutomationBusy, the fallback in `_fire` must
+    runtime.fire() itself raises AutomationBusyError, the fallback in `_fire` must
     still enqueue the event when a queue is wired, with matching
     telemetry."""
     _save(tmp_path, concurrency="single",
@@ -528,7 +528,7 @@ async def test_automationbusy_fallback_enqueues(tmp_path):
               "thread": "digest-1", "subject": "Re: quarterly report"}
 
     # Call _fire directly to simulate the guard having already been cleared
-    # (empty pending set) while runtime.fire() still raises AutomationBusy.
+    # (empty pending set) while runtime.fire() still raises AutomationBusyError.
     await matcher._fire("l1", "email", "hello there", origin)
 
     assert len(rt.fire_calls) == 1
@@ -754,7 +754,7 @@ async def test_counterpart_wake_answer_failure_after_exec_finalizes_failed(tmp_p
     continuation's real behavior; matcher._answer's except-handler (log +
     release the claim) is still exercised, unaffected, by
     test_claim_wake_default_when_spec_missing above — a genuine PROLOGUE
-    failure (AutomationNotFound for a missing spec)."""
+    failure (AutomationNotFoundError for a missing spec)."""
     import durin.automations.runtime as runtime_module
     from durin.automations.runtime import AutomationsRuntime
     from durin.workflow.result import WorkflowResult

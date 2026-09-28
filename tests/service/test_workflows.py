@@ -15,8 +15,8 @@ from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
     WorkflowDeleteCommand,
     WorkflowDuplicateCommand,
-    WorkflowRenameCommand,
     WorkflowGetQuery,
+    WorkflowRenameCommand,
     WorkflowRunCommand,
     WorkflowRunResult,
     WorkflowRunsListQuery,

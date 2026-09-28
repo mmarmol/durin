@@ -170,7 +170,7 @@ because a trigger delivered new information (a cron tick, a channel/webhook matc
 chain outcome, a manual/chat request) — insistence, when wanted, comes from the
 trigger's own schedule plus `life`, not from a timer inside the runtime.
 
-**`fire`** (manual/scheduled/chain entry) loads the spec, raises `AutomationBusy` if
+**`fire`** (manual/scheduled/chain entry) loads the spec, raises `AutomationBusyError` if
 `concurrency == "single"` and a run is already active, then runs. **`try_fire`**
 (the cron dispatch path) additionally no-ops silently on a disabled automation or a
 busy one, rather than raising — a scheduled tick that finds nothing to do is not an
@@ -274,7 +274,7 @@ carried through an explicit `chain_depth` counter, refused once it reaches
 long acyclic chains, not the only thing standing between a bad graph and an infinite
 fan-out. Multiple chain triggers naming the same downstream automation fire it once,
 not once per matching trigger (deduplicated by target name within one dispatch). A
-target that is busy (`AutomationBusy`) is queued rather than dropped, carrying its
+target that is busy (`AutomationBusyError`) is queued rather than dropped, carrying its
 `chain_depth` forward so the eventual drained fire resumes the same hop count instead
 of silently restarting at zero.
 

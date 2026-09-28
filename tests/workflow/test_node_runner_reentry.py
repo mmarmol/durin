@@ -12,7 +12,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from durin.agent.runner import AgentRunResult, AgentRunner
+from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.workflow.engine import NodeRunRequest

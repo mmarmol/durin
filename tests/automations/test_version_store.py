@@ -6,7 +6,7 @@ store/version-store pair (style reference only — written fresh here).
 
 import pytest
 
-from durin.automations.spec import AutomationNotFound, parse_automation
+from durin.automations.spec import AutomationNotFoundError, parse_automation
 from durin.automations.store import automations_dir, delete_automation, save_automation
 from durin.automations.version_store import AutomationVersionStore
 
@@ -75,7 +75,7 @@ def test_the_commit_records_who_changed_it(tmp_path):
 def test_deleting_a_missing_automation_still_raises(tmp_path):
     """Versioning must not change the store's contract."""
     save_automation(tmp_path, _spec(), actor="user", reason="create")
-    with pytest.raises(AutomationNotFound):
+    with pytest.raises(AutomationNotFoundError):
         delete_automation(tmp_path, "ghost", actor="user", reason="r")
 
 

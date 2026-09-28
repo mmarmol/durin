@@ -897,7 +897,7 @@ force-stop already in flight.
   hard-only check; the node
   runner runs the turn as a task and polls the flag on a short interval,
   cancelling the task the moment it turns true. The abort surfaces as a
-  `WorkInterrupted` cause, the partial conversation is persisted exactly like
+  `WorkInterruptedError` cause, the partial conversation is persisted exactly like
   any node failure, and the run ends `cancelled`.
 
 **What a hard cancel does and does not reach.** Cancelling the turn's task

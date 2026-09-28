@@ -6,7 +6,6 @@ Without a _stream_id guard, _coalesce_stream_deltas merges them, blending text
 from stream B into stream A's edit bubble.  These tests verify the guard is in
 place.
 """
-import asyncio
 
 import pytest
 

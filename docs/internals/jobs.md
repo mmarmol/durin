@@ -65,7 +65,7 @@ The registry's *own* `kind` column is one layer more specific: it names which
 
 ```mermaid
 flowchart TD
-    ING["ingest_artifact\ndurin/memory/ingestion.py"] -->|NeedsOcrJob\nover the inline budget| SPAWN["spawn_ocr_job\ndurin/jobs/spawn.py"]
+    ING["ingest_artifact\ndurin/memory/ingestion.py"] -->|NeedsOcrJobError\nover the inline budget| SPAWN["spawn_ocr_job\ndurin/jobs/spawn.py"]
     SPAWN -->|enqueue| REG[(jobs.db\nJobRegistry)]
     SPAWN -->|Popen, detached| WORKER["ocr_worker.run_job\npython -m durin.jobs.ocr_worker &lt;id&gt;"]
 

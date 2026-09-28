@@ -28,8 +28,8 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.automations import queue, run_log
 from durin.automations.cron_sync import sync_automation_jobs
-from durin.automations.runtime import AutomationBusy
-from durin.automations.spec import AutomationError, AutomationNotFound, parse_automation
+from durin.automations.runtime import AutomationBusyError
+from durin.automations.spec import AutomationError, AutomationNotFoundError, parse_automation
 from durin.automations.store import list_automations, load_automation, save_automation
 
 _PARAMETERS = tool_parameters_schema(
@@ -189,7 +189,7 @@ class AutomationsTool(Tool):
     def _status(self, name: str) -> str:
         try:
             spec = load_automation(self._ws, name)
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             return f"Error: {exc}"
         active = run_log.active_runs(self._ws, name)
         awaiting = sum(1 for r in active if r.get("status") == "paused")
@@ -233,7 +233,7 @@ class AutomationsTool(Tool):
         """
         try:
             spec = load_automation(self._ws, name)
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             return f"Error: {exc}"
         if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
             return f"Automation '{name}' is busy: an active run already exists"
@@ -268,11 +268,11 @@ class AutomationsTool(Tool):
         unretrieved-task-exception warning at GC time — the agent has already
         been told the run started and no one is watching for the failure.
         Mirrors the automations runtime's own dispatch paths: a distinct
-        `AutomationBusy` branch for the automation going busy between this
+        `AutomationBusyError` branch for the automation going busy between this
         call's pre-check and the task actually running (e.g. two fires issued
         in the same batch — the pre-check can't see a sibling task's run
         until it writes its own run_log entry), and a catch-all for
-        everything else (AutomationNotFound if the automation is deleted
+        everything else (AutomationNotFoundError if the automation is deleted
         mid-flight, a run_log write error, ...).
 
         Both branches also retract the run id through the runtime's outcome
@@ -282,7 +282,7 @@ class AutomationsTool(Tool):
         """
         try:
             await self._runtime.fire(name, source="chat", task=task or None, origin=origin, run_id=run_id)
-        except AutomationBusy:
+        except AutomationBusyError:
             logger.warning(
                 "automations: chat fire for automation '{}' lost the race (now busy); run {} never started",
                 name, run_id,
@@ -344,7 +344,7 @@ class AutomationsTool(Tool):
             )
         try:
             record = await self._runtime.answer_nowait(name, run_id, answer, by="agent")
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             return f"Error: {exc}"
         except ValueError as exc:
             return f"Error: {exc}"
@@ -359,7 +359,7 @@ class AutomationsTool(Tool):
     def _set_enabled(self, name: str, enable: bool) -> str:
         try:
             spec = load_automation(self._ws, name)
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             return f"Error: {exc}"
         new_spec = replace(spec, enabled=enable)
         state = "enabled" if enable else "paused"

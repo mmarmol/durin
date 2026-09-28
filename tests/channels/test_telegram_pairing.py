@@ -95,7 +95,6 @@ async def test_on_start_group_publishes_is_dm_false() -> None:
 @pytest.mark.asyncio
 async def test_on_message_private_publishes_is_dm_true() -> None:
     """_on_message for a private chat always publishes is_dm=True regardless of auth status."""
-    from unittest.mock import patch
 
     channel = _make_channel(allow_from=[])
     channel._handle_message = AsyncMock()
@@ -124,6 +123,7 @@ async def test_unauthorized_dm_pairs_via_gate(monkeypatch) -> None:
     TelegramChannel so we confirm the is_dm flag threads through correctly.
     """
     import types
+
     import durin.channels.manager as mgr_mod
 
     sent: list = []
@@ -169,6 +169,7 @@ async def test_unauthorized_dm_pairs_via_gate(monkeypatch) -> None:
 async def test_unauthorized_group_message_not_paired_via_gate() -> None:
     """Group messages from unauthorized senders must NOT trigger pairing."""
     import types
+
     import durin.channels.manager as mgr_mod
 
     sent: list = []

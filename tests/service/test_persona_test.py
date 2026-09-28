@@ -1,5 +1,5 @@
 import asyncio
-import pytest
+
 from durin.service.personas import PersonasService, PersonaTestCommand
 from durin.service.principal import Principal, Scope
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from durin.pairing import store
 from durin.service.channels_telegram import (
     PairingApproveCommand,
@@ -22,7 +20,9 @@ async def test_token_test_ok(monkeypatch):
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def get_me(self):
-            class U: id = 42; username = "durin_bot"
+            class U:
+                id = 42
+                username = "durin_bot"
             return U()
 
     monkeypatch.setattr("durin.service.channels_telegram.Bot", FakeBot)
@@ -60,7 +60,9 @@ async def test_token_test_persists_nothing(monkeypatch):
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def get_me(self):
-            class U: id = 7; username = "safe_bot"
+            class U:
+                id = 7
+                username = "safe_bot"
             return U()
 
     monkeypatch.setattr("durin.service.channels_telegram.Bot", FakeBot)

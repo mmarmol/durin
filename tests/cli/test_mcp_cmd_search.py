@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
-from durin.cli.mcp_cmd import mcp_app
+
 import durin.cli.mcp_cmd as cmd
+from durin.cli.mcp_cmd import mcp_app
 
 
 def test_search_all_flag(monkeypatch):

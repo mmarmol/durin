@@ -11,7 +11,7 @@ from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 
-def _DEFAULT_JUDGE(prompt: str) -> str:
+def _default_judge(prompt: str) -> str:
     from durin.memory.llm_invoke import judge_llm_invoke
     return judge_llm_invoke(prompt).text
 
@@ -68,7 +68,7 @@ class SkillPublishTool(Tool, ContextAware):
             self._workspace,
             str(kwargs.get("name", "")),
             attribution=attribution,
-            composition_judge=_DEFAULT_JUDGE,
+            composition_judge=_default_judge,
             composition_override=bool(kwargs.get("override_composition")),
         )
         if result.get("composition_rejected"):

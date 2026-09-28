@@ -5,8 +5,8 @@ Table-driven tests covering every classification and delivery rule.
 
 import pytest
 
-from durin.automations.spec import AutomationSpec, Delivery, Life
 from durin.automations.classify import classify, is_achieved, should_deliver
+from durin.automations.spec import AutomationSpec, Delivery, Life
 from durin.workflow.result import WorkflowResult
 
 

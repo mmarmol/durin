@@ -1,6 +1,7 @@
 import pytest
+
 from durin.service.principal import Principal
-from durin.service.tasks import TasksService, TasksListQuery
+from durin.service.tasks import TasksListQuery, TasksService
 
 
 class _Sessions:

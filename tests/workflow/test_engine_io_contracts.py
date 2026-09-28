@@ -22,7 +22,6 @@ import pytest
 from durin.workflow.engine import NodeRunResponse, ResumeState, WorkflowEngine
 from durin.workflow.spec import WorkflowError, parse_workflow
 
-
 # ── spec: inputs_from ──
 
 def test_inputs_from_parses_on_work_and_script():

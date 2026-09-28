@@ -379,7 +379,7 @@ def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
     tmp_path, monkeypatch
 ):
     # The flagship OCR case: a scanned book attached in chat with OCR on.
-    # convert_file_to_markdown raises NeedsOcrJob because its page count
+    # convert_file_to_markdown raises NeedsOcrJobError because its page count
     # blows the inline budget; that used to vanish as an [error:] string the
     # drop gate discarded. The model must see the filename, the on-disk
     # path, and the "Ingest" instruction instead.
@@ -394,7 +394,7 @@ def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
     )
     # The [ocr] extra is not part of CI's install set, so engine_available()
     # would read False there and this test would take the engine-missing
-    # coverage-note branch instead of raising NeedsOcrJob — never exercising
+    # coverage-note branch instead of raising NeedsOcrJobError — never exercising
     # the fix under test. Force it available so the test is deterministic
     # regardless of what is or isn't installed on the machine running it.
     monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
@@ -450,7 +450,7 @@ def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
 def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_path):
     # The [error:] gate predates the OCR branch — it silently dropped
     # corrupt files too. The fix covers the whole defect class, not just
-    # NeedsOcrJob.
+    # NeedsOcrJobError.
     from durin.utils.document import extract_documents
 
     corrupt = tmp_path / "broken.pdf"

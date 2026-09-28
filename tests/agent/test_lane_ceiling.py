@@ -1,4 +1,3 @@
-import asyncio
 
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus

@@ -53,6 +53,7 @@ def test_revoke_creates_lock_file(patched_store: Path) -> None:
 
 def test_pairing_json_is_valid_json_after_generate(patched_store: Path) -> None:
     import json
+
     from durin.pairing import store
 
     code = store.generate_code("ch", "u1")

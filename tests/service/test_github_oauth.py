@@ -12,7 +12,7 @@ from durin.service.oauth import (
     GithubStatusQuery,
     OAuthService,
 )
-from durin.service.principal import Principal, Scope
+from durin.service.principal import Principal
 from durin.service.types import ForbiddenError, UnavailableError, ValidationFailedError
 
 

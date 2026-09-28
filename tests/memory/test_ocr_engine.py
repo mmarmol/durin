@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from durin.memory.ocr import (
-    OcrUnavailable,
+    OcrUnavailableError,
     TranscribedPage,
     engine_available,
     render_page,
@@ -102,7 +102,7 @@ def test_engine_available_reports_a_bool():
 def test_transcribe_raises_ocr_unavailable_without_the_extra(monkeypatch, tmp_path):
     monkeypatch.setattr("durin.memory.ocr.engine_available", lambda: False)
     monkeypatch.setattr("durin.memory.ocr._engine", None, raising=False)
-    with pytest.raises(OcrUnavailable):
+    with pytest.raises(OcrUnavailableError):
         transcribe_page(tmp_path / "nope.pdf", 1)
 
 
@@ -243,7 +243,7 @@ def test_transcribe_page_runs_a_det_only_pass_when_recognition_finds_nothing(
 # ``transcribe_pages_detached`` and the child it spawns: how it is invoked,
 # and how each outcome the child can produce (clean JSON, a noisy failure, a
 # hang, an incomplete result) turns into either a parsed dict or the single
-# ``OcrUnavailable`` every existing caller already degrades on.
+# ``OcrUnavailableError`` every existing caller already degrades on.
 
 
 def _fake_run(stdout="", stderr="", returncode=0):
@@ -352,14 +352,14 @@ def test_transcribe_pages_detached_treats_a_malformed_page_object_as_no_result(
     """A child that emits anything but the full per-page object — notably the
     flat ``"page": "text"`` shape this contract replaced — has not produced a
     parseable result. Parent and child ship in the same install, so a mismatch
-    is a bug, and it must surface as the one OcrUnavailable every caller
+    is a bug, and it must surface as the one OcrUnavailableError every caller
     already handles rather than as half-parsed data."""
     monkeypatch.setattr(
         "durin.memory.ocr.subprocess.run",
         _fake_run(stdout=json.dumps({"pages": {"1": inner}})),
     )
 
-    with pytest.raises(OcrUnavailable) as excinfo:
+    with pytest.raises(OcrUnavailableError) as excinfo:
         transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert "no parseable result" in str(excinfo.value)
@@ -550,7 +550,7 @@ def test_transcribe_pages_detached_raises_on_nonzero_exit(monkeypatch, tmp_path)
         ),
     )
 
-    with pytest.raises(OcrUnavailable) as excinfo:
+    with pytest.raises(OcrUnavailableError) as excinfo:
         transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert "boom" in str(excinfo.value)
@@ -567,13 +567,13 @@ def test_transcribe_pages_detached_reports_the_childs_own_error_on_a_clean_failu
     monkeypatch.setattr(
         "durin.memory.ocr.subprocess.run",
         _fake_run(
-            stdout=json.dumps({"error": "OcrUnavailable: local OCR needs the [ocr] extra"}),
+            stdout=json.dumps({"error": "OcrUnavailableError: local OCR needs the [ocr] extra"}),
             stderr="",
             returncode=1,
         ),
     )
 
-    with pytest.raises(OcrUnavailable) as excinfo:
+    with pytest.raises(OcrUnavailableError) as excinfo:
         transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert "local OCR needs the [ocr] extra" in str(excinfo.value)
@@ -590,7 +590,7 @@ def test_transcribe_pages_detached_falls_back_to_stderr_when_stdout_says_nothing
         _fake_run(stdout="not json at all", stderr="Killed: 9", returncode=137),
     )
 
-    with pytest.raises(OcrUnavailable) as excinfo:
+    with pytest.raises(OcrUnavailableError) as excinfo:
         transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert "Killed: 9" in str(excinfo.value)
@@ -602,7 +602,7 @@ def test_transcribe_pages_detached_raises_on_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr("durin.memory.ocr.subprocess.run", run)
 
-    with pytest.raises(OcrUnavailable) as excinfo:
+    with pytest.raises(OcrUnavailableError) as excinfo:
         transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert "stuck loading model" in str(excinfo.value)
@@ -619,7 +619,7 @@ def test_transcribe_pages_detached_raises_when_a_page_is_missing_from_the_result
         _fake_run(stdout=json.dumps({"pages": {"1": _page_payload("hello", 0.9, 0.9)}})),
     )
 
-    with pytest.raises(OcrUnavailable):
+    with pytest.raises(OcrUnavailableError):
         transcribe_pages_detached(tmp_path / "doc.pdf", [1, 2])
 
 

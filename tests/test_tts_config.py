@@ -1,4 +1,4 @@
-from durin.config.schema import TtsConfig, TranscriptionConfig
+from durin.config.schema import TranscriptionConfig, TtsConfig
 
 
 def test_tts_config_defaults():

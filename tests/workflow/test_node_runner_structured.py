@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from durin.agent.runner import AgentRunResult, AgentRunner
+from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest

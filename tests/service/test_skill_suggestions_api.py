@@ -18,8 +18,8 @@ from durin.service.principal import Principal, Scope
 from durin.service.skills import (
     AcceptSuggestionCommand,
     RejectSuggestionCommand,
-    SkillSuggestionsQuery,
     SkillsService,
+    SkillSuggestionsQuery,
 )
 
 

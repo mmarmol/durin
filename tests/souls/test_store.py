@@ -1,5 +1,6 @@
 import pytest
-from durin.souls.store import SoulStore, DEFAULT_SLUG
+
+from durin.souls.store import DEFAULT_SLUG, SoulStore
 
 
 def test_default_slug_maps_to_soul_md(tmp_path):

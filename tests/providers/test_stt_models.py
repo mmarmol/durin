@@ -1,4 +1,3 @@
-from pathlib import Path
 import durin.providers.stt_models as m
 
 

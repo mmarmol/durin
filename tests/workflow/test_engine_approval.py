@@ -4,7 +4,7 @@ onward, and the reply (approve/revise) resumes it via durin.workflow.approval.""
 
 from durin.workflow import run_log
 from durin.workflow.approval import build_approval_resume
-from durin.workflow.engine import NodeRunRequest, NodeRunResponse, ResumeState, WorkflowEngine
+from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
 
 

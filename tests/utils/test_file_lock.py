@@ -1,6 +1,8 @@
 import threading
 from pathlib import Path
+
 import pytest
+
 from durin.utils.file_lock import cross_process_lock
 
 

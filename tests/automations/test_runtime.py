@@ -9,9 +9,9 @@ from durin.automations import claims
 from durin.automations import queue as automation_queue
 from durin.automations import run_log as rl
 from durin.automations.chains import CHAIN_HOP_CAP
-from durin.automations.runtime import AutomationBusy, AutomationsRuntime
+from durin.automations.runtime import AutomationBusyError, AutomationsRuntime
 from durin.automations.spec import (
-    AutomationNotFound,
+    AutomationNotFoundError,
     AutomationSpec,
     AutomationTrigger,
     Delivery,
@@ -169,7 +169,7 @@ async def test_single_concurrency_busy_raises_and_try_fire_skips(tmp_path):
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])
     await rt.fire("a1", source="manual")  # leaves an active paused run
-    with pytest.raises(AutomationBusy):
+    with pytest.raises(AutomationBusyError):
         await rt.fire("a1", source="manual")
     assert await rt.try_fire("a1", source="cron") is None
 
@@ -943,7 +943,7 @@ async def test_stop_paused_run_no_drain_for_parallel_concurrency(tmp_path):
 async def test_stop_missing_run_raises_automation_not_found(tmp_path):
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [])
-    with pytest.raises(AutomationNotFound):
+    with pytest.raises(AutomationNotFoundError):
         await rt.stop("a1", "ghost-run")
 
 
@@ -1186,7 +1186,7 @@ async def test_relaunch_that_loses_the_fire_race_is_retracted(tmp_path):
     rl.update_run(tmp_path, "a1", "dead", workflow_run_id="wf-never-started",
                   owner={"pid": 999999, "started": "long ago"})
     # A run genuinely owned by this (live) process — active_runs sees it, so
-    # the relaunch attempt for "dead" hits AutomationBusy.
+    # the relaunch attempt for "dead" hits AutomationBusyError.
     rl.start_run(tmp_path, "a1", "live", cause={"kind": "cron", "excerpt": "other", "trigger_index": None})
 
     handled = await rt.sweep_orphans()
@@ -1308,7 +1308,7 @@ async def test_chain_into_busy_single_target_queues_event_and_drains_after_free(
 
 
 async def test_chain_fire_exception_is_logged_not_lost(tmp_path, caplog):
-    """A chain target that no longer exists (AutomationNotFound, uncaught by
+    """A chain target that no longer exists (AutomationNotFoundError, uncaught by
     fire() itself) must be logged by _chain_fire, not turned into an
     asyncio "Task exception was never retrieved" warning nobody ever reads."""
     rt, _ = _mk_runtime(tmp_path, [])
@@ -1630,7 +1630,7 @@ async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tm
 
 
 async def test_chain_fire_busy_handler_logs_when_queue_push_itself_raises(tmp_path, monkeypatch, caplog):
-    """The residual of finding 1: queue.push inside the AutomationBusy handler
+    """The residual of finding 1: queue.push inside the AutomationBusyError handler
     must be guarded — if it raises (lock/IO), the exception must be logged,
     not left to escape _chain_fire and recreate the exact "Task exception
     was never retrieved" mode finding 1 eliminated."""
@@ -1649,7 +1649,7 @@ async def test_chain_fire_busy_handler_logs_when_queue_push_itself_raises(tmp_pa
     handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
     try:
         with caplog.at_level(logging.ERROR):
-            await rt._chain_fire("downstream", "task text", 1)  # hits AutomationBusy, then push raises
+            await rt._chain_fire("downstream", "task text", 1)  # hits AutomationBusyError, then push raises
     finally:
         loguru_logger.remove(handler_id)
 

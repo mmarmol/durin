@@ -337,8 +337,7 @@ def test_run_record_persona_persisted_and_reloaded(tmp_path: Path) -> None:
 
 def test_run_history_cap_respected(tmp_path: Path) -> None:
     """run_history_max=3 keeps at most 3 records after 4 runs."""
-    import asyncio
-    from durin.cron.types import CronJob, CronRunRecord
+    from durin.cron.types import CronRunRecord
 
     store_path = tmp_path / "cron" / "jobs.json"
     service = CronService(store_path, run_history_max=3)

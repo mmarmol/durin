@@ -1,8 +1,16 @@
 from types import SimpleNamespace
+
 from durin.workflow.engine import NodeRunResponse
 from durin.workflow.provenance import (
-    content_sha256, drop, input_hash, load, node_hash, params_hash, record,
+    content_sha256,
+    drop,
+    input_hash,
+    load,
+    node_hash,
+    params_hash,
+    record,
 )
+
 
 def test_node_hash_is_stable_and_order_insensitive():
     a = {"id": "n", "prompt": "p", "output_schema": {"x": 1}}

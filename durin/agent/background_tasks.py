@@ -162,7 +162,7 @@ def collect_tasks(
             })
 
     from durin.workflow import run_log
-    from durin.workflow.loader import WorkflowNotFound, load_workflow
+    from durin.workflow.loader import WorkflowNotFoundError, load_workflow
     from durin.workflow.spec import WorkflowError, node_label
     for rec in run_log.runs_for_session(workspace, session_key):
         node_runs = rec.get("runs") or []
@@ -173,7 +173,7 @@ def collect_tasks(
             try:
                 wf_def = load_workflow(workspace, wf_name)
                 label_map = {nid: node_label(node) for nid, node in wf_def.nodes.items()}
-            except (WorkflowNotFound, WorkflowError, Exception):
+            except (WorkflowNotFoundError, WorkflowError, Exception):
                 pass
         needs_input_detail = None
         if rec.get("status") == "needs_input":

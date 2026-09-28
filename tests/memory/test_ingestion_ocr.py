@@ -95,7 +95,7 @@ def test_a_session_scoped_job_appears_in_that_sessions_tray(tmp_path, book, regi
 
 
 def test_ingest_survives_ocr_enabled_without_the_extra(tmp_path, book, registry, monkeypatch):
-    """OcrUnavailable is a RuntimeError: neither IngestError nor OSError, so an
+    """OcrUnavailableError is a RuntimeError: neither IngestError nor OSError, so an
     ingest that let it escape would raise straight through every caller. It has
     to be handled where the conversion happens, not left to each caller to
     catch a type none of them mention."""

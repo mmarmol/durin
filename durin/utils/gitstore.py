@@ -13,7 +13,6 @@ from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
 
-
 # Per-repo write locks. Serialize the stage+commit so concurrent writers to one
 # git-backed store (e.g. the skill dream and a webui edit) cannot corrupt the git
 # index or lose a commit. Mirrors the memory writer's discipline. Keyed by the

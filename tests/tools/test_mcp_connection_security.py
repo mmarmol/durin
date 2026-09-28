@@ -5,7 +5,6 @@ import pytest
 
 from durin.config.schema import MCPServerConfig
 
-
 # ---------------------------------------------------------------------------
 # 5a.1 — allow_private_url config field
 # ---------------------------------------------------------------------------
@@ -87,12 +86,8 @@ def test_sse_factory_skips_guard_when_opted_out():
 # 5b.2 — injection-scan warns but registers
 # ---------------------------------------------------------------------------
 
-import asyncio
-import contextlib
-from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_client_server_memory_streams
 
 from tests.tools.test_mcp_connection import _InProcessHarness  # noqa
 
@@ -151,8 +146,9 @@ async def test_refuse_policy_blocks_egress_spawn():
 
 @pytest.mark.asyncio
 async def test_warn_policy_allows_spawn(monkeypatch):
-    import durin.agent.tools.mcp_connection as mc
     from loguru import logger as loguru_logger
+
+    import durin.agent.tools.mcp_connection as mc
 
     class _FakeCM:
         async def __aenter__(self):

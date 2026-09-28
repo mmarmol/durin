@@ -1,6 +1,5 @@
-import pytest
-from durin.bus.queue import MessageBus
 from durin.bus.events import InboundMessage
+from durin.bus.queue import MessageBus
 
 
 def _msg(**kw):

@@ -9,7 +9,6 @@ a missing name derives from the directory, a missing description from the
 body's first paragraph. Preview first (diff, no write), then apply.
 """
 
-import json
 from pathlib import Path
 
 import pytest

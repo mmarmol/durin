@@ -1,7 +1,7 @@
 """Tests for run_workflow background execution mode."""
 
-import asyncio
 import pytest
+
 from durin.agent.tools.run_workflow import RunWorkflowTool, _background_launch_message
 
 

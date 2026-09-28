@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from durin.agent.tools.filesystem import EditFileTool
 from durin.agent.tools.file_state import FileStates, _hash_file
+from durin.agent.tools.filesystem import EditFileTool
 
 
 @pytest.fixture()

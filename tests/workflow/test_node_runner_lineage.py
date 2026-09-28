@@ -4,7 +4,7 @@ so ``children_of`` of that root finds every node session of the run."""
 
 from unittest.mock import AsyncMock, MagicMock
 
-from durin.agent.runner import AgentRunResult, AgentRunner
+from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session import lineage
 from durin.session.manager import Session, SessionManager

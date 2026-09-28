@@ -9,7 +9,6 @@ def test_reload_app_config_picks_up_new_persona(tmp_path, monkeypatch):
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     cfg = load_config(get_config_path())
     from durin.agent.loop import AgentLoop
-
     from durin.utils.resizable_semaphore import ResizableSemaphore
 
     loop = AgentLoop.__new__(AgentLoop)  # construct bare; only app_config matters here
@@ -32,7 +31,6 @@ def test_apply_default_model_live_reapplies_new_default(tmp_path, monkeypatch):
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     cfg = load_config(get_config_path())
     from durin.agent.loop import AgentLoop
-
     from durin.utils.resizable_semaphore import ResizableSemaphore
 
     loop = AgentLoop.__new__(AgentLoop)  # bare; only the fields below are touched
@@ -71,8 +69,8 @@ def _real_loop_default_only(tmp_path):
     registered preset is ``"default"`` — so ``apply_default_model_live`` drives
     the real ``normalize_preset_name`` path that raised KeyError for an
     ``auto`` provider default before the fix."""
-    from durin.bus.queue import MessageBus
     from durin.agent.loop import AgentLoop
+    from durin.bus.queue import MessageBus
     from durin.config.schema import ModelPresetConfig
     from durin.providers.factory import ProviderSnapshot
 

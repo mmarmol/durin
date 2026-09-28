@@ -35,7 +35,7 @@ def test_edit_existing_persists_and_versions(tmp_path):
     assert out.get("ok") is True
 
     from durin.workflow.loader import load_workflow
-    from durin.workflow.version_store import WorkflowVersionStore, history_for_dream
+    from durin.workflow.version_store import history_for_dream
     wf = load_workflow(tmp_path, "qa")
     assert wf.nodes["only"].prompt == "Answer with sources."
     hist = history_for_dream(tmp_path, "qa")

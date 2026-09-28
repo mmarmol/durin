@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
-import pytest
-
 from durin.utils.webui_transcript import session_messages_to_ui_messages
 
 

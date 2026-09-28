@@ -398,14 +398,14 @@ class RunWorkflowTool(Tool, ContextAware):
         from durin.workflow.artifacts import safe_key
         from durin.workflow.engine import WorkflowEngine
         from durin.workflow.judge import AgentJudgeRunner
-        from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
+        from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
         from durin.workflow.node_runner import AgentNodeRunner
         from durin.workflow.subworkflow import SubworkflowRunner
         from durin.workflow.version_store import WorkflowVersionStore
 
         try:
             workflow = load_workflow(self._workspace, name)
-        except WorkflowNotFound as exc:
+        except WorkflowNotFoundError as exc:
             return f"Error: {exc}"
 
         # Validate before any side effect below (the version-store snapshot,

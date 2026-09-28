@@ -50,7 +50,8 @@ def test_service_mode_without_discovery_quietly_uses_pool(provider):
 
 
 def test_service_mode_broken_server_flips_to_process(provider, monkeypatch):
-    from durin.memory import embed_server, embedding as embedding_mod
+    from durin.memory import embed_server
+    from durin.memory import embedding as embedding_mod
 
     events: list[str] = []
     monkeypatch.setattr(

@@ -137,6 +137,7 @@ async def test_subagent_spec_captures_provider_at_spawn_time(tmp_path):
     manager.runner.run = intercepting_run  # type: ignore[method-assign]
 
     import time
+
     from durin.agent.subagent import SubagentStatus
 
     status = SubagentStatus(

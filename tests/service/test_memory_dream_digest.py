@@ -15,7 +15,6 @@ import pytest
 from durin.service.memory import (
     DreamDigest,
     DreamDigestQuery,
-    DreamEvent,
     MemoryService,
 )
 from durin.service.principal import Principal

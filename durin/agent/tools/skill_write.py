@@ -29,7 +29,7 @@ from durin.agent.tools.schema import (
 logger = logging.getLogger(__name__)
 
 
-def _DEFAULT_JUDGE(prompt: str) -> str:
+def _default_judge(prompt: str) -> str:
     """Composition-gate judge: one completion via the judge aux preset
     (``skills.security.llm_judge.model`` → the user's default preset).
     Loop-safe sync invoke; exceptions propagate and the gate accepts
@@ -89,7 +89,7 @@ class SkillWriteTool(Tool, ContextAware):
     """
 
     def __init__(self, workspace: str | Path, *, gate_mode: str = "override",
-                 composition_judge=_DEFAULT_JUDGE) -> None:
+                 composition_judge=_default_judge) -> None:
         # gate_mode: "override" (in-session — the user's explicit word may skip
         # the composition gate) or "hard" (autonomous dream — no override).
         self._workspace = Path(workspace).expanduser()

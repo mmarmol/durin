@@ -22,7 +22,12 @@ from pathlib import Path
 
 from loguru import logger
 
-from durin.automations.spec import AutomationNotFound, AutomationSpec, automation_to_dict, parse_automation
+from durin.automations.spec import (
+    AutomationNotFoundError,
+    AutomationSpec,
+    automation_to_dict,
+    parse_automation,
+)
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
@@ -38,7 +43,7 @@ def _path(workspace: str | Path, name: str) -> Path:
 def load_automation(workspace: str | Path, name: str) -> AutomationSpec:
     p = _path(workspace, name)
     if not p.exists():
-        raise AutomationNotFound(f"automation '{name}' not found")
+        raise AutomationNotFoundError(f"automation '{name}' not found")
     return parse_automation(json.loads(p.read_text(encoding="utf-8")))
 
 
@@ -85,7 +90,7 @@ def delete_automation(
     p = _path(workspace, name)
     with cross_process_lock(automations_dir(workspace) / name):
         if not p.exists():
-            raise AutomationNotFound(f"automation '{name}' not found")
+            raise AutomationNotFoundError(f"automation '{name}' not found")
         p.unlink()
     _version(workspace, [p], f"automation({name}): delete", reason, actor)
 

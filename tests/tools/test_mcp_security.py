@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from durin.agent.tools.mcp_security import scan_injection, scan_spawn_command
 
-
 # ---------------------------------------------------------------------------
 # 5b.1 — scan_injection reason codes
 # ---------------------------------------------------------------------------

@@ -134,7 +134,6 @@ def test_scheduler_refreshes_immediately_when_cache_missing(tmp_path, monkeypatc
     """start() with no cache refreshes right away (in the background thread)
     instead of sleeping a full interval first."""
     import threading
-    import time
 
     fired = threading.Event()
     monkeypatch.setattr(

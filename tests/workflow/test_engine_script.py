@@ -7,7 +7,12 @@ import pytest
 
 from durin.workflow import run_log
 from durin.workflow.artifacts import artifact_dir
-from durin.workflow.engine import NodeRunRequest, WorkflowConfigError, WorkflowEngine, build_resume_state
+from durin.workflow.engine import (
+    NodeRunRequest,
+    WorkflowConfigError,
+    WorkflowEngine,
+    build_resume_state,
+)
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
 

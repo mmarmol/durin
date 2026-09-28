@@ -40,7 +40,7 @@ from durin.automations import claims, queue, run_log
 from durin.automations.chains import CHAIN_HOP_CAP, chain_targets
 from durin.automations.classify import classify, should_deliver
 from durin.automations.outcome import AutomationOutcome, build_outcome, route
-from durin.automations.spec import AutomationNotFound, AutomationSpec
+from durin.automations.spec import AutomationNotFoundError, AutomationSpec
 from durin.automations.store import load_automation, save_automation
 from durin.telemetry.logger import (
     bind_telemetry,
@@ -83,7 +83,7 @@ def _bind_automations_telemetry(name: str):
     return bind_telemetry(get_session_logger(f"automation:{name}"), purpose="automation")
 
 
-class AutomationBusy(Exception):
+class AutomationBusyError(Exception):
     """concurrency=single and an active run exists."""
 
 
@@ -153,7 +153,7 @@ class AutomationsRuntime:
         try:
             spec = load_automation(self._ws, name)
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
-                raise AutomationBusy(f"automation '{name}' already has an active run")
+                raise AutomationBusyError(f"automation '{name}' already has an active run")
             return await self._run(spec, source=source, task=task, origin=origin,
                                     run_id=run_id, chain_depth=chain_depth)
         finally:
@@ -342,7 +342,7 @@ class AutomationsRuntime:
     async def _stop(self, name: str, run_id: str, *, hard: bool) -> dict:
         record = run_log.read_run(self._ws, name, run_id)
         if record is None:
-            raise AutomationNotFound(f"run '{run_id}' of automation '{name}' not found")
+            raise AutomationNotFoundError(f"run '{run_id}' of automation '{name}' not found")
         status = record.get("status")
 
         if status == "running":
@@ -396,7 +396,7 @@ class AutomationsRuntime:
             # still has to happen here too — see _drain_queue_if_single.
             try:
                 spec = load_automation(self._ws, name)
-            except AutomationNotFound:
+            except AutomationNotFoundError:
                 spec = None
             if spec is not None:
                 self._drain_queue_if_single(spec)
@@ -446,7 +446,7 @@ class AutomationsRuntime:
                 continue
             try:
                 spec = load_automation(self._ws, automation_name)
-            except AutomationNotFound:
+            except AutomationNotFoundError:
                 continue
 
             wf_run_id = rec.get("workflow_run_id")
@@ -505,7 +505,7 @@ class AutomationsRuntime:
         try:
             await self.fire(automation_name, source=cause.get("kind") or "cron",
                              task=cause.get("excerpt") or None, origin=origin, run_id=new_run_id)
-        except AutomationBusy:
+        except AutomationBusyError:
             # A single-concurrency automation already has a live run — the
             # cause is being served, so a second run must not be stacked on
             # it. The promised replacement still never happened, and only the
@@ -872,7 +872,7 @@ class AutomationsRuntime:
         """
         try:
             await self.fire(target_name, source="chain", task=task, chain_depth=chain_depth)
-        except AutomationBusy:
+        except AutomationBusyError:
             # Only ever raised when the target is single-concurrency and
             # already has an active run — the same holding area the queue
             # drain already services for a busy channel-triggered fire.
@@ -920,7 +920,7 @@ class AutomationsRuntime:
         """Fire a drained event, re-enqueueing and logging if the automation is busy.
 
         Called via create_task from _post_finish, so unhandled exceptions are
-        logged by asyncio as task exceptions. On AutomationBusy, push the
+        logged by asyncio as task exceptions. On AutomationBusyError, push the
         event BACK via queue.push and log a warning (mirrors how the matcher's
         own fire handles the race). Other exceptions are logged (run-level
         failures are already finalized by fire itself). `source`/`chain_depth`
@@ -932,7 +932,7 @@ class AutomationsRuntime:
         try:
             await self.fire(automation_name, source=source, task=task, origin=origin,
                              chain_depth=chain_depth)
-        except AutomationBusy:
+        except AutomationBusyError:
             try:
                 queue.push(self._ws, automation_name, {"content": task, "origin": origin,
                                                         "source": source, "chain_depth": chain_depth})

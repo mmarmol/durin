@@ -12,9 +12,9 @@ from durin.agent.skill_observations import (
     open_observations,
 )
 from durin.memory.dream_passes import (
+    _recent_sessions_text,
     _resolve_gap_observations,
     _skill_extract_messages,
-    _recent_sessions_text,
 )
 
 
@@ -73,8 +73,8 @@ def test_resolve_gap_marks_applied_when_skill_materializes(tmp_path):
 def test_gap_resolution_matches_normalized_names(tmp_path):
     """Gap logged as 'new:Release Runbook' should match skill 'release-runbook'
     via normalized name comparison."""
-    from durin.agent.skill_observations import log_observation
     from durin.agent import skills_store as ss
+    from durin.agent.skill_observations import log_observation
 
     log_observation(tmp_path, skill="new:Release Runbook", kind="gap",
                     issue="no runbook", improvement="write one")
