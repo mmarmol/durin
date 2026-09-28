@@ -486,12 +486,24 @@ def _resolve_gap_observations(workspace: Path) -> int:
     return apply_dispositions(workspace, done).get("applied", 0)
 
 
+_SESSIONS_WINDOW_CHARS = 12000
+
+
+def _head_and_tail(text: str, budget: int) -> str:
+    """``text`` cut to ``budget`` chars, keeping its start and its end."""
+    if len(text) <= budget:
+        return text
+    half = budget // 2
+    return text[:half] + "\n\n[... middle truncated ...]\n\n" + text[-half:]
+
+
 def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
     """The newest sessions' conversation text (user + assistant turns).
 
-    Long inputs are trimmed to preserve both head and tail: keeps first 6000
-    chars, then middle truncation marker, then last 6000 chars. This ensures
-    late-session procedures (which live in the tail) survive truncation."""
+    Each session gets its share of the window and is trimmed on its own,
+    keeping its head and its tail. A session's end is where the procedure that
+    finally worked lives; trimming the joined text instead kept the oldest
+    session's end and dropped the newest one's."""
     from durin.memory.extract_runner import load_session
     sdir = Path(workspace) / "sessions"
     if not sdir.is_dir():
@@ -508,11 +520,12 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
             for m in msgs if m.get("content")
         )
         if turns.strip():
-            blocks.append(f"=== session {jsonl.stem} ===\n{turns}")
-    text = "\n\n".join(blocks)
-    if len(text) <= 12000:
-        return text
-    return text[:6000] + "\n\n[... middle truncated ...]\n\n" + text[-6000:]
+            blocks.append((f"=== session {jsonl.stem} ===\n", turns))
+    if not blocks:
+        return ""
+    share = _SESSIONS_WINDOW_CHARS // len(blocks)
+    return "\n\n".join(header + _head_and_tail(turns, share - len(header))
+                       for header, turns in blocks)
 
 
 def _list_skills(workspace: Path) -> list[str]:

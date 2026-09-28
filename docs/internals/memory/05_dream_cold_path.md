@@ -395,7 +395,9 @@ warning and is skipped, never aborting the pass. Gated by
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
 `SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, mining the
 newest sessions (plus any logged skill gaps)
-for a recurring step-by-step **procedure**. When it finds one it prefers
+for a recurring step-by-step **procedure**. Each session gets its share of the
+input window and is trimmed on its own, keeping its start and its end — the end
+is where what finally worked lives. When it finds one it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
 over authoring from scratch, then calls `skill_write`. Its prompt lists the
 retired skills with their replacements, and its `skill_write` door refuses a

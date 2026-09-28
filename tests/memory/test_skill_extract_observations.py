@@ -116,3 +116,28 @@ def test_recent_sessions_text_preserves_head_and_tail_when_truncating(tmp_path):
     # Truncation marker should be present (when > 12000 chars)
     if len(full_text) > 12000:
         assert "[... middle truncated ...]" in result
+
+
+def test_each_session_keeps_its_own_end(tmp_path):
+    """A session's end is where what finally worked lives. Cutting the joined
+    text kept the oldest session's end and dropped the newest one's."""
+    import os
+
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True)
+    old = sdir / "s_old.jsonl"
+    new = sdir / "s_new.jsonl"
+    old.write_text(json.dumps({"role": "user",
+                               "content": "OLD_START " + "o" * 9000 + " OLD_END"}) + "\n",
+                   encoding="utf-8")
+    new.write_text(json.dumps({"role": "user",
+                               "content": "NEW_START " + "n" * 9000 + " NEW_VERIFIED_OUTCOME"}) + "\n",
+                   encoding="utf-8")
+    os.utime(old, (1_000_000, 1_000_000))
+
+    result = _recent_sessions_text(tmp_path, max_sessions=2)
+
+    assert "NEW_VERIFIED_OUTCOME" in result
+    assert "NEW_START" in result
+    assert "OLD_END" in result
+    assert len(result) <= 12300
