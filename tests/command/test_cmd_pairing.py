@@ -87,6 +87,17 @@ async def test_pairing_composite_sender_allowed_by_username_half(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pairing_owner_listed_with_an_at_sign_is_the_owner(monkeypatch):
+    """Telegram lets "@owner_handle" in allow_from chat; /pairing must treat
+    the same entry as the owner, or the owner cannot approve anyone."""
+    monkeypatch.setattr(
+        "durin.pairing.store.list_pending", lambda: [], raising=True
+    )
+    out = await cmd_pairing(_ctx(sender="555|owner_handle", allow_from=("@owner_handle",)))
+    assert "No pending pairing requests" in out.content
+
+
+@pytest.mark.asyncio
 async def test_pairing_composite_sender_denied_for_non_matching_halves(monkeypatch):
     """Composite sender "555|owner_handle" is denied if neither half is in allowlist."""
     out = await cmd_pairing(_ctx(sender="555|owner_handle", allow_from=("999",)))

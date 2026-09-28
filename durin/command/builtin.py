@@ -2372,10 +2372,11 @@ def _sender_is_owner(ctx: CommandContext) -> bool:
 
     # For composite senders "sid|username", match either half against allowlist.
     # Mirror Telegram's shape validation: exactly one "|", numeric sid, non-empty username.
+    # Like Telegram's own check, a username entry may be written with its "@".
     if sender.count("|") == 1:
         sid, username = sender.split("|", 1)
         if sid.isdigit() and username:
-            return sid in allow or username in allow
+            return sid in allow or username in {str(e).removeprefix("@") for e in allow}
 
     return False
 
