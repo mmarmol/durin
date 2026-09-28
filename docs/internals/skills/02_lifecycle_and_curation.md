@@ -291,7 +291,11 @@ provenance.
   a similarity threshold) catches paraphrases — LLMs rarely phrase a recurring
   complaint identically twice. A match bumps `count` and `last_seen` on the
   existing record instead of creating a duplicate; `count >= 2` is the
-  recurrence signal curation looks for.
+  recurrence signal curation looks for. An issue that matches an `APPLIED`
+  record — still active, or already archived — is a regression. That record
+  comes back `OPEN` (out of the archive when needed) with its count bumped,
+  so a fix that did not hold reads as recurring, not as a first report.
+  `DECLINED` records are not reopened.
 - **Lifecycle.** `OPEN` → `APPLIED`, `DECLINED` or `UPSTREAM`. The first two are
   set in bulk by `apply_dispositions` from the curation judge's per-observation
   verdicts, or one at a time by `resolve_observation` when the user resolves a

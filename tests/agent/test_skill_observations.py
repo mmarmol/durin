@@ -170,6 +170,34 @@ def test_archive_noop_when_nothing_resolved(tmp_path):
     assert archive_resolved(ws) == 0
 
 
+def test_an_issue_that_returns_after_being_applied_reopens_its_record(tmp_path):
+    """A fix that did not hold is a regression, not a first report: it goes
+    back on the same record with its count, so curation sees it recur."""
+    ws = tmp_path / "ws"
+    first = _log(ws, issue="step 2 uses the wrong output bucket")
+    apply_dispositions(ws, [{"id": first["id"], "disposition": "applied"}])
+    archive_resolved(ws)
+
+    again = _log(ws, issue="step 2 still uses the wrong output bucket")
+
+    assert again["id"] == first["id"]
+    [rec] = open_observations(ws)
+    assert rec["id"] == first["id"]
+    assert rec["count"] == 2
+    assert not (ws / "skills" / ".observations.archive.jsonl").read_text().strip()
+
+
+def test_a_declined_issue_that_returns_stays_declined(tmp_path):
+    ws = tmp_path / "ws"
+    first = _log(ws, issue="rename the skill to something shorter")
+    apply_dispositions(ws, [{"id": first["id"], "disposition": "declined"}])
+
+    again = _log(ws, issue="rename the skill to something shorter please")
+
+    assert again["id"] != first["id"]
+    assert [r["id"] for r in suppressed_observations(ws)] == [first["id"]]
+
+
 # -- cross-cutting principles --------------------------------------------------
 
 

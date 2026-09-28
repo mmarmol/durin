@@ -196,6 +196,15 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
                  dedup_bumped=True, count=rec["count"])
             return {"ok": True, "id": rec["id"], "count": rec["count"], "commit": sha}
 
+    reopened = _reopen_applied(workspace, records, skill, issue, session)
+    if reopened is not None:
+        sha = store.auto_commit(
+            f"observation(#{reopened['id']} {skill}): reopened, recurred x{reopened['count']}")
+        _emit("skill.observation_logged", skill=skill, kind=kind,
+             dedup_bumped=True, count=reopened["count"], reopened=True)
+        return {"ok": True, "id": reopened["id"], "count": reopened["count"],
+                "reopened": True, "commit": sha}
+
     rec = {
         "id": _next_id(workspace),
         "skill": skill,
@@ -215,6 +224,40 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     _emit("skill.observation_logged", skill=skill, kind=kind,
          dedup_bumped=False, count=1)
     return {"ok": True, "id": rec["id"], "count": 1, "commit": sha}
+
+
+def _reopen_applied(workspace: Path, records: list[dict], skill: str, issue: str,
+                    session: str | None) -> dict | None:
+    """Reopen the APPLIED record this issue matches, if any; written, not committed.
+
+    An issue marked fixed that comes back is a regression. Logged as a new
+    record it would start again at count 1 — a one-off to curation — while
+    the fix that did not hold sits in the archive. The matching record comes
+    back OPEN instead (out of the archive when it was moved there), with its
+    count bumped. DECLINED records are left alone: they are the judge's
+    memory of what not to do.
+    """
+    def _matches(rec: dict) -> bool:
+        return (rec.get("skill") == skill and rec.get("status") == "APPLIED"
+                and _same_issue(str(rec.get("issue", "")), issue))
+
+    target = next((r for r in records if _matches(r)), None)
+    if target is None:
+        archive = _read_records(_archive_path(workspace))
+        target = next((r for r in archive if _matches(r)), None)
+        if target is None:
+            return None
+        _write_records(_archive_path(workspace), [r for r in archive if r is not target])
+        records.append(target)
+    target["status"] = "OPEN"
+    target["count"] = int(target.get("count", 1)) + 1
+    target["last_seen"] = _today()
+    target["reopened_at"] = _today()
+    target.pop("resolved_at", None)
+    if session and session not in target.get("sessions", []):
+        target.setdefault("sessions", []).append(session)
+    _write_records(_active_path(workspace), records)
+    return target
 
 
 def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
