@@ -356,3 +356,17 @@ async def test_hotkeys_lists_every_terminal_ui_binding(tmp_path: Path) -> None:
         assert shown in out.content, key
         assert label in out.content, label
     assert "--legacy" in out.content and "Ctrl+L" in out.content
+
+
+@pytest.mark.asyncio
+async def test_hotkeys_lists_the_input_box_keys(tmp_path: Path) -> None:
+    """The input box has its own keys — a newline, completion, history — that
+    a user needs as much as the app's."""
+    from durin.cli.tui.widgets.input_area import InputArea
+
+    out = await cmd_hotkeys(_ctx(_make_loop(tmp_path), "/hotkeys"))
+
+    for key, _action, label in InputArea.BINDINGS:
+        shown = "+".join(part.capitalize() for part in key.split("+"))
+        assert shown in out.content, key
+        assert label in out.content, label
