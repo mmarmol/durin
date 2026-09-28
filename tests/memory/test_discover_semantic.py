@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.field_patch import FieldPatch
 from durin.memory.extract_dream import _resolve_semantic_ref, discover_entities
+from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)

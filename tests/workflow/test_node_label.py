@@ -1,6 +1,5 @@
 """Unit tests for node_label and its constituent helpers."""
 
-import pytest
 
 from durin.workflow.spec import (
     ParallelNode,
@@ -11,7 +10,6 @@ from durin.workflow.spec import (
     node_description,
     node_label,
 )
-
 
 # ---------------------------------------------------------------------------
 # _first_sentence

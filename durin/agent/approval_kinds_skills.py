@@ -125,10 +125,18 @@ def _install_reason(gate: dict) -> str:
 
 
 def prepare_skill_install(workspace: Path, qdir: Path, *, gate: dict, source: str,
-                          replace: bool, attribution: "ss.Attribution") -> Prepared:
+                          replace: bool, attribution: "ss.Attribution",
+                          retired: dict | None = None) -> Prepared:
     """The request for installing the quarantined skill ``qdir``; ``gate`` is
-    ``skills_import.install_gate`` for that directory."""
+    ``skills_import.install_gate`` for that directory. ``retired``: the
+    retirement record when the install brings back a retired skill, which
+    the person deciding is shown."""
     name = gate["name"]
+    reason = _install_reason(gate)
+    if retired is not None:
+        from durin.agent.skill_retirements import retirement_notice
+        notice = "brings back a retired skill: " + retirement_notice(retired)
+        reason = notice if gate["action"] == "allow" else f"{reason}; {notice}"
     new_md = (Path(qdir) / "SKILL.md").read_text(encoding="utf-8", errors="replace")
     current = Path(workspace) / "skills" / name / "SKILL.md"
     old_md = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
@@ -137,7 +145,7 @@ def prepare_skill_install(workspace: Path, qdir: Path, *, gate: dict, source: st
                "session": attribution.session, "agent": attribution.agent}
     return Prepared(
         kind="skill_install",
-        summary=f"install skill {name!r} from {source} ({_install_reason(gate)})",
+        summary=f"install skill {name!r} from {source} ({reason})",
         detail={"skill": name, "source": source, "verdict": gate["verdict"],
                 "needs": gate["action"], "findings": gate["findings"],
                 "carries_code": gate["carries_code"],
@@ -551,9 +559,11 @@ def request_edit_autonomously(workspace: Path, name: str, *, old: str, new: str,
     if outcome.status == "applied":
         return {**(outcome.result or {}), "approval_id": outcome.record["id"],
                 "approved_by": "judge"}
-    return {"error": outcome.message,
-            "pending_approval": (outcome.record or {}).get("id"),
-            "verdict": scan.after, "findings": scan.findings}
+    result = {"error": outcome.message, "verdict": scan.after, "findings": scan.findings}
+    if outcome.status == "pending":
+        # Still open for a person; any other outcome (a failed run) is an error.
+        result["pending_approval"] = (outcome.record or {}).get("id")
+    return result
 
 
 def register_all() -> None:

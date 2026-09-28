@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from durin.workflow.engine import NodeExecutionError, NodeRunRequest, ScriptCancelled
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest, ScriptCancelledError
 from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
 
@@ -103,7 +103,7 @@ def test_cancel_check_kills_running_process_before_timeout(tmp_path):
 
     with pytest.raises(NodeExecutionError) as exc:
         runner(tmp_path)(_req(node, tmp_path=tmp_path, cancel_check=cancel_check))
-    assert isinstance(exc.value.cause, ScriptCancelled)
+    assert isinstance(exc.value.cause, ScriptCancelledError)
     assert time.monotonic() - t0 < 10
 
 

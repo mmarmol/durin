@@ -395,10 +395,23 @@ warning and is skipped, never aborting the pass. Gated by
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
 `SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, mining the
 newest sessions (plus any logged skill gaps)
-for a recurring step-by-step **procedure**. When it finds one it prefers
+for a recurring step-by-step **procedure**. Each session gets its share of the
+input window and is trimmed on its own, keeping its start and its end — the end
+is where what finally worked lives. Each logged gap also brings its own
+evidence (`_gap_evidence`): the end of the sessions it was logged from, and the
+observations recorded from those sessions about existing skills
+(`observations_from_sessions`), marked as overriding the gap's text. A gap
+logged mid-session can carry that slice's failed guesses; the corrections that
+held are often on a skill that already covers the area. The prompt tells the
+extractor to encode only facts a session shows working, and not to author a
+skill for a procedure a correction shows an existing skill already covers. When it finds one it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
-over authoring from scratch, then calls `skill_write`. It does nothing on a
-one-off, and reuses/extends an existing local skill instead of duplicating. It
+over authoring from scratch, then calls `skill_write`. Its prompt lists the
+retired skills with their replacements, and its `skill_write` door refuses a
+retired name (`../skills/02_lifecycle_and_curation.md`). It does nothing on a
+one-off. It cannot edit a local skill; duplicates are stopped before they reach
+it — the signal pass sees the catalog, a gap named after an existing skill is
+logged as an improvement on that skill, and curation makes that change. It
 is a sync wrapper over the async runner so the cron can call it in a thread.
 
 ### Pass 4 — refine: dedup duplicate entities

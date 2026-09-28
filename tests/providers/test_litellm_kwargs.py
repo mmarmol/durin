@@ -755,6 +755,62 @@ def test_deepseek_thinking_backfills_missing_reasoning_content_on_tool_history()
     assert assistant["tool_calls"][0]["function"]["name"] == "my"
 
 
+_ONE_TOOL = [{"type": "function", "function": {
+    "name": "my", "parameters": {"type": "object", "properties": {}}}}]
+
+_TOOL_HISTORY = [
+    {"role": "user", "content": "can we use wechat?"},
+    {"role": "assistant", "content": "", "tool_calls": [_tool_call("call_1")]},
+    {"role": "tool", "tool_call_id": "call_1", "name": "my", "content": "channels"},
+    {"role": "user", "content": "continue"},
+]
+
+
+def _compat_kwargs(model: str, *, spec_name: str | None = None,
+                   api_base: str | None = None) -> dict:
+    """Kwargs for a request with tools and no reasoning effort configured."""
+    with patch("durin.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider(
+            api_key="sk-test",
+            api_base=api_base,
+            default_model=model,
+            spec=find_by_name(spec_name) if spec_name else None,
+        )
+    return provider._build_kwargs(
+        messages=[dict(m) for m in _TOOL_HISTORY],
+        tools=_ONE_TOOL,
+        model=model,
+        max_tokens=1024,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    )
+
+
+def test_every_deepseek_model_thinks_by_default_so_its_tool_history_is_padded() -> None:
+    """DeepSeek's API thinks by default on every current model (deepseek-flash,
+    deepseek-v4-pro) and rejects a tool request whose earlier assistant turns
+    lack reasoning_content, so the pad does not depend on the model name."""
+    kwargs = _compat_kwargs("deepseek-flash", spec_name="deepseek")
+
+    assert kwargs["messages"][1]["reasoning_content"] == " "
+
+
+def test_a_custom_provider_on_deepseeks_host_is_padded_too() -> None:
+    kwargs = _compat_kwargs("deepseek-v4-pro", api_base="https://api.deepseek.com/v1")
+
+    assert kwargs["messages"][1]["reasoning_content"] == " "
+
+
+def test_a_deepseek_model_on_another_host_follows_that_hosts_contract() -> None:
+    """Other hosts serving DeepSeek weights have their own message schema; a
+    strict one rejects reasoning_content, so the DeepSeek pad stays off."""
+    kwargs = _compat_kwargs("deepseek-r1-distill-llama-70b",
+                            api_base="https://api.groq.com/openai/v1")
+
+    assert "reasoning_content" not in kwargs["messages"][1]
+
+
 def test_deepseek_thinking_keeps_tool_history_with_reasoning_content() -> None:
     kwargs = _deepseek_kwargs([
         {"role": "user", "content": "can we use wechat?"},

@@ -10,9 +10,9 @@ from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
     NodeRunResponse,
-    ScriptCancelled,
+    ScriptCancelledError,
     WorkflowEngine,
-    WorkInterrupted,
+    WorkInterruptedError,
 )
 from durin.workflow.spec import parse_workflow
 
@@ -84,11 +84,11 @@ def test_no_cancel_check_completes_normally():
 
 def test_work_interrupted_cause_ends_run_cancelled():
     """A hard cancel aborts the in-flight work turn: the node runner raises
-    NodeExecutionError with a WorkInterrupted cause, and the run must end
+    NodeExecutionError with a WorkInterruptedError cause, and the run must end
     'cancelled' (not 'aborted'), keeping the honest node_failed trace row."""
 
     def runner(req: NodeRunRequest) -> NodeRunResponse:
-        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterrupted("forced"))
+        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterruptedError("forced"))
 
     eng = WorkflowEngine(node_runner=runner, run_id_factory=lambda: "r-hard")
     result = eng.run(_wf_two_nodes(), "do it", root_session_key="websocket:chatA")
@@ -199,7 +199,7 @@ def test_a_parallel_node_whose_branches_were_all_interrupted_ends_cancelled():
         # The force-stop lands while the branches are in flight; each branch's
         # turn is aborted, which the branch layer records as a failure.
         state["cancel"] = True
-        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterrupted("forced"))
+        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterruptedError("forced"))
 
     eng = WorkflowEngine(
         node_runner=runner, run_id_factory=lambda: "r-par-hard",
@@ -298,7 +298,7 @@ def test_a_graceful_stop_that_killed_every_script_branch_ends_cancelled():
     def script_runner(req: NodeRunRequest) -> NodeRunResponse:
         state["cancel"] = True   # the stop lands while the subprocesses run
         raise NodeExecutionError(req.node.id, req.iteration, None,
-                                 ScriptCancelled("cancelled by user"))
+                                 ScriptCancelledError("cancelled by user"))
 
     eng = WorkflowEngine(
         node_runner=lambda req: NodeRunResponse(output="", session_key=None, messages=[]),
@@ -322,7 +322,7 @@ def test_a_hard_stop_that_interrupted_every_fanout_worker_ends_cancelled():
         if req.node.id == "list":
             return NodeRunResponse(output="one, two", session_key=None, messages=[])
         state["cancel"] = True   # the force-stop lands while the workers run
-        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterrupted("forced"))
+        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterruptedError("forced"))
 
     wf = parse_workflow({
         "name": "f", "start": "list",

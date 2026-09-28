@@ -12,6 +12,7 @@ Usage: python scripts/audit_run_compat.py /path/to/workspace [--json]"""
 import json
 import sys
 from pathlib import Path
+
 from durin.workflow import run_log
 from durin.workflow.provenance import load
 

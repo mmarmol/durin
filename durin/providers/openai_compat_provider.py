@@ -251,6 +251,62 @@ def _blank_assistant_tool_call_content(
     return out if changed else None
 
 
+# How endpoints word "this message field is not part of my schema" (Groq,
+# Cerebras: unsupported; Mistral: extra inputs are not permitted).
+_FIELD_REJECTED_MARKERS = (
+    "unsupported", "not supported", "not permitted", "not allowed",
+    "unknown", "unrecognized",
+)
+# How endpoints word "this field is required" (Kimi: missing; DeepSeek: must be
+# passed back, not empty) — the opposite case, which stripping cannot fix.
+_FIELD_REQUIRED_MARKERS = ("missing", "required", "must", "empty")
+
+
+def _with_tool_result_names(
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of *messages* whose tool results carry the name of the
+    call they answer, or ``None`` when none was missing."""
+    if not isinstance(messages, list):
+        return None
+    names: dict[str, str] = {}
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if isinstance(fn, dict) and tc.get("id") and fn.get("name"):
+                    names[tc["id"]] = fn["name"]
+        elif (
+            isinstance(msg, dict)
+            and msg.get("role") == "tool"
+            and not msg.get("name")
+            and msg.get("tool_call_id") in names
+        ):
+            msg = {**msg, "name": names[msg["tool_call_id"]]}
+            changed = True
+        out.append(msg)
+    return out if changed else None
+
+
+def _strip_reasoning_content(
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of *messages* without ``reasoning_content``, or ``None``
+    when no message carries it."""
+    if not isinstance(messages, list):
+        return None
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and "reasoning_content" in msg:
+            msg = {k: v for k, v in msg.items() if k != "reasoning_content"}
+            changed = True
+        out.append(msg)
+    return out if changed else None
+
+
 def _openai_compat_timeout_s() -> float:
     """Return the bounded request timeout used for OpenAI-compatible providers."""
     return _float_env("DURIN_OPENAI_COMPAT_TIMEOUT_S", _OPENAI_COMPAT_REQUEST_TIMEOUT_S)
@@ -456,6 +512,12 @@ class OpenAICompatProvider(LLMProvider):
         # per unique combo per process — enough to verify the config is
         # firing in production without per-request spam.
         self._parallel_tool_calls_logged: set[tuple[str, bool, str]] = set()
+        # Models whose endpoint rejected reasoning_content on input messages;
+        # their later requests leave it out instead of failing once per call.
+        self._reasoning_rejected_models: set[str] = set()
+        # Models whose endpoint needs the function name on each tool result
+        # (a proxy that translates to Gemini's native API).
+        self._tool_names_required_models: set[str] = set()
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -665,6 +727,11 @@ class OpenAICompatProvider(LLMProvider):
                 # _recover_request_for_error, not by muting every model.
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
+            if clean.get("role") == "tool":
+                # The Chat Completions tool message has no ``name`` (the call
+                # id ties the result to its call) and strict endpoints reject
+                # it; ``name`` stays valid on user and assistant messages.
+                clean.pop("name", None)
             if (
                 force_string_content
                 and not (clean.get("role") == "assistant" and clean.get("tool_calls"))
@@ -685,6 +752,30 @@ class OpenAICompatProvider(LLMProvider):
         ship new models. Returns a mutated copy of *kw* or ``None``.
         """
         text = (response.content or "").lower()
+        # Endpoint whose message schema has no reasoning_content (a custom
+        # base URL the registry knows nothing about): send the history without
+        # it, now and on that model's later requests. Checked first because
+        # the field name also contains "content". An error saying the field is
+        # missing, required or empty (Kimi, DeepSeek) is the opposite case and
+        # keeps it.
+        if (
+            "reasoning_content" in text
+            and any(marker in text for marker in _FIELD_REJECTED_MARKERS)
+            and not any(marker in text for marker in _FIELD_REQUIRED_MARKERS)
+        ):
+            stripped = _strip_reasoning_content(kw.get("messages"))
+            if stripped is not None:
+                if isinstance(kw.get("model"), str):
+                    self._reasoning_rejected_models.add(kw["model"])
+                return {**kw, "messages": stripped}
+        # Endpoint that needs the function name on each tool result, which
+        # durin leaves out by default (Gemini's native API, behind a proxy).
+        if "function_response.name" in text:
+            named = _with_tool_result_names(kw.get("messages"))
+            if named is not None:
+                if isinstance(kw.get("model"), str):
+                    self._tool_names_required_models.add(kw["model"])
+                return {**kw, "messages": named}
         # Gateway rejects assistant content sent alongside tool_calls: blank it
         # (the old unconditional behavior, now applied only where it's needed).
         if ("tool_call" in text or "tool call" in text) and "content" in text:
@@ -831,10 +922,13 @@ class OpenAICompatProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Backfill reasoning_content="" on assistants missing it: DeepSeek
-        # thinking mode rejects history otherwise (#3554, #3584); "" reads
-        # as "no thinking that turn". DeepSeek-V4/reasoner reason natively,
-        # so backfill even without explicit reasoning_effort.
+        # Backfill reasoning_content on assistants missing it: DeepSeek
+        # thinking mode rejects a tool request whose earlier assistant turns
+        # lack it (#3554, #3584). DeepSeek's API thinks by default on every
+        # current model, so the backfill follows the API (the deepseek spec or
+        # its host) and runs without an explicit effort; only deepseek-chat,
+        # the legacy non-thinking alias, is left alone. Other hosts serving
+        # DeepSeek weights keep their own contract.
         explicit_thinking = (
             reasoning_effort is not None
             and semantic_effort not in ("none", "minimal")
@@ -845,10 +939,12 @@ class OpenAICompatProvider(LLMProvider):
             )
         )
         implicit_deepseek_thinking = (
-            spec is not None
-            and spec.name == "deepseek"
+            (
+                (spec is not None and spec.name == "deepseek")
+                or _host_of(self._effective_base) == "api.deepseek.com"
+            )
             and semantic_effort not in ("none", "minimal", "minimum")
-            and any(t in model_name.lower() for t in ("deepseek-v4", "deepseek-reasoner"))
+            and "deepseek-chat" not in model_name.lower()
         )
         if explicit_thinking or implicit_deepseek_thinking:
             for msg in kwargs["messages"]:
@@ -862,6 +958,19 @@ class OpenAICompatProvider(LLMProvider):
                     # without fabricating chain-of-thought. Covers both the
                     # absent key and a legacy "" persisted before this fix.
                     msg["reasoning_content"] = " "
+
+        # Earlier reasoning stays off the request where the message schema
+        # rejects it: a provider whose spec says so, or a model whose endpoint
+        # already refused it in this process (_recover_request_for_error).
+        if (spec is not None and not spec.echo_reasoning) or (
+            model_name in self._reasoning_rejected_models
+        ):
+            for msg in kwargs["messages"]:
+                msg.pop("reasoning_content", None)
+        if model_name in self._tool_names_required_models:
+            named = _with_tool_result_names(kwargs["messages"])
+            if named is not None:
+                kwargs["messages"] = named
 
         # Non-standard sampling params ride in extra_body: ollama / LM Studio
         # read top_k and repeat_penalty there (the OpenAI schema has no

@@ -16,7 +16,6 @@ These tests drive the httpx-auth-flow wrapper that does exactly that.
 from __future__ import annotations
 
 import asyncio
-import json
 
 import httpx
 import pytest

@@ -1,5 +1,6 @@
 import pytest
-from durin.workflow.spec import parse_workflow, WorkflowError
+
+from durin.workflow.spec import WorkflowError, parse_workflow
 
 
 def _wf(nodes):

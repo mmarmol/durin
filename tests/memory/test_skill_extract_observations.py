@@ -12,9 +12,9 @@ from durin.agent.skill_observations import (
     open_observations,
 )
 from durin.memory.dream_passes import (
+    _recent_sessions_text,
     _resolve_gap_observations,
     _skill_extract_messages,
-    _recent_sessions_text,
 )
 
 
@@ -73,8 +73,8 @@ def test_resolve_gap_marks_applied_when_skill_materializes(tmp_path):
 def test_gap_resolution_matches_normalized_names(tmp_path):
     """Gap logged as 'new:Release Runbook' should match skill 'release-runbook'
     via normalized name comparison."""
-    from durin.agent.skill_observations import log_observation
     from durin.agent import skills_store as ss
+    from durin.agent.skill_observations import log_observation
 
     log_observation(tmp_path, skill="new:Release Runbook", kind="gap",
                     issue="no runbook", improvement="write one")
@@ -116,3 +116,55 @@ def test_recent_sessions_text_preserves_head_and_tail_when_truncating(tmp_path):
     # Truncation marker should be present (when > 12000 chars)
     if len(full_text) > 12000:
         assert "[... middle truncated ...]" in result
+
+
+def test_a_gap_brings_its_session_end_and_what_was_corrected_there(tmp_path):
+    """A gap's text can carry the session's early, failed guesses; the facts
+    that held are at that session's end and in the corrections logged from it."""
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True)
+    (sdir / "websocket_S1.jsonl").write_text(
+        json.dumps({"role": "user", "content": "EARLY attempt with guessed columns"}) + "\n"
+        + json.dumps({"role": "assistant",
+                      "content": "FINAL_WORKING: log LIKE on logs_prod.containers"}) + "\n",
+        encoding="utf-8")
+    log_observation(tmp_path, skill="mxhero-support-api", kind="correction",
+                    issue="contextId is nested in the log JSON",
+                    improvement="use json_extract_scalar(log, '$.contextId')",
+                    session="websocket_S1")
+    log_observation(tmp_path, skill="new:athena-logs", kind="gap",
+                    issue="no skill runs Athena queries",
+                    improvement="create athena-logs with level and contextId columns",
+                    session="websocket:S1")
+
+    msgs = _skill_extract_messages(tmp_path, max_sessions=0)
+
+    user = msgs[1]["content"]
+    assert "FINAL_WORKING: log LIKE on logs_prod.containers" in user
+    assert "json_extract_scalar(log, '$.contextId')" in user
+    assert "only facts" in msgs[0]["content"].lower()
+
+
+def test_each_session_keeps_its_own_end(tmp_path):
+    """A session's end is where what finally worked lives. Cutting the joined
+    text kept the oldest session's end and dropped the newest one's."""
+    import os
+
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True)
+    old = sdir / "s_old.jsonl"
+    new = sdir / "s_new.jsonl"
+    old.write_text(json.dumps({"role": "user",
+                               "content": "OLD_START " + "o" * 9000 + " OLD_END"}) + "\n",
+                   encoding="utf-8")
+    new.write_text(json.dumps({"role": "user",
+                               "content": "NEW_START " + "n" * 9000 + " NEW_VERIFIED_OUTCOME"}) + "\n",
+                   encoding="utf-8")
+    os.utime(old, (1_000_000, 1_000_000))
+
+    result = _recent_sessions_text(tmp_path, max_sessions=2)
+
+    assert "NEW_VERIFIED_OUTCOME" in result
+    assert "NEW_START" in result
+    assert "OLD_END" in result
+    assert len(result) <= 12300

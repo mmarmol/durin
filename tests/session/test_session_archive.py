@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 import durin.session.manager as manager_module
 from durin.session.manager import SessionManager
 

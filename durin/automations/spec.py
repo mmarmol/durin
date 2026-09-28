@@ -61,7 +61,7 @@ class AutomationError(ValueError):
     """Malformed automation definition."""
 
 
-class AutomationNotFound(AutomationError):
+class AutomationNotFoundError(AutomationError):
     """No definition file for the requested automation name."""
 
 

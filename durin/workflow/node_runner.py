@@ -39,7 +39,7 @@ from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
     NodeRunResponse,
-    WorkInterrupted,
+    WorkInterruptedError,
 )
 from durin.workflow.node_progress import NodeCheckpointHook, NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
@@ -515,7 +515,7 @@ class AgentNodeRunner:
         the turn runs as a task and a watcher polls the flag every
         ``_CANCEL_POLL_SECONDS``; the moment it turns true the task is cancelled —
         CancelledError unwinds the in-flight provider/tool await — and
-        WorkInterrupted is raised so the caller's failure path persists the partial
+        WorkInterruptedError is raised so the caller's failure path persists the partial
         conversation and the engine ends the run 'cancelled'. Without it the turn
         runs directly on this thread's private event loop, exactly as before.
 
@@ -545,7 +545,7 @@ class AgentNodeRunner:
                         await turn
                     except (asyncio.CancelledError, Exception):  # noqa: BLE001 - the turn is being discarded
                         pass
-                    raise WorkInterrupted("agent turn aborted by force-stop")
+                    raise WorkInterruptedError("agent turn aborted by force-stop")
 
         outcome: dict[str, Any] = {}
         abandoned = threading.Event()
@@ -555,10 +555,10 @@ class AgentNodeRunner:
                 outcome["result"] = asyncio.run(_watched())
             except BaseException as exc:  # noqa: BLE001 - re-raised on the engine thread
                 outcome["error"] = exc
-                if abandoned.is_set() and not isinstance(exc, WorkInterrupted):
+                if abandoned.is_set() and not isinstance(exc, WorkInterruptedError):
                     # Once the engine has walked away nobody re-raises this, so a
                     # genuine failure in the orphan would leave no trace at all.
-                    # WorkInterrupted is the abandonment itself and says nothing.
+                    # WorkInterruptedError is the abandonment itself and says nothing.
                     logger.warning(
                         "workflow: the abandoned turn thread failed after its "
                         "force-stop ({}): {}", type(exc).__name__, exc,
@@ -579,7 +579,7 @@ class AgentNodeRunner:
                 # The watcher on the turn thread cancels the turn itself; this only
                 # stops waiting for the teardown behind it.
                 abandoned.set()
-                raise WorkInterrupted("agent turn aborted by force-stop")
+                raise WorkInterruptedError("agent turn aborted by force-stop")
         if "error" in outcome:
             raise outcome["error"]
         return outcome["result"]

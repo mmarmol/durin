@@ -108,7 +108,7 @@ def ingest_artifact(
 
     from durin.memory.doc_convert import (
         DocConvertError,
-        NeedsOcrJob,
+        NeedsOcrJobError,
         convert_file_to_markdown,
         engine_available,
         is_convertible,
@@ -256,7 +256,7 @@ def ingest_artifact(
             )
             content = converted_doc.markdown
             is_ocr_stub = converted_doc.ocr_stub
-        except NeedsOcrJob as exc:
+        except NeedsOcrJobError as exc:
             # The text is not ready, but the document is: store the original
             # now and let a background job fill in the markdown sidecar. The
             # job is only spawned once the entry below is complete — its

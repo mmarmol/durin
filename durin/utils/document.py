@@ -220,7 +220,7 @@ def extract_documents(
                 # model saw neither the file nor a reason, so an attachment it
                 # was just given would vanish as if never sent. That is a
                 # regular occurrence with OCR enabled: a scanned document over
-                # the inline page budget raises NeedsOcrJob, whose message is
+                # the inline page budget raises NeedsOcrJobError, whose message is
                 # the actionable "ingest this as a background job" instruction
                 # the model needs — dropped along with everything else. Report
                 # it instead, mirroring the oversized branch above.

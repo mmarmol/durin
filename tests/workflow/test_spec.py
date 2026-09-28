@@ -3,9 +3,8 @@
 import pytest
 
 from durin.workflow.spec import (
-    WorkNode,
-    Workflow,
     WorkflowError,
+    WorkNode,
     parse_workflow,
 )
 

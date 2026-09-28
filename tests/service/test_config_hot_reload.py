@@ -1,6 +1,6 @@
 import pytest
 
-from durin.service.config import ConfigService, CONCURRENCY_CAP_KEYS
+from durin.service.config import CONCURRENCY_CAP_KEYS, ConfigService
 from durin.service.principal import Principal, Scope
 
 
@@ -25,7 +25,7 @@ async def test_set_fires_callback_only_for_cap_keys(tmp_path, monkeypatch):
     calls = []
     svc = ConfigService(on_config_changed=lambda: calls.append(1))
     # Point config at a temp file with a valid minimal config.
-    from durin.config.loader import get_config_path, save_config, load_config
+    from durin.config.loader import get_config_path, load_config, save_config
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     save_config(load_config(), get_config_path())
     principal = _principal()

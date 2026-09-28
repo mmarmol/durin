@@ -1,12 +1,10 @@
 """Tests for the build_entity_manifest primitive."""
-from pathlib import Path
 from datetime import datetime, timezone
-
-import pytest
+from pathlib import Path
 
 from durin.memory.entity_manifest import build_entity_manifest
-from durin.memory.memory_writer import write_entity
 from durin.memory.field_patch import FieldPatch
+from durin.memory.memory_writer import write_entity
 
 
 def _seed(ws: Path, ref: str, name: str, body: str) -> None:
@@ -54,8 +52,8 @@ def test_query_mode_returns_relevant_entity(tmp_path, monkeypatch):
     # the entity ref. This tests that build_entity_manifest correctly maps
     # SectionedHit.uri -> entity page -> manifest line, without requiring a
     # populated FTS/vector index in the test workspace.
-    from durin.memory.sectioned_output import SectionedHit
     from durin.memory.search_pipeline import SearchPipelineResult
+    from durin.memory.sectioned_output import SectionedHit
 
     fake_result = SearchPipelineResult(
         hits=[SectionedHit(uri="topic:durin", type="entity", path="", score=1.0)],
@@ -103,8 +101,8 @@ def test_query_mode_skips_bogus_and_missing_refs(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     _seed(ws, "topic:durin", "durin", "A personal AI agent project.")
 
-    from durin.memory.sectioned_output import SectionedHit
     from durin.memory.search_pipeline import SearchPipelineResult
+    from durin.memory.sectioned_output import SectionedHit
 
     fake_result = SearchPipelineResult(
         hits=[

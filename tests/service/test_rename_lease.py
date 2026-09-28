@@ -28,12 +28,10 @@ from durin.service.principal import Principal
 from durin.service.sessions import SessionRenameCommand, SessionsService
 from durin.service.types import ConflictError
 from durin.session.manager import SessionManager
-from durin.session.turn_lease import session_turn_lease
 from durin.utils.webui_titles import (
     WEBUI_TITLE_METADATA_KEY,
     WEBUI_TITLE_USER_EDITED_METADATA_KEY,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -307,7 +307,7 @@ def test_note_with_ocr_disabled_says_how_to_enable_it():
 def test_note_with_engine_missing_covers_every_way_the_engine_produced_nothing():
     """Three different failures reach this note, not one: the extra is absent,
     the transcription child failed to start, or it timed out — they all land
-    in the caller's one ``except (OcrUnavailable, ImportError)``. Telling a
+    in the caller's one ``except (OcrUnavailableError, ImportError)``. Telling a
     user whose engine timed out to install software they already have is a
     false instruction, so the install advice has to be offered conditionally
     and the note has to point somewhere else for the other two."""

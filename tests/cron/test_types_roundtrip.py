@@ -1,7 +1,7 @@
 from dataclasses import asdict
 
 from durin.cron.service import CronService
-from durin.cron.types import CronJob, CronPayload, CronRunRecord, CronSchedule, CronJobState
+from durin.cron.types import CronJob, CronPayload, CronRunRecord, CronSchedule
 
 
 def test_loop_trigger_payload_survives_store_save_and_load(tmp_path):

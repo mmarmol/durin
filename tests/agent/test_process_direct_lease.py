@@ -17,13 +17,10 @@ from pathlib import Path
 from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from durin.agent.loop import AgentLoop, _SESSION_BUSY_NOTICE
+from durin.agent.loop import _SESSION_BUSY_NOTICE, AgentLoop
 from durin.bus.queue import MessageBus
 from durin.session.manager import SessionManager
 from durin.session.turn_lease import session_turn_lease
-
 
 # ---------------------------------------------------------------------------
 # Helpers

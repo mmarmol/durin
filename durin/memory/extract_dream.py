@@ -21,8 +21,8 @@ from typing import Any, Callable, Iterable
 from json_repair import repair_json
 
 from durin.memory.aliases_index import AliasIndex
-from durin.memory.entity_manifest import build_entity_manifest
 from durin.memory.entities import SUGGESTED_TYPES_ORDERED
+from durin.memory.entity_manifest import build_entity_manifest
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import default_llm_invoke, emit_parse_failure

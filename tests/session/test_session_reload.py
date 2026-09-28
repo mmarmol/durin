@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from durin.session.manager import SessionManager
 
 

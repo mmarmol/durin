@@ -1,5 +1,7 @@
-import errno, os
+import errno
+import os
 from pathlib import Path
+
 import durin.utils.atomic_write as aw
 
 

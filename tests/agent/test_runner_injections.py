@@ -568,10 +568,8 @@ async def test_pending_queue_cleanup_on_dispatch(tmp_path):
 @pytest.mark.asyncio
 async def test_followup_routed_to_pending_queue(tmp_path):
     """Unified-session follow-ups should route into the active pending queue."""
-    from durin.agent.loop import UNIFIED_SESSION_KEY
+    from durin.agent.loop import UNIFIED_SESSION_KEY, PendingQueues
     from durin.bus.events import InboundMessage
-
-    from durin.agent.loop import PendingQueues
 
     loop = _make_loop(tmp_path)
     loop._unified_session = True
@@ -658,9 +656,8 @@ async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_pat
 @pytest.mark.asyncio
 async def test_pending_queue_full_falls_back_to_queued_task(tmp_path):
     """QueueFull should preserve the message by dispatching a queued task."""
-    from durin.bus.events import InboundMessage
-
     from durin.agent.loop import PendingQueues
+    from durin.bus.events import InboundMessage
 
     loop = _make_loop(tmp_path)
     loop._dispatch = AsyncMock()  # type: ignore[method-assign]

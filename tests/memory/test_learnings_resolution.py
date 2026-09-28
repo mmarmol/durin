@@ -1,9 +1,9 @@
-from pathlib import Path
 from datetime import datetime, timezone
-from durin.memory.extract_dream import mine_learnings
-from durin.memory.memory_writer import write_entity
-from durin.memory.field_patch import FieldPatch
+
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.extract_dream import mine_learnings
+from durin.memory.field_patch import FieldPatch
+from durin.memory.memory_writer import write_entity
 
 
 class _FakeResp:

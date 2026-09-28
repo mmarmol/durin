@@ -1,5 +1,6 @@
 import pytest
-from durin.automations.spec import AutomationNotFound, parse_automation
+
+from durin.automations.spec import AutomationNotFoundError, parse_automation
 from durin.automations.store import (
     automations_dir,
     delete_automation,
@@ -31,7 +32,7 @@ def test_list_on_missing_dir_is_empty(tmp_path):
 
 
 def test_load_missing_raises(tmp_path):
-    with pytest.raises(AutomationNotFound):
+    with pytest.raises(AutomationNotFoundError):
         load_automation(tmp_path, "nope")
 
 
@@ -39,5 +40,5 @@ def test_delete(tmp_path):
     save_automation(tmp_path, _spec())
     delete_automation(tmp_path, "renew-certs")
     assert list_automations(tmp_path) == []
-    with pytest.raises(AutomationNotFound):
+    with pytest.raises(AutomationNotFoundError):
         delete_automation(tmp_path, "renew-certs")

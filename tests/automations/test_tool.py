@@ -349,7 +349,7 @@ async def test_fire_returns_before_the_workflow_finishes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_busy_automation_still_reports_synchronously(tmp_path):
-    """AutomationBusy is known before anything is launched — it must not be
+    """AutomationBusyError is known before anything is launched — it must not be
     swallowed into the background."""
     rt = _runtime(tmp_path, [_wr("completed")])
     save_automation(tmp_path, parse_automation({

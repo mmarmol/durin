@@ -1,7 +1,9 @@
-import pytest
 from types import SimpleNamespace
-from durin.command.router import CommandContext
+
+import pytest
+
 from durin.command.builtin import cmd_persona
+from durin.command.router import CommandContext
 from durin.config.schema import Config, PersonaConfig
 from durin.session.manager import Session
 

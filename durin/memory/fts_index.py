@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
 
-from durin.utils.sqlite_util import connect as _sqlite_connect, execute_write as _execute_write
+from durin.utils.sqlite_util import connect as _sqlite_connect
+from durin.utils.sqlite_util import execute_write as _execute_write
 
 __all__ = ["FTSHit", "FTSIndex", "escape_like", "fts_index_path"]
 

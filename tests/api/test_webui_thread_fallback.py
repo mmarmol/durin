@@ -12,13 +12,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
 from durin.session.manager import Session, SessionManager
+from tests.conftest import write_webui_transcript
 
 
 def _ch(bus: Any, *, session_manager: SessionManager | None = None) -> WebSocketChannel:

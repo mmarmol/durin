@@ -8,10 +8,10 @@ import pytest
 from durin.config.schema import DocumentsConfig
 from durin.memory.doc_convert import (
     DocConvertError,
-    NeedsOcrJob,
+    NeedsOcrJobError,
     convert_file_to_markdown,
 )
-from durin.memory.ocr import OcrUnavailable, TranscribedPage
+from durin.memory.ocr import OcrUnavailableError, TranscribedPage
 
 
 def _cfg(*, enabled=True, inline_max_pages=5, language=None):
@@ -217,7 +217,7 @@ def test_scan_over_the_budget_raises_needs_ocr_job(big_scan):
     # document: the exhaustive list is the worker's to derive, and deriving it
     # here is the work this path exists to avoid. `estimated_pages` is what
     # sizes the job for the reader.
-    with pytest.raises(NeedsOcrJob) as excinfo:
+    with pytest.raises(NeedsOcrJobError) as excinfo:
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
     assert excinfo.value.total_pages == 40
     assert excinfo.value.pages == [1, 2, 3, 4, 5, 6]
@@ -242,7 +242,7 @@ def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkey
 
     over_budget = tmp_path / "over_budget.pdf"
     _write_text_pdf(over_budget, [""] * 6)
-    with pytest.raises(NeedsOcrJob):
+    with pytest.raises(NeedsOcrJobError):
         convert_file_to_markdown(over_budget, documents_config=_cfg(inline_max_pages=5))
 
 
@@ -260,7 +260,7 @@ def test_an_over_budget_scan_is_decided_without_converting_the_document(
 
     monkeypatch.setattr("durin.memory.doc_convert.page_texts", _never)
 
-    with pytest.raises(NeedsOcrJob):
+    with pytest.raises(NeedsOcrJobError):
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
 
     assert conv.calls == []
@@ -282,7 +282,7 @@ def test_the_over_budget_decision_confirms_only_as_many_pages_as_it_needs(
 
     monkeypatch.setattr("durin.memory.doc_convert.page_texts_subset", _record)
 
-    with pytest.raises(NeedsOcrJob):
+    with pytest.raises(NeedsOcrJobError):
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
 
     assert asked == [1, 2, 3, 4, 5, 6]
@@ -337,7 +337,7 @@ def test_the_early_exit_raises_at_exactly_one_page_over_the_budget(
         lambda path, pages, language=None: {p: _page(f"transcribed page {p}") for p in pages},
     )
 
-    with pytest.raises(NeedsOcrJob) as excinfo:
+    with pytest.raises(NeedsOcrJobError) as excinfo:
         convert_file_to_markdown(
             big_scan, documents_config=_cfg(inline_max_pages=budget)
         )
@@ -350,7 +350,7 @@ def test_the_over_budget_message_reports_a_lower_bound(big_scan):
     # The early exit stops counting the moment the budget is blown, so the
     # exact number of pages needing OCR is not known here. Saying "6 of 40"
     # would be a number this path did not measure.
-    with pytest.raises(NeedsOcrJob) as excinfo:
+    with pytest.raises(NeedsOcrJobError) as excinfo:
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
 
     assert "at least 6 of 40 pages need OCR" in str(excinfo.value)
@@ -360,7 +360,7 @@ def test_the_job_is_sized_from_the_probe_not_from_the_early_exit(big_scan):
     # `pages` is the confirmed floor the worker starts from; `estimated_pages`
     # is what the user is told is coming. Handing the tray the floor would show
     # a forty-page scan as six pages of work.
-    with pytest.raises(NeedsOcrJob) as excinfo:
+    with pytest.raises(NeedsOcrJobError) as excinfo:
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
 
     assert excinfo.value.pages == [1, 2, 3, 4, 5, 6]
@@ -522,7 +522,7 @@ def test_ocr_enabled_without_the_engine_reads_like_ocr_being_off(big_scan, monke
 
 
 def test_no_job_is_enqueued_for_a_book_no_engine_can_transcribe(big_scan, monkeypatch):
-    # big_scan is 40 pages over a budget of 5, so this is the NeedsOcrJob path.
+    # big_scan is 40 pages over a budget of 5, so this is the NeedsOcrJobError path.
     # A background job would fail on page 1 and leave the document with no
     # sidecar and no Library entry; the note is the useful answer instead.
     monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: False)
@@ -535,10 +535,10 @@ def test_no_job_is_enqueued_for_a_book_no_engine_can_transcribe(big_scan, monkey
 @pytest.mark.parametrize(
     "boom",
     [
-        pytest.param(OcrUnavailable("no extra"), id="ocr-unavailable"),
+        pytest.param(OcrUnavailableError("no extra"), id="ocr-unavailable"),
         # engine_available() only proves `import rapidocr` works; the
         # subprocess's own imports can still fail underneath, which
-        # transcribe_pages_detached surfaces as OcrUnavailable itself.
+        # transcribe_pages_detached surfaces as OcrUnavailableError itself.
         pytest.param(ImportError("onnxruntime is broken"), id="broken-lazy-import"),
     ],
 )
@@ -558,13 +558,13 @@ def test_an_engine_that_fails_at_transcribe_time_is_handled_the_same_way(
 def test_a_timed_out_engine_is_not_reported_as_a_missing_install(
     two_page_scan, monkeypatch, caplog
 ):
-    """A timeout and a crashed child raise the same ``OcrUnavailable`` a
+    """A timeout and a crashed child raise the same ``OcrUnavailableError`` a
     missing extra does, so this path can no longer claim the engine "failed to
     load" or that it is not installed — the user would go reinstall software
     they already have. The child's own reason has to travel with it: the
     gateway log is the only place it is recorded."""
     def _raise(path, pages, language=None):
-        raise OcrUnavailable("OCR subprocess timed out after 80s: stuck loading model")
+        raise OcrUnavailableError("OCR subprocess timed out after 80s: stuck loading model")
 
     monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", _raise)
 
@@ -807,12 +807,12 @@ def test_the_probe_failure_fallback_extraction_wraps_a_raw_extractor_exception(
 def test_needs_ocr_job_still_propagates_unwrapped_through_the_confirmation_region(
     big_scan,
 ):
-    """NeedsOcrJob is raised in convert_file_to_markdown AFTER
+    """NeedsOcrJobError is raised in convert_file_to_markdown AFTER
     _confirm_empty_pages returns -- the DocConvertError wrap around its
     page_texts_subset call must not catch it or relabel it. pytest.raises
     with the subclass already proves this (a plain DocConvertError would not
     satisfy it), the explicit type() check makes the proof unmissable."""
-    with pytest.raises(NeedsOcrJob) as excinfo:
+    with pytest.raises(NeedsOcrJobError) as excinfo:
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
 
-    assert type(excinfo.value) is NeedsOcrJob
+    assert type(excinfo.value) is NeedsOcrJobError

@@ -6,12 +6,13 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from durin.agent.skill_retirements import OVERRIDE_RETIRED_HELP
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 
-def _DEFAULT_JUDGE(prompt: str) -> str:
+def _default_judge(prompt: str) -> str:
     from durin.memory.llm_invoke import judge_llm_invoke
     return judge_llm_invoke(prompt).text
 
@@ -21,6 +22,7 @@ _PARAMETERS = tool_parameters_schema(
     override_composition=BooleanSchema(
         description="Skip the composition gate. ONLY when the gate rejected the body, you showed "
         "the user its reason, and the user explicitly said to keep it as prose."),
+    override_retired=BooleanSchema(description=OVERRIDE_RETIRED_HELP),
     required=["name"],
     description=(
         "Publish a draft skill (built and tested under skill-drafts/<name>/) into the active "
@@ -60,15 +62,25 @@ class SkillPublishTool(Tool, ContextAware):
     async def execute(self, **kwargs: Any) -> str:
         import asyncio
 
+        from durin.agent.skill_retirements import retired_refusal
         from durin.agent.skills_store import Attribution, publish_draft_skill
 
+        # Publishing under a retired name brings that skill back: the user's
+        # explicit word (override_retired) only. Checked off the event loop:
+        # the first read of the retirements takes the skills store's lock.
+        if not kwargs.get("override_retired"):
+            refusal = await asyncio.to_thread(
+                retired_refusal, self._workspace, str(kwargs.get("name", "")),
+                can_override=True)
+            if refusal is not None:
+                return json.dumps(refusal, ensure_ascii=False)
         attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
         result = await asyncio.to_thread(
             publish_draft_skill,
             self._workspace,
             str(kwargs.get("name", "")),
             attribution=attribution,
-            composition_judge=_DEFAULT_JUDGE,
+            composition_judge=_default_judge,
             composition_override=bool(kwargs.get("override_composition")),
         )
         if result.get("composition_rejected"):

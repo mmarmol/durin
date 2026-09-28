@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from durin.agent import skill_observations as so
 from durin.agent import skills_store as ss
@@ -65,6 +66,104 @@ def _parse_judge_output(raw: object) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+_MIN_EVIDENCE_CHARS = 12
+# How much of the bundled files the judge sees: enough to aim an edit at a
+# script line, bounded per file, per skill, and for the whole review — every
+# selected skill may carry scripts, and one batch can hold many skills.
+_BUNDLE_FILE_CHARS = 6000
+_BUNDLE_SKILL_CHARS = 12000
+_BUNDLES_TOTAL_CHARS = 48000
+_NOT_SHOWN = "[not shown this pass: the review's room for bundled files is used up]"
+
+
+def _bundle_view(workspace: Path, name: str, budget: int = _BUNDLE_SKILL_CHARS) -> dict[str, str]:
+    """A skill's bundled text files for the judge, each cut to a bounded
+    head with a marker when longer, within ``budget`` for the skill."""
+    skill_dir = ss._skills_dir(workspace) / name
+    if not skill_dir.is_dir():
+        return {}
+    view: dict[str, str] = {}
+    for rel, text in ss.read_bundle_files(skill_dir).items():
+        if budget <= 0:
+            view[rel] = _NOT_SHOWN
+            continue
+        cap = min(_BUNDLE_FILE_CHARS, budget)
+        view[rel] = text if len(text) <= cap else (
+            text[:cap] + f"\n[... cut: {len(text) - cap} more chars not shown ...]")
+        budget -= len(view[rel])
+    return view
+
+
+def _bundle_views(workspace: Path, names: list[str]) -> dict[str, dict[str, str]]:
+    """Bundled files for the skills under review, in ``names`` order, within
+    one budget for the whole prompt; a skill past it shows its file names."""
+    views: dict[str, dict[str, str]] = {}
+    remaining = _BUNDLES_TOTAL_CHARS
+    for name in names:
+        view = _bundle_view(workspace, name, budget=min(_BUNDLE_SKILL_CHARS, remaining))
+        if view:
+            views[name] = view
+            remaining -= sum(len(t) for t in view.values() if t != _NOT_SHOWN)
+    return views
+
+
+def _settle_decided_edits(workspace: Path) -> set[int]:
+    """Settle the OPEN records whose last attempt is an edit that went to a
+    person: applied makes them APPLIED, rejected DECLINED. Returns the ids
+    still waiting for that decision, which this pass leaves alone — shown
+    again, the judge would propose the same edit."""
+    from durin.agent import approval_store
+
+    waiting: set[int] = set()
+    decided: list[dict] = []
+    for rec in so.open_observations(workspace):
+        attempts = rec.get("attempts") or []
+        approval_id = attempts[-1].get("approval") if attempts else None
+        if not approval_id:
+            continue
+        status = (approval_store.get(workspace, str(approval_id)) or {}).get("status")
+        if status == "applied":
+            decided.append({"id": rec.get("id"), "disposition": "applied"})
+        elif status == "rejected":
+            decided.append({"id": rec.get("id"), "disposition": "declined"})
+        elif status in ("pending", "approved"):
+            waiting.add(int(rec.get("id", 0)))
+    if decided:
+        so.apply_dispositions(workspace, decided)
+    return waiting
+
+
+def _applied_holds(workspace: Path, rec: dict, disposition: dict, landed: set[str]) -> bool:
+    """Whether an `applied` verdict on ``rec`` is backed by something real: a
+    change that landed on its skill this pass, or ``evidence`` — text quoted
+    from the skill — that is really in the skill's files (the judge's claim
+    that the fix was already there)."""
+    skill = str(rec.get("skill") or "")
+    if skill in landed:
+        return True
+    evidence = disposition.get("evidence")
+    if not isinstance(evidence, str):
+        return False
+    needle = _squash(evidence)
+    if len(needle) < _MIN_EVIDENCE_CHARS:
+        return False
+    if skill == "all":
+        # A cross-skill lesson is in place when an active principle says it.
+        return any(needle in _squash(str(p.get("text", "")))
+                   for p in so.active_principles(workspace))
+    skill_dir = ss._skills_dir(workspace) / skill
+    if not skill_dir.is_dir():
+        return False
+    texts = [ss.read_skill_content(workspace, skill) or ""]
+    texts += list(ss.read_bundle_files(skill_dir).values())
+    return any(needle in _squash(t) for t in texts)
+
+
+def _squash(text: str) -> str:
+    """Whitespace-insensitive form, so a quote survives line re-wrapping."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _normalize_files(raw: object) -> dict[str, str]:
     """Accept the judge's bundled-file spec as either a {path: content} object or
     a [{path, content}] array, returning a {path: content} dict. Malformed
@@ -101,6 +200,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     # Records APPLIED during the previous pass got their cycle of visibility —
     # move them to the archive before building this pass's evidence.
     so.archive_resolved(workspace)
+    waiting = _settle_decided_edits(workspace)
 
     # Only the evolving WORKSPACE set: dream-created + forked skills. Pristine
     # builtins (source="builtin") are the stable seed — not re-curated/forked
@@ -126,15 +226,18 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     delta += sorted(n for n in backfilled_names if n not in delta)
     # Observation-driven delta: an OPEN observation pulls its skill in even
     # when the body is unchanged. ("all"/"new:*" records carry no reviewable
-    # skill; they ride along in the prompt / the skill-extract pass.)
-    open_obs = so.open_observations(workspace)
+    # skill; they ride along in the prompt / the skill-extract pass.) A record
+    # waiting for a person's decision on its edit, or one curation stopped
+    # trying (stalled), stays out.
+    open_obs = [r for r in so.open_observations(workspace)
+                if int(r.get("id", 0)) not in waiting and not r.get("stalled_at")]
     delta += sorted(n for n in {r.get("skill") for r in open_obs}
                     if n in auto and n not in delta)
     if not delta:
         _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
              backfilled=backfilled)
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
-                "observations": {**_NO_OBS, "open": len(open_obs)},
+                "observations": {**_NO_OBS, "open": len(so.open_observations(workspace))},
                 "principles": len(so.active_principles(workspace))}
 
     selected = delta[:budget]
@@ -144,6 +247,9 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                     len(delta), budget, deferred)
 
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
+    # Skills with open observations first: their fix may be in a script.
+    with_obs = {r.get("skill") for r in open_obs}
+    bundles = _bundle_views(workspace, sorted(selected, key=lambda n: n not in with_obs))
 
     import shutil as _shutil
     upstream: dict[str, str] = {}
@@ -187,7 +293,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
 
     prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
                            declined_shown, principles, user_edits,
-                           workspace=workspace)
+                           workspace=workspace, bundles=bundles)
     raw = judge(prompt)
     parsed = _parse_judge_output(raw)
     if parsed is None:
@@ -210,6 +316,22 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     actions = parsed.get("actions", [])
 
     applied = 0
+    # Which skills a change actually landed on this pass, and what happened to
+    # the attempts that did not: an observation is settled by a landed change,
+    # not by the judge saying so.
+    landed: set[str] = set()
+    attempts: dict[str, list[str]] = {}
+    # The approval an edit was filed as, by skill: its decision settles the
+    # records later (_settle_decided_edits).
+    approvals: dict[str, str] = {}
+
+    def _attempt(skill: Any, what: str, res: dict) -> None:
+        detail = res.get("error") or "no change was committed"
+        if res.get("pending_approval"):
+            detail = f"waiting for approval {res['pending_approval']}"
+            approvals[str(skill)] = str(res["pending_approval"])
+        attempts.setdefault(str(skill), []).append(f"{what}: {detail}")
+
     for a in actions:
         t = a.get("type")
         if t == "fuse":
@@ -230,6 +352,11 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                                      attribution=ss.Attribution(actor="curation"))
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0
+            if ok:
+                landed.update([a["target"], *a["sources"]])
+            else:
+                for name in a["sources"]:
+                    _attempt(name, f"fuse into {a['target']}", r)
             _emit("skill.curation_action", action="fuse", skill=a["target"], applied=ok)
         elif t == "restructure":
             # The doctrine-repair verb. The judge only DECIDES ("restructure X
@@ -252,7 +379,10 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             r = restructure_skill_agentic(workspace, a["name"], intent=intent)
             ok = bool(r.get("applied"))
             applied += 1 if ok else 0
-            if not ok:
+            if ok:
+                landed.add(a["name"])
+            else:
+                _attempt(a["name"], "restructure", r)
                 logger.info("curation: restructure of %s not applied: %s",
                             a["name"], r.get("error"))
             _emit("skill.curation_action", action="restructure", skill=a["name"], applied=ok)
@@ -273,9 +403,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                      applied=False)
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
-                                    rationale=a.get("rationale", "evolve"))
-            ok = bool(r.get("ok"))
+                                    rationale=a.get("rationale", "evolve"),
+                                    file=str(a.get("file") or "SKILL.md"))
+            # An edit that committed nothing (a no-op) changed nothing.
+            ok = bool(r.get("ok")) and bool(r.get("commit"))
             applied += 1 if ok else 0
+            if ok:
+                landed.add(a["name"])
+            else:
+                _attempt(a["name"], "evolve", r)
             _emit("skill.curation_action", action="evolve", skill=a["name"], applied=ok)
         elif t == "retire":
             # Remove a fully-obsolete skill outright (git-recoverable via
@@ -296,9 +432,16 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                                a["name"], describe(deps))
                 _emit("skill.curation_action", action="retire", skill=a["name"], applied=False)
                 continue
-            r = ss.remove_skill(workspace, a["name"])
+            replaced_by = a.get("replaced_by")
+            r = ss.remove_skill(workspace, a["name"], by="curation",
+                                reason=str(a.get("rationale") or ""),
+                                replaced_by=replaced_by if isinstance(replaced_by, str) else None)
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0
+            if ok:
+                landed.add(a["name"])
+            else:
+                _attempt(a["name"], "retire", r)
             _emit("skill.curation_action", action="retire", skill=a["name"], applied=ok)
         elif t == "principle":
             r = so.add_principle(workspace, str(a.get("text", "")),
@@ -306,7 +449,13 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             ok = bool(r.get("ok"))
             if ok:
                 applied += 1
+                landed.add("all")
+            elif r.get("error") == "principle already exists":
+                # The lesson is already in force: what an "all" record asks for
+                # is in place.
+                landed.add("all")
             else:
+                _attempt("all", "principle", r)
                 logger.warning("curation: principle action rejected: %s", r.get("error"))
             _emit("skill.curation_action", action="principle", applied=ok)
         elif t == "retire_principle":
@@ -314,14 +463,33 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             ok = bool(r.get("ok"))
             if ok:
                 applied += 1
+                landed.add("all")
             else:
+                _attempt("all", "retire_principle", r)
                 logger.warning("curation: retire_principle rejected: %s", r.get("error"))
             _emit("skill.curation_action", action="retire_principle", applied=ok)
 
     # Per-observation dispositions — only for records the judge actually saw.
-    shown_ids = {r.get("id") for r in obs_shown}
-    dispositions = [d for d in parsed.get("observations", [])
-                    if d.get("id") in shown_ids]
+    # An `applied` stands only on a change that landed on that skill this pass,
+    # or on quoted evidence found in the skill's files that it already holds
+    # the fix; otherwise the record stays OPEN with a note of what was tried.
+    shown = {r.get("id"): r for r in obs_shown}
+    dispositions = []
+    for d in parsed.get("observations", []):
+        rec = shown.get(d.get("id"))
+        if rec is None:
+            continue
+        skill = str(rec.get("skill") or "")
+        if d.get("disposition") == "applied" and not _applied_holds(workspace, rec, d, landed):
+            note = "; ".join(attempts.get(skill, [])) or (
+                "marked applied, but no change landed on the skill and no evidence "
+                "was quoted from it")
+            d = {"id": d.get("id"), "disposition": "keep", "note": note}
+        elif d.get("disposition") == "keep" and attempts.get(skill):
+            d = {**d, "note": "; ".join(attempts[skill])}
+        if d.get("disposition") == "keep" and skill in approvals:
+            d = {**d, "approval": approvals[skill]}
+        dispositions.append(d)
     obs_res = (so.apply_dispositions(workspace, dispositions)
                if dispositions else dict(_NO_OBS))
 
@@ -408,7 +576,8 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   declined: list[dict] | None = None,
                   principles: list[dict] | None = None,
                   user_edits: dict | None = None,
-                  workspace: Path | None = None) -> str:
+                  workspace: Path | None = None,
+                  bundles: dict | None = None) -> str:
     from durin.agent.skills_doctrine import composition_doctrine, workflow_catalog_text
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
@@ -416,6 +585,7 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                            workflow_catalog=(workflow_catalog_text(workspace)
                                              if workspace else "(no workflows installed)"),
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
+                           bundles_json=json.dumps(bundles or {}, ensure_ascii=False),
                            usage_json=json.dumps(usage, ensure_ascii=False),
                            upstream_json=json.dumps(upstream or {}, ensure_ascii=False),
                            observations_json=json.dumps(observations or [], ensure_ascii=False),

@@ -27,8 +27,9 @@ def test_second_gateway_refused(tmp_path: Path):
     assert started.wait(5.0), "holder process did not signal ready"
 
     os.environ["DURIN_HOME"] = str(tmp_path)
-    from durin.cli.gateway_daemon import AlreadyRunningError, acquire_gateway_singleton
     import pytest
+
+    from durin.cli.gateway_daemon import AlreadyRunningError, acquire_gateway_singleton
 
     with pytest.raises(AlreadyRunningError):
         acquire_gateway_singleton()

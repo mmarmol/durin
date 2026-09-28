@@ -16,6 +16,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from durin.agent.skill_retirements import OVERRIDE_RETIRED_HELP
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import (
@@ -29,7 +30,7 @@ from durin.agent.tools.schema import (
 logger = logging.getLogger(__name__)
 
 
-def _DEFAULT_JUDGE(prompt: str) -> str:
+def _default_judge(prompt: str) -> str:
     """Composition-gate judge: one completion via the judge aux preset
     (``skills.security.llm_judge.model`` → the user's default preset).
     Loop-safe sync invoke; exceptions propagate and the gate accepts
@@ -65,6 +66,7 @@ _PARAMETERS = tool_parameters_schema(
             "prose anyway — their word wins. Never set it on your own judgment."
         ),
     ),
+    override_retired=BooleanSchema(description=OVERRIDE_RETIRED_HELP),
     required=["name", "content", "rationale"],
     description=(
         "Create a new skill (a step-by-step procedure to follow later). Writes "
@@ -89,7 +91,7 @@ class SkillWriteTool(Tool, ContextAware):
     """
 
     def __init__(self, workspace: str | Path, *, gate_mode: str = "override",
-                 composition_judge=_DEFAULT_JUDGE) -> None:
+                 composition_judge=_default_judge) -> None:
         # gate_mode: "override" (in-session — the user's explicit word may skip
         # the composition gate) or "hard" (autonomous dream — no override).
         self._workspace = Path(workspace).expanduser()
@@ -126,6 +128,20 @@ class SkillWriteTool(Tool, ContextAware):
                 return json.dumps({"error": "each files entry needs path and content"})
             files[str(entry["path"])] = str(entry["content"])
 
+        # A skill someone retired stays retired unless a person brings it back:
+        # the dream's door never does, and in-session only the user's explicit
+        # word (override_retired) does — the agent may call this on its own.
+        # Off the event loop: the first read of the retirements takes the
+        # skills store's lock, which the dream worker may hold.
+        import asyncio
+        if not (kwargs.get("override_retired") and self._gate_mode == "override"):
+            from durin.agent.skill_retirements import retired_refusal
+            refusal = await asyncio.to_thread(
+                retired_refusal, self._workspace, str(kwargs.get("name", "")),
+                can_override=self._gate_mode == "override")
+            if refusal is not None:
+                return json.dumps(refusal, ensure_ascii=False)
+
         # The user's explicit word may skip the gate in-session; the dream's
         # instance runs gate_mode="hard" and ignores the override outright.
         override = bool(kwargs.get("override_composition")) and self._gate_mode == "override"
@@ -135,7 +151,6 @@ class SkillWriteTool(Tool, ContextAware):
         # the SYNC llm_invoke (_run_blocking), which would otherwise freeze the
         # gateway loop for the whole judge round-trip. On the worker thread
         # _run_blocking sees no running loop and takes its clean asyncio.run branch.
-        import asyncio
         result = await asyncio.to_thread(
             dream_create_skill,
             self._workspace,

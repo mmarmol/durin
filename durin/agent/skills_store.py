@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 # bundled script, and a missing workflow is authored so the skill can delegate
 # (curation `restructure` action; pre-doctrine skills re-enter the delta to be
 # repaired now that the vocabulary can express it).
-CURATION_RULES_VERSION = 4
+# v5: an `applied` disposition must rest on a landed change or quoted evidence,
+# and the judge sees bundled files and can aim an `evolve` at one (every auto
+# skill re-enters the delta once, so scripts get their first review).
+CURATION_RULES_VERSION = 5
 
 
 @dataclass
@@ -314,6 +317,23 @@ def _lint_script(relpath: str, content: str) -> dict | None:
         if proc.returncode != 0:
             return {"error": "syntax", "lang": "bash",
                     "detail": (proc.stderr or "syntax error").strip(), "line": 0}
+    return None
+
+
+def _lint_bundle(files: dict[str, str]) -> dict | None:
+    """The first file in ``files`` that does not parse, as a refusal, or None.
+
+    Every authoring path runs it — a person's save, the agent's draft
+    publish, and the dream's create, edit, restructure and fuse — so none
+    ships a script or config file that fails before it can even run. An
+    import is third-party content a person chose; it gets the security scan."""
+    for rel, text in files.items():
+        bad = _lint_script(rel, str(text))
+        if bad is not None:
+            where = f", line {bad['line']}" if bad.get("line") else ""
+            return {"error": f"bundled file {rel} does not parse "
+                             f"({bad.get('lang')}{where}): {bad.get('detail')}",
+                    "lint": {**bad, "path": rel}}
     return None
 
 
@@ -651,13 +671,17 @@ def removable_action(workspace: Path, name: str,
     return "revert" if builtin_md.exists() else "remove"
 
 
-def remove_skill(workspace: Path, name: str) -> dict:
+def remove_skill(workspace: Path, name: str, *, by: str = "user", reason: str = "",
+                 replaced_by: str | None = None) -> dict:
     """Delete a workspace skill — the mirror of :func:`install_imported_skill`.
 
     Removes the workspace ``skills/<name>/`` dir, commits the deletion to the
     skills git store (so it is recoverable), evicts the skill from the memory
     index, and appends an audit entry. Builtins (package) are never touched: a
     forked builtin reverts to the shipped version, a pure builtin is refused.
+
+    A removed workspace skill is recorded as retired (who, why, and what
+    replaces it) in the same commit, so the dream does not re-create it.
     """
     if not _safe_name(name):
         return {"error": "invalid skill name"}
@@ -670,6 +694,9 @@ def remove_skill(workspace: Path, name: str) -> dict:
     store = _store_init(workspace)
     dest = _skills_dir(workspace) / name
     shutil.rmtree(dest)
+    if action == "remove":
+        from durin.agent.skill_retirements import record_retirement
+        record_retirement(workspace, name, by=by, reason=reason, replaced_by=replaced_by)
     label = "revert to builtin" if action == "revert" else "remove"
     sha = store.auto_commit(f"skill({name}): {label}")
     _unsync_index(workspace, name)
@@ -738,6 +765,9 @@ def plan_skill_edit(workspace: Path, name: str, *, old: str, new: str,
     edit = _edit_text(root, file, old, new)
     if "error" in edit:
         return edit
+    bad = _lint_bundle({file: edit["after"]})
+    if bad is not None:
+        return bad
     return {"mode": read_mode(workspace, name, loader), "skill_dir": root,
             "file": file, **edit}
 
@@ -1059,6 +1089,11 @@ def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
                                "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
+    # The skill exists again, so it is no longer retired; the callers that
+    # may bring back a retired name took the user's word first. A quarantined
+    # skill returned above and stays retired.
+    from durin.agent.skill_retirements import clear_retirement
+    clear_retirement(workspace, name)
     store = _store_init(workspace)
     sha = store.auto_commit(commit_subject, trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
@@ -1106,6 +1141,9 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     files = files or {}
     if not all(_safe_bundle_path(p) for p in files):
         return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    bad = _lint_bundle(files)
+    if bad is not None:
+        return bad
     md = _skill_md(workspace, name)
     if md.exists():
         return {"error": f"skill already exists: {name}"}
@@ -1180,6 +1218,9 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
     files = files or {}
     if not all(_safe_bundle_path(p) for p in files):
         return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    bad = _lint_bundle(files)
+    if bad is not None:
+        return bad
     loader = _loader(workspace)
     if loader.load_skill(name) is None:
         return {"error": f"skill not found: {name}"}
@@ -1298,6 +1339,9 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         for rel, text in read_bundle_files(sdir).items():
             merged_files.setdefault(rel, text)
     merged_files.update(files)
+    bad = _lint_bundle(merged_files)
+    if bad is not None:
+        return bad
 
     store = _store_init(workspace)
     md = _skill_md(workspace, target)
@@ -1327,10 +1371,13 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                                "fused_from": list(sources), "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
+    from durin.agent.skill_retirements import record_retirement
     for s in sources:
         src_dir = _skills_dir(workspace) / s
         if src_dir.exists():
             shutil.rmtree(src_dir)
+            record_retirement(workspace, s, by="curation", reason=f"fused into {target}",
+                              replaced_by=target)
         else:  # builtin: workspace tombstone that disables model invocation
             tomb = _skills_dir(workspace) / s
             tomb.mkdir(parents=True, exist_ok=True)
@@ -1377,6 +1424,9 @@ def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution
     bad = _skill_md_integrity(content)
     if bad is not None:
         return {"error": bad}  # integrity floor - nothing moved, draft left intact
+    unparsed = _lint_bundle(read_bundle_files(draft))
+    if unparsed is not None:
+        return unparsed  # draft left intact for the author to fix
     ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
     if not ok:
         return {"error": f"composition gate: {reason}", "composition_rejected": True}

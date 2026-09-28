@@ -21,8 +21,10 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   clarification, a missing step). Do not rewrite for style or preference.
 - `retire` ONLY a skill that is fully obsolete — its entire procedure no longer
   applies, or it has been wholly subsumed by another skill. This DELETES the skill
-  (recoverable in git). Prefer `evolve` whenever any part is still useful; reach for
-  `retire` only when the right end state is "this skill should not exist."
+  (recoverable in git) and records it as retired, so it is not re-created later;
+  name the skill that covers it now in `replaced_by`. Prefer `evolve` whenever any
+  part is still useful; reach for `retire` only when the right end state is "this
+  skill should not exist."
 - NEVER touch user or `manual` skills. Only `auto` skills are given to you here, so
   act exclusively on the skills listed below.
 - Exception to the no-style rule — **English normalization**: the catalog norm is that
@@ -101,6 +103,17 @@ The full content of each `auto` skill, as JSON (name -> body):
 {{ catalog_json }}
 ```
 
+The bundled files of those skills (scripts, references), as JSON
+(name -> path -> text; long files are cut, and once the review's room for them
+is used up a file shows only a "not shown this pass" marker — never evolve
+text you cannot see). A fix that belongs in one of these
+files — a script that fails, a query with wrong columns — is an `evolve` with
+that file's path in `file`, and `old` copied exactly from it:
+
+```json
+{{ bundles_json }}
+```
+
 ## Recent usage (context only)
 
 Which skills were used recently. Context only — NOT a value signal:
@@ -131,11 +144,19 @@ how many times the same issue recurred. This is your primary evidence for
 
 Answer EVERY record below with a disposition in the `observations` output
 array: `applied` (you emitted an action incorporating it, OR the current
-skill body ALREADY incorporates the suggestion — it is resolved either way),
+skill ALREADY incorporates the suggestion — it is resolved either way),
 `declined` (you judged the suggestion itself wrong or harmful — it is
 remembered and never re-shown as open; do NOT use this for suggestions that
 are correct but already addressed), or `keep` (plausible but not yet
 actionable; it stays open and may recur).
+
+`applied` is checked, not taken on trust. It stands only when an action of
+yours on that skill lands this pass, or — for "already incorporated" — when you
+add `"evidence"`: text copied exactly from the skill's current files that shows
+the fix is there. Otherwise the record stays open and a note of what was
+tried is added to it. A record's `attempts` list shows earlier tries that did
+not land; do not repeat one that failed — fix what it says, or use
+`restructure` when the fix needs a script or a workflow.
 
 ```json
 {{ observations_json }}
@@ -190,19 +211,21 @@ carries one disposition per open observation shown above:
 ```json
 {"actions": [
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
-  {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
+  {"type": "evolve", "name": "<skill>", "file": "<SKILL.md, or a bundled file's path>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
   {"type": "restructure", "name": "<skill>", "intent": "<what to fix and how — e.g. lift the decode snippet into scripts/decode.py taking the image path as an argument and invoke it by path>", "rationale": "<why>"},
-  {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>"}
+  {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>", "replaced_by": "<the skill that covers it now, if any>"}
 ],
  "observations": [
   {"id": 1, "disposition": "applied"},
+  {"id": 3, "disposition": "applied", "evidence": "<exact text from the skill showing the fix is already there>"},
   {"id": 2, "disposition": "keep"}
 ]}
 ```
 
 For a `fuse`, `content` must be the full merged SKILL.md body of the new skill, and
 `sources` lists the names of the skills it replaces. For an `evolve`, `old` must be
-the exact text to replace within that skill's content, and `new` is the replacement.
+the exact text to replace within the file named in `file` (the skill's SKILL.md when
+omitted), and `new` is the replacement.
 For a `restructure`, give ONLY an `intent` — a precise instruction for what to
 bundle/author and how the body should change. You do NOT write the new files: an
 agentic sub-agent reads the skill, writes the script or authors the workflow with

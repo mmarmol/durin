@@ -50,7 +50,8 @@ def test_service_mode_without_discovery_quietly_uses_pool(provider):
 
 
 def test_service_mode_broken_server_flips_to_process(provider, monkeypatch):
-    from durin.memory import embed_server, embedding as embedding_mod
+    from durin.memory import embed_server
+    from durin.memory import embedding as embedding_mod
 
     events: list[str] = []
     monkeypatch.setattr(
@@ -73,7 +74,11 @@ def test_service_mode_broken_server_flips_to_process(provider, monkeypatch):
 
 
 def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
-    """Full loop: provider(service) → HTTP → embed server app → response."""
+    """Full loop: provider(service) → HTTP → embed server app → response.
+
+    Runs the server with the production config, which loads no websocket
+    stack: the embed API is plain HTTP, and uvicorn's default websocket
+    implementation is built on an API the websockets package deprecated."""
     import uvicorn
 
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
@@ -99,7 +104,7 @@ def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    server = uvicorn.Server(embed_server.embed_server_config(app))
     thread = threading.Thread(
         target=lambda: server.run(sockets=[sock]), daemon=True)
     thread.start()
@@ -108,6 +113,7 @@ def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
         while not server.started and time.monotonic() < deadline:
             time.sleep(0.05)
         assert server.started, "test embed server never started"
+        assert server.config.ws_protocol_class is None
 
         embed_server.write_discovery(
             port=port, token="tok", model="fake/test-embed")

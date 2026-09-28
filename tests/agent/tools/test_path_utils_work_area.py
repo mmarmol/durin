@@ -1,7 +1,5 @@
 # tests/agent/tools/test_path_utils_work_area.py
-from pathlib import Path
 
-import pytest
 
 from durin.agent.tools.path_utils import resolve_workspace_path
 

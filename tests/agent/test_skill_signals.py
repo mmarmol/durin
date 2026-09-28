@@ -2,7 +2,7 @@
 from a session's turns and feeds the observation queue (no agent initiative)."""
 import json
 
-from durin.agent.skill_observations import open_observations
+from durin.agent.skill_observations import log_observation, open_observations
 from durin.agent.skill_signals import (
     build_skill_signal_prompt,
     discover_skill_signals,
@@ -50,6 +50,52 @@ def test_build_prompt_includes_turn_indexed_loads_header():
         "the turns", [{"skill": "git-helper", "op": "read", "turn": 3}])
     assert "git-helper@3" in p
     assert "the turns" in p
+
+
+def test_a_skill_loaded_with_skill_view_counts_as_loaded():
+    """skill_view is the dedicated load tool; a skill it loaded must not look
+    unloaded, or the pass reports a procedure that skill covers as a gap."""
+    p = build_skill_signal_prompt(
+        "the turns", [{"skill": "mxhero-support-api", "op": "view", "turn": 3}])
+    assert "mxhero-support-api@3" in p
+    assert "(none recorded)" not in p
+
+
+def test_the_signal_pass_sees_the_catalog_and_open_gaps(tmp_path):
+    """A gap is only for work no skill covers; the pass can only tell when it
+    sees what exists, and can reuse an open gap's name for the same work."""
+    skill = tmp_path / "skills" / "mxhero-support-api" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: mxhero-support-api\ndescription: Query mxHero APIs and "
+                     "container logs in Athena\n---\n# API\n", encoding="utf-8")
+    log_observation(tmp_path, skill="new:release-runbook", kind="gap",
+                    issue="no skill covers releases", improvement="write one")
+    prompts = []
+
+    def _capture(prompt, **kw):
+        prompts.append(prompt)
+        return "[]"
+
+    discover_skill_signals(tmp_path, "USER: trace this email", llm_invoke=_capture)
+
+    assert "mxhero-support-api" in prompts[0]
+    assert "container logs in Athena" in prompts[0]
+    assert "release-runbook" in prompts[0]
+
+
+def test_a_gap_named_after_an_existing_skill_becomes_an_improvement_on_it(tmp_path):
+    skill = tmp_path / "skills" / "athena-boto3-query" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: athena-boto3-query\ndescription: run Athena SQL\n---\n# q\n",
+                     encoding="utf-8")
+
+    res = log_observation(tmp_path, skill="new:athena-boto3-query", kind="gap",
+                          issue="needs a way to run Athena SQL", improvement="add defaults")
+
+    assert res.get("ok"), res
+    [rec] = open_observations(tmp_path)
+    assert rec["skill"] == "athena-boto3-query"
+    assert rec["kind"] == "improvement"
 
 
 def test_prompt_keeps_most_recent_turns_when_truncating():

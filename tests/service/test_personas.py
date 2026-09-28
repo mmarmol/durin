@@ -1,9 +1,14 @@
 import asyncio
+
 import pytest
+
 from durin.personas import seed_example_personas
 from durin.service.personas import (
-    PersonasService, PersonaListQuery, PersonaUpsertCommand,
-    PersonaDeleteCommand, SetDefaultPersonaCommand,
+    PersonaDeleteCommand,
+    PersonaListQuery,
+    PersonasService,
+    PersonaUpsertCommand,
+    SetDefaultPersonaCommand,
 )
 from durin.service.principal import Principal, Scope
 from durin.service.types import DomainError

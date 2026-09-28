@@ -108,14 +108,19 @@ entirely) when both are empty:
 
 1. **Recent sessions.** `_recent_sessions_text` renders the newest
    `max_sessions` session transcripts (workflow session files excluded), newest
-   first. A long combined transcript is **head+tail windowed**: the first 6000
-   characters, a truncation marker, then the last 6000 characters. This keeps
-   late-session procedures from being silently dropped — a plain head-truncate
-   would lose exactly the material near the end of a long session, which is
-   where a just-established procedure is most likely to sit.
+   first. Each session gets an equal share of the input window
+   (`_SESSIONS_WINDOW_CHARS`) and is **head+tail windowed on its own**. The end
+   of a session is where the procedure that finally worked sits; trimming the
+   joined text instead would keep the oldest session's end and drop the newest
+   one's.
 2. **Logged gaps.** Any OPEN observation whose `skill` field starts with
    `new:` — a coverage gap flagged in hindsight (see below) — is surfaced as a
-   `LOGGED GAPS` block with its working name and issue text.
+   `LOGGED GAPS` block with its working name and issue text, followed by its
+   evidence (`_gap_evidence`): the end of the sessions it was logged from and
+   the observations recorded from those sessions about existing skills, marked
+   as overriding the gap's text. A gap logged mid-session can carry that
+   slice's failed guesses; the prompt tells the extractor to encode only facts
+   a session shows working.
 
 The sub-agent (`ToolRegistry` built by `_build_skill_extract_tools`) carries
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
@@ -258,12 +263,17 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 — a one-off nitpick specific to the current task is explicitly excluded:
 
 - **`correction`** — while a skill was loaded (visible in the turns'
-  `SKILLS LOADED` list, built from turn-indexed `skill_calls`), the user
-  redirected or corrected the output in a way that implies the skill itself
+  `SKILLS LOADED` list, built from turn-indexed `skill_calls`; a skill opened
+  with `skill_view` and one whose `SKILL.md` was read both count, and a run of
+  one of its scripts shows with its outcome), the user redirected or corrected
+  the output — or its script failed — in a way that implies the skill itself
   should change.
-- **`gap`** — the agent completed a multi-step procedure that no loaded skill
-  covered and that looks likely to recur; its `skill` field is normalized to
-  `new:<working-name>`.
+- **`gap`** — the agent completed a multi-step procedure that no existing skill
+  covers and that looks likely to recur; its `skill` field is normalized to
+  `new:<working-name>`. The prompt carries the catalog (every skill's name and
+  a one-line description, bounded) and the open gaps. A procedure a skill
+  already covers, even in part, is a `correction` on that skill, and a
+  procedure an open gap names reuses that gap's name.
 
 Unlike entity discovery (which **head**-truncates, because identity facts tend
 to appear early), the skill-signal prompt **tail**-truncates the turns —
@@ -290,7 +300,21 @@ provenance.
   a similarity threshold) catches paraphrases — LLMs rarely phrase a recurring
   complaint identically twice. A match bumps `count` and `last_seen` on the
   existing record instead of creating a duplicate; `count >= 2` is the
-  recurrence signal curation looks for.
+  recurrence signal curation looks for. An issue that matches an `APPLIED`
+  record — still active, or already archived — is a regression. That record
+  comes back `OPEN` (out of the archive when needed) with its count bumped
+  and the new report's improvement (the old one is the fix that did not
+  hold), so it reads as recurring, not as a first report. `DECLINED` records
+  are not reopened.
+- **Concurrency.** The gateway (`skill_observe`, the webui) and the dream
+  worker (signal pass, curation) both update these files, so every
+  read-modify-write of observations, principles and retirements holds the
+  skills store's write lock (`GitStore.write_lock`, the lock its commits
+  take).
+- **Routing.** A `new:<name>` gap whose name is an existing skill is logged as
+  an `improvement` on that skill rather than as a request for a duplicate. A
+  gap for a retired skill is routed to its replacement (Retired skills stay
+  retired, below).
 - **Lifecycle.** `OPEN` → `APPLIED`, `DECLINED` or `UPSTREAM`. The first two are
   set in bulk by `apply_dispositions` from the curation judge's per-observation
   verdicts, or one at a time by `resolve_observation` when the user resolves a
@@ -370,7 +394,11 @@ left for human review and never auto-incorporated.
 
 **Step 5 — build the prompt and call the judge.** `_build_prompt` renders
 `templates/agent/skill_curation.md` with: the selected skills' full content,
-light usage context, the upstream drift bodies (if any), the OPEN observations
+their bundled text files (`_bundle_views`: each file cut to a bounded head,
+within a per-skill total and one total for the whole review, skills with open
+observations first, so a fix that belongs in a script is reviewable; a file
+past the budget shows only a "not shown this pass" marker), light
+usage context, the upstream drift bodies (if any), the OPEN observations
 scoped to the selected skills plus any `"all"` cross-cutting record, a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
 active principles, the **composition doctrine and workflow catalog** (the same
@@ -400,10 +428,10 @@ before it is applied:
 
 | Action | Effect | Guard |
 |---|---|---|
-| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
+| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body, or on one bundled file named in `file`; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
 | `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
 | `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
-| `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected`, and nothing may depend on it (below) |
+| `retire` | `remove_skill` — delete outright (git-recoverable) and record it as retired, with the optional `replaced_by` | target must be in `selected`, and nothing may depend on it (below) |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
 
@@ -445,10 +473,62 @@ push a fully-obsolete skill toward an empty body, leaving dead clutter;
 `remove_skill` is the same git-recoverable delete used by the manual admin
 removal path.
 
+**Retired skills stay retired.** Removing a workspace skill records it in
+`skills/.retired.jsonl` (`durin/agent/skill_retirements.py`) in the same
+commit: when, by whom, why, and what replaces it. That covers a person's
+removal, a curation `retire` (whose `replaced_by` names the skill that covers it
+now) and the workspace sources of a fuse (replaced by the target). A store
+whose removals predate these records gets them from its skills history the
+first time they are read: `skill(<name>): remove` commits and fuse sources,
+unless the name exists again. Names are compared in one form (`name_key`:
+`athena_logs` and `Athena Logs` are `athena-logs`). No path brings a retired
+skill back without a person:
+- the dream's `skill_write` door refuses a retired name, with the notice;
+- the in-session `skill_write` and `skill_publish` refuse it too, unless the
+  call carries `override_retired` — set only on the user's explicit word,
+  after the refusal was shown to them, like `override_composition`;
+- a `skill_import` install of a retired name takes no shortcut (no `allow`
+  auto-install, no judge): a person decides, shown why it was retired;
+- `log_observation` turns a `new:<retired>` gap into an `improvement` on the
+  replacement;
+- `_resolve_gap_observations` declines any other open gap for a retired name;
+- the skill extractor's prompt lists the retired skills and their replacements.
+
+A skill that lands again — created, published or imported, and committed —
+clears its record in that same commit. One that goes to quarantine does not
+exist, so its record stands.
+
 **Step 7 — resolve observation dispositions.** The judge's response also
 carries a per-observation verdict (`applied` / `declined` / `keep`) for each
 OPEN record it was shown; dispositions for ids the judge was **not** shown are
 ignored, and `apply_dispositions` writes the batch in one commit.
+
+An `applied` verdict is checked against what this pass actually did. It stands
+when a change landed on that record's skill:
+- an `evolve` that committed something;
+- an applied `restructure`;
+- a `fuse` (target and sources);
+- a `retire`;
+- for `skill: "all"`, a principle change, or a proposed principle that is
+  already active (the lesson is in force).
+
+For "the skill already had the fix", it stands when the judge quotes
+`evidence` that `_applied_holds` finds, whitespace-insensitive, in the skill's
+current files — for `"all"`, in an active principle. Otherwise the record stays
+OPEN and gets an `attempts` note (the last few kept) saying what was tried: the
+failed edit's error, or the approval it was filed as. The next pass shows the
+judge that note.
+
+A record never stays OPEN forever by itself:
+- **An edit filed for approval** is settled by the person's decision: at the
+  start of each pass (`_settle_decided_edits`) an applied request makes the
+  record APPLIED and a rejected one DECLINED. While the request is open, the
+  record is not shown to the judge and does not pull its skill in, so the
+  same edit is not proposed again.
+- **A record nothing can land** — `_STALL_ATTEMPTS` failed attempts — gets
+  `stalled_at` (event `skill.observation_stalled`) and stops pulling its skill
+  into every pass. It stays OPEN for a person to resolve by hand; a new report
+  of the same issue clears the mark and curation tries again.
 
 **Step 8 — stamp.** Every skill still present in `selected` after the actions
 run gets `mark_curated`, which stamps `provenance.dream_processed_through`

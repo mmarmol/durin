@@ -1,7 +1,9 @@
 import time
+
 import pytest
+
 from durin.service.principal import Principal
-from durin.service.tasks import TasksService, TasksListQuery, _subagent_status, _workflow_status
+from durin.service.tasks import TasksListQuery, TasksService, _subagent_status, _workflow_status
 
 
 class _Status:

@@ -42,7 +42,9 @@ whichever ramp produced it (see below). `skill.used` marks the *use* signal (a
 skill was loaded or edited during a turn). `skill.observation_logged` marks
 the *feedback* signal (something was noted for later review), and
 `skill.observation_resolved` closes a single observation the user resolves by
-hand. `skill.curation_action` and `skill.curation_run` mark the *judgment*
+hand, and `skill.observation_stalled` (`{skill, kind, attempts}`) marks one
+curation stopped trying after repeated attempts that landed nothing — it now
+waits for a person. `skill.curation_action` and `skill.curation_run` mark the *judgment*
 signal (what the daily judge did, item-by-item and in aggregate).
 `skill.suggestion_resolved` closes the loop for manual skills specifically —
 it records what the *user* decided about a suggestion the judge could not
@@ -152,7 +154,7 @@ newly authored versus merely edited was to diff the catalog by hand.
 
 Emitted once per entry returned by `extract_skill_calls`
 (`durin/agent/skill_usage.py`), right after `AgentLoop._state_save` records
-those entries into `session.metadata["skill_calls"]`. A "call" is one of three
+those entries into `session.metadata["skill_calls"]`. A "call" is one of four
 things the agent did to a skill during a turn:
 
 - `view` — the `skill_view` tool loaded the skill.
@@ -160,12 +162,24 @@ things the agent did to a skill during a turn:
   fallback path when the agent reads a skill file directly instead of using
   `skill_view`).
 - `edit` — `skill_edit` modified the skill.
+- `run` — an `exec` command ran a file inside `skills/<name>/` other than its
+  `SKILL.md` (a bundled script): the file is the program of a command segment,
+  or the first argument of an interpreter (`python3 -u …`, past env
+  assignments and wrappers like `timeout 60`), and it exists in this
+  workspace's skills folder. Listing or printing a skill's files is not a run.
+  The call carries `ok` from the result's last `Exit code:` line when the
+  command is that run alone — in a pipeline or a chain the exit code is
+  another command's. The hindsight signal pass shows a failed run next to the
+  skill ("script failed"), so a script that keeps failing becomes a
+  correction on its skill instead of going unseen.
 
 Each event payload is the call dict itself: `{skill, op, turn}`, optionally
 carrying `iteration` and `session_key`. Because this fires per call rather than
 per turn, a turn that views two skills and edits one emits three separate
 `skill.used` events. `emit_skill_used` is best-effort and a no-op on an empty
-call list.
+call list. `_state_save` runs after the turn's run has released its telemetry
+binding, so the loop passes the session key and the events go to that
+session's own log.
 
 ### `skill.observation_logged` — the feedback signal
 

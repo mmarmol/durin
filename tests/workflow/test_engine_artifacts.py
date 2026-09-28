@@ -1,5 +1,6 @@
 from pathlib import Path
-from durin.workflow.engine import WorkflowEngine, NodeRunResponse
+
+from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
 
 

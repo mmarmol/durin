@@ -10,15 +10,11 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import time
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from durin.memory.extract_runner import get_extract_cursor, set_extract_cursor
 from durin.session.manager import Session, SessionManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from durin.agent.runner import AgentRunResult, AgentRunner
+from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.workflow.judge import AgentJudgeRunner
 

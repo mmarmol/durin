@@ -187,7 +187,7 @@ def test_extract_data_url_mime_tolerates_codecs_param():
     """MediaRecorder emits ``audio/webm;codecs=opus`` — the base MIME must parse
     (regression: the regex used to reject any data URL with media-type params,
     so recorded audio silently failed)."""
-    from durin.channels.websocket import _extract_data_url_mime, _UPLOAD_MIME_ALLOWED
+    from durin.channels.websocket import _UPLOAD_MIME_ALLOWED, _extract_data_url_mime
 
     assert _extract_data_url_mime("data:audio/webm;codecs=opus;base64,AAAA") == "audio/webm"
     assert _extract_data_url_mime("data:audio/mp4;codecs=mp4a.40.2;base64,AAAA") == "audio/mp4"

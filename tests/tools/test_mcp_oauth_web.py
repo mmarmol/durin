@@ -207,16 +207,16 @@ async def test_drive_oauth_handshake_picks_transport_by_cfg(monkeypatch) -> None
 
     calls: list[str] = []
 
-    class _Stop(Exception):
+    class _StopError(Exception):
         pass
 
     def fake_sse(url, **kw):
         calls.append("sse")
-        raise _Stop
+        raise _StopError
 
     def fake_stream(url, **kw):
         calls.append("stream")
-        raise _Stop
+        raise _StopError
 
     monkeypatch.setattr("mcp.client.sse.sse_client", fake_sse, raising=False)
     monkeypatch.setattr(
@@ -228,7 +228,7 @@ async def test_drive_oauth_handshake_picks_transport_by_cfg(monkeypatch) -> None
     provider = httpx.BasicAuth("u", "p")  # a real httpx.Auth (never exercised)
 
     async def drive(cfg):
-        with pytest.raises(_Stop):
+        with pytest.raises(_StopError):
             await mo.drive_oauth_handshake(provider, cfg)
         return calls[-1]
 

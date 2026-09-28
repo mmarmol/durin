@@ -2,8 +2,8 @@ from pathlib import Path
 
 from durin.agent.tools.work_area import (
     MANAGED_PREFIXES,
-    session_work_dir,
     anchored_base,
+    session_work_dir,
 )
 
 

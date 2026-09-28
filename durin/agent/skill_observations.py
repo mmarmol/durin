@@ -13,12 +13,13 @@ over a workspace Path — unit-testable with tmp_path.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import json
 import logging
 import re
 from pathlib import Path
 
-from durin.agent.skills_store import _safe_name, _skills_dir, _store_init
+from durin.agent.skills_store import _safe_name, _skills_dir, _store, _store_init
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,19 @@ def _today() -> str:
     return _dt.date.today().isoformat()
 
 
+def _under_store_lock(fn):
+    """Run ``fn`` holding the skills store's write lock. The gateway (the
+    skill_observe tool, the webui) and the dream worker (signal pass,
+    curation) both read-modify-write these files; unlocked, one process's
+    update overwrites the other's. Reentrant, and the same lock the store's
+    commits take."""
+    @functools.wraps(fn)
+    def wrapper(workspace, *args, **kwargs):
+        with _store(Path(workspace)).write_lock():
+            return fn(workspace, *args, **kwargs)
+    return wrapper
+
+
 def _read_records(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -100,6 +114,13 @@ def _norm(text: str) -> str:
 
 
 _SIMILARITY_THRESHOLD = 0.5
+# Attempt notes kept per record, and their length: enough to show the judge
+# what already failed without the record growing every night.
+_MAX_ATTEMPTS = 5
+_NOTE_CHARS = 300
+# Attempts that land nothing before a record stops pulling its skill into
+# every curation pass and waits for a person (or a new report of the issue).
+_STALL_ATTEMPTS = 3
 
 
 def _same_issue(a: str, b: str) -> bool:
@@ -129,6 +150,38 @@ def _next_id(workspace: Path) -> int:
     return max(ids, default=0) + 1
 
 
+def _route_new_skill_ref(workspace: Path, skill: str, kind: str,
+                         issue: str) -> tuple[str, str, str]:
+    """Where a ``new:<name>`` gap belongs.
+
+    A gap named after a skill that exists is feedback on that skill: it
+    becomes an ``improvement`` on it rather than a request for a duplicate. A
+    gap for a retired skill that has a replacement is a request to extend
+    that replacement: it becomes an ``improvement`` on it, noting the retired
+    name, instead of a gap that would ask for the retired skill again.
+    """
+    if not skill.startswith("new:"):
+        return skill, kind, issue
+    from durin.agent.skill_retirements import name_key, retirement_for
+
+    name = skill[4:]
+    skills_dir = _skills_dir(workspace)
+    existing = next((p.name for p in (skills_dir.iterdir() if skills_dir.is_dir() else [])
+                     if name_key(p.name) == name_key(name) and (p / "SKILL.md").is_file()),
+                    None)
+    if existing is not None:
+        return existing, "improvement", issue.strip() + " (proposed as a new skill; it already exists)"
+    retired = retirement_for(workspace, name)
+    target = retired.get("replaced_by") if retired else None
+    if target and (_skills_dir(workspace) / target / "SKILL.md").is_file():
+        note = f" (proposed as the new skill `{name}`, which is retired"
+        if retired.get("reason"):
+            note += f": {retired['reason']}"
+        return target, "improvement", issue.strip() + note + ")"
+    return skill, kind, issue
+
+
+@_under_store_lock
 def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
                     improvement: str, principle: str | None = None,
                     session: str | None = None) -> dict:
@@ -148,6 +201,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     if not improvement or not improvement.strip():
         return {"error": "improvement is required"}
 
+    skill, kind, issue = _route_new_skill_ref(workspace, skill, kind, issue)
+
     _skills_dir(workspace).mkdir(parents=True, exist_ok=True)
     store = _store_init(workspace)
     records = _read_records(_active_path(workspace))
@@ -158,6 +213,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
         if _same_issue(str(rec.get("issue", "")), issue):
             rec["count"] = int(rec.get("count", 1)) + 1
             rec["last_seen"] = _today()
+            # A new report is new evidence: curation tries a stalled one again.
+            rec.pop("stalled_at", None)
             if session and session not in rec.get("sessions", []):
                 rec.setdefault("sessions", []).append(session)
             _write_records(_active_path(workspace), records)
@@ -166,6 +223,15 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
             _emit("skill.observation_logged", skill=skill, kind=kind,
                  dedup_bumped=True, count=rec["count"])
             return {"ok": True, "id": rec["id"], "count": rec["count"], "commit": sha}
+
+    reopened = _reopen_applied(workspace, records, skill, issue, improvement, session)
+    if reopened is not None:
+        sha = store.auto_commit(
+            f"observation(#{reopened['id']} {skill}): reopened, recurred x{reopened['count']}")
+        _emit("skill.observation_logged", skill=skill, kind=kind,
+             dedup_bumped=True, count=reopened["count"], reopened=True)
+        return {"ok": True, "id": reopened["id"], "count": reopened["count"],
+                "reopened": True, "commit": sha}
 
     rec = {
         "id": _next_id(workspace),
@@ -188,6 +254,69 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     return {"ok": True, "id": rec["id"], "count": 1, "commit": sha}
 
 
+def _reopen_applied(workspace: Path, records: list[dict], skill: str, issue: str,
+                    improvement: str, session: str | None) -> dict | None:
+    """Reopen the APPLIED record this issue matches, if any; written, not committed.
+
+    An issue marked fixed that comes back is a regression. Logged as a new
+    record it would start again at count 1 — a one-off to curation — while
+    the fix that did not hold sits in the archive. The matching record comes
+    back OPEN instead (out of the archive when it was moved there), with its
+    count bumped and the new report's improvement: the old one is the fix
+    that did not hold. DECLINED records are left alone: they are the judge's
+    memory of what not to do.
+    """
+    def _matches(rec: dict) -> bool:
+        return (rec.get("skill") == skill and rec.get("status") == "APPLIED"
+                and _same_issue(str(rec.get("issue", "")), issue))
+
+    target = next((r for r in records if _matches(r)), None)
+    archive: list[dict] | None = None
+    if target is None:
+        archive = _read_records(_archive_path(workspace))
+        target = next((r for r in archive if _matches(r)), None)
+        if target is None:
+            return None
+        records.append(target)
+    target["status"] = "OPEN"
+    target["count"] = int(target.get("count", 1)) + 1
+    target["last_seen"] = _today()
+    target["reopened_at"] = _today()
+    target["improvement"] = improvement.strip()
+    target.pop("resolved_at", None)
+    if session and session not in target.get("sessions", []):
+        target.setdefault("sessions", []).append(session)
+    # Active file first: a failure before the archive write leaves the record
+    # in both files, never in neither.
+    _write_records(_active_path(workspace), records)
+    if archive is not None:
+        _write_records(_archive_path(workspace), [r for r in archive if r is not target])
+    return target
+
+
+def _session_ref(ref: str) -> str:
+    """One form for a session reference: the signal pass records the session
+    file's stem (``websocket_x``), the in-session tool its key (``websocket:x``)."""
+    return str(ref).replace(":", "_")
+
+
+def observations_from_sessions(workspace: Path, sessions: list[str]) -> list[dict]:
+    """Records about existing skills logged from any of ``sessions``, active
+    or archived, whatever their status — what those sessions taught about the
+    skills they used."""
+    wanted = {_session_ref(s) for s in sessions if s}
+    if not wanted:
+        return []
+    workspace = Path(workspace)
+    out = []
+    for rec in _read_records(_active_path(workspace)) + _read_records(_archive_path(workspace)):
+        if str(rec.get("skill", "")).startswith("new:"):
+            continue
+        if wanted & {_session_ref(s) for s in rec.get("sessions") or []}:
+            out.append(rec)
+    return out
+
+
 def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
     """All OPEN observations, optionally filtered to one skill ref."""
     recs = [r for r in _read_records(_active_path(Path(workspace)))
@@ -197,6 +326,7 @@ def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
     return recs
 
 
+@_under_store_lock
 def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
     """Resolve one OPEN observation by hand (webui/API path).
 
@@ -240,6 +370,7 @@ def suppressed_observations(workspace: Path) -> list[dict]:
             if r.get("status") in ("DECLINED", "UPSTREAM")]
 
 
+@_under_store_lock
 def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
     """Bulk status update from the curation judge's per-observation verdicts.
 
@@ -251,6 +382,7 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
     records = _read_records(_active_path(workspace))
     by_id = {int(r.get("id", 0)): r for r in records}
     counts = {"applied": 0, "declined": 0, "kept": 0}
+    noted = 0
     for d in dispositions:
         rec = by_id.get(int(d.get("id", 0)))
         disp = d.get("disposition")
@@ -267,14 +399,31 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
             counts["declined"] += 1
         elif disp == "keep":
             counts["kept"] += 1
+            # What was tried and did not land stays on the record, so the next
+            # pass sees it instead of trying the same thing blind.
+            if d.get("note"):
+                attempts = rec.setdefault("attempts", [])
+                entry = {"at": _today(), "note": str(d["note"])[:_NOTE_CHARS]}
+                if d.get("approval"):
+                    # Went to a person; their decision settles the record.
+                    entry["approval"] = str(d["approval"])
+                attempts.append(entry)
+                del attempts[:-_MAX_ATTEMPTS]
+                noted += 1
+                failed = [a for a in attempts if not a.get("approval")]
+                if len(failed) >= _STALL_ATTEMPTS and not rec.get("stalled_at"):
+                    rec["stalled_at"] = _today()
+                    _emit("skill.observation_stalled", skill=rec.get("skill", ""),
+                         kind=rec.get("kind", ""), attempts=len(failed))
         else:
             logger.warning("unknown disposition %r for observation %s", disp, d.get("id"))
     sha = None
-    if counts["applied"] or counts["declined"]:
+    if counts["applied"] or counts["declined"] or noted:
         _write_records(_active_path(workspace), records)
         store = _store_init(workspace)
         sha = store.auto_commit(
-            f"observations: {counts['applied']} applied, {counts['declined']} declined")
+            f"observations: {counts['applied']} applied, {counts['declined']} declined, "
+            f"{noted} attempts noted")
     return {**counts, "commit": sha}
 
 
@@ -284,6 +433,7 @@ def active_principles(workspace: Path) -> list[dict]:
             if p.get("status") == "active"]
 
 
+@_under_store_lock
 def add_principle(workspace: Path, text: str, rationale: str = "") -> dict:
     """Promote a generalizable lesson to a cross-cutting principle.
 
@@ -311,6 +461,7 @@ def add_principle(workspace: Path, text: str, rationale: str = "") -> dict:
     return {"ok": True, "id": pid, "commit": sha}
 
 
+@_under_store_lock
 def retire_principle(workspace: Path, pid: int) -> dict:
     """Retire an active principle (kept in the file for history)."""
     workspace = Path(workspace)
@@ -326,6 +477,7 @@ def retire_principle(workspace: Path, pid: int) -> dict:
     return {"error": f"no active principle with id {pid}"}
 
 
+@_under_store_lock
 def archive_resolved(workspace: Path) -> int:
     """Move APPLIED records to the archive file; returns how many moved.
 

@@ -16,7 +16,6 @@ last-writer-wins data loss.
 from __future__ import annotations
 
 import multiprocessing as mp
-import os
 from pathlib import Path
 
 

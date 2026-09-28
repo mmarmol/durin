@@ -1,8 +1,7 @@
 """Tests for the lightweight Consolidator — append-only to HISTORY.md."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

@@ -8,6 +8,7 @@ import secrets
 import string
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import json_repair
 
@@ -20,6 +21,32 @@ from durin.providers.base import (
 )
 
 _ALNUM = string.ascii_letters + string.digits
+
+# Claude models up to Opus 4.6 accept `temperature` and the budget_tokens
+# thinking mode; every later one rejects both. This set is closed — new models
+# fall on the other side — so it never needs updating. A trailing word after
+# the version (a proxy's "-think") still names the same model.
+_OLDER_CLAUDE_RE = re.compile(
+    r"^claude-(?:(?:2|3|instant)(?:-|$)|(?:opus|sonnet|haiku)-4(?:-[0-6])?"
+    r"(?:-\d{8}|-latest)?(?:-[a-z][a-z0-9-]*)?$)"
+)
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Lets a request set thinking.block_binding (what to do when earlier content
+# no longer matches the thinking that followed it).
+_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+# How the API words "this request field does not exist here".
+_FIELD_REJECTED_MARKERS = (
+    "extra inputs", "not permitted", "unknown", "unrecognized", "not supported",
+)
+
+
+def _is_current_claude(model_name: str) -> bool:
+    """A Claude model released after Opus 4.6 (not another vendor's model
+    served through an Anthropic-compatible API). Vertex-style ``@date`` ids
+    and dotted versions (``claude-sonnet-4.5``) are read as Anthropic's own
+    form."""
+    name = model_name.lower().split("@", 1)[0].replace(".", "-")
+    return name.startswith("claude-") and not _OLDER_CLAUDE_RE.match(name)
 
 
 def _gen_tool_id() -> str:
@@ -58,6 +85,12 @@ class AnthropicProvider(LLMProvider):
         # Keep retries centralized in LLMProvider._run_with_retry to avoid retry amplification.
         client_kw["max_retries"] = 0
         self._client = AsyncAnthropic(**client_kw)
+        # What the API refused once, remembered so later requests do not
+        # fail the same way: a forced tool and a disabled thinking (per
+        # model), and the thinking-binding field (per endpoint).
+        self._forced_tool_refused: set[str] = set()
+        self._thinking_always_on: set[str] = set()
+        self._binding_refused = False
 
     @classmethod
     def _handle_error(cls, e: Exception) -> LLMResponse:
@@ -186,13 +219,19 @@ class AnthropicProvider(LLMProvider):
         blocks: list[dict[str, Any]] = []
         content = msg.get("content")
 
+        # Every thinking and redacted_thinking block goes back unchanged and in
+        # order: Anthropic rejects a tool turn whose thinking was altered.
         for tb in msg.get("thinking_blocks") or []:
-            if isinstance(tb, dict) and tb.get("type") == "thinking":
+            if not isinstance(tb, dict):
+                continue
+            if tb.get("type") == "thinking":
                 blocks.append({
                     "type": "thinking",
                     "thinking": tb.get("thinking", ""),
                     "signature": tb.get("signature", ""),
                 })
+            elif tb.get("type") == "redacted_thinking" and tb.get("data"):
+                blocks.append({"type": "redacted_thinking", "data": tb["data"]})
 
         if isinstance(content, str) and content:
             blocks.append({"type": "text", "text": content})
@@ -442,10 +481,6 @@ class AnthropicProvider(LLMProvider):
         max_tokens = max(1, max_tokens)
         thinking_enabled = bool(reasoning_effort) and reasoning_effort.lower() != "none"
 
-        # claude-opus-4-7 deprecated the `temperature` parameter entirely — the
-        # API returns 400 if it is present, on any code path.
-        omit_temperature = "opus-4-7" in model_name
-
         kwargs: dict[str, Any] = {
             "model": model_name,
             "messages": anthropic_msgs,
@@ -454,6 +489,40 @@ class AnthropicProvider(LLMProvider):
 
         if system:
             kwargs["system"] = system
+
+        if _is_current_claude(model_name):
+            # Models released after Opus 4.6 reject a non-default temperature
+            # and the budget_tokens thinking mode on every request: no sampling
+            # params, adaptive thinking, effort through output_config.
+            effort = (reasoning_effort or "").lower()
+            if effort in _EFFORT_LEVELS or effort == "adaptive":
+                kwargs["thinking"] = {"type": "adaptive"}
+                if self._binding_controls_available():
+                    # Earlier tool results the runner trimmed would otherwise
+                    # make the API reject the thinking that follows them;
+                    # drop_block drops that thinking instead.
+                    kwargs["thinking"]["block_binding"] = {
+                        "prefix_mismatch_behavior": "drop_block"}
+                    self._add_beta(kwargs, _THINKING_BINDING_BETA)
+                if effort in _EFFORT_LEVELS:
+                    kwargs["output_config"] = {"effort": effort}
+            elif effort == "none" and model_name not in self._thinking_always_on:
+                # Some of these models think when the field is omitted, so
+                # "none" has to say disabled.
+                kwargs["thinking"] = {"type": "disabled"}
+            if anthropic_tools:
+                kwargs["tools"] = anthropic_tools
+                # Some of these models refuse a forced tool; the refusal is
+                # retried with auto and remembered (_recover_request_for_error).
+                tc = self._convert_tool_choice(
+                    tool_choice, thinking_enabled=model_name in self._forced_tool_refused)
+                if tc:
+                    kwargs["tool_choice"] = tc
+            if self.extra_headers:
+                self._merge_headers(kwargs, self.extra_headers)
+            return kwargs
+
+        omit_temperature = temperature is None
 
         if reasoning_effort == "adaptive":
             # Adaptive thinking: model decides when and how much to think
@@ -479,9 +548,90 @@ class AnthropicProvider(LLMProvider):
                 kwargs["tool_choice"] = tc
 
         if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
+            self._merge_headers(kwargs, self.extra_headers)
 
         return kwargs
+
+    @staticmethod
+    def _merge_headers(kwargs: dict[str, Any], headers: dict[str, str]) -> None:
+        """Add ``headers`` to the request, joining ``anthropic-beta`` values."""
+        merged = dict(kwargs.get("extra_headers") or {})
+        for key, value in headers.items():
+            if key.lower() == "anthropic-beta" and merged.get("anthropic-beta"):
+                betas = [b.strip() for b in f"{merged['anthropic-beta']},{value}".split(",") if b.strip()]
+                merged["anthropic-beta"] = ",".join(dict.fromkeys(betas))
+            else:
+                merged[key] = value
+        kwargs["extra_headers"] = merged
+
+    @classmethod
+    def _add_beta(cls, kwargs: dict[str, Any], beta: str) -> None:
+        cls._merge_headers(kwargs, {"anthropic-beta": beta})
+
+    def _binding_controls_available(self) -> bool:
+        """The thinking-binding controls exist on Anthropic's own API. A proxy
+        or gateway in front of it may drop the beta header and then reject
+        the field, and other platforms spell it differently."""
+        if self._binding_refused:
+            return False
+        if not self.api_base:
+            return True
+        host = (urlparse(self.api_base).hostname or "").lower()
+        return host == "anthropic.com" or host.endswith(".anthropic.com")
+
+    def _recover_request_for_error(
+        self, kw: dict[str, Any], response: LLMResponse,
+    ) -> dict[str, Any] | None:
+        """Retry once without what the API just rejected.
+
+        - The thinking-binding field on an endpoint without it: sent without
+          it from now on.
+        - A forced tool on a model that refuses one: auto, remembered.
+        - A disabled thinking on a model that always thinks: the field is
+          left out, remembered.
+        - A thinking block the API no longer accepts (its signature, or the
+          content before it changed on a model that binds thinking to its
+          prefix): every thinking block is dropped from the history. Adaptive
+          thinking accepts a turn without one; budget thinking requires the
+          last assistant turn to start with one, so on those models the retry
+          also runs without thinking.
+        - A rejected sampling param is omitted.
+        """
+        text = (response.content or "").lower()
+        model_name = self._strip_prefix(kw.get("model") or self.default_model)
+        effort = str(kw.get("reasoning_effort") or "").lower()
+        if (
+            "block_binding" in text
+            and any(marker in text for marker in _FIELD_REJECTED_MARKERS)
+            and not self._binding_refused
+        ):
+            self._binding_refused = True
+            return dict(kw)
+        tool_choice = kw.get("tool_choice")
+        if (
+            "tool_choice" in text
+            and ("not supported" in text or "forces tool use" in text)
+            and tool_choice not in (None, "auto", "none")
+        ):
+            self._forced_tool_refused.add(model_name)
+            return {**kw, "tool_choice": "auto"}
+        if "thinking" in text and "disabled" in text and effort == "none":
+            self._thinking_always_on.add(model_name)
+            return dict(kw)
+        if "signature" in text or ("thinking" in text and "block" in text):
+            messages = kw.get("messages") or []
+            if any(isinstance(m, dict) and m.get("thinking_blocks") for m in messages):
+                recovered = {**kw, "messages": [
+                    {k: v for k, v in m.items() if k != "thinking_blocks"}
+                    if isinstance(m, dict) else m
+                    for m in messages
+                ]}
+                if not _is_current_claude(model_name) and effort not in ("", "none", "adaptive"):
+                    recovered["reasoning_effort"] = None
+                return recovered
+        if "temperature" in text and kw.get("temperature") is not None:
+            return {**kw, "temperature": None}
+        return None
 
     # ------------------------------------------------------------------
     # Response parsing
@@ -507,6 +657,11 @@ class AnthropicProvider(LLMProvider):
                     "type": "thinking",
                     "thinking": block.thinking,
                     "signature": getattr(block, "signature", ""),
+                })
+            elif block.type == "redacted_thinking":
+                thinking_blocks.append({
+                    "type": "redacted_thinking",
+                    "data": getattr(block, "data", ""),
                 })
 
         stop_map = {"tool_use": "tool_calls", "end_turn": "stop", "max_tokens": "length"}

@@ -349,31 +349,40 @@ class GithubMcpRegistry:
         self._http = http or _DefaultHTTP()
         self._by_name: dict[str, dict] | None = None
 
+    # The registry now and then rejects a cursor it issued (HTTP 400 "Invalid
+    # cursor parameter"); the listing is a few pages, so the walk starts over.
+    _CRAWL_ATTEMPTS = 3
+    _PAGE_CAP = 100  # backstop, not a real bound
+
     async def _index(self) -> dict[str, dict]:
+        """The whole listing by name. Kept only when the walk completed: a
+        failed one is tried again on the next call, never served truncated."""
         if self._by_name is None:
-            self._by_name = {}
-            async for server in self._iter_servers():
-                norm = _normalize_github_server(server)
-                if norm["name"]:
-                    self._by_name[norm["name"]] = norm
+            try:
+                servers = await self.fetch_all()
+            except Exception:  # noqa: BLE001 — the curated fallback degrades to empty
+                return {}
+            self._by_name = {s["name"]: s for s in servers if s.get("name")}
         return self._by_name
 
-    async def _iter_servers(self):
-        cursor = None
-        for _ in range(100):  # hard page cap — backstop, not a real bound
-            params: dict = {"limit": 100}
-            if cursor:
-                params["cursor"] = cursor
-            url = f"{self.BASE}/v0/servers?{urllib.parse.urlencode(params)}"
+    async def fetch_all(self) -> list[dict]:
+        """Every server, normalized, following ``next_cursor`` from the first
+        page. A rejected cursor restarts the walk; when every attempt fails
+        the last error is raised — a partial listing must not pass for the
+        whole one."""
+        for attempt in range(self._CRAWL_ATTEMPTS):
+            servers, cursor = await self.fetch_page()
             try:
-                data = await self._http.get_json(url)
-            except Exception:  # noqa: BLE001
-                return
-            for e in data.get("servers") or []:
-                yield e.get("server") or e
-            cursor = (data.get("metadata") or {}).get("next_cursor")
-            if not cursor:
-                return
+                for _ in range(self._PAGE_CAP):
+                    if not cursor:
+                        return servers
+                    page, cursor = await self.fetch_page(cursor=cursor)
+                    servers.extend(page)
+                return servers
+            except Exception:
+                if attempt == self._CRAWL_ATTEMPTS - 1:
+                    raise
+        return []
 
     async def search(self, query: str, *, limit: int) -> list[McpServerHit]:
         index = await self._index()

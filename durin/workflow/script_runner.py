@@ -33,7 +33,12 @@ import time
 from pathlib import Path
 
 from durin.security.secrets import get_secret_store, redact_secrets, scope_allows
-from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse, ScriptCancelled
+from durin.workflow.engine import (
+    NodeExecutionError,
+    NodeRunRequest,
+    NodeRunResponse,
+    ScriptCancelledError,
+)
 from durin.workflow.verdict import parse_label
 
 # Env values have platform size limits (unlike stdin); the task is a hint, not data.
@@ -216,7 +221,7 @@ class ScriptNodeRunner:
                     killed_out, killed_err = self._killpg(proc)
                     raise NodeExecutionError(
                         node.id, req.iteration, None,
-                        ScriptCancelled("cancelled by user"),
+                        ScriptCancelledError("cancelled by user"),
                         command=self._display_command(node),
                         stdout=self._cap_log(redact_secrets(killed_out)),
                         stderr=self._cap_log(redact_secrets(killed_err)),

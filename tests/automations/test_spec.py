@@ -4,7 +4,6 @@ import pytest
 
 from durin.automations.spec import (
     AutomationError,
-    AutomationSpec,
     AutomationTrigger,
     Delivery,
     Help,

@@ -345,11 +345,81 @@ implement this:
 The self-healing net is `_recover_request_for_error(kw, response)`. On a
 *non-transient* error the retry loop calls it once; a provider overrides it to strip
 the piece the endpoint just rejected and return a mutated request the loop retries a
-single time. The OpenAI-compat provider recovers three shapes: content sent alongside
-`tool_calls` (blank it — the backstop for the default above), and an unsupported
-`temperature` or token-limit param (drop it via the `_OMIT` sentinel that
-`_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
+single time. The OpenAI-compat provider recovers these shapes: a `reasoning_content`
+the endpoint's message schema does not have (send the history without it, and leave
+it off that model's later requests — an error saying the field is missing, required
+or empty keeps it), content sent alongside `tool_calls` (blank
+it — the backstop for the default above), and an unsupported `temperature` or
+token-limit param (drop it via the `_OMIT` sentinel that `_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
 is absorbed here without a code edit; the base-class default is no recovery.
+
+### 4.11 The model's reasoning in later requests
+
+The runner stores a response's reasoning on its assistant message
+(`reasoning_content`, and Anthropic `thinking_blocks`), and every later request
+carries it back: within the turn, and from earlier turns until compaction
+summarizes them. This is the common practice among agent harnesses. Within a
+turn every provider asks for it, and Anthropic, DeepSeek with tools and Gemini
+reject a request without it. Across turns each provider decides server-side,
+with its own switch and default, what to keep.
+
+Provider rules the serialization honors:
+
+- **Anthropic.** Every `thinking` and `redacted_thinking` block goes back
+  unchanged and in its original order. A redacted block is opaque — its
+  `data` is replayed as received and never shown as reasoning text.
+- **Current Claude models** (anything after Opus 4.6; `_is_current_claude`,
+  which matches the closed set of older names — Vertex-style `@date` ids and
+  dotted versions read as Anthropic's own form — so a new model needs no code
+  change):
+  - no `temperature` is sent, since any non-default value is rejected;
+  - an effort level becomes adaptive thinking plus `output_config.effort`,
+    because the `budget_tokens` mode is rejected;
+  - effort `none` sends `thinking: {"type": "disabled"}`, since some of these
+    models think when the field is omitted;
+  - a forced tool is sent as requested.
+  - When thinking is configured and the request goes to Anthropic's own API,
+    it also sets `thinking.block_binding.prefix_mismatch_behavior:
+    "drop_block"` (beta `thinking-binding-controls-2026-08-01`). On models
+    that bind thinking to everything before it, an earlier tool result the
+    runner trimmed then drops the later thinking instead of failing the
+    request. A proxy or gateway in front of the API may drop the beta header
+    and then reject the field, so another base URL does not get it.
+- **Recovery.** `AnthropicProvider._recover_request_for_error` retries once,
+  and remembers what a model or endpoint refused so later requests do not
+  fail the same way:
+  - the binding field on an endpoint without it is left out from then on;
+  - a forced tool on a model that refuses one (Opus 5.5, Fable 5.1, Mythos
+    5.1) becomes `auto` for that model;
+  - a disabled thinking on a model that always thinks is left out for that
+    model;
+  - a thinking block the API no longer accepts (a signature, or content that
+    changed before it) drops every thinking block from the history. Adaptive
+    thinking accepts a turn without one; budget thinking requires the last
+    assistant turn to start with one, so on those models the retry also runs
+    without thinking;
+  - a rejected `temperature` is omitted.
+- **DeepSeek.** Its API thinks by default and rejects a tool request whose
+  earlier assistant turns lack `reasoning_content`, so a turn stored without
+  reasoning gets the single-space pad above. The pad follows DeepSeek's API —
+  the `deepseek` provider, or a base URL on `api.deepseek.com` — rather than
+  the model name, so a new DeepSeek model is covered without a code change. It
+  is skipped when the effort is `none` and for `deepseek-chat`, the legacy
+  non-thinking alias. Other hosts serving DeepSeek weights keep their own
+  contract.
+- **Providers that take no reasoning back.** `ProviderSpec.echo_reasoning`
+  is false for Mistral, whose assistant message schema forbids extra fields,
+  and for Groq, whose non-reasoning models reject any reasoning field — and a
+  turn from another provider carries one (an empty `reasoning_content` after
+  Anthropic thinking). Their requests leave `reasoning_content` out. A custom
+  endpoint that rejects it is covered by the recovery in 4.10.
+- **Tool results carry no `name`.** The Chat Completions tool message is
+  `role`, `tool_call_id` and `content`; strict endpoints (Groq documents a 400)
+  reject a `name` there, so it is dropped on the way out. The runner keeps it
+  in the stored history. An endpoint that needs it — a proxy that translates
+  to Gemini's native API rejects an empty `function_response.name` — gets each
+  result's name back from the call it answers, on the retry and on that
+  model's later requests.
 
 ---
 
@@ -357,7 +427,7 @@ is absorbed here without a code edit; the base-class default is no recovery.
 
 | Symbol | File | Role |
 |---|---|---|
-| `ProviderSpec` | `durin/providers/registry.py` | Frozen metadata for one provider: `name`, `keywords`, `env_key`, `backend`, gateway/local/oauth/direct flags, `strip_model_prefix`, `thinking_style`, `supports_prompt_caching` |
+| `ProviderSpec` | `durin/providers/registry.py` | Frozen metadata for one provider: `name`, `keywords`, `env_key`, `backend`, gateway/local/oauth/direct flags, `strip_model_prefix`, `thinking_style`, `echo_reasoning`, `supports_prompt_caching` |
 | `PROVIDERS` | `durin/providers/registry.py` | Ordered tuple of all `ProviderSpec` entries; order controls match priority |
 | `LLMProvider` | `durin/providers/base.py` | Abstract base: `chat()`, `chat_stream()`, `chat_stream_with_retry()`, retry logic, message sanitization, `generation` settings |
 | `LLMResponse` | `durin/providers/base.py` | Response dataclass: `content`, `tool_calls`, `finish_reason`, `usage`, structured error fields (`error_kind`, `error_status_code`, `error_should_retry`) |

@@ -141,7 +141,6 @@ def _resolve_provider_model() -> tuple[Any, str]:
 
 
 def _build_tools(workspace: Path) -> Any:
-    from durin.agent.tools.registry import ToolRegistry
     from durin.agent.tools.memory_lineage_tools import (
         MemoryEntityLineageTool,
         MemoryReadEntityTool,
@@ -149,6 +148,7 @@ def _build_tools(workspace: Path) -> Any:
         MemorySourceSessionTool,
     )
     from durin.agent.tools.memory_search import MemorySearchTool
+    from durin.agent.tools.registry import ToolRegistry
 
     t = ToolRegistry()
     t.register(MemoryReadEntityTool(workspace))
@@ -174,8 +174,8 @@ async def _escalate_async(
 ) -> JudgeResult:
     global AgentRunner
     if AgentRunner is None:
-        from durin.agent.runner import AgentRunner as _AR
-        AgentRunner = _AR
+        from durin.agent.runner import AgentRunner as _AgentRunner
+        AgentRunner = _AgentRunner
     from durin.agent.runner import AgentRunSpec
 
     if provider is None or not model:

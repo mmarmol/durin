@@ -1,6 +1,5 @@
 """Test message tool suppress logic for final replies."""
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 

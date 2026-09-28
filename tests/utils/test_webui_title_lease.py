@@ -16,13 +16,10 @@ Contract:
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from durin.session.manager import Session, SessionManager
 from durin.session.turn_lease import session_turn_lease
@@ -32,7 +29,6 @@ from durin.utils.webui_titles import (
     WEBUI_TITLE_USER_EDITED_METADATA_KEY,
     maybe_generate_webui_title,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

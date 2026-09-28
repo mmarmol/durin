@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
+from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
 from durin.workflow.spec import Workflow
 
 
@@ -26,7 +26,7 @@ def test_loads_and_parses_named_workflow(tmp_path):
 
 
 def test_missing_workflow_raises_not_found(tmp_path):
-    with pytest.raises(WorkflowNotFound, match="ghost"):
+    with pytest.raises(WorkflowNotFoundError, match="ghost"):
         load_workflow(tmp_path, "ghost")
 
 

@@ -598,14 +598,14 @@ def build_gateway_http_app(
 
     # -- /api/v1/mcp/oauth/callback ------------------------------------------
 
-    _OAUTH_DONE_HTML = (
+    _oauth_done_html = (
         "<!doctype html><meta charset='utf-8'><title>durin</title>"
         "<body style='font-family:system-ui;display:grid;place-items:center;height:90vh'>"
         "<div><h3>Signed in</h3><p>You can close this window.</p></div>"
         "<script>setTimeout(()=>window.close(),800)</script></body>"
     )
 
-    _OAUTH_FAIL_HTML = (
+    _oauth_fail_html = (
         "<!doctype html><meta charset='utf-8'><title>durin</title>"
         "<body style='font-family:system-ui;display:grid;place-items:center;height:90vh'>"
         "<div><h3>Sign-in failed</h3><p>The provider returned: {reason}</p>"
@@ -632,9 +632,9 @@ def build_gateway_http_app(
             import html as _html
 
             return HTMLResponse(
-                _OAUTH_FAIL_HTML.format(reason=_html.escape(error)), status_code=200
+                _oauth_fail_html.format(reason=_html.escape(error)), status_code=200
             )
-        return HTMLResponse(_OAUTH_DONE_HTML)
+        return HTMLResponse(_oauth_done_html)
 
     # -- /webui/bootstrap ---------------------------------------------------
 

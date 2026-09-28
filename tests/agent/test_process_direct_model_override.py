@@ -6,7 +6,7 @@ _process_message without mutating the global self.model_preset.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

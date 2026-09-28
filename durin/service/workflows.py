@@ -33,7 +33,7 @@ from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
 from durin.workflow.artifacts import safe_key
-from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
+from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
 from durin.workflow.result import WorkflowResult
 from durin.workflow.spec import WorkflowError, parse_workflow
 from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
@@ -702,7 +702,7 @@ class WorkflowsService:
         principal.require(Scope.WORKFLOWS_WRITE)
         try:
             load_workflow(self._workspace, cmd.name)
-        except WorkflowNotFound:
+        except WorkflowNotFoundError:
             raise NotFoundError(f"workflow {cmd.name!r} not found")
 
         # Validate BEFORE detaching: an unsafe work_key must never reach the
@@ -761,7 +761,7 @@ class WorkflowsService:
             raise UnavailableError("running a workflow is not available on this surface")
         try:
             workflow = load_workflow(self._workspace, name)
-        except WorkflowNotFound:
+        except WorkflowNotFoundError:
             raise NotFoundError(f"workflow {name!r} not found")
 
         # Same validation as launch()'s, but gated on `is not None` rather than
@@ -828,7 +828,10 @@ class WorkflowsService:
                             "this reached it."
                         )
                     if manifest.get("ask_kind") == "approval":
-                        from durin.workflow.approval import build_approval_resume, parse_approval_reply
+                        from durin.workflow.approval import (
+                            build_approval_resume,
+                            parse_approval_reply,
+                        )
 
                         action = parse_approval_reply(task) or "revise"
                         if action == "reject":

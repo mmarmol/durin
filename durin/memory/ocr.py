@@ -30,7 +30,7 @@ from pathlib import Path
 from durin.config.home import durin_home
 
 __all__ = [
-    "OcrUnavailable",
+    "OcrUnavailableError",
     "TranscribedPage",
     "engine_available",
     "render_page",
@@ -76,7 +76,7 @@ _engine_language: str | None = None
 _INLINE_OCR_SLOT = threading.Semaphore(1)
 
 
-class OcrUnavailable(RuntimeError):
+class OcrUnavailableError(RuntimeError):
     """Raised when OCR is requested but the [ocr] extra is not installed."""
 
 
@@ -156,7 +156,7 @@ def _get_engine(language: str | None = None):
     global _engine, _engine_language
     if _engine is None or _engine_language != language:
         if not engine_available():
-            raise OcrUnavailable(
+            raise OcrUnavailableError(
                 "local OCR needs the [ocr] extra: install it via the "
                 "Settings > Documents toggle, or manually with `pipx inject "
                 'durin-agent "durin-agent[ocr]"` / `uv tool install '
@@ -291,12 +291,12 @@ def transcribe_pages_detached(
     living in the caller. The child renders its own pages from *pdf_path*;
     only the page numbers cross the process boundary, not image data.
 
-    Raises :class:`OcrUnavailable` — the same exception a broken in-process
+    Raises :class:`OcrUnavailableError` — the same exception a broken in-process
     engine raises — on a non-zero exit, a timeout, an unparseable result, or
     a result missing one of the requested pages. Every one of those is a
     failure of the whole call: there is no partial result to salvage, so
     existing callers degrade exactly as they already do for a missing
-    engine, via the ``except (OcrUnavailable, ImportError)`` they already
+    engine, via the ``except (OcrUnavailableError, ImportError)`` they already
     have. That reuse is deliberate — this adds no new exception type.
 
     Holds ``_INLINE_OCR_SLOT`` for the whole call, so concurrent callers
@@ -340,12 +340,12 @@ def transcribe_pages_detached(
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
             tail = (exc.stderr or "")[-500:]
-            raise OcrUnavailable(
+            raise OcrUnavailableError(
                 f"OCR subprocess timed out after {timeout_s:.0f}s: {tail}"
             ) from exc
 
         if proc.returncode != 0:
-            raise OcrUnavailable(
+            raise OcrUnavailableError(
                 f"OCR subprocess exited {proc.returncode}: "
                 f"{_child_failure(proc.stdout, proc.stderr)}"
             )
@@ -361,15 +361,15 @@ def transcribe_pages_detached(
                 )
                 for page, obj in payload["pages"].items()
             }
-        except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailable too
+        except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailableError too
             tail = (proc.stderr or "")[-500:]
-            raise OcrUnavailable(
+            raise OcrUnavailableError(
                 f"OCR subprocess produced no parseable result: {tail}"
             ) from exc
 
         missing = [page for page in pages if page not in result]
         if missing:
-            raise OcrUnavailable(
+            raise OcrUnavailableError(
                 f"OCR subprocess did not return page(s) {missing} of the "
                 f"{len(pages)} requested"
             )

@@ -1,5 +1,5 @@
-from durin.personas.resolve import resolve_active_persona_name
 from durin.config.schema import Config
+from durin.personas.resolve import resolve_active_persona_name
 
 
 def test_precedence_cron_over_session_over_default():
@@ -18,6 +18,7 @@ def test_none_when_nothing_set():
 
 def test_process_direct_accepts_persona():
     import inspect
+
     from durin.agent.loop import AgentLoop
 
     sig = inspect.signature(AgentLoop.process_direct)

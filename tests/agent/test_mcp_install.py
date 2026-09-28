@@ -357,7 +357,7 @@ def test_build_remote_config_no_headers_is_empty():
 
 def test_apply_auth_help_sets_url_for_curated_input():
     from durin.agent.mcp_install import apply_auth_help
-    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+    from durin.agent.mcp_registry import EnvVarSpec, McpServerDetail, PackageSpec
 
     detail = McpServerDetail(
         name="github", ref="io.github.github/github-mcp-server",
@@ -375,7 +375,7 @@ def test_apply_auth_help_sets_url_for_curated_input():
 
 def test_apply_auth_help_noop_for_unknown_ref():
     from durin.agent.mcp_install import apply_auth_help
-    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+    from durin.agent.mcp_registry import EnvVarSpec, McpServerDetail, PackageSpec
 
     detail = McpServerDetail(
         name="x", ref="io.unknown/srv", description="", version="1", repository="",
@@ -392,7 +392,7 @@ def test_apply_auth_help_noop_for_unknown_ref():
 
 def test_apply_auth_help_noop_for_known_ref_unknown_input():
     from durin.agent.mcp_install import apply_auth_help
-    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+    from durin.agent.mcp_registry import EnvVarSpec, McpServerDetail, PackageSpec
 
     detail = McpServerDetail(
         name="github", ref="io.github.github/github-mcp-server",

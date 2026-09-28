@@ -17,7 +17,6 @@ job's run-state delta was persisted.
 
 """
 
-import asyncio
 import time
 
 import pytest

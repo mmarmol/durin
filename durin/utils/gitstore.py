@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +14,6 @@ from pathlib import Path
 from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
-
 
 # Per-repo write locks. Serialize the stage+commit so concurrent writers to one
 # git-backed store (e.g. the skill dream and a webui edit) cannot corrupt the git
@@ -202,6 +203,15 @@ class GitStore:
 
     # -- daily operations ------------------------------------------------------
 
+    @contextmanager
+    def write_lock(self) -> Iterator[None]:
+        """Hold this repo's write lock: in-process, then cross-process, the
+        order :meth:`auto_commit` takes them. Wrap a read-modify-write of a
+        file the next commit carries in it, so two processes (the gateway and
+        the dream worker) cannot interleave their updates. Reentrant."""
+        with _repo_write_lock(self._workspace), cross_process_lock(self._workspace / ".git-worktree"):
+            yield
+
     def auto_commit(self, message: str, *, trailers: dict[str, str] | None = None) -> str | None:
         """Stage changes (tracked files, or the whole tree in subtree mode) and commit if any.
 
@@ -214,7 +224,7 @@ class GitStore:
         if not self.is_initialized():
             return None
 
-        with _repo_write_lock(self._workspace), cross_process_lock(self._workspace / ".git-worktree"):
+        with self.write_lock():
             try:
                 from dulwich import porcelain
 
@@ -340,7 +350,8 @@ class GitStore:
     def _build_gitignore(self) -> str:
         """Generate .gitignore content from tracked files."""
         if self._subtree:
-            return "__pycache__/\n*.pyc\n.archive/\n.DS_Store\n"
+            # .git-worktree.lock is write_lock's own lock file, in this tree.
+            return "__pycache__/\n*.pyc\n.archive/\n.DS_Store\n.git-worktree.lock\n"
         dirs: set[str] = set()
         for f in self._tracked_files:
             parent = str(Path(f).parent)

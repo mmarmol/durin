@@ -353,7 +353,7 @@ falls through to the full accurate pass described above, which answers exactly
 — a second confirmation batch would cost about a fifth of that pass (opening a
 PDF is O(total pages) whatever gets read afterwards), so walking a long
 document in batches is the slower way to a worse answer.
-`NeedsOcrJob` then carries the confirmed floor as `pages` (the worker widens it
+`NeedsOcrJobError` then carries the confirmed floor as `pages` (the worker widens it
 to the exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged
 count as `estimated_pages`, which is what sizes the job for the reader.
 

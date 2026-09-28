@@ -56,7 +56,7 @@ from loguru import logger
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.automations import channel_meta, claims, run_log, store
 from durin.automations.channel_meta import InboundFacts
-from durin.automations.runtime import AutomationBusy, AutomationsRuntime
+from durin.automations.runtime import AutomationBusyError, AutomationsRuntime
 from durin.automations.spec import AutomationSpec, AutomationTrigger
 from durin.telemetry.logger import (
     bind_telemetry,
@@ -113,7 +113,7 @@ class TriggerMatcher:
         # messages arriving back-to-back for the same single-concurrency
         # automation would otherwise both read "not active" and both decide
         # to fire, so the second loses the race inside the task
-        # (AutomationBusy) and gets dropped. This set closes that window: a
+        # (AutomationBusyError) and gets dropped. This set closes that window: a
         # name is added synchronously before the task is scheduled and
         # removed in the task's `finally`. Single-threaded asyncio event loop
         # — no lock needed, the add/check are never interleaved with the
@@ -326,7 +326,7 @@ class TriggerMatcher:
             source = "webhook" if channel == "webhook" else "channel"
             await self._runtime.fire(name, source=source, task=content, origin=origin)
             self._emit(name, channel, "fired")
-        except AutomationBusy:
+        except AutomationBusyError:
             # Belt and braces: the pending-fires guard should make this
             # unreachable for the sequential-message race it was built for,
             # but keep the fallback for any other path that can still lose

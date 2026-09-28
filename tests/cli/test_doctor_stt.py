@@ -2,8 +2,7 @@
 
 import sys
 import types
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from durin.cli.doctor import check_stt_installed, check_stt_model_cached
 

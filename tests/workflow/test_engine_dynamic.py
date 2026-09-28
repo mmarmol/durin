@@ -1,6 +1,5 @@
 """Tests for dynamic fan-out (orchestrator → worker × N per runtime list)."""
 
-import pytest
 
 from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow

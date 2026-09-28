@@ -14,8 +14,6 @@ Covers:
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from durin.agent.runner import AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager

@@ -1789,6 +1789,15 @@ class SkillObservationResolvedEvent(TypedDict):
     disposition: str  # "applied" | "declined"
 
 
+class SkillObservationStalledEvent(TypedDict):
+    """Curation stopped trying an OPEN skill observation: repeated attempts
+    landed nothing, so it waits for a person (or a new report of the issue)."""
+
+    skill: str
+    kind: str
+    attempts: int  # failed attempts on the record when it stalled
+
+
 class WorkflowImproveRecommendedEvent(TypedDict):
     """The improve pass queued a proposal (prompt / command / script_file) as
     a recommendation — either a MANUAL-mode workflow, or an AUTO-mode one where
@@ -2080,6 +2089,7 @@ EVENTS: dict[str, type] = {
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
+    "skill.observation_stalled": SkillObservationStalledEvent,
     # Documents / OCR jobs
     "documents.ocr.job": DocumentsOcrJobEvent,
 }
@@ -2176,4 +2186,5 @@ __all__ = [
     "SkillCurationRunEvent",
     "SkillSuggestionResolvedEvent",
     "SkillObservationResolvedEvent",
+    "SkillObservationStalledEvent",
 ]

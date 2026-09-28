@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 import pytest
 
 from durin.memory.absorb_judge import (
+    _RELATION_GUIDE,
     JudgeError,
     JudgeResult,
-    _RELATION_GUIDE,
     _build_prompt,
     _load_template,
     _parse_response,

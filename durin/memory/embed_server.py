@@ -265,6 +265,18 @@ def build_embed_app(provider: Any, *, token: str, cache: EmbedResultCache | None
     ])
 
 
+def embed_server_config(app: Any) -> Any:
+    """The uvicorn config the embed server runs with.
+
+    The embed API is plain HTTP, so ``ws="none"``: uvicorn otherwise loads a
+    websocket implementation the server never uses, and its default one is
+    built on an API the websockets package has deprecated.
+    """
+    import uvicorn
+
+    return uvicorn.Config(app, log_level="warning", access_log=False, ws="none")
+
+
 def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
     """Blocking entry point for the ``durin memory embed-server`` CLI.
 
@@ -299,9 +311,7 @@ def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
     logger.info(
         "embed server ready (port={} model={})", bound_port, provider.model_name)
     try:
-        uvicorn.Server(uvicorn.Config(
-            app, log_level="warning", access_log=False,
-        )).run(sockets=[sock])
+        uvicorn.Server(embed_server_config(app)).run(sockets=[sock])
     finally:
         clear_discovery()
 

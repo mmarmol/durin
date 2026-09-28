@@ -338,6 +338,14 @@ uncovered while working, with a working name. Treat each gap as a strong \
 candidate; when you author a skill for one, use its working name VERBATIM as \
 the skill name so the gap can be closed automatically.
 
+Encode only facts the session shows working: commands and queries that \
+succeeded, names and fields confirmed by real output. Never encode a failed \
+attempt, a guess, or a reference document's claim that the session did not \
+confirm. When EVIDENCE FOR THE GAPS is given, it is what the session finally \
+did and what was corrected there — it overrides the gap's own text. If a \
+correction shows an existing skill already covers the procedure, do not \
+author a new skill for it.
+
 Every skill you write MUST carry YAML frontmatter with `name` and `description`.
 The description is the ONLY text the agent later reads to decide when the skill
 applies — state what the skill does and its concrete trigger conditions in 1-4
@@ -371,8 +379,14 @@ transform steps instead of an agent node):
 
 {workflow_authoring}
 
-EXISTING SKILLS: {existing}{principles}
+EXISTING SKILLS: {existing}{retired}{principles}
 """
+
+_RETIRED_BLOCK = """
+
+RETIRED SKILLS — removed on purpose; never re-create one (the write is \
+refused). Extend the replacement instead, when there is one:
+{retired}"""
 
 _PRINCIPLES_BLOCK = """
 
@@ -404,9 +418,13 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
             f" (seen x{r.get('count', 1)})"
             for r in gaps)
         user_parts.append(f"=== LOGGED GAPS ===\n{gap_lines}")
+        evidence = _gap_evidence(workspace, gaps)
+        if evidence:
+            user_parts.append(evidence)
     if sessions_text.strip():
         user_parts.append(sessions_text)
 
+    from durin.agent.skill_retirements import retired_skills
     from durin.agent.skills_doctrine import (
         composition_doctrine,
         workflow_authoring_reference,
@@ -414,6 +432,14 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     )
 
     existing = _list_skills(workspace)
+    retired_block = ""
+    retired = retired_skills(workspace)
+    if retired:
+        retired_block = _RETIRED_BLOCK.format(retired="\n".join(
+            f"- {name}"
+            + (f" → extend `{r['replaced_by']}`" if r.get("replaced_by") else "")
+            + (f" ({r['reason']})" if r.get("reason") else "")
+            for name, r in sorted(retired.items())))
     return [
         {"role": "system",
          "content": _SKILL_EXTRACT_PROMPT.format(
@@ -422,16 +448,71 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
              workflow_authoring=workflow_authoring_reference()
                  or "(authoring reference unavailable — rely on workflow_write's validation errors)",
              existing=", ".join(existing) or "(none)",
+             retired=retired_block,
              principles=principles_block)},
         {"role": "user", "content": "\n\n".join(user_parts)},
     ]
 
 
-def _norm(s: str) -> str:
-    """Normalize a skill name for gap matching: lowercase, replace non-alphanumeric
-    with hyphens, strip hyphens from edges."""
-    import re
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+_GAP_SESSION_TAIL_CHARS = 2000
+_GAP_RELATED_RECORDS = 5
+_GAP_EVIDENCE_TOTAL_CHARS = 12000
+
+
+def _session_tail(workspace: Path, ref: str, chars: int) -> str:
+    """The last ``chars`` of one session's conversation text, by its reference."""
+    from durin.memory.extract_runner import load_session
+    from durin.utils.helpers import safe_filename
+
+    path = Path(workspace) / "sessions" / f"{safe_filename(str(ref).replace(':', '_'))}.jsonl"
+    if not path.is_file():
+        return ""
+    _meta, msgs = load_session(path)
+    turns = "\n".join(
+        f"{str(m.get('role') or '?').upper()}: {m.get('content')}"
+        for m in msgs if m.get("content"))
+    return turns[-chars:]
+
+
+def _gap_evidence(workspace: Path, gaps: list[dict]) -> str:
+    """What each gap's own sessions ended with, and what was corrected in them.
+
+    A gap is logged from one slice of a session and its text can hold that
+    slice's guesses and failed attempts; the facts that held are at the
+    session's end and in the corrections recorded from it (often on a skill
+    that already covers the area). They go next to the gap, marked as
+    overriding its text."""
+    from durin.agent.skill_observations import observations_from_sessions
+
+    blocks: list[str] = []
+    used = 0
+    for gap in gaps:
+        refs = [str(s) for s in (gap.get("sessions") or []) if s][-2:]
+        if not refs:
+            continue
+        parts = []
+        for ref in refs:
+            tail = _session_tail(workspace, ref, _GAP_SESSION_TAIL_CHARS)
+            if tail:
+                parts.append(f"end of session {ref}:\n{tail}")
+        related = observations_from_sessions(workspace, refs)[:_GAP_RELATED_RECORDS]
+        if related:
+            parts.append("recorded from the same session(s):\n" + "\n".join(
+                f"- {r.get('skill')} ({r.get('kind')}): {r.get('issue')} → {r.get('improvement')}"
+                for r in related))
+        if not parts:
+            continue
+        block = f"[{gap.get('skill')}]\n" + "\n".join(parts)
+        if used + len(block) > _GAP_EVIDENCE_TOTAL_CHARS:
+            break
+        blocks.append(block)
+        used += len(block)
+    if not blocks:
+        return ""
+    return ("=== EVIDENCE FOR THE GAPS ===\n"
+            "What each gap's sessions ended with and what was corrected in them. "
+            "Where this contradicts a gap's text, this wins.\n\n" + "\n\n".join(blocks))
+
 
 
 def _resolve_gap_observations(workspace: Path) -> int:
@@ -442,9 +523,11 @@ def _resolve_gap_observations(workspace: Path) -> int:
     Matching uses both exact and normalized name comparison: a gap "Release Runbook"
     matches skill "release-runbook" via normalization."""
     from durin.agent.skill_observations import apply_dispositions, open_observations
+    from durin.agent.skill_retirements import name_key, retired_skills
 
     existing = set(_list_skills(workspace))
-    existing_normalized = {_norm(s): s for s in existing}
+    existing_normalized = {name_key(s): s for s in existing}
+    retired_normalized = {name_key(s) for s in retired_skills(workspace)}
 
     done = []
     for r in open_observations(workspace):
@@ -455,20 +538,36 @@ def _resolve_gap_observations(workspace: Path) -> int:
         if gap_name in existing:
             done.append({"id": r.get("id"), "disposition": "applied"})
         # Fallback: normalized match
-        elif _norm(gap_name) in existing_normalized:
+        elif name_key(gap_name) in existing_normalized:
             done.append({"id": r.get("id"), "disposition": "applied"})
+        # A gap asking for a skill someone retired is closed, not kept as a
+        # standing request to re-create it.
+        elif name_key(gap_name) in retired_normalized:
+            done.append({"id": r.get("id"), "disposition": "declined"})
 
     if not done:
         return 0
     return apply_dispositions(workspace, done).get("applied", 0)
 
 
+_SESSIONS_WINDOW_CHARS = 12000
+
+
+def _head_and_tail(text: str, budget: int) -> str:
+    """``text`` cut to ``budget`` chars, keeping its start and its end."""
+    if len(text) <= budget:
+        return text
+    half = budget // 2
+    return text[:half] + "\n\n[... middle truncated ...]\n\n" + text[-half:]
+
+
 def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
     """The newest sessions' conversation text (user + assistant turns).
 
-    Long inputs are trimmed to preserve both head and tail: keeps first 6000
-    chars, then middle truncation marker, then last 6000 chars. This ensures
-    late-session procedures (which live in the tail) survive truncation."""
+    Each session gets its share of the window and is trimmed on its own,
+    keeping its head and its tail. A session's end is where the procedure that
+    finally worked lives; trimming the joined text instead kept the oldest
+    session's end and dropped the newest one's."""
     from durin.memory.extract_runner import load_session
     sdir = Path(workspace) / "sessions"
     if not sdir.is_dir():
@@ -477,7 +576,7 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
         (p for p in sdir.glob("*.jsonl") if not is_workflow_session_file(p)),
         key=lambda p: p.stat().st_mtime, reverse=True,
     )
-    blocks: list[str] = []
+    blocks: list[tuple[str, str]] = []
     for jsonl in files[:max_sessions]:
         _meta, msgs = load_session(jsonl)
         turns = "\n".join(
@@ -485,11 +584,12 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
             for m in msgs if m.get("content")
         )
         if turns.strip():
-            blocks.append(f"=== session {jsonl.stem} ===\n{turns}")
-    text = "\n\n".join(blocks)
-    if len(text) <= 12000:
-        return text
-    return text[:6000] + "\n\n[... middle truncated ...]\n\n" + text[-6000:]
+            blocks.append((f"=== session {jsonl.stem} ===\n", turns))
+    if not blocks:
+        return ""
+    share = _SESSIONS_WINDOW_CHARS // len(blocks)
+    return "\n\n".join(header + _head_and_tail(turns, share - len(header))
+                       for header, turns in blocks)
 
 
 def _list_skills(workspace: Path) -> list[str]:
@@ -511,8 +611,8 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     the dream just authors from scratch. Path B previously lived in the deleted 2h
     ``Dream`` phase-2; the daily ``memory_dream`` skill-extract pass is its new home.
     """
-    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
     from durin.agent.tools.dependents import DependentsTool
+    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
     from durin.agent.tools.list_workflows import ListWorkflowsTool
     from durin.agent.tools.registry import ToolRegistry
     from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool

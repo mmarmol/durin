@@ -8,7 +8,7 @@ from durin.automations import claims
 from durin.automations import run_log as rl
 from durin.automations.hooks import HookDispatcher
 from durin.automations.matcher import TriggerMatcher
-from durin.automations.runtime import AutomationBusy
+from durin.automations.runtime import AutomationBusyError
 from durin.automations.spec import parse_automation
 from durin.automations.store import save_automation
 
@@ -31,7 +31,7 @@ def _per_test_telemetry_dir(tmp_path, monkeypatch):
 
 
 class FakeRuntime:
-    """Records fire/answer calls; fire() raises AutomationBusy for names in `busy`."""
+    """Records fire/answer calls; fire() raises AutomationBusyError for names in `busy`."""
 
     def __init__(self, busy: set[str] | None = None):
         self.fire_calls: list[tuple] = []
@@ -41,7 +41,7 @@ class FakeRuntime:
     async def fire(self, name, *, source, task=None, origin=None):
         self.fire_calls.append((name, source, task, origin))
         if name in self._busy:
-            raise AutomationBusy(name)
+            raise AutomationBusyError(name)
         return {"status": "done"}
 
     async def answer_nowait(self, name, run_id, answer):

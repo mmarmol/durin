@@ -39,6 +39,7 @@ def test_no_recommendations_is_empty(tmp_path):
 
 def test_apply_recommendation_edits_node_versions_and_marks_applied(tmp_path):
     import json
+
     from durin.workflow.loader import workflows_dir
     from durin.workflow.version_store import history_for_dream
 
@@ -166,6 +167,7 @@ def test_apply_script_file_recommendation_rejects_backslash_and_nul(tmp_path):
 
 def test_apply_command_recommendation_on_script_node_end_to_end(tmp_path):
     import json
+
     from durin.workflow.loader import workflows_dir
 
     d = workflows_dir(tmp_path)
@@ -190,6 +192,7 @@ def test_apply_command_recommendation_refuses_on_precheck_failure(tmp_path):
     whose proposed command has a bash syntax error must be refused, and the
     recommendation must stay open (nothing gets written)."""
     import json
+
     from durin.workflow.loader import workflows_dir
 
     d = workflows_dir(tmp_path)
@@ -213,6 +216,7 @@ def test_apply_command_recommendation_refuses_on_precheck_failure(tmp_path):
 
 def test_apply_command_recommendation_fails_when_node_also_has_script(tmp_path):
     import json
+
     from durin.workflow.loader import workflows_dir
 
     d = workflows_dir(tmp_path)

@@ -315,3 +315,24 @@ def test_deps_run_fails_when_a_step_fails(tmp_path):
     audit = [json.loads(line) for line in
              (tmp_path / ".durin" / "import-audit.log").read_text().splitlines()]
     assert audit[-1]["action"] == "install_deps" and audit[-1]["succeeded"] == []
+
+
+def test_an_autonomous_edit_that_failed_is_not_reported_as_waiting(tmp_path, monkeypatch):
+    """Only a request still open for a person is "waiting for approval"; a
+    failed run is an error the curation note must show as one."""
+    _skill(tmp_path, "mine", "step one\n")
+    plan = ss.plan_skill_edit(tmp_path, "mine", old="step one", new="step two",
+                              rationale="r", file="SKILL.md")
+    scan = ss.scan_skill_write(plan["skill_dir"], {"SKILL.md": plan["after"]})
+
+    async def _failed(*a, **k):
+        return approval.Outcome("failed", {"id": "apr-9"}, None,
+                                "Approved, but running it failed: disk full")
+
+    monkeypatch.setattr(approval, "request", _failed)
+    res = kinds.request_edit_autonomously(
+        tmp_path, "mine", old="step one", new="step two", rationale="r", file="SKILL.md",
+        attribution=None, plan=plan, scan=scan)
+
+    assert "pending_approval" not in res
+    assert "disk full" in res["error"]

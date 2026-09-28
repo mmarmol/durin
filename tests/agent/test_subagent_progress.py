@@ -1,7 +1,6 @@
-import asyncio
 import pytest
-from durin.agent.subagent import _SubagentHook, SubagentStatus
-from durin.agent.hook import AgentHookContext  # real import path (not durin.agent.hooks)
+
+from durin.agent.subagent import SubagentStatus, _SubagentHook
 
 
 class _Bus:

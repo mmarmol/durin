@@ -99,9 +99,8 @@ async def test_warmup_process_mode_keeps_model_out_of_parent():
     always constructed with isolation="inline" and loaded in the caller,
     which silently defeated process isolation on every gateway boot.
     """
-    from tests.memory.test_embedding import _inject_fake_fastembed
-
     from durin.memory.embedding import FastembedProvider
+    from tests.memory.test_embedding import _inject_fake_fastembed
 
     class _StubPool:
         """Stands in for the ProcessPoolExecutor — submit().result()

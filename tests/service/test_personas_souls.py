@@ -1,8 +1,12 @@
 import asyncio
-from pathlib import Path
+
 import pytest
+
 from durin.service.personas import (
-    PersonasService, SoulUpsertCommand, SoulDeleteCommand, SoulListQuery,
+    PersonasService,
+    SoulDeleteCommand,
+    SoulListQuery,
+    SoulUpsertCommand,
 )
 from durin.service.principal import Principal, Scope
 
@@ -61,7 +65,7 @@ def test_delete_invalid_slug_rejected(tmp_path):
 
 
 def test_delete_soul_in_use_now_allowed(tmp_path, monkeypatch):
-    from durin.service.personas import PersonaUpsertCommand, PersonaListQuery
+    from durin.service.personas import PersonaListQuery, PersonaUpsertCommand
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     svc = _svc(tmp_path)
     svc._store().write("vibes", "# Soul\nx")

@@ -105,7 +105,7 @@ async def test_stop_cancels_a_service_launched_run(tmp_path):
         manifest = await _wait_for_manifest(tmp_path, "blocked", run_id)
 
     # Same status the engine reports for cooperative cancellation elsewhere
-    # (see durin/workflow/engine.py's ScriptCancelled -> status="cancelled").
+    # (see durin/workflow/engine.py's ScriptCancelledError -> status="cancelled").
     assert manifest["status"] == "cancelled"
     # The flag is cleared once the run ends — the registry does not grow
     # without bound (mirrors run_workflow's identical `finally: clear(rid)`).

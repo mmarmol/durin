@@ -21,10 +21,10 @@ from typing import Any, Callable, Literal
 
 from durin.automations import queue, run_log
 from durin.automations.cron_sync import remove_automation_jobs, sync_automation_jobs
-from durin.automations.runtime import AutomationBusy
+from durin.automations.runtime import AutomationBusyError
 from durin.automations.spec import (
     AutomationError,
-    AutomationNotFound,
+    AutomationNotFoundError,
     AutomationSpec,
     automation_to_dict,
     parse_automation,
@@ -213,7 +213,7 @@ class AutomationsService:
         principal.require(Scope.AUTOMATIONS_READ)
         try:
             spec = load_automation(self._workspace, query.name)
-        except AutomationNotFound:
+        except AutomationNotFoundError:
             raise NotFoundError(f"automation {query.name!r} not found")
         return AutomationGetResult(name=spec.name, definition=automation_to_dict(spec))
 
@@ -250,7 +250,7 @@ class AutomationsService:
         try:
             delete_automation(self._workspace, cmd.name, actor="user",
                                reason="deleted in the automations editor")
-        except AutomationNotFound:
+        except AutomationNotFoundError:
             raise NotFoundError(f"automation {cmd.name!r} not found")
         remove_automation_jobs(self._cron_service, cmd.name)
         return AutomationDeleteResult(deleted=True)
@@ -286,7 +286,7 @@ class AutomationsService:
         if task is None:
             try:
                 spec = load_automation(self._workspace, cmd.name)
-            except AutomationNotFound:
+            except AutomationNotFoundError:
                 spec = None
             if spec is not None:
                 task = next((t.task or None for t in spec.triggers if t.source == "schedule"), None)
@@ -294,9 +294,9 @@ class AutomationsService:
                     task = f"Run the {spec.workflow} workflow"
         try:
             record = await self._runtime.fire(cmd.name, source="manual", task=task)
-        except AutomationBusy as exc:
+        except AutomationBusyError as exc:
             raise ValidationFailedError(f"automation busy: {exc}")
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             raise NotFoundError(str(exc))
         return AutomationFireResult(run=record)
 
@@ -314,7 +314,7 @@ class AutomationsService:
         try:
             record = await self._runtime.answer_nowait(
                 cmd.name, cmd.run_id, cmd.text, action=cmd.action, by="operator")
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             raise NotFoundError(str(exc))
         except ValueError as exc:
             raise ValidationFailedError(str(exc))
@@ -332,7 +332,7 @@ class AutomationsService:
             raise UnavailableError("stopping an automation run is not available on this surface")
         try:
             record = await self._runtime.stop(cmd.name, cmd.run_id, hard=cmd.hard)
-        except AutomationNotFound as exc:
+        except AutomationNotFoundError as exc:
             raise NotFoundError(str(exc))
         except ValueError as exc:
             raise ValidationFailedError(str(exc))

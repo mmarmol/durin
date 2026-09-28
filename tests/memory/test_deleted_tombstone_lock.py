@@ -21,9 +21,6 @@ import multiprocessing
 import time
 from pathlib import Path
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Worker processes (module-level for multiprocessing "spawn" compatibility)
 # ---------------------------------------------------------------------------

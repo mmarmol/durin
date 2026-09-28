@@ -63,7 +63,7 @@ def main(argv: list[str]) -> int:
             page: transcribe_page(Path(pdf_path), page, dpi=dpi, language=language)
             for page in pages
         }
-    except Exception as exc:  # noqa: BLE001 — every failure here is the parent's OcrUnavailable
+    except Exception as exc:  # noqa: BLE001 — every failure here is the parent's OcrUnavailableError
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
         return 1
 

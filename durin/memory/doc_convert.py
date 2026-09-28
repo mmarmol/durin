@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_pages_detached
+from durin.memory.ocr import OcrUnavailableError, engine_available, transcribe_pages_detached
 from durin.memory.pdf_coverage import (
     EMPTY_PAGE_CHARS,
     PdfCoverage,
@@ -32,7 +32,7 @@ __all__ = [
     "SUPPORTED_SUFFIXES",
     "ConvertedDoc",
     "DocConvertError",
-    "NeedsOcrJob",
+    "NeedsOcrJobError",
     "convert_file_to_markdown",
     "is_convertible",
 ]
@@ -81,7 +81,7 @@ class ConvertedDoc:
     ocr_stub: bool = False
 
 
-class NeedsOcrJob(DocConvertError):
+class NeedsOcrJobError(DocConvertError):
     """Raised when a PDF needs more OCR than the inline budget allows.
 
     Carries what a caller needs to enqueue the work: which pages, and how big
@@ -187,7 +187,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
     text layer). ``OSError`` from reading the file propagates to the caller.
 
     For a PDF, pages with no text layer are transcribed with local OCR
-    (subject to ``documents_config.ocr``). Raises :class:`NeedsOcrJob` when
+    (subject to ``documents_config.ocr``). Raises :class:`NeedsOcrJobError` when
     transcribing them inline would exceed the configured page budget — the
     caller enqueues the work as a background job instead. ``documents_config``
     is the ``DocumentsConfig`` to use; ``None`` loads the active config.
@@ -282,7 +282,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                         path, flagged[: ocr_cfg.inline_max_pages + 1]
                     )
                     if len(confirmed) > ocr_cfg.inline_max_pages:
-                        raise NeedsOcrJob(
+                        raise NeedsOcrJobError(
                             f"{path.name}: at least {len(confirmed)} of "
                             f"{len(counts)} pages need OCR, over the inline "
                             f"limit of {ocr_cfg.inline_max_pages}. Ingest the "
@@ -326,7 +326,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 )
             pages = list(cov.empty_pages)
             if len(pages) > ocr_cfg.inline_max_pages:
-                raise NeedsOcrJob(
+                raise NeedsOcrJobError(
                     f"{path.name}: {len(pages)} of {cov.total_pages} pages need "
                     f"OCR, over the inline limit of {ocr_cfg.inline_max_pages}. "
                     "Ingest the document to have it transcribed as a background job.",
@@ -339,11 +339,11 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 )
                 for page in pages:
                     texts[page - 1] = transcribed[page].text
-            except (OcrUnavailable, ImportError) as exc:
+            except (OcrUnavailableError, ImportError) as exc:
                 # engine_available() above only proves ``import rapidocr``
                 # works; the subprocess's own imports can still fail
                 # underneath it, it can be killed, and it can time out — the
-                # transcription call raises the same OcrUnavailable for all of
+                # transcription call raises the same OcrUnavailableError for all of
                 # them, and it is a RuntimeError no caller of this function
                 # catches. Same outcome as finding the engine missing before
                 # starting: the document, and a note saying why it has gaps.

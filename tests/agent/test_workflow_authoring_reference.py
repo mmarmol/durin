@@ -34,6 +34,6 @@ def test_skill_extract_prompt_embeds_the_schema():
     rendered = _SKILL_EXTRACT_PROMPT.format(
         doctrine="D", workflow_catalog="C",
         workflow_authoring=workflow_authoring_reference(),
-        existing="(none)", principles="",
+        existing="(none)", retired="", principles="",
     )
     assert "deterministic subprocess" in rendered and '`script`' in rendered

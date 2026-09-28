@@ -284,14 +284,14 @@ class WorkflowConfigError(RuntimeError):
     programmer/config error — it fails fast rather than being swallowed as a run abort."""
 
 
-class ScriptCancelled(RuntimeError):
+class ScriptCancelledError(RuntimeError):
     """A script node's subprocess was killed mid-run by a cooperative cancel (as
     opposed to timing out or exiting non-zero). Raised by the script runner and
     carried as a NodeExecutionError's cause so run() can end the run 'cancelled'
     rather than 'aborted'."""
 
 
-class WorkInterrupted(RuntimeError):
+class WorkInterruptedError(RuntimeError):
     """A work node's in-flight agent turn was aborted by a HARD cancel (as opposed
     to failing on its own). Raised by the node runner's cancel watcher and carried
     as a NodeExecutionError's cause so run() can end the run 'cancelled' rather
@@ -561,7 +561,7 @@ class WorkflowEngine:
                     effective_root, started_at, parent_run_id)
                 raise
             except NodeExecutionError as exc:
-                if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                if isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)):
                     # The in-flight node was cancelled mid-run (a script killed by any
                     # cancel, or a work turn aborted by a hard cancel): end the run
                     # 'cancelled' (not 'aborted'), carrying the partial trace the walk
@@ -1170,14 +1170,14 @@ class WorkflowEngine:
 
                 if node.cases is not None:
                     # Multi-way routing: match the agent's output against declared labels.
-                    _UNSET = object()
+                    unset = object()
                     label = route_label if route_label in node.cases else parse_label(output, node.cases)
                     if label is not None:
                         target = node.cases[label]
                     else:
                         # No label matched — fall back to "default" case, or abort.
-                        target = node.cases.get("default", _UNSET)
-                        if target is _UNSET:
+                        target = node.cases.get("default", unset)
+                        if target is unset:
                             expected = sorted(node.cases)
                             abort_msg = (
                                 f"node {node.id!r}: agent output did not match any expected label "
@@ -1698,7 +1698,7 @@ class WorkflowEngine:
                 ))
                 return idx, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
             except NodeExecutionError as exc:
-                if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                if isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)):
                     cancelled_workers.add(idx)
                 return idx, "", exc.session_key, str(exc.cause), False, round(time.monotonic() - t0, 3)
             except Exception as exc:  # noqa: BLE001 - isolate a single worker's failure
@@ -1907,7 +1907,7 @@ class WorkflowEngine:
                 except NodeExecutionError as exc:
                     with _branch_lock:
                         branch_status[bid] = "failed"
-                        if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                        if isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)):
                             cancelled_branches.add(bid)
                     _emit_branches()
                     return (bid, "", exc.session_key, str(exc.cause), False,
