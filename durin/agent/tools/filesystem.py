@@ -807,27 +807,39 @@ class ReadFileTool(_FsTool):
             return result
         # The whole text goes to a file this same tool pages through, since
         # a run may have no other way to open the document. It is redacted
-        # before it touches disk; the page itself is redacted by the runner.
+        # before it touches disk, and the page is cut from that same text,
+        # so the line the pointer names is the line where the page stops.
         from durin.agent.tools.output_spill import write_spill
         from durin.security.secrets import redact_secrets
 
-        saved, error = write_spill(redact_secrets(result), "read_file", self._workspace)
-        # Sized with the full length in the note, which the head's length
-        # can only shorten, so head and note fit the page together.
-        room = page - measure(self._document_cut_note(saved, error, len(result), len(result)))
+        result = redact_secrets(result)
+        saved, error = write_spill(result, "read_file", self._workspace, reuse=True)
+        # Sized with the largest numbers the note can show, which the real
+        # ones can only shorten, so head and note fit the page together.
+        longest = self._document_cut_note(
+            saved, error, len(result), len(result), result.count("\n") + 1,
+        )
+        room = max(0, page - measure(longest))
         head = result[:room] if budget is None else _json_head(result, room)
-        return head + self._document_cut_note(saved, error, len(head), len(result))
+        return head + self._document_cut_note(
+            saved, error, len(head), len(result), head.count("\n") + 1,
+        )
 
     @staticmethod
-    def _document_cut_note(saved: Path | None, error: str | None, shown: int, total: int) -> str:
+    def _document_cut_note(
+        saved: Path | None, error: str | None, shown: int, total: int, next_line: int,
+    ) -> str:
         if saved is None:
             return (
                 f"\n\n(Document text cut at {shown:,} of {total:,} chars; the rest could "
                 f"not be saved to a file: {error or 'unknown error'}.)"
             )
+        # The page may stop inside a line: continuing from that line repeats
+        # its start rather than skipping its end.
         return (
             f"\n\n(Document text cut at {shown:,} of {total:,} chars. The whole text is "
-            f'saved: read it with read_file(path="{saved}"), one page per call.)'
+            f'saved; continue with read_file(path="{saved}", offset={next_line}), '
+            "one page per call.)"
         )
 
 

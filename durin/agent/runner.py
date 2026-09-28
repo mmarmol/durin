@@ -96,8 +96,9 @@ _MICROCOMPACT_HEAD_CHARS = 120
 
 # Per-result cap when nothing sets one explicitly: it follows the model's
 # context window (tiers by window size), and never takes more than 30% of
-# the window at roughly 4 characters per token, so a small local model is
-# not handed results that crowd out the rest of its prompt.
+# the run's input budget (of the window when no budget is known) at roughly
+# 4 characters per token, so a small local model is not handed results that
+# crowd out the rest of its prompt.
 _RESULT_CAP_DEFAULT_CHARS = 16_000
 _RESULT_CAP_TIERS = ((200_000, 64_000), (100_000, 32_000))
 _RESULT_CAP_MAX_WINDOW_SHARE = 0.3

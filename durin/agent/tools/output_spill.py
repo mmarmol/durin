@@ -50,20 +50,38 @@ def write_spill(
     content: str,
     tool_name: str,
     workspace: Path | None,
+    *,
+    reuse: bool = False,
 ) -> tuple[Path | None, str | None]:
-    """Write ``content`` to a new spill file.
+    """Write ``content`` to a spill file.
 
     Returns ``(path, None)``, or ``(None, reason)`` when the file cannot be
     written. The caller redacts ``content`` first: this writes it as given.
+    With ``reuse``, the file is named by the content alone and an existing
+    one is returned as is, so reading the same document again does not pile
+    up copies of its text.
     """
     root = _spill_root(workspace)
     try:
         root.mkdir(parents=True, exist_ok=True)
-        path = root / _spill_filename(tool_name, content)
+        if reuse:
+            path = root / _content_filename(tool_name, content)
+            if path.is_file() and path.stat().st_size == len(content.encode("utf-8")):
+                return path, None
+        else:
+            path = root / _spill_filename(tool_name, content)
         atomic_write_text(path, content)
     except Exception as e:
         return None, str(e)[:80]
     return path, None
+
+
+def _content_filename(tool_name: str, content: str) -> str:
+    """Filename from the tool and the whole content hash: the same content
+    always maps to the same file."""
+    digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:32]
+    safe_tool = "".join(c if c.isalnum() else "_" for c in tool_name)[:32]
+    return f"{safe_tool}_{digest}.txt"
 
 
 def truncate_with_spill(

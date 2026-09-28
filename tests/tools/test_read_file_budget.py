@@ -245,10 +245,9 @@ def _fake_long_document(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(secrets, "build_redactor", lambda: SecretRedactor({"DOC_KEY": _DOC_SECRET}))
 
 
-async def _read_to_the_end(tool: ReadFileTool, path: str) -> str:
-    """Follow read_file's own continuation footers from the first page on."""
+async def _read_to_the_end(tool: ReadFileTool, path: str, offset: int = 1) -> str:
+    """Follow read_file's own continuation footers from ``offset`` on."""
     pages: list[str] = []
-    offset = 1
     for _ in range(40):
         page = await tool.execute(path=path, offset=offset)
         pages.append(page)
@@ -273,10 +272,56 @@ async def test_an_office_document_over_its_page_is_saved_and_read_back(
     assert parse_persisted_reference(_as_delivered(page, run_cap, tmp_path)) is None
     assert "Document text cut at" in page
     assert "convert_to_markdown" not in page
-    saved = re.search(r'read_file\(path="([^"]+)"\)', page)
+    saved = re.search(r'read_file\(path="([^"]+)", offset=(\d+)\)', page)
     assert saved is not None
-    assert _DOC_SECRET not in Path(saved.group(1)).read_text(encoding="utf-8")
-    assert _DOC_TAIL in await _read_to_the_end(tool, saved.group(1))
+    path, offset = saved.group(1), int(saved.group(2))
+    assert _DOC_SECRET not in Path(path).read_text(encoding="utf-8")
+    # The pointer continues where the page stopped: nothing the page showed
+    # is read twice as a whole page, and nothing is skipped.
+    assert offset > 1
+    rest = await _read_to_the_end(tool, path, offset)
+    assert _DOC_TAIL in rest
+    assert all(f"Paragraph {i}:" in page + rest for i in range(1_200))
+
+
+@pytest.mark.asyncio
+async def test_reading_the_same_document_again_reuses_its_saved_text(
+    tmp_path: Path, run_cap: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    _fake_long_document(monkeypatch)
+    ticks = iter(range(1_000_000, 2_000_000, 7))
+    monkeypatch.setattr(time, "time", lambda: float(next(ticks)))
+    doc = tmp_path / "report.docx"
+    doc.write_bytes(b"PK")
+    tool = ReadFileTool(workspace=tmp_path)
+
+    first = await tool.execute(path=str(doc))
+    second = await tool.execute(path=str(doc))
+
+    pointer = re.compile(r'read_file\(path="([^"]+)"')
+    assert pointer.search(first).group(1) == pointer.search(second).group(1)
+    assert len(list((tmp_path / ".durin" / "spills").iterdir())) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_page_too_small_for_its_pointer_never_returns_the_whole_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_long_document(monkeypatch)
+    workspace = tmp_path / ("w" * 200) / ("x" * 200)
+    workspace.mkdir(parents=True)
+    doc = workspace / "report.docx"
+    doc.write_bytes(b"PK")
+    token = set_result_char_cap(1_000)
+    try:
+        page = await ReadFileTool(workspace=workspace).execute(path=str(doc))
+    finally:
+        reset_result_char_cap(token)
+
+    assert "Document text cut at 0 of" in page
+    assert len(page) < 2_000
 
 
 @pytest.mark.asyncio

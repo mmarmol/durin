@@ -363,6 +363,12 @@ If the spill write fails (unwritable temp dir), the tool falls back to plain
 head+tail truncation with an error note — the tool call never fails because of a
 spill failure.
 
+The write itself is `write_spill()`, which callers that render their own page
+use directly. `read_file` does so for an office document over its page, with
+`reuse=True`: the file is then named by a hash of the content alone
+(`<tool>_<hash>.txt`), and an existing file with that content is returned
+instead of written again.
+
 `ExecTool` uses `truncate_with_spill` directly inside its `execute()` method (cap
 of 10 000 chars) and emits a `tool.exec.spill` telemetry event when truncation
 occurs. For every other tool, the runner's `maybe_persist_tool_result()` in
@@ -422,10 +428,12 @@ keeps its own limits there too.
   pointer, never an empty page.
 - An office document (`.docx`, `.xlsx`, `.pptx`) whose text is larger than its
   page, or than its share of a batch, has its whole text saved, redacted, to
-  `<workspace>/.durin/spills/`. The page is the head of the text plus the
-  `read_file` call that pages through the saved file, sized so both fit. The
-  same tool reads it back, so this works in runs that have no document tool.
-  If the file cannot be written, the page says so and why.
+  `<workspace>/.durin/spills/`. The page is the head of that text plus the
+  `read_file` call that continues from the line where the page stops, sized so
+  both fit. The same tool reads it back, so this works in runs that have no
+  document tool. The file is named by its content, so reading the same
+  document again reuses it instead of saving another copy. If the file cannot
+  be written, the page says so and why.
 
 `grep` sizes its output the same way. A matching or context line over 2,000
 chars is shortened to a 2,000-char window that ends with the `read_file` call
@@ -437,8 +445,8 @@ note that holds results back gives the offset that shows the next ones, and
 the total when it is known. An `offset` past the last match says so, with the
 number of matches, instead of reporting that nothing matched. When a single
 match's block, context lines included, is larger than the whole output may
-be, it is shown without its context lines, so the matching line always
-arrives.
+be, it is shown without its context lines, so the output leads with the
+matching line.
 
 ### Turn-budget enforcement
 
@@ -477,6 +485,7 @@ through byte-for-byte.
 | `ToolLoader` | `durin/agent/tools/loader.py` | Package scanner that discovers, filters, and registers all built-in `Tool` subclasses at startup; also discovers external plugins via `entry_points` |
 | `ExecTool` | `durin/agent/tools/shell.py` | Shell command execution (`exec` tool); implements the hard floor, deny/allow patterns (a refused command is put to the person in a chat for a one-time approval), workspace boundary enforcement, sandbox wrapping, background process support, and per-output spill |
 | `truncate_with_spill` | `durin/agent/tools/output_spill.py` | Overflow helper: writes full content to `.durin/spills/`, returns head+tail+spill-ref rendering |
+| `write_spill` | `durin/agent/tools/output_spill.py` | Writes (already redacted) content to a spill file and returns its path or the reason it failed; `reuse=True` names the file by its content and reuses an existing one |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function for structured telemetry from tool code; privacy-trims free-text fields; silently no-ops when no session logger is bound |
 | `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by both the definition filter and the execution gate |
 | `AgentRunner` | `durin/agent/runner.py` | Inner LLM/tool loop; owns `_execute_tools`, `_run_tool`, `_normalize_tool_result`, `_enforce_turn_budget`, `_drop_orphan_tool_results`, `_backfill_missing_tool_results`, and `_active_tool_definitions` |
