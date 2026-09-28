@@ -424,13 +424,12 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     if sessions_text.strip():
         user_parts.append(sessions_text)
 
+    from durin.agent.skill_retirements import retired_skills
     from durin.agent.skills_doctrine import (
         composition_doctrine,
         workflow_authoring_reference,
         workflow_catalog_text,
     )
-
-    from durin.agent.skill_retirements import retired_skills
 
     existing = _list_skills(workspace)
     retired_block = ""
@@ -583,7 +582,7 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
         (p for p in sdir.glob("*.jsonl") if not is_workflow_session_file(p)),
         key=lambda p: p.stat().st_mtime, reverse=True,
     )
-    blocks: list[str] = []
+    blocks: list[tuple[str, str]] = []
     for jsonl in files[:max_sessions]:
         _meta, msgs = load_session(jsonl)
         turns = "\n".join(

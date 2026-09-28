@@ -108,14 +108,19 @@ entirely) when both are empty:
 
 1. **Recent sessions.** `_recent_sessions_text` renders the newest
    `max_sessions` session transcripts (workflow session files excluded), newest
-   first. A long combined transcript is **head+tail windowed**: the first 6000
-   characters, a truncation marker, then the last 6000 characters. This keeps
-   late-session procedures from being silently dropped — a plain head-truncate
-   would lose exactly the material near the end of a long session, which is
-   where a just-established procedure is most likely to sit.
+   first. Each session gets an equal share of the input window
+   (`_SESSIONS_WINDOW_CHARS`) and is **head+tail windowed on its own**. The end
+   of a session is where the procedure that finally worked sits; trimming the
+   joined text instead would keep the oldest session's end and drop the newest
+   one's.
 2. **Logged gaps.** Any OPEN observation whose `skill` field starts with
    `new:` — a coverage gap flagged in hindsight (see below) — is surfaced as a
-   `LOGGED GAPS` block with its working name and issue text.
+   `LOGGED GAPS` block with its working name and issue text, followed by its
+   evidence (`_gap_evidence`): the end of the sessions it was logged from and
+   the observations recorded from those sessions about existing skills, marked
+   as overriding the gap's text. A gap logged mid-session can carry that
+   slice's failed guesses; the prompt tells the extractor to encode only facts
+   a session shows working.
 
 The sub-agent (`ToolRegistry` built by `_build_skill_extract_tools`) carries
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
@@ -259,8 +264,9 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 
 - **`correction`** — while a skill was loaded (visible in the turns'
   `SKILLS LOADED` list, built from turn-indexed `skill_calls`; a skill opened
-  with `skill_view` and one whose `SKILL.md` was read both count), the user
-  redirected or corrected the output in a way that implies the skill itself
+  with `skill_view` and one whose `SKILL.md` was read both count, and a run of
+  one of its scripts shows with its outcome), the user redirected or corrected
+  the output — or its script failed — in a way that implies the skill itself
   should change.
 - **`gap`** — the agent completed a multi-step procedure that no existing skill
   covers and that looks likely to recur; its `skill` field is normalized to
