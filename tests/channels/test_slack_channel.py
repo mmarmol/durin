@@ -1176,6 +1176,94 @@ def test_extract_quoted_context_surfaces_shared_message_attachment() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Inbound markup: text reaches the agent as the person typed it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # A Message-ID pasted in angle brackets: Slack links the address
+        # inside and escapes the brackets around it.
+        ("&lt;<mailto:CAKx+1@mail.gmail.com|CAKx+1@mail.gmail.com>&gt;", "<CAKx+1@mail.gmail.com>"),
+        ("<mailto:bruno@example.com|Bruno>", "Bruno (bruno@example.com)"),
+        ("<mailto:bruno@example.com>", "bruno@example.com"),
+        ("<http://example.com|example.com>", "example.com"),
+        ("<https://jira.example.com/X-1|X-1>", "X-1 (https://jira.example.com/X-1)"),
+        ("<https://example.com/a?b=1&amp;c=2>", "https://example.com/a?b=1&c=2"),
+        ("<tel:+15551234|+15551234>", "+15551234"),
+        ("in <#C42|ops> and <#C43>", "in #ops and <#C43>"),
+        ("<!here> <!channel> <!everyone|everyone>", "@here @channel @everyone"),
+        ("<!subteam^S1|@support>", "@support"),
+        ("<!date^1392734382^{date_short}|Feb 18, 2014>", "Feb 18, 2014"),
+        ("hi <@U123> and <@U456|bruno>", "hi <@U123> and <@U456|bruno>"),
+        ("a &amp; b &lt;c&gt;", "a & b <c>"),
+        # An entity someone typed arrives escaped once more, and must come
+        # back as typed rather than decoded twice.
+        ("&amp;lt;tag&amp;gt;", "&lt;tag&gt;"),
+        ("<b> is not markup", "<b> is not markup"),
+        ("plain text", "plain text"),
+    ],
+)
+def test_inbound_markup_decodes_to_what_was_typed(raw: str, expected: str) -> None:
+    assert SlackChannel._decode_inbound_markup(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_pasted_message_id_reaches_the_agent_as_typed() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True, allow_from=[]), MessageBus())
+    channel._bot_user_id = "UBOT"
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+    req = SimpleNamespace(
+        type="events_api",
+        envelope_id="env-mid",
+        payload={
+            "event": {
+                "type": "app_mention",
+                "user": "U1",
+                "channel": "C123",
+                "text": (
+                    "<@UBOT> find &lt;<mailto:CAKx+1@mail.gmail.com|CAKx+1@mail.gmail.com>&gt; "
+                    "in <#C42|ops>"
+                ),
+                "ts": "112.000",
+            }
+        },
+    )
+
+    await channel._on_socket_request(client, req)
+
+    content = channel._handle_message.await_args.kwargs["content"]
+    assert content == "find <CAKx+1@mail.gmail.com> in #ops"
+
+
+def test_thread_context_lines_arrive_as_typed() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    channel._bot_user_id = "UBOT"
+    lines = channel._format_thread_context(
+        [{
+            "ts": "1.0",
+            "user": "U2",
+            "text": "mid is &lt;<mailto:a1@x.com|a1@x.com>&gt; see <https://x.com/t|ticket>",
+        }],
+        current_ts="2.0",
+    )
+    assert lines == ["- <@U2>: mid is <a1@x.com> see ticket (https://x.com/t)"]
+
+
+def test_shared_message_attachment_arrives_as_typed() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    event = {
+        "attachments": [
+            {"author_name": "alice", "text": "mail &lt;<mailto:a1@x.com|a1@x.com>&gt; bounced"},
+        ],
+    }
+    lines = channel._extract_quoted_context(event, "fyi")
+    assert lines == ["[shared] alice — mail <a1@x.com> bounced"]
+
+
+# ---------------------------------------------------------------------------
 # Thread auto-follow
 # ---------------------------------------------------------------------------
 
