@@ -115,9 +115,15 @@ def _make_minimal_loop(tmp_path):
     from durin.config.schema import AgentDefaults
     from durin.session.manager import SessionManager
 
+    from unittest.mock import MagicMock
+
+    from durin.providers.base import GenerationSettings
+
     loop = AgentLoop.__new__(AgentLoop)
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
     loop.context_window_tokens = AgentDefaults().context_window_tokens
+    loop.context_block_limit = AgentDefaults().context_block_limit
+    loop.provider = MagicMock(generation=GenerationSettings())
     loop.sessions = SessionManager(tmp_path)
     return loop
 

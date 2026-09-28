@@ -375,11 +375,15 @@ which is how compaction keeps the recovery path.
 A run's per-result cap is `spec.max_tool_result_chars`. When the spec leaves
 it unset (the configuration's default), `AgentRunner.run()` resolves it from
 the run's context window with `result_char_cap()`: 16,000 chars below a
-100k-token window, 32,000 from 100k, 64,000 from 200k, never more than 30% of
-the window (at about 4 chars per token), and 16,000 when no window is known.
+100k-token window, 32,000 from 100k, 64,000 from 200k, and 16,000 when no
+window is known. It is never more than 30% of the run's input budget (at about
+4 chars per token) — the window minus the output reservation and the safety
+buffer, or `context_block_limit` when set. On a small window the answer's share
+is large, so a cap sized from the window alone would let one result take most
+of what the prompt may hold.
 An explicit value — in the configuration or from a caller such as the dream
-passes — always wins. The loop saves a turn under the same cap its model
-window gives a run, so a result kept whole in the run is saved whole. A turn
+passes — always wins. The loop saves a turn under the same cap a run on its
+model gets, so a result kept whole in the run is saved whole. A turn
 that runs on a per-turn model override with a larger window can keep larger
 results; those are saved cut, with a pointer to the full copy.
 

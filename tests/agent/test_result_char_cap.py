@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -10,7 +11,7 @@ import pytest
 from durin.agent.runner import AgentRunner, AgentRunSpec, result_char_cap
 from durin.agent.tools.context import current_result_char_cap
 from durin.config.schema import AgentDefaults
-from durin.providers.base import LLMResponse, ToolCallRequest
+from durin.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
 
 @pytest.mark.parametrize(
@@ -32,7 +33,43 @@ def test_the_config_leaves_the_cap_to_the_window_by_default() -> None:
     assert AgentDefaults().max_tool_result_chars is None
 
 
-async def _cap_seen_by_a_tool(window: int | None, configured: int | None) -> int | None:
+@pytest.mark.parametrize(
+    ("window", "input_budget", "expected"),
+    [
+        (16_384, 7_168, 8_601),  # 30% of the input budget, not of the window
+        (231_072, 225_952, 64_000),  # on a large window the tier still wins
+        (8_000, 0, 9_600),  # no usable budget: the window's share
+        (8_000, None, 9_600),
+    ],
+)
+def test_the_cap_is_a_share_of_the_input_budget(
+    window: int, input_budget: int | None, expected: int,
+) -> None:
+    assert result_char_cap(None, window, input_budget) == expected
+
+
+def _loop_settings(window: int, max_output: int, block_limit: int | None = None) -> SimpleNamespace:
+    """The loop attributes its save-time cap reads, as a real loop has them."""
+    return SimpleNamespace(
+        max_tool_result_chars=None,
+        context_window_tokens=window,
+        context_block_limit=block_limit,
+        provider=SimpleNamespace(generation=GenerationSettings(max_tokens=max_output)),
+    )
+
+
+def test_the_loop_saves_under_the_cap_its_runs_use() -> None:
+    from durin.agent.loop import AgentLoop
+
+    # 16,384 − 8,192 held for the answer − 1,024 margin = 7,168 input tokens.
+    assert AgentLoop._saved_result_cap(_loop_settings(16_384, 8_192)) == 8_601
+    # A block limit replaces the computed input budget, as it does in a run.
+    assert AgentLoop._saved_result_cap(_loop_settings(16_384, 8_192, 5_000)) == 6_000
+
+
+async def _cap_seen_by_a_tool(
+    window: int | None, configured: int | None, max_output: int | None = None,
+) -> int | None:
     seen: dict[str, Any] = {}
     calls = {"n": 0}
 
@@ -52,6 +89,8 @@ async def _cap_seen_by_a_tool(window: int | None, configured: int | None) -> int
 
     provider = MagicMock()
     provider.chat_with_retry = chat_with_retry
+    if max_output is not None:
+        provider.generation = GenerationSettings(max_tokens=max_output)
     tools = MagicMock()
     tools.get_definitions.return_value = []
     tools.execute = execute
@@ -71,3 +110,8 @@ async def test_a_run_without_an_explicit_cap_uses_its_windows_cap() -> None:
     assert await _cap_seen_by_a_tool(231_072, None) == 64_000
     assert await _cap_seen_by_a_tool(65_536, None) == 16_000
     assert await _cap_seen_by_a_tool(231_072, 8_000) == 8_000
+
+
+@pytest.mark.asyncio
+async def test_a_run_on_a_small_window_caps_by_its_input_budget() -> None:
+    assert await _cap_seen_by_a_tool(16_384, None, max_output=8_192) == 8_601

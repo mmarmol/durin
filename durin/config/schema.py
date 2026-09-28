@@ -1045,7 +1045,7 @@ class AgentDefaults(Base):
     max_concurrent_subagents: int = Field(default=3, ge=1, description="Parallel subagent concurrency cap; 1 forces strictly serial subagents")
     max_concurrent_interactive: int = Field(default=4, ge=1, description="Interactive-lane cap: human-facing turns running at once across all sessions; env DURIN_MAX_CONCURRENT_REQUESTS overrides at runtime")
     concurrency_ceiling: int = Field(default=12, ge=1, description="Global ceiling on total in-flight turns + subagents across all lanes; keep it >= the interactive cap")
-    max_tool_result_chars: int | None = Field(default=None, description="Largest tool result, in characters, kept whole in the model's context; a larger one is saved to a file the agent reads in pages. Unset: follows the model's context window — 16,000 below 100k tokens, 32,000 from 100k, 64,000 from 200k, at most 30% of the window")
+    max_tool_result_chars: int | None = Field(default=None, description="Largest tool result, in characters, kept whole in the model's context; a larger one is saved to a file the agent reads in pages. Unset: follows the model's context window — 16,000 below 100k tokens, 32,000 from 100k, 64,000 from 200k, at most 30% of the input budget (the window minus what is held for the answer)")
     provider_retry_mode: Literal["standard", "persistent"] = Field(default="standard", description='Retry strategy on provider errors: "standard" or "persistent"')
     tool_hint_max_length: int = Field(
         default=40,

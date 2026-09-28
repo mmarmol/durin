@@ -27,6 +27,8 @@ from durin.agent.runner import (
     _MAX_INJECTIONS_PER_TURN,
     AgentRunner,
     AgentRunSpec,
+    input_budget_tokens,
+    provider_max_output,
     result_char_cap,
 )
 from durin.agent.skill_usage import emit_skill_used, extract_skill_calls
@@ -4031,9 +4033,18 @@ class AgentLoop:
 
     def _saved_result_cap(self) -> int:
         """The per-result cap applied when a turn is saved: the configured
-        one, or the cap the loop's model window gives a run (a result the
-        run kept whole under that cap is saved whole)."""
-        return result_char_cap(self.max_tool_result_chars, self.context_window_tokens)
+        one, or the cap a run on the loop's model gets from its window and
+        input budget (a result the run kept whole under that cap is saved
+        whole)."""
+        return result_char_cap(
+            self.max_tool_result_chars,
+            self.context_window_tokens,
+            input_budget_tokens(
+                self.context_window_tokens,
+                provider_max_output(self.provider),
+                self.context_block_limit,
+            ),
+        )
 
     def _save_turn(
         self,

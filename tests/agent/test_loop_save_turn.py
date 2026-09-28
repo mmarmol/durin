@@ -9,7 +9,7 @@ from durin.agent.context import ContextBuilder
 from durin.agent.loop import AgentLoop, TurnContext, TurnState
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
-from durin.providers.base import LLMResponse
+from durin.providers.base import GenerationSettings, LLMResponse
 from durin.session.goal_state import GOAL_STATE_KEY
 from durin.session.manager import Session
 from durin.utils.webui_titles import (
@@ -25,6 +25,8 @@ def _mk_loop() -> AgentLoop:
 
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
     loop.context_window_tokens = AgentDefaults().context_window_tokens
+    loop.context_block_limit = AgentDefaults().context_block_limit
+    loop.provider = MagicMock(generation=GenerationSettings())
     return loop
 
 

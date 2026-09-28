@@ -111,7 +111,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `max_concurrent_subagents` | `3` | Parallel sub-agent concurrency cap (set `1` to force serial) |
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns running at once across all sessions (env `DURIN_MAX_CONCURRENT_REQUESTS` overrides at runtime) |
 | `concurrency_ceiling` | `12` | Global ceiling on total in-flight turns + subagents across all lanes; keep `>=` the interactive cap |
-| `max_tool_result_chars` | unset | Largest tool result kept whole in the model's context; a larger one is saved to a file the agent reads in pages (`read_file` and `grep` size their pages under this cap). Unset, it follows the model's context window: `16000` below 100k tokens, `32000` from 100k, `64000` from 200k, never more than 30% of the window. A number here applies to every model |
+| `max_tool_result_chars` | unset | Largest tool result kept whole in the model's context; a larger one is saved to a file the agent reads in pages (`read_file` and `grep` size their pages under this cap). Unset, it follows the model's context window: `16000` below 100k tokens, `32000` from 100k, `64000` from 200k, never more than 30% of the input budget (the window minus what is held for the answer). A number here applies to every model |
 | `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
 | `fallback_models` | `[]` | Ordered list of preset names or inline model specs to try on provider failure |
 | `timezone` | `UTC` | IANA timezone for date-aware tools (e.g. `America/New_York`) |

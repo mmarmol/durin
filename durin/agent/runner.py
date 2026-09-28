@@ -103,13 +103,20 @@ _RESULT_CAP_TIERS = ((200_000, 64_000), (100_000, 32_000))
 _RESULT_CAP_MAX_WINDOW_SHARE = 0.3
 
 
-def result_char_cap(configured: int | None, context_window_tokens: int | None) -> int:
+def result_char_cap(
+    configured: int | None,
+    context_window_tokens: int | None,
+    input_budget: int | None = None,
+) -> int:
     """The per-result character cap a run uses.
 
     An explicit setting wins. Otherwise it follows the model's context
     window: 16,000 below a 100k-token window, 32,000 from 100k, 64,000 from
-    200k, and never more than 30% of the window. Without a known window it
-    is 16,000.
+    200k, and never more than 30% of the run's input budget (the window
+    minus what is held for the answer), or of the window when no budget is
+    known. On a small window the answer's share is large, and a cap sized
+    from the window alone would let one result take most of what the
+    prompt may use. Without a known window it is 16,000.
     """
     if configured is not None:
         return configured
@@ -120,7 +127,30 @@ def result_char_cap(configured: int | None, context_window_tokens: int | None) -
         if context_window_tokens >= min_window:
             cap = tier_cap
             break
-    return max(1, min(cap, int(context_window_tokens * 4 * _RESULT_CAP_MAX_WINDOW_SHARE)))
+    share_of = input_budget if input_budget and input_budget > 0 else context_window_tokens
+    return max(1, min(cap, int(share_of * 4 * _RESULT_CAP_MAX_WINDOW_SHARE)))
+
+
+def provider_max_output(provider: Any) -> int:
+    """The provider's default output ceiling (``generation.max_tokens``),
+    or 4,096 when it has none."""
+    provider_max = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
+    return provider_max if isinstance(provider_max, int) else 4096
+
+
+def input_budget_tokens(
+    context_window_tokens: int | None,
+    max_output: int,
+    context_block_limit: int | None = None,
+) -> int | None:
+    """Input-token budget: ``context_block_limit`` when set, else the context
+    window minus a capped output reservation and the safety buffer. None
+    when no window is known."""
+    if not isinstance(context_window_tokens, int) or context_window_tokens <= 0:
+        return None
+    if isinstance(context_block_limit, int) and context_block_limit > 0:
+        return context_block_limit
+    return context_window_tokens - _output_reservation(max_output) - _SNIP_SAFETY_BUFFER
 
 
 def _output_reservation(max_output: int) -> int:
@@ -565,7 +595,11 @@ class AgentRunner:
         if spec.max_tool_result_chars is None:
             spec = dataclasses.replace(
                 spec,
-                max_tool_result_chars=result_char_cap(None, spec.context_window_tokens),
+                max_tool_result_chars=result_char_cap(
+                    None,
+                    spec.context_window_tokens,
+                    self._input_budget(spec, spec.provider or self.provider),
+                ),
             )
         # Tools that page their own output (read_file, grep) size a page
         # under this run's per-result cap, so the page arrives whole instead
@@ -1313,8 +1347,7 @@ class AgentRunner:
         unset."""
         if isinstance(spec.max_tokens, int):
             return spec.max_tokens
-        provider_max = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
-        return provider_max if isinstance(provider_max, int) else 4096
+        return provider_max_output(provider)
 
     def _input_budget(self, spec: AgentRunSpec, provider: LLMProvider | None) -> int | None:
         """Input-token budget: ``context_block_limit`` when set, else the
@@ -1326,12 +1359,11 @@ class AgentRunner:
         ceiling is still honoured for output via the dynamic ``max_tokens``
         sent on the request (see ``_effective_max_tokens``).
         """
-        if not spec.context_window_tokens:
-            return None
-        if spec.context_block_limit:
-            return spec.context_block_limit
-        reservation = _output_reservation(self._resolve_max_output(spec, provider))
-        return spec.context_window_tokens - reservation - _SNIP_SAFETY_BUFFER
+        return input_budget_tokens(
+            spec.context_window_tokens,
+            self._resolve_max_output(spec, provider),
+            spec.context_block_limit,
+        )
 
     def _estimate_and_budget(
         self,

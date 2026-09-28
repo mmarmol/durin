@@ -348,12 +348,10 @@ class MyTool(Tool, ContextAware):
     @staticmethod
     def _value_in_use(state: Any, key: str) -> Any:
         """A setting's value as runs use it: an unset per-result cap shows the
-        cap the current model window gives."""
+        cap a run on the current model gets."""
         value = getattr(state, key, None)
         if key == "max_tool_result_chars" and value is None:
-            from durin.agent.runner import result_char_cap
-
-            return result_char_cap(None, getattr(state, "context_window_tokens", None))
+            return state._saved_result_cap()
         return value
 
     def _inspect_all(self) -> str:
