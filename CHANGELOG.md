@@ -5,6 +5,49 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.1 — 2026-09-27
+
+### Highlights
+
+- **Cancel a workflow run that is waiting on you.** A run paused for your
+  answer or approval can now be cancelled from the Pending page or its run
+  view. It is finalized as cancelled, keeps its history, and records who
+  cancelled it. Before, a run paused on a question could only be ended by
+  answering it, which runs the rest of the workflow. A run started by an
+  automation is stopped from the automation instead, so both stay in sync.
+  (#644)
+- **Better memory deduplication decisions.** The judges that decide whether
+  two memory pages are the same thing, related, or unrelated now type
+  relations properly: "is a kind of", "is part of" and "uses" are no longer
+  confused. They follow one rule for merging versus relating, and can read
+  the source document a thin page was extracted from before deciding.
+  (#642, #643)
+
+### Upgrade notes
+
+- **The dream re-judges its cached pairs.** The judge's prompt changed, so
+  over the next nights the dream re-judges pairs it had already settled,
+  strongest matches first. New clear duplicates are still handled early each
+  night. On a large memory this takes several weeks of nightly budget and
+  the matching model usage.
+
+### Memory
+
+- The investigating judge can read, bounded and read-only, the reference
+  document an entity page was extracted from. When the evidence stays thin,
+  it answers "unclear" instead of guessing. (#642)
+- Both judges share one relation guide. It prefers the relation labels your
+  memory already uses, and only merges two pages when everything on both
+  belongs to one thing. An established product name is not merged into one of
+  its sub-services. (#642, #643)
+- The cheap judge's prompt is in English. (#643)
+
+### Workflows
+
+- `POST /api/v1/workflows/{name}/runs/{run_id}/cancel` ends a run that waits
+  for input. A cancel and a resume that arrive together can no longer both
+  act on the run. (#644)
+
 ## 0.11.0 — 2026-09-26
 
 ### Highlights
