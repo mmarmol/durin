@@ -257,14 +257,7 @@ def main() -> None:
 
     def sync_fetch_verified():
         """Crawl GitHub's curated registry → normalized server dicts (the verified tier)."""
-        out: list = []
-        cursor = None
-        while True:
-            servers, cursor = asyncio.run(gh_registry.fetch_page(cursor=cursor))
-            out.extend(servers)
-            if not cursor:
-                break
-        return out
+        return asyncio.run(gh_registry.fetch_all())
 
     from durin.agent.mcp_github import fetch_repo_meta as _fetch_repo_meta
 

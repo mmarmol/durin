@@ -122,6 +122,70 @@ def test_github_registry_describe_finds_by_name():
     assert asyncio.run(reg.describe("does/not-exist")) is None
 
 
+def _server(name: str) -> dict:
+    return {"server": {"name": name, "description": name,
+                       "repository": {"url": f"https://github.com/x/{name}"}}}
+
+
+class _CursorHttp:
+    """Two pages behind cursor "c2"; the first ``rejections`` requests for it
+    fail the way the registry does ("Invalid cursor parameter")."""
+
+    def __init__(self, rejections: int):
+        self.rejections = rejections
+        self.urls: list[str] = []
+
+    async def get_json(self, url):
+        self.urls.append(url)
+        if "cursor=c2" in url:
+            if self.rejections:
+                self.rejections -= 1
+                raise RuntimeError("400 Bad Request: Invalid cursor parameter")
+            return {"servers": [_server("b/two")], "metadata": {}}
+        return {"servers": [_server("a/one")], "metadata": {"next_cursor": "c2"}}
+
+
+def test_a_rejected_cursor_restarts_the_github_crawl():
+    """The registry rejects a cursor it issued now and then; the walk starts
+    over from the first page instead of failing the whole catalog build."""
+    import asyncio
+
+    from durin.agent.mcp_registry import GithubMcpRegistry
+
+    http = _CursorHttp(rejections=1)
+    servers = asyncio.run(GithubMcpRegistry(http=http).fetch_all())
+
+    assert [s["name"] for s in servers] == ["a/one", "b/two"]
+    assert len(http.urls) == 4  # page 1, rejected page 2, page 1, page 2
+
+
+def test_a_github_crawl_that_keeps_failing_raises():
+    """A partial listing must not pass for the whole one."""
+    import asyncio
+
+    import pytest
+
+    from durin.agent.mcp_registry import GithubMcpRegistry
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(GithubMcpRegistry(http=_CursorHttp(rejections=99)).fetch_all())
+
+
+def test_a_failed_github_crawl_is_not_kept_as_the_index():
+    """describe() tries again later instead of serving a truncated index for
+    the rest of the process."""
+    import asyncio
+
+    from durin.agent.mcp_registry import GithubMcpRegistry
+
+    http = _CursorHttp(rejections=99)
+    reg = GithubMcpRegistry(http=http)
+    assert asyncio.run(reg.describe("b/two")) is None
+
+    http.rejections = 0
+    assert asyncio.run(reg.describe("b/two")) is not None
+
+
 def test_build_mcp_adapters_includes_github():
     from durin.agent.mcp_registry import build_mcp_adapters
 
