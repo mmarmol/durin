@@ -684,6 +684,15 @@ def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
     assert channel.is_allowed("67890|bob") is True
 
 
+def test_an_allowed_username_may_be_written_with_its_at_sign() -> None:
+    """The settings hint and Telegram itself write usernames as @alice; the
+    sender carries the bare name."""
+    channel = TelegramChannel(TelegramConfig(allow_from=["@alice"]), MessageBus())
+
+    assert channel.is_allowed("99999|alice") is True
+    assert channel.is_allowed("99999|mallory") is False
+
+
 def test_is_allowed_rejects_invalid_legacy_telegram_sender_shapes() -> None:
     channel = TelegramChannel(TelegramConfig(allow_from=["alice"]), MessageBus())
 

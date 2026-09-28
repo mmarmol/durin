@@ -310,8 +310,10 @@ class TelegramChannel(BaseChannel):
     def is_allowed(self, sender_id: str) -> bool:
         """Check whether a sender is on the allowlist.
 
-        Handles two entry formats in allow_from:
+        Handles these entry formats in allow_from:
         - Bare numeric ID: "123456" — permanent, preferred for manually curated lists.
+        - Username, with or without its "@": "alice" or "@alice" (a username
+          cannot contain "@").
         - Composite "<id>|<username>": written by the pairing flow.  Username part
           can go stale if the Telegram user changes or removes their username; in
           that case the numeric ID half still matches.
@@ -331,7 +333,8 @@ class TelegramChannel(BaseChannel):
         if not sid.isdigit() or not username:
             return False
 
-        return sid in allow_list or username in allow_list
+        return sid in allow_list or username in {
+            str(entry).removeprefix("@") for entry in allow_list}
 
     @staticmethod
     def _normalize_telegram_command(content: str) -> str:
