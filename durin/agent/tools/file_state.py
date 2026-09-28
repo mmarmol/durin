@@ -125,6 +125,17 @@ class FileStates:
         """Return the raw ReadState entry for a path, or None."""
         return self._state.get(str(Path(path).resolve()))
 
+    def forget_reads(self) -> None:
+        """Stop answering repeat reads with the "unchanged" stub.
+
+        The stub points at an earlier read's result in the model's context.
+        A new run cannot count on that result still being there — the
+        history may have been compacted, saved cut, or trimmed to a window —
+        so each run starts without stubs. Read-before-edit tracking is kept.
+        """
+        for entry in self._state.values():
+            entry.can_dedup = False
+
     def clear(self) -> None:
         """Clear all tracked state (useful for testing)."""
         self._state.clear()

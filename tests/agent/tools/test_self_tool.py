@@ -9,7 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel
 
+from durin.agent.loop import AgentLoop
 from durin.agent.tools.self import MyTool
+from durin.providers.base import GenerationSettings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,6 +54,12 @@ def _make_mock_loop(**overrides):
     loop.subagents = MagicMock()
     loop.subagents._running_tasks = {"abc123": MagicMock(done=MagicMock(return_value=False))}
     loop.subagents.get_running_count = MagicMock(return_value=1)
+
+    # The per-result cap in use is the loop's own save-time cap; resolve it
+    # with the real method so the double answers as a loop set up this way.
+    loop.context_block_limit = None
+    loop.provider.generation = GenerationSettings()
+    loop._saved_result_cap = lambda: AgentLoop._saved_result_cap(loop)
 
     for k, v in overrides.items():
         setattr(loop, k, v)
@@ -408,6 +416,13 @@ class TestModifyFree:
         tool = _make_tool(_make_mock_loop(max_tool_result_chars=None, context_window_tokens=231_072))
         result = await tool.execute(action="check")
         assert "max_tool_result_chars: 64000" in result
+
+    @pytest.mark.asyncio
+    async def test_check_shows_the_cap_a_small_window_run_uses(self):
+        loop = _make_mock_loop(max_tool_result_chars=None, context_window_tokens=16_384)
+        loop.provider.generation = GenerationSettings(max_tokens=8_192)
+        result = await _make_tool(loop).execute(action="check")
+        assert "max_tool_result_chars: 8601" in result
 
 
 # ---------------------------------------------------------------------------

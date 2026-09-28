@@ -376,6 +376,25 @@ class ReadFileTool(_FsTool):
         paths = arguments.get("paths")
         return len(paths) if isinstance(paths, list) and paths else 1
 
+    def result_left_context(self, arguments: dict[str, Any]) -> None:
+        """A read whose result the model no longer has must not answer a
+        repeat read with the "unchanged since last read" stub: the stub
+        points at that result. The next read of the file returns its page."""
+        if not isinstance(arguments, dict):
+            return
+        paths = arguments.get("paths")
+        if not isinstance(paths, list):
+            paths = [arguments.get("path")]
+        for raw in paths:
+            if not isinstance(raw, str) or not raw:
+                continue
+            try:
+                entry = self._file_states.get(self._resolve(raw))
+            except Exception:  # noqa: BLE001
+                continue
+            if entry is not None:
+                entry.can_dedup = False
+
     async def execute(
         self,
         path: str | None = None,
@@ -782,17 +801,46 @@ class ReadFileTool(_FsTool):
 
         # A batch page's share (``budget``) is measured JSON-encoded, the
         # way the batch arrives.
-        room = (budget if budget is not None else self._page_budget()) - self._FOOTER_ROOM
-        head = result[:room] if budget is None else _json_head(result, room)
-        if len(head) < len(result):
-            result = (
-                head
-                + f"\n\n(Document text cut at {len(head):,} of {len(result):,} chars; "
-                "convert_to_markdown returns the whole text, and a result that "
-                "large is saved to a file you can read in pages.)"
-            )
+        page = budget if budget is not None else self._page_budget()
+        measure = len if budget is None else _json_len
+        if measure(result) <= page - self._FOOTER_ROOM:
+            return result
+        # The whole text goes to a file this same tool pages through, since
+        # a run may have no other way to open the document. It is redacted
+        # before it touches disk, and the page is cut from that same text,
+        # so the line the pointer names is the line where the page stops.
+        from durin.agent.tools.output_spill import write_spill
+        from durin.security.secrets import redact_secrets
 
-        return result
+        result = redact_secrets(result)
+        saved, error = write_spill(result, "read_file", self._workspace, reuse=True)
+        # Sized with the largest numbers the note can show, which the real
+        # ones can only shorten, so head and note fit the page together.
+        longest = self._document_cut_note(
+            saved, error, len(result), len(result), result.count("\n") + 1,
+        )
+        room = max(0, page - measure(longest))
+        head = result[:room] if budget is None else _json_head(result, room)
+        return head + self._document_cut_note(
+            saved, error, len(head), len(result), head.count("\n") + 1,
+        )
+
+    @staticmethod
+    def _document_cut_note(
+        saved: Path | None, error: str | None, shown: int, total: int, next_line: int,
+    ) -> str:
+        if saved is None:
+            return (
+                f"\n\n(Document text cut at {shown:,} of {total:,} chars; the rest could "
+                f"not be saved to a file: {error or 'unknown error'}.)"
+            )
+        # The page may stop inside a line: continuing from that line repeats
+        # its start rather than skipping its end.
+        return (
+            f"\n\n(Document text cut at {shown:,} of {total:,} chars. The whole text is "
+            f'saved; continue with read_file(path="{saved}", offset={next_line}), '
+            "one page per call.)"
+        )
 
 
 # ---------------------------------------------------------------------------

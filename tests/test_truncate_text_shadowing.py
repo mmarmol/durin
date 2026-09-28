@@ -20,7 +20,9 @@ def test_sanitize_persisted_blocks_truncate_text_shadowing_regression() -> None:
     assert "should_truncate_text" in sig.parameters
     assert "truncate_text" not in sig.parameters
 
-    dummy = SimpleNamespace(max_tool_result_chars=5, context_window_tokens=None)
+    dummy = SimpleNamespace(
+        max_tool_result_chars=5, context_window_tokens=None, context_block_limit=None, provider=None,
+    )
     # The sanitizer asks the loop for its save-time cap; resolve it with the
     # real method so the double caps exactly as a loop configured this way.
     dummy._saved_result_cap = lambda: AgentLoop._saved_result_cap(dummy)

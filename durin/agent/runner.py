@@ -96,20 +96,28 @@ _MICROCOMPACT_HEAD_CHARS = 120
 
 # Per-result cap when nothing sets one explicitly: it follows the model's
 # context window (tiers by window size), and never takes more than 30% of
-# the window at roughly 4 characters per token, so a small local model is
-# not handed results that crowd out the rest of its prompt.
+# the run's input budget (of the window when no budget is known) at roughly
+# 4 characters per token, so a small local model is not handed results that
+# crowd out the rest of its prompt.
 _RESULT_CAP_DEFAULT_CHARS = 16_000
 _RESULT_CAP_TIERS = ((200_000, 64_000), (100_000, 32_000))
 _RESULT_CAP_MAX_WINDOW_SHARE = 0.3
 
 
-def result_char_cap(configured: int | None, context_window_tokens: int | None) -> int:
+def result_char_cap(
+    configured: int | None,
+    context_window_tokens: int | None,
+    input_budget: int | None = None,
+) -> int:
     """The per-result character cap a run uses.
 
     An explicit setting wins. Otherwise it follows the model's context
     window: 16,000 below a 100k-token window, 32,000 from 100k, 64,000 from
-    200k, and never more than 30% of the window. Without a known window it
-    is 16,000.
+    200k, and never more than 30% of the run's input budget (the window
+    minus what is held for the answer), or of the window when no budget is
+    known. On a small window the answer's share is large, and a cap sized
+    from the window alone would let one result take most of what the
+    prompt may use. Without a known window it is 16,000.
     """
     if configured is not None:
         return configured
@@ -120,7 +128,30 @@ def result_char_cap(configured: int | None, context_window_tokens: int | None) -
         if context_window_tokens >= min_window:
             cap = tier_cap
             break
-    return max(1, min(cap, int(context_window_tokens * 4 * _RESULT_CAP_MAX_WINDOW_SHARE)))
+    share_of = input_budget if input_budget and input_budget > 0 else context_window_tokens
+    return max(1, min(cap, int(share_of * 4 * _RESULT_CAP_MAX_WINDOW_SHARE)))
+
+
+def provider_max_output(provider: Any) -> int:
+    """The provider's default output ceiling (``generation.max_tokens``),
+    or 4,096 when it has none."""
+    provider_max = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
+    return provider_max if isinstance(provider_max, int) else 4096
+
+
+def input_budget_tokens(
+    context_window_tokens: int | None,
+    max_output: int,
+    context_block_limit: int | None = None,
+) -> int | None:
+    """Input-token budget: ``context_block_limit`` when set, else the context
+    window minus a capped output reservation and the safety buffer. None
+    when no window is known."""
+    if not isinstance(context_window_tokens, int) or context_window_tokens <= 0:
+        return None
+    if isinstance(context_block_limit, int) and context_block_limit > 0:
+        return context_block_limit
+    return context_window_tokens - _output_reservation(max_output) - _SNIP_SAFETY_BUFFER
 
 
 def _output_reservation(max_output: int) -> int:
@@ -317,6 +348,9 @@ class _PruneState:
     # from its messages) or this run's before its last batch — so size checks
     # count those messages from scratch instead of trusting the stamps.
     trusted_from: int = 0
+    # Tool calls whose result has stopped reaching the model whole and whose
+    # tool was told so; each tool hears about a result once.
+    left_context: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -565,7 +599,11 @@ class AgentRunner:
         if spec.max_tool_result_chars is None:
             spec = dataclasses.replace(
                 spec,
-                max_tool_result_chars=result_char_cap(None, spec.context_window_tokens),
+                max_tool_result_chars=result_char_cap(
+                    None,
+                    spec.context_window_tokens,
+                    self._input_budget(spec, spec.provider or self.provider),
+                ),
             )
         # Tools that page their own output (read_file, grep) size a page
         # under this run's per-result cap, so the page arrives whole instead
@@ -773,6 +811,15 @@ class AgentRunner:
                         await hook.after_iteration(context)
                         break
                 effective_max_tokens = self._effective_max_tokens(spec, estimate_tokens, provider)
+
+            try:
+                self._notify_results_left_context(spec, messages, messages_for_model, prune_state)
+            except Exception:
+                logger.exception(
+                    "Tool-result notice failed on turn {} for {}",
+                    iteration,
+                    spec.session_key or "default",
+                )
 
             context = AgentHookContext(
                 iteration=iteration,
@@ -1313,8 +1360,7 @@ class AgentRunner:
         unset."""
         if isinstance(spec.max_tokens, int):
             return spec.max_tokens
-        provider_max = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
-        return provider_max if isinstance(provider_max, int) else 4096
+        return provider_max_output(provider)
 
     def _input_budget(self, spec: AgentRunSpec, provider: LLMProvider | None) -> int | None:
         """Input-token budget: ``context_block_limit`` when set, else the
@@ -1326,12 +1372,11 @@ class AgentRunner:
         ceiling is still honoured for output via the dynamic ``max_tokens``
         sent on the request (see ``_effective_max_tokens``).
         """
-        if not spec.context_window_tokens:
-            return None
-        if spec.context_block_limit:
-            return spec.context_block_limit
-        reservation = _output_reservation(self._resolve_max_output(spec, provider))
-        return spec.context_window_tokens - reservation - _SNIP_SAFETY_BUFFER
+        return input_budget_tokens(
+            spec.context_window_tokens,
+            self._resolve_max_output(spec, provider),
+            spec.context_block_limit,
+        )
 
     def _estimate_and_budget(
         self,
@@ -2719,6 +2764,60 @@ class AgentRunner:
                     "freed_tokens": int(freed),
                 })
         return view
+
+    @staticmethod
+    def _notify_results_left_context(
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        view: list[dict[str, Any]],
+        state: _PruneState,
+    ) -> None:
+        """Tell a tool, once per call, when its result stops reaching the
+        model whole: a batch replaced it with a pointer, a size check cut it,
+        the turn budget saved it to disk (in the run's own messages, so both
+        copies match), or old history was dropped. A tool can hold state that
+        assumes the model still has the result — read_file answers a repeat
+        read with "unchanged since last read" — and must reset it."""
+        shown = {m.get("tool_call_id"): m.get("content") for m in view if m.get("role") == "tool"}
+        missing = object()
+        left = [
+            m["tool_call_id"]
+            for m in messages
+            if m.get("role") == "tool"
+            and m.get("tool_call_id")
+            and m["tool_call_id"] not in state.left_context
+            and (
+                shown.get(m["tool_call_id"], missing) != m.get("content")
+                or parse_persisted_reference(m.get("content")) is not None
+            )
+        ]
+        if not left:
+            return
+        calls: dict[str, tuple[str, Any]] = {}
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            for call in message.get("tool_calls") or []:
+                if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                    continue
+                function = call["function"]
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except ValueError:
+                        arguments = {}
+                calls[call.get("id")] = (function.get("name"), arguments)
+        for call_id in left:
+            state.left_context.add(call_id)
+            name, arguments = calls.get(call_id, (None, None))
+            tool = spec.tools.get(name) if name else None
+            if tool is None or not isinstance(arguments, dict):
+                continue
+            try:
+                tool.result_left_context(arguments)
+            except Exception:  # noqa: BLE001
+                logger.exception("result_left_context failed for {} ({})", name, call_id)
 
     def _microcompact_reference(
         self,

@@ -323,6 +323,37 @@ async def test_content_output_fits_the_calling_run_cap(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [3, 5])
+async def test_content_offset_past_the_last_match_says_so(tmp_path: Path, offset: int) -> None:
+    (tmp_path / "a.log").write_text("needle 1\nhay\nneedle 2\nneedle 3\n", encoding="utf-8")
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+
+    result = await tool.execute(pattern="needle", path=".", output_mode="content", offset=offset)
+
+    assert f"offset {offset} is past the last of 3 matches" in result
+    assert "No matches found" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_block_cut_to_fit_keeps_its_matching_line(tmp_path: Path) -> None:
+    from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
+
+    context = [f"context {i} " + "c" * 1_890 for i in range(5)]
+    (tmp_path / "wide.log").write_text("\n".join([*context, "THE_MATCH here"]), encoding="utf-8")
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+    token = set_result_char_cap(4_000)
+    try:
+        result = await tool.execute(
+            pattern="THE_MATCH", path=".", output_mode="content", context_before=5,
+        )
+    finally:
+        reset_result_char_cap(token)
+
+    assert "> 6| THE_MATCH here" in result
+    assert len(result) <= 4_000
+
+
+@pytest.mark.asyncio
 async def test_grep_reports_skipped_binary_and_large_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

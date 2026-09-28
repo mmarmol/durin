@@ -342,6 +342,20 @@ empty and put everything identifying (a ticket number, a status) in the
 attachment. Other subtypes (`message_changed`, `message_deleted`,
 `channel_join`, …) stay discarded.
 
+**Inbound text as typed.** Slack sends message text in its own markup: links
+as `<url|label>`, email addresses as `<mailto:addr|addr>`, dates as
+`<!date^…|fallback>`, and `&`, `<`, `>` as entities. The adapter turns the
+message text, each thread-context line, and a shared message's attachment
+text back into what the person typed before any of it reaches the agent or a
+trigger. A link shows its label, plus the URL when the label is something
+else; a date shows its fallback text; `<!here>` shows `@here`; an entity
+shows its character. So an id pasted in angle brackets, such as an email
+Message-ID, arrives exactly as pasted. Mentions that carry an id stay as
+Slack writes them — users `<@U…>`, channels `<#C…|name>`, user groups
+`<!subteam^…|@handle>` — since the id is what a reply, a post to that
+channel, or an automation needs; thread-context lines name senders the same
+way.
+
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
 or `"{channel}:{chat_id}"` otherwise. This lets thread-scoped sessions (for
@@ -845,7 +859,7 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `handle_pairing_command` | `durin/pairing/store.py` | Pure function dispatching `/pairing list|approve|deny|revoke` subcommands. Used by both CLI and `CommandRouter`. |
 | `format_pairing_reply` | `durin/pairing/store.py` | Returns the user-facing string sent to an unapproved DM sender containing their pairing code. |
 | `TelegramChannel` | `durin/channels/telegram.py` | Telegram adapter using `python-telegram-bot`. Implements streaming via in-place message edits. |
-| `SlackChannel` | `durin/channels/slack.py` | Slack Socket Mode adapter. Implements streaming via in-place `chat.update` edits, thread-scoped sessions, quoted/forwarded-content extraction, and mentioned-thread auto-follow. |
+| `SlackChannel` | `durin/channels/slack.py` | Slack Socket Mode adapter. Implements streaming via in-place `chat.update` edits, thread-scoped sessions, quoted/forwarded-content extraction, inbound markup decoding, and mentioned-thread auto-follow. |
 | `WebSocketChannel` | `durin/channels/websocket.py` | WebSocket server channel that also hosts the embedded webui SPA. Handles token issuance, `websocket_requires_token`, and session/cron integration. |
 | `EmailChannel` | `durin/channels/email.py` | IMAP+SMTP adapter. Polls for new messages and sends replies. |
 | `WhatsAppChannel` | `durin/channels/whatsapp.py` | Supervises the Go bridge process (`bridge/`, whatsmeow) and speaks the v2 frame protocol to it over a loopback WebSocket. See "WhatsApp bridge transport" above. |

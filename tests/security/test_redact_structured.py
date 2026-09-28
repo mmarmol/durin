@@ -31,6 +31,29 @@ def test_every_string_inside_a_structured_result_is_redacted() -> None:
     assert out["results"][1]["meta"]["tags"][0].startswith("t-")
 
 
+def test_a_secret_used_as_a_key_is_redacted() -> None:
+    result = {"tokens": {STORED: "valid", TOKEN: "expired", "note": "ok"}}
+
+    out = _redactor().redact(result)
+
+    flat = repr(out)
+    assert STORED not in flat
+    assert TOKEN not in flat
+    assert out["tokens"]["note"] == "ok"
+    assert sorted(out["tokens"].values()) == ["expired", "ok", "valid"]
+
+
+def test_keys_that_redact_alike_keep_every_entry() -> None:
+    other = "sk-" + "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6"
+    result = {TOKEN: 1, other: 2}
+
+    out = _redactor().redact(result)
+
+    assert TOKEN not in repr(out) and other not in repr(out)
+    assert sorted(out.values()) == [1, 2]
+    assert len(out) == 2
+
+
 def test_image_blocks_pass_through_byte_for_byte() -> None:
     payload = "data:image/png;base64," + "A" * 64
     blocks = [

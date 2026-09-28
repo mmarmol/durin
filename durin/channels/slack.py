@@ -873,7 +873,7 @@ class SlackChannel(BaseChannel):
         # gate still makes the actual authorization decision.
         sender_allowed = self.is_allowed(sender_id)
 
-        text = self._strip_bot_mention(text)
+        text = self._decode_inbound_markup(self._strip_bot_mention(text))
 
         event_ts = event.get("ts")
         raw_thread_ts = event.get("thread_ts")
@@ -1130,7 +1130,7 @@ class SlackChannel(BaseChannel):
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            text = self._strip_bot_mention(text)
+            text = self._decode_inbound_markup(self._strip_bot_mention(text))
             if len(text) > 500:
                 text = text[:500] + "…"
             lines.append(f"- {label}: {text}")
@@ -1243,11 +1243,11 @@ class SlackChannel(BaseChannel):
             ]
             parts: list[str] = []
             for candidate in candidates:
-                stripped = candidate.strip()
+                stripped = self._decode_inbound_markup(candidate.strip())
                 if stripped and stripped not in parts:
                     parts.append(stripped)
             body = " — ".join(parts)
-            att_text = str(att.get("text") or "").strip()
+            att_text = self._decode_inbound_markup(str(att.get("text") or "").strip())
             if body and body not in text and (not att_text or att_text not in text):
                 lines.append(f"[shared] {body[:500]}")
         return lines[:5]
@@ -1283,6 +1283,51 @@ class SlackChannel(BaseChannel):
         if not text or not self._bot_user_id:
             return text
         return re.sub(rf"<@{re.escape(self._bot_user_id)}>\s*", "", text).strip()
+
+    _INBOUND_MARKUP_RE = re.compile(r"<([^<>]+)>")
+    _URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:(?://)?")
+
+    @classmethod
+    def _decode_inbound_markup(cls, text: str) -> str:
+        """Turn Slack's message markup back into the text a person typed.
+
+        Slack sends links as ``<url|label>``, email addresses as
+        ``<mailto:addr|addr>``, dates as ``<!date^…|fallback>``, and escapes
+        ``&``, ``<`` and ``>``. Left encoded, an id someone pasted (a
+        Message-ID in angle brackets) reaches the agent wrapped in markup it
+        then "repairs" wrongly. Mentions that carry an id — users ``<@U…>``,
+        channels ``<#C…|name>``, user groups ``<!subteam^…|@handle>`` — stay
+        as Slack writes them: the id is what a reply, a post to that channel
+        or an automation needs, and thread-context lines name senders the
+        same way. A real ``<`` always arrives escaped, so every ``<…>`` here
+        is markup; entities are decoded after it, ``&amp;`` last, so an
+        entity someone typed comes back as typed.
+        """
+        if not text or ("<" not in text and "&" not in text):
+            return text
+        text = cls._INBOUND_MARKUP_RE.sub(cls._plain_markup, text)
+        return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+    @classmethod
+    def _plain_markup(cls, match: re.Match[str]) -> str:
+        target, _, label = match.group(1).partition("|")
+        if target.startswith("!"):
+            special = target[1:].split("^", 1)[0]
+            if special in ("here", "channel", "everyone"):
+                return f"@{special}"
+            if special == "date" and label:
+                return label
+            # A user group, or anything else addressed by id.
+            return match.group(0)
+        scheme = cls._URI_SCHEME_RE.match(target)
+        if scheme is None:
+            # User and channel mentions, and anything else that is not a link.
+            return match.group(0)
+        bare = target[scheme.end():]
+        shown = bare if target.lower().startswith("mailto:") else target
+        if not label or label in (target, bare):
+            return label or shown
+        return f"{label} ({shown})"
 
     _TABLE_RE = re.compile(r"(?m)^\|.*\|$(?:\n\|[\s:|-]*\|$)(?:\n\|.*\|$)*")
     _CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")

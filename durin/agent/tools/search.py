@@ -63,6 +63,9 @@ def _is_binary(raw: bytes) -> bool:
     return (non_text / len(sample)) > 0.2
 
 
+_CONTEXT_DROPPED = "\n… [context lines dropped to fit the output]"
+
+
 def _paginate(items: list[T], limit: int | None, offset: int) -> tuple[list[T], bool]:
     if limit is None:
         return items[offset:], False
@@ -461,10 +464,20 @@ class GrepTool(_SearchTool):
                     if result_chars + extra_sep + len(block) > budget:
                         if not blocks:
                             # One block alone is larger than the whole output
-                            # may be: show its head rather than report that
-                            # nothing matched.
-                            cut = block[: max(200, budget - 200)]
-                            blocks.append(cut + "\n… [match block cut to fit the output]")
+                            # may be. Drop its context lines first: they come
+                            # before the matching line, so a cut block could
+                            # show only context and lose the line searched for.
+                            bare = block
+                            if context_before or context_after:
+                                bare = self._format_block(
+                                    display_path, lines, idx, 0, 0,
+                                    file_path=file_path, regex=regex,
+                                )
+                            if bare is not block and len(bare) + len(_CONTEXT_DROPPED) <= budget:
+                                blocks.append(bare + _CONTEXT_DROPPED)
+                            else:
+                                cut = bare[: max(200, budget - 200)]
+                                blocks.append(cut + "\n… [match block cut to fit the output]")
                             result_chars += len(blocks[-1])
                         size_truncated = True
                         break
@@ -511,7 +524,13 @@ class GrepTool(_SearchTool):
                     displayed_count = len(fitted)
                     result = "\n".join(fitted)
             else:
-                if not blocks:
+                if not blocks and offset and seen_content_matches:
+                    total_count_before_pagination = seen_content_matches
+                    result = (
+                        f"(offset {offset} is past the last of "
+                        f"{seen_content_matches} matches)"
+                    )
+                elif not blocks:
                     result = f"No matches found for pattern '{pattern}' in {path}"
                 else:
                     displayed_count = len(blocks)
