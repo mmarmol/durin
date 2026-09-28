@@ -1292,14 +1292,16 @@ class SlackChannel(BaseChannel):
         """Turn Slack's message markup back into the text a person typed.
 
         Slack sends links as ``<url|label>``, email addresses as
-        ``<mailto:addr|addr>``, channel and group mentions as ``<#C…|name>``
-        and ``<!subteam^…|@handle>``, and escapes ``&``, ``<`` and ``>``.
-        Left encoded, an id someone pasted (a Message-ID in angle brackets)
-        reaches the agent wrapped in markup it then "repairs" wrongly. User
-        mentions stay ``<@U…>``, the form thread-context lines use for
-        senders. A real ``<`` always arrives escaped, so every ``<…>`` here is
-        markup; entities are decoded after it, ``&amp;`` last, so an entity
-        someone typed comes back as typed.
+        ``<mailto:addr|addr>``, dates as ``<!date^…|fallback>``, and escapes
+        ``&``, ``<`` and ``>``. Left encoded, an id someone pasted (a
+        Message-ID in angle brackets) reaches the agent wrapped in markup it
+        then "repairs" wrongly. Mentions that carry an id — users ``<@U…>``,
+        channels ``<#C…|name>``, user groups ``<!subteam^…|@handle>`` — stay
+        as Slack writes them: the id is what a reply, a post to that channel
+        or an automation needs, and thread-context lines name senders the
+        same way. A real ``<`` always arrives escaped, so every ``<…>`` here
+        is markup; entities are decoded after it, ``&amp;`` last, so an
+        entity someone typed comes back as typed.
         """
         if not text or ("<" not in text and "&" not in text):
             return text
@@ -1309,16 +1311,17 @@ class SlackChannel(BaseChannel):
     @classmethod
     def _plain_markup(cls, match: re.Match[str]) -> str:
         target, _, label = match.group(1).partition("|")
-        if target.startswith("#"):
-            return f"#{label}" if label else match.group(0)
         if target.startswith("!"):
             special = target[1:].split("^", 1)[0]
             if special in ("here", "channel", "everyone"):
                 return f"@{special}"
-            return label or match.group(0)
+            if special == "date" and label:
+                return label
+            # A user group, or anything else addressed by id.
+            return match.group(0)
         scheme = cls._URI_SCHEME_RE.match(target)
         if scheme is None:
-            # User mentions, and anything else that is not a link.
+            # User and channel mentions, and anything else that is not a link.
             return match.group(0)
         bare = target[scheme.end():]
         shown = bare if target.lower().startswith("mailto:") else target

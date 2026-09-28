@@ -343,16 +343,18 @@ attachment. Other subtypes (`message_changed`, `message_deleted`,
 `channel_join`, …) stay discarded.
 
 **Inbound text as typed.** Slack sends message text in its own markup: links
-as `<url|label>`, email addresses as `<mailto:addr|addr>`, channel and group
-mentions as `<#C…|name>` and `<!subteam^…|@handle>`, dates as
+as `<url|label>`, email addresses as `<mailto:addr|addr>`, dates as
 `<!date^…|fallback>`, and `&`, `<`, `>` as entities. The adapter turns the
 message text, each thread-context line, and a shared message's attachment
 text back into what the person typed before any of it reaches the agent or a
 trigger. A link shows its label, plus the URL when the label is something
-else; a channel shows `#name`; `<!here>` shows `@here`; an entity shows its
-character. So an id pasted in angle brackets, such as an email Message-ID,
-arrives exactly as pasted. User mentions stay `<@U…>`, the form the
-thread-context lines use for senders.
+else; a date shows its fallback text; `<!here>` shows `@here`; an entity
+shows its character. So an id pasted in angle brackets, such as an email
+Message-ID, arrives exactly as pasted. Mentions that carry an id stay as
+Slack writes them — users `<@U…>`, channels `<#C…|name>`, user groups
+`<!subteam^…|@handle>` — since the id is what a reply, a post to that
+channel, or an automation needs; thread-context lines name senders the same
+way.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,

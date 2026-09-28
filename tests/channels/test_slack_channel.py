@@ -1192,11 +1192,13 @@ def test_extract_quoted_context_surfaces_shared_message_attachment() -> None:
         ("<https://jira.example.com/X-1|X-1>", "X-1 (https://jira.example.com/X-1)"),
         ("<https://example.com/a?b=1&amp;c=2>", "https://example.com/a?b=1&c=2"),
         ("<tel:+15551234|+15551234>", "+15551234"),
-        ("in <#C42|ops> and <#C43>", "in #ops and <#C43>"),
         ("<!here> <!channel> <!everyone|everyone>", "@here @channel @everyone"),
-        ("<!subteam^S1|@support>", "@support"),
         ("<!date^1392734382^{date_short}|Feb 18, 2014>", "Feb 18, 2014"),
+        # Mentions that carry an id stay as Slack writes them: the id is
+        # what a reply, a post to that channel or an automation needs.
         ("hi <@U123> and <@U456|bruno>", "hi <@U123> and <@U456|bruno>"),
+        ("in <#C42|ops> and <#C43>", "in <#C42|ops> and <#C43>"),
+        ("<!subteam^S1|@support>", "<!subteam^S1|@support>"),
         ("a &amp; b &lt;c&gt;", "a & b <c>"),
         # An entity someone typed arrives escaped once more, and must come
         # back as typed rather than decoded twice.
@@ -1235,7 +1237,7 @@ async def test_a_pasted_message_id_reaches_the_agent_as_typed() -> None:
     await channel._on_socket_request(client, req)
 
     content = channel._handle_message.await_args.kwargs["content"]
-    assert content == "find <CAKx+1@mail.gmail.com> in #ops"
+    assert content == "find <CAKx+1@mail.gmail.com> in <#C42|ops>"
 
 
 def test_thread_context_lines_arrive_as_typed() -> None:
