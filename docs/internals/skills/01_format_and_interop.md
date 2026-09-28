@@ -186,12 +186,15 @@ over-length body) at WARNING level. Scripts are parsed for syntax
 (`compile()` for `.py`, `bash -n` for `.sh`) but never executed. This is
 creation-time tooling; the runtime loader accepts what it finds.
 
-Every write path also refuses a bundled file that does not parse
+Every authoring path also refuses a bundled file that does not parse
 (`_lint_bundle` → `_lint_script` in `durin/agent/skills_store.py`: `.py`,
-`.sh`, `.json`, `.toml`, `.yaml`). The paths are a person's save, and the
-dream's create, edit (curation `evolve`, in-session `skill_edit`, approval
-replays), restructure and fuse. The refusal names the file and the parse
-error, and nothing is written. Scripts are still never run before they ship.
+`.sh`, `.json`, `.toml`, `.yaml`). The paths are a person's save, the agent's
+draft publish (`skill_publish`), and the dream's create, edit (curation
+`evolve`, in-session `skill_edit`, approval replays), restructure and fuse.
+The refusal names the file and the parse error, and nothing is written — a
+draft stays where it is. An import is not linted: it is third-party content a
+person chose, and it passes the security scan. Scripts are still never run
+before they ship.
 
 ---
 

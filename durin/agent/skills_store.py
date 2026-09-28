@@ -323,9 +323,10 @@ def _lint_script(relpath: str, content: str) -> dict | None:
 def _lint_bundle(files: dict[str, str]) -> dict | None:
     """The first file in ``files`` that does not parse, as a refusal, or None.
 
-    Every write path runs it — a person's save, and the dream's create, edit,
-    restructure and fuse — so no path ships a script or config file that
-    fails before it can even run."""
+    Every authoring path runs it — a person's save, the agent's draft
+    publish, and the dream's create, edit, restructure and fuse — so none
+    ships a script or config file that fails before it can even run. An
+    import is third-party content a person chose; it gets the security scan."""
     for rel, text in files.items():
         bad = _lint_script(rel, str(text))
         if bad is not None:
@@ -1423,6 +1424,9 @@ def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution
     bad = _skill_md_integrity(content)
     if bad is not None:
         return {"error": bad}  # integrity floor - nothing moved, draft left intact
+    unparsed = _lint_bundle(read_bundle_files(draft))
+    if unparsed is not None:
+        return unparsed  # draft left intact for the author to fix
     ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
     if not ok:
         return {"error": f"composition gate: {reason}", "composition_rejected": True}

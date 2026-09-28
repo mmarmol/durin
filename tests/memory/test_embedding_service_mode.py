@@ -73,12 +73,12 @@ def test_service_mode_broken_server_flips_to_process(provider, monkeypatch):
     assert "memory.embedding.service_fallback" in events
 
 
-@pytest.mark.filterwarnings("error::DeprecationWarning")
 def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
     """Full loop: provider(service) → HTTP → embed server app → response.
 
-    Runs the server with the production config; a deprecated stack it loads
-    (uvicorn's default websocket implementation) fails the test."""
+    Runs the server with the production config, which loads no websocket
+    stack: the embed API is plain HTTP, and uvicorn's default websocket
+    implementation is built on an API the websockets package deprecated."""
     import uvicorn
 
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
@@ -113,6 +113,7 @@ def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
         while not server.started and time.monotonic() < deadline:
             time.sleep(0.05)
         assert server.started, "test embed server never started"
+        assert server.config.ws_protocol_class is None
 
         embed_server.write_discovery(
             port=port, token="tok", model="fake/test-embed")

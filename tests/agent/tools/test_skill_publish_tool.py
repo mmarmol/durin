@@ -20,6 +20,19 @@ def test_publish_tool_activates_draft(tmp_path):
     assert (tmp_path / "skills" / "emailer" / "SKILL.md").exists()
 
 
+def test_a_draft_whose_script_does_not_parse_is_not_published(tmp_path):
+    _draft(tmp_path, "emailer", BODY)
+    scripts = tmp_path / "skill-drafts" / "emailer" / "scripts"
+    scripts.mkdir()
+    (scripts / "parse.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+
+    out = json.loads(asyncio.run(SkillPublishTool(workspace=tmp_path).execute(name="emailer")))
+
+    assert "does not parse" in out.get("error", ""), out
+    assert not (tmp_path / "skills" / "emailer").exists()
+    assert (scripts / "parse.py").exists()
+
+
 def test_discard_tool_removes_draft(tmp_path):
     _draft(tmp_path, "emailer", BODY)
     out = json.loads(asyncio.run(SkillDiscardTool(workspace=tmp_path).execute(name="emailer")))
