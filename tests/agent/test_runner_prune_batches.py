@@ -148,6 +148,77 @@ async def test_a_batch_that_brings_the_prompt_back_under_the_budget_keeps_the_bi
     assert any("result trimmed" in c for c in contents[:-1])
 
 
+def _stamped_history(count: int, stamp: int) -> list[dict[str, Any]]:
+    """History from an earlier run that pruned: its last assistant message
+    carries the small size of a pruned request, while this list holds every
+    result in full (the way a run's result.messages does)."""
+    history = _fresh()
+    for i in range(count):
+        history.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"h{i}", "type": "function", "function": {"name": "exec", "arguments": "{}"}}]})
+        history.append({"role": "tool", "tool_call_id": f"h{i}", "name": "exec", "content": RESULT})
+    history.append({"role": "assistant", "content": "ok", "usage_prompt_tokens": stamp})
+    return history
+
+
+@pytest.mark.asyncio
+async def test_a_run_seeded_with_an_earlier_runs_messages_measures_them_from_scratch(tmp_path) -> None:
+    """A workflow node's synthesis, re-entry and persistent revisit start from
+    an earlier run's messages, stamps included. Those stamps measured that run's
+    pruned requests; this run has pruned nothing yet, so trusting them would
+    send the whole history unpruned — past the window."""
+    history = _stamped_history(20, stamp=2_000) + [{"role": "user", "content": "go on"}]
+    seen = await _run(history, calls=2, tmp_path=tmp_path, window=12_000)
+    first = seen[0]
+    assert any("result trimmed" in str(m.get("content")) for m in first)
+    assert estimate_prompt_tokens(first) <= 12_000 - 4_096 - 1_024
+
+
+@pytest.mark.asyncio
+async def test_a_retry_after_a_batch_is_measured_on_the_pruned_prompt(tmp_path) -> None:
+    """The batch request gets an empty reply, so the runner retries with no
+    new stamped message. The retry must not be measured against the stamp of
+    the request before the batch — that would cut the result the batch made
+    room for."""
+    big = "".join(str((i * 7) % 10) for i in range(13_500))
+    seen: list[list[dict[str, Any]]] = []
+    state = {"emptied": False, "reads": 0}
+
+    async def chat_with_retry(**kwargs: Any) -> LLMResponse:
+        messages = [_sent(m) for m in kwargs["messages"]]
+        seen.append(messages)
+        usage = {"prompt_tokens": estimate_prompt_tokens(messages), "completion_tokens": 5}
+        pruned_now = any("result trimmed" in str(m.get("content")) for m in messages)
+        if pruned_now and not state["emptied"]:
+            state["emptied"] = True
+            return LLMResponse(content="", tool_calls=[], usage=usage)
+        if state["reads"] < 9:
+            state["reads"] += 1
+            return LLMResponse(content="", tool_calls=[
+                ToolCallRequest(id=f"call_{state['reads']}", name="exec", arguments={"n": state["reads"]})], usage=usage)
+        return LLMResponse(content="done", tool_calls=[], usage=usage)
+
+    executed = {"n": 0}
+
+    async def execute(name: str, params: Any) -> str:
+        executed["n"] += 1
+        return big if executed["n"] == 9 else RESULT
+
+    provider = MagicMock()
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = execute
+    await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=_fresh(), tools=tools, model="m", max_iterations=14,
+        max_tool_result_chars=16_000, context_window_tokens=12_000, workspace=tmp_path, session_key="sess",
+    ))
+    assert state["emptied"], "the batch request never happened"
+    for request in seen:
+        for message in request:
+            assert "truncated: context budget" not in str(message.get("content"))
+
+
 @pytest.mark.asyncio
 async def test_a_new_turn_is_measured_from_scratch_and_prunes_on_its_first_request(tmp_path) -> None:
     """A new turn's history carries no usage stamps (session history replays

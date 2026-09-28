@@ -312,6 +312,11 @@ class _PruneState:
     placeholders: dict[str, str] = field(default_factory=dict)
     pruned: set[str] = field(default_factory=set)
     batches: int = 0
+    # Usage stamps on messages before this index measured requests this view
+    # no longer matches — an earlier run's (a node synthesis or revisit starts
+    # from its messages) or this run's before its last batch — so size checks
+    # count those messages from scratch instead of trusting the stamps.
+    trusted_from: int = 0
 
 
 @dataclass(slots=True)
@@ -612,7 +617,9 @@ class AgentRunner:
 
         # Old tool results this run replaced by pointers; kept for the whole
         # run so later requests carry the same placeholders (see _microcompact).
-        prune_state = _PruneState()
+        # The initial messages' usage stamps measured another run's requests
+        # (possibly pruned ones), so none of them is trusted.
+        prune_state = _PruneState(trusted_from=len(messages))
 
         # Unknown-tool loop guard. Counter per hallucinated tool name
         # across this turn. Trips when any name's count exceeds
@@ -643,7 +650,9 @@ class AgentRunner:
                 # may repair or compact historical messages for the model, but
                 # those synthetic edits must not shift the append boundary used
                 # later when the caller saves only the new turn.
-                messages_for_model = self._drop_orphan_tool_results(messages)
+                messages_for_model = self._drop_orphan_tool_results(
+                    self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
+                )
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 # Prune images/audio from completed turns older than the
                 # preservation window so accumulated media doesn't ride
@@ -666,9 +675,15 @@ class AgentRunner:
                                 "iteration": iteration,
                                 "session_key": spec.session_key,
                             })
+                batches_before = prune_state.batches
                 messages_for_model = self._microcompact(
                     spec, messages_for_model, provider, state=prune_state, iteration=iteration,
                 )
+                if prune_state.batches != batches_before:
+                    # Every stamp so far measured a prompt that still held the
+                    # results just pruned; the reply to this request is the
+                    # first one stamped with the pruned size.
+                    prune_state.trusted_from = len(messages)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model, provider)
                 # Snipping may have created new orphans; clean them up.
@@ -681,7 +696,9 @@ class AgentRunner:
                     spec.session_key or "default",
                 )
                 try:
-                    messages_for_model = self._drop_orphan_tool_results(messages)
+                    messages_for_model = self._drop_orphan_tool_results(
+                        self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
+                    )
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
                     messages_for_model = messages
@@ -2551,6 +2568,28 @@ class AgentRunner:
             })
             offset += 1
         return updated
+
+    @staticmethod
+    def _drop_stale_usage_stamps(
+        messages: list[dict[str, Any]], trusted_from: int,
+    ) -> list[dict[str, Any]]:
+        """The messages with the usage stamps before ``trusted_from`` removed.
+
+        Size estimates anchor on the latest usage stamp. A stamp this run did
+        not produce after its last prune measured a different prompt — another
+        run's, or this one's before results were pruned — so trusting it would
+        misjudge the request about to be sent. Without it the estimate counts
+        those messages from scratch. Stamps are bookkeeping, never sent; the
+        caller's messages are not modified.
+        """
+        view = messages
+        for idx in range(min(trusted_from, len(messages))):
+            msg = messages[idx]
+            if msg.get("role") == "assistant" and "usage_prompt_tokens" in msg:
+                if view is messages:
+                    view = list(messages)
+                view[idx] = {k: v for k, v in msg.items() if k != "usage_prompt_tokens"}
+        return view
 
     @staticmethod
     def _prune_key(message: dict[str, Any], idx: int) -> str | None:
