@@ -100,8 +100,8 @@ class TranscriptionProviderKeysConfig(Base):
 class TranscriptionConfig(Base):
     """Global transcription settings.
 
-    Channel-level ``transcription_provider`` / ``transcription_api_key`` /
-    ``transcription_language`` override these per-channel.
+    Voice messages on every channel go through the one transcription service
+    built from these settings; there is no per-channel override.
     """
 
     enabled: bool = Field(default=True, description="Master toggle for voice transcription")
@@ -1178,8 +1178,8 @@ class ProvidersConfig(Base):
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="VolcEngine Coding Plan")
     byteplus: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus (VolcEngine international)")
     byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus Coding Plan")
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="OpenAI Codex (OAuth; managed by `durin login`, not persisted)")
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="GitHub Copilot (OAuth; managed by `durin login`, not persisted)")
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="OpenAI Codex (OAuth; managed by `durin oauth login`, not persisted)")
+    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="GitHub Copilot (OAuth; managed by `durin oauth login`, not persisted)")
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig, description="Baidu Qianfan (百度千帆)")
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig, description="NVIDIA NIM (nvapi- keys)")
 
@@ -1225,7 +1225,7 @@ class AutomationsConfig(Base):
     run's outcome from the workflow's own result instead of a separately
     timed goal-check pass, so there is no per-check timeout to bound."""
 
-    keep_runs: int = Field(default=20, ge=1, description="Finalized automation-run manifests kept per automation (needs_operator runs are never pruned).")
+    keep_runs: int = Field(default=20, ge=1, description="Finalized automation-run manifests kept per automation (paused runs are never pruned).")
     queue_ttl_s: int = Field(default=3600, ge=60, description="How long a queued channel event stays fresh before the drain hook drops it unfired.")
 
 

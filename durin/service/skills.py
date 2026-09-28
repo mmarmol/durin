@@ -300,7 +300,7 @@ class SkillUnreviewCommand(Command):
 def _enrich_usage(workspace: Path, skills: list[dict]) -> None:
     """Add ``use_count``/``last_used_ms``/``open_observations`` to each row (in place).
 
-    ``use_count`` is the 30-day call count (view+read+edit summed) and
+    ``use_count`` is the 30-day call count (view+read+edit+run summed) and
     ``last_used_ms`` the mtime (epoch ms) of the most-recently-modified
     session sidecar that mentions the skill, both from one
     ``collect_usage_and_last_used`` pass over ``sessions/*.meta.json`` — the
