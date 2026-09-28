@@ -286,7 +286,7 @@ def _channel_field_schema(model: type) -> list[dict[str, Any]]:
         # A field is rendered only if it opts in: it has a group OR is a
         # secret. Email gives every field a group (full form); WebSocket marks
         # only `token` secret, so the rest of its config (host, ssl paths,
-        # token_issue_secret, …) stays out of the UI and in config.toml.
+        # token_issue_secret, …) stays out of the UI and in config.json.
         if not group and not is_secret:
             continue
         if finfo.is_required():

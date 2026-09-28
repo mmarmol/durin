@@ -1,10 +1,12 @@
 """Build the list of models shown in the picker.
 
-Three sources merged into one list of :class:`ModelEntry`:
-1. **Configured presets** — from ``loop.model_presets`` dict.
-2. **Curated suggestions** — ``DEFAULT_MODELS`` entries for providers
-   whose API key is configured.
-3. **Recent models** — persisted via :mod:`durin.cli.tui.state`.
+The rows come from the shared picker builder
+(:func:`durin.agent.model_picker.picker_entries`), merged into one list of
+:class:`ModelEntry`:
+1. **Easy pick** — the active model, the default, the configured presets
+   (``loop.model_presets``) and the recent models persisted via
+   :mod:`durin.cli.tui.state`.
+2. **Provider catalogs** — the models of every configured provider.
 
 Each entry is formatted with capability metadata (context window,
 reasoning, vision) from the vendored catalog.

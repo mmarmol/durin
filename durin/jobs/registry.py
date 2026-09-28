@@ -387,10 +387,10 @@ class JobRegistry:
         after a host reboot, pid allocation restarts from a low number, so a
         stale "running" row's pid can end up matching a completely unrelated
         live process, and `alive` would report a job as fine that has no
-        worker at all. Called at gateway start, and again inline by
-        `ocr_worker.run_job` when the concurrency cap refuses a claim (a
-        self-heal for a stale holder). Finished units are kept, so a
-        requeued job resumes rather than restarting.
+        worker at all. Called at gateway start and by the gateway's periodic
+        job sweep, and inline by `ocr_worker.run_job` when the concurrency
+        cap refuses a claim (a self-heal for a stale holder). Finished units
+        are kept, so a requeued job resumes rather than restarting.
         """
         if now is None:
             now = time.time()
