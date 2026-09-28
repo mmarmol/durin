@@ -50,8 +50,9 @@ silent no-op.
 **3. Result governance — a result arrives whole, or as a working pointer to itself.**
 Every tool result goes through `_normalize_tool_result()` in the runner, in
 this order:
-1. **Redact.** Every string in the result is redacted, at any depth of a dict
-   or list. Only a typed content block keeps its binary payload untouched.
+1. **Redact.** Every string in the result is redacted, dict keys included, at
+   any depth of a dict or list. Only a typed content block keeps its binary
+   payload untouched.
 2. **Coerce.** A dict or untyped list becomes its JSON text, so the size check
    below sees what the model would receive.
 3. **Spill.** If the text exceeds the run's per-result cap (`max_tool_result_chars`,
@@ -426,11 +427,11 @@ model context nor a spill file. This strips any stored secret value whose
 `scope` grants access to the tool that produced the result, plus
 credential-shaped patterns. A structured result is walked recursively: every
 string value inside a dict or list is redacted, which covers batch reads such
-as `read_file(paths=...)`. Dict keys are not redacted, so a secret used as a
-key stays in the spill file and in the tool message the session saves; the
-model's view of that message is redacted again, as text, before each request.
-A typed content block only has its text fields redacted, so image and audio
-payloads pass through byte-for-byte.
+as `read_file(paths=...)`. Dict keys are redacted the same way. When two keys
+redact to the same marker (two different tokens both become `«redacted»`), the
+later ones are numbered (`«redacted» #2`) so no entry is lost. A typed content
+block only has its text fields redacted, so image and audio payloads pass
+through byte-for-byte.
 
 ---
 

@@ -646,7 +646,21 @@ class SecretRedactor:
                     if isinstance(block.get(key), str):
                         block[key] = self.redact_text(block[key])
                 return block
-            return {key: self._redact_value(item) for key, item in value.items()}
+            out: dict[Any, Any] = {}
+            for key, item in value.items():
+                if isinstance(key, str):
+                    redacted = self.redact_text(key)
+                    if redacted != key:
+                        # Two keys can redact to the same marker (two tokens
+                        # both become «redacted»): number the later ones so
+                        # no entry is dropped.
+                        candidate, n = redacted, 2
+                        while candidate in out or candidate in value:
+                            candidate = f"{redacted} #{n}"
+                            n += 1
+                        key = candidate
+                out[key] = self._redact_value(item)
+            return out
         return value
 
 
