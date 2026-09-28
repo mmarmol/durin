@@ -351,6 +351,23 @@ single time. The OpenAI-compat provider recovers three shapes: content sent alon
 `_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
 is absorbed here without a code edit; the base-class default is no recovery.
 
+### 4.11 The model's reasoning in later requests
+
+The runner stores a response's reasoning on its assistant message
+(`reasoning_content`, and Anthropic `thinking_blocks`), and every later request
+carries it back: within the turn, and from earlier turns until compaction
+summarizes them. This is the common practice among agent harnesses. Within a
+turn every provider asks for it, and Anthropic, DeepSeek with tools and Gemini
+reject a request without it. Across turns each provider decides server-side,
+with its own switch and default, what to keep.
+
+Provider rules the serialization honors:
+
+- **Anthropic.** Every `thinking` and `redacted_thinking` block goes back
+  unchanged and in its original order. A redacted block is opaque — its
+  `data` is replayed as received and never shown as reasoning text.
+- **DeepSeek.** See the reasoning pad above.
+
 ---
 
 ## 5. Key types and entry points

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from durin.providers.anthropic_provider import AnthropicProvider
@@ -90,3 +91,35 @@ def test_reasoning_effort_string_none_does_not_enable_thinking() -> None:
     kw = _build(_make_provider(), "none")
     assert "thinking" not in kw
     assert kw["temperature"] == 0.7
+
+
+def test_redacted_thinking_is_kept_and_sent_back_in_order() -> None:
+    """Anthropic requires every thinking and redacted_thinking block of a tool
+    turn to come back unchanged and in order; dropping the redacted one breaks
+    the conversation."""
+    response = SimpleNamespace(
+        content=[
+            SimpleNamespace(type="thinking", thinking="first", signature="sig1"),
+            SimpleNamespace(type="redacted_thinking", data="opaque-bytes"),
+            SimpleNamespace(type="thinking", thinking="second", signature="sig2"),
+            SimpleNamespace(type="tool_use", id="t1", name="read_file", input={"path": "a"}),
+        ],
+        stop_reason="tool_use",
+        usage=None,
+    )
+
+    parsed = AnthropicProvider._parse_response(response)
+    blocks = AnthropicProvider._assistant_blocks({
+        "role": "assistant",
+        "content": None,
+        "thinking_blocks": parsed.thinking_blocks,
+        "tool_calls": [{"id": "t1", "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path": "a"}'}}],
+    })
+
+    assert blocks == [
+        {"type": "thinking", "thinking": "first", "signature": "sig1"},
+        {"type": "redacted_thinking", "data": "opaque-bytes"},
+        {"type": "thinking", "thinking": "second", "signature": "sig2"},
+        {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "a"}},
+    ]

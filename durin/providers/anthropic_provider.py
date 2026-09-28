@@ -186,13 +186,19 @@ class AnthropicProvider(LLMProvider):
         blocks: list[dict[str, Any]] = []
         content = msg.get("content")
 
+        # Every thinking and redacted_thinking block goes back unchanged and in
+        # order: Anthropic rejects a tool turn whose thinking was altered.
         for tb in msg.get("thinking_blocks") or []:
-            if isinstance(tb, dict) and tb.get("type") == "thinking":
+            if not isinstance(tb, dict):
+                continue
+            if tb.get("type") == "thinking":
                 blocks.append({
                     "type": "thinking",
                     "thinking": tb.get("thinking", ""),
                     "signature": tb.get("signature", ""),
                 })
+            elif tb.get("type") == "redacted_thinking" and tb.get("data"):
+                blocks.append({"type": "redacted_thinking", "data": tb["data"]})
 
         if isinstance(content, str) and content:
             blocks.append({"type": "text", "text": content})
@@ -507,6 +513,11 @@ class AnthropicProvider(LLMProvider):
                     "type": "thinking",
                     "thinking": block.thinking,
                     "signature": getattr(block, "signature", ""),
+                })
+            elif block.type == "redacted_thinking":
+                thinking_blocks.append({
+                    "type": "redacted_thinking",
+                    "data": getattr(block, "data", ""),
                 })
 
         stop_map = {"tool_use": "tool_calls", "end_turn": "stop", "max_tokens": "length"}
