@@ -406,7 +406,11 @@ a session, a relative path resolves in the session's work area. On the matching
 line the window is centered on the first match, so a match deep inside a
 one-line file is shown, and the call starts where the window starts. Every
 note that holds results back gives the offset that shows the next ones, and
-the total when it is known.
+the total when it is known. An `offset` past the last match says so, with the
+number of matches, instead of reporting that nothing matched. When a single
+match's block, context lines included, is larger than the whole output may
+be, it is shown without its context lines, so the matching line always
+arrives.
 
 ### Turn-budget enforcement
 
