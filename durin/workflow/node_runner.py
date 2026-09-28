@@ -34,6 +34,7 @@ from durin.config.schema import ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
+from durin.utils.prompt_templates import render_template
 from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
@@ -670,6 +671,12 @@ class AgentNodeRunner:
         skills_text = self._load_skills(getattr(req.node, "skills", ()))
         if skills_text:
             system = f"{system}\n\n# Skills\n\n{skills_text}" if system else f"# Skills\n\n{skills_text}"
+        # A node with tools can have old results pruned from view or large
+        # ones saved to a file; without the chat's operating floor it needs
+        # the rule for getting them back, or it answers from memory.
+        if getattr(req.node, "tools", "none") == "default" or getattr(req.node, "mcps", ()):
+            recovery = render_template("agent/_snippets/tool_result_recovery.md").strip()
+            system = f"{system}\n\n# Tool results\n\n{recovery}" if system else f"# Tool results\n\n{recovery}"
         # The node's work mode (AgentMode) appends its posture to the prompt so the model
         # adopts the right stance (e.g. read-only in plan/explore).
         from durin.agent.agent_mode import get_mode

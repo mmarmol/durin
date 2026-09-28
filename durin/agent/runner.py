@@ -2708,15 +2708,22 @@ class AgentRunner:
                 spilled = None
             if isinstance(spilled, str):
                 ref = parse_persisted_reference(spilled)
+        # The placeholder says the content is gone from view: a model that
+        # only sees "trimmed" can take it for a partial view and answer from
+        # what it recalls of the result instead of reading it back.
         if ref is not None:
             path, size = ref
             return (
-                f"[{name} result trimmed{began} — full output "
-                f'({size} chars) at {path}; read it with read_file(path="{path}") '
+                f"[{name} result trimmed{began} — its content is no longer shown here. "
+                f"The full output ({size} chars) is at {path}: read it back with "
+                f'read_file(path="{path}") before you use anything from it, '
                 "instead of re-running the call]"
             )
         # No workspace to spill to: keep the (lossy) marker, but honest.
-        return f"[{name} result trimmed{began} — no longer in context]"
+        return (
+            f"[{name} result trimmed{began} — no longer shown here and not saved: "
+            "run the call again if you need it]"
+        )
 
     def _apply_tool_result_budget(
         self,

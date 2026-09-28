@@ -215,7 +215,12 @@ def test_build_mode_keeps_all_tools_and_adds_no_posture(tmp_path):
     spec = nr.runner.run.call_args.args[0]
     assert spec.tools.has("read_file") and spec.tools.has("write_file")     # build = full set
     system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
-    assert system == "do it"                    # build adds no posture suffix
+    from durin.utils.prompt_templates import render_template
+
+    recovery = render_template("agent/_snippets/tool_result_recovery.md").strip()
+    # build adds no posture suffix; a node with tools only gets the rule for
+    # reading back results that were trimmed or saved to a file
+    assert system == f"do it\n\n# Tool results\n\n{recovery}"
 
 
 class _FakeMcpTool(Tool):

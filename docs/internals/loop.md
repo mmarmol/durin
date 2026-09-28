@@ -516,9 +516,18 @@ The placeholder is informative rather than opaque:
 - it quotes a short head snippet of what the output began with (omitted when
   the content is already a persisted reference, since its head is marker
   boilerplate);
-- it names the `read_file` call on the recoverable file, "instead of re-running
-  the call". A result that was never saved is saved on the spot; a run without
-  a workspace keeps an honest "no longer in context" marker instead.
+- it says the content is no longer shown and names the `read_file` call on the
+  recoverable file, to read it back "before you use anything from it, instead
+  of re-running the call" — a model that only sees "trimmed" can take it for a
+  partial view and answer from memory. A result that was never saved is saved
+  on the spot; a run without a workspace keeps an honest "no longer shown here
+  and not saved" marker instead.
+
+Runs that have tools but not the chat's operating floor — subagents and
+workflow nodes — carry the same recovery rule (`agent/_snippets/tool_result_recovery.md`,
+in the subagent system prompt and in a node's "Tool results" section): read a
+trimmed or saved result back before using it, and state findings in your own
+words as they come, since those runs have no `note_decision`.
 
 **Task state mid-turn.** The prompt built for a turn carries the `<task-state>`
 block: goal, decisions and findings, todos. The loop hands the runner a

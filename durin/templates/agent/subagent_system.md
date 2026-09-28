@@ -7,6 +7,8 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
 When several tool calls are independent — their inputs do not depend on each other's results — emit them together in one turn so they run in parallel (for example, fetching several URLs). Chain calls sequentially only when one needs another's output.
 
+{% include 'agent/_snippets/tool_result_recovery.md' %}
+
 {% include 'agent/_snippets/untrusted_content.md' %}
 
 ## Workspace
