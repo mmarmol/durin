@@ -38,6 +38,30 @@ def _write_script_workflow(tmp_path, name):
 
 
 @pytest.mark.asyncio
+async def test_runs_started_through_the_service_keep_the_configured_number(tmp_path):
+    """workflow.keep_runs bounds the run working folders for every way a run
+    starts; the service (HTTP launch, editor, automations) kept 20 regardless."""
+    from durin.workflow.artifacts import ARTIFACT_ROOT
+
+    _write_script_workflow(tmp_path, "w1")
+    app_config = SimpleNamespace(
+        resolve_default_preset=lambda: object(),
+        tools=ToolsConfig(),
+        workflow=WorkflowConfig(keep_runs=2),
+    )
+    svc = WorkflowsService(workspace=tmp_path, app_config=app_config,
+                           sessions=SessionManager(workspace=tmp_path))
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        for _ in range(4):
+            await svc.execute("w1", "task")
+
+    run_dirs = [p for p in (tmp_path / ARTIFACT_ROOT).iterdir()
+                if p.is_dir() and p.name != "keys"]
+    assert len(run_dirs) <= 3  # the kept ones plus the run that just started
+
+
+@pytest.mark.asyncio
 async def test_execute_forwards_work_key_to_the_engine_manifest(tmp_path):
     _write_script_workflow(tmp_path, "w1")
     with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
