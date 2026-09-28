@@ -651,13 +651,17 @@ def removable_action(workspace: Path, name: str,
     return "revert" if builtin_md.exists() else "remove"
 
 
-def remove_skill(workspace: Path, name: str) -> dict:
+def remove_skill(workspace: Path, name: str, *, by: str = "user", reason: str = "",
+                 replaced_by: str | None = None) -> dict:
     """Delete a workspace skill — the mirror of :func:`install_imported_skill`.
 
     Removes the workspace ``skills/<name>/`` dir, commits the deletion to the
     skills git store (so it is recoverable), evicts the skill from the memory
     index, and appends an audit entry. Builtins (package) are never touched: a
     forked builtin reverts to the shipped version, a pure builtin is refused.
+
+    A removed workspace skill is recorded as retired (who, why, and what
+    replaces it) in the same commit, so the dream does not re-create it.
     """
     if not _safe_name(name):
         return {"error": "invalid skill name"}
@@ -670,6 +674,9 @@ def remove_skill(workspace: Path, name: str) -> dict:
     store = _store_init(workspace)
     dest = _skills_dir(workspace) / name
     shutil.rmtree(dest)
+    if action == "remove":
+        from durin.agent.skill_retirements import record_retirement
+        record_retirement(workspace, name, by=by, reason=reason, replaced_by=replaced_by)
     label = "revert to builtin" if action == "revert" else "remove"
     sha = store.auto_commit(f"skill({name}): {label}")
     _unsync_index(workspace, name)
@@ -1122,6 +1129,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target = md.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
+    # Created again on purpose (the dream's own door refuses a retired name),
+    # so it is no longer retired.
+    from durin.agent.skill_retirements import clear_retirement
+    clear_retirement(workspace, name)
     composition = "overridden" if composition_override else "compliant"
     return _finalize_skill(workspace, name, md.parent, source="dream",
                            attribution=attribution, ramp="write", composition=composition,
@@ -1327,10 +1338,13 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                                "fused_from": list(sources), "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
+    from durin.agent.skill_retirements import record_retirement
     for s in sources:
         src_dir = _skills_dir(workspace) / s
         if src_dir.exists():
             shutil.rmtree(src_dir)
+            record_retirement(workspace, s, by="curation", reason=f"fused into {target}",
+                              replaced_by=target)
         else:  # builtin: workspace tombstone that disables model invocation
             tomb = _skills_dir(workspace) / s
             tomb.mkdir(parents=True, exist_ok=True)

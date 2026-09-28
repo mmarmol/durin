@@ -21,8 +21,10 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   clarification, a missing step). Do not rewrite for style or preference.
 - `retire` ONLY a skill that is fully obsolete — its entire procedure no longer
   applies, or it has been wholly subsumed by another skill. This DELETES the skill
-  (recoverable in git). Prefer `evolve` whenever any part is still useful; reach for
-  `retire` only when the right end state is "this skill should not exist."
+  (recoverable in git) and records it as retired, so it is not re-created later;
+  name the skill that covers it now in `replaced_by`. Prefer `evolve` whenever any
+  part is still useful; reach for `retire` only when the right end state is "this
+  skill should not exist."
 - NEVER touch user or `manual` skills. Only `auto` skills are given to you here, so
   act exclusively on the skills listed below.
 - Exception to the no-style rule — **English normalization**: the catalog norm is that
@@ -192,7 +194,7 @@ carries one disposition per open observation shown above:
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
   {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
   {"type": "restructure", "name": "<skill>", "intent": "<what to fix and how — e.g. lift the decode snippet into scripts/decode.py taking the image path as an argument and invoke it by path>", "rationale": "<why>"},
-  {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>"}
+  {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>", "replaced_by": "<the skill that covers it now, if any>"}
 ],
  "observations": [
   {"id": 1, "disposition": "applied"},

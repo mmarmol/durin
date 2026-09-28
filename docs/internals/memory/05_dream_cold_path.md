@@ -397,7 +397,9 @@ warning and is skipped, never aborting the pass. Gated by
 newest sessions (plus any logged skill gaps)
 for a recurring step-by-step **procedure**. When it finds one it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
-over authoring from scratch, then calls `skill_write`. It does nothing on a
+over authoring from scratch, then calls `skill_write`. Its prompt lists the
+retired skills with their replacements, and its `skill_write` door refuses a
+retired name (`../skills/02_lifecycle_and_curation.md`). It does nothing on a
 one-off, and reuses/extends an existing local skill instead of duplicating. It
 is a sync wrapper over the async runner so the cron can call it in a thread.
 

@@ -296,7 +296,10 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                                a["name"], describe(deps))
                 _emit("skill.curation_action", action="retire", skill=a["name"], applied=False)
                 continue
-            r = ss.remove_skill(workspace, a["name"])
+            replaced_by = a.get("replaced_by")
+            r = ss.remove_skill(workspace, a["name"], by="curation",
+                                reason=str(a.get("rationale") or ""),
+                                replaced_by=replaced_by if isinstance(replaced_by, str) else None)
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0
             _emit("skill.curation_action", action="retire", skill=a["name"], applied=ok)

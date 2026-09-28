@@ -371,8 +371,14 @@ transform steps instead of an agent node):
 
 {workflow_authoring}
 
-EXISTING SKILLS: {existing}{principles}
+EXISTING SKILLS: {existing}{retired}{principles}
 """
+
+_RETIRED_BLOCK = """
+
+RETIRED SKILLS — removed on purpose; never re-create one (the write is \
+refused). Extend the replacement instead, when there is one:
+{retired}"""
 
 _PRINCIPLES_BLOCK = """
 
@@ -413,7 +419,17 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
         workflow_catalog_text,
     )
 
+    from durin.agent.skill_retirements import retired_skills
+
     existing = _list_skills(workspace)
+    retired_block = ""
+    retired = retired_skills(workspace)
+    if retired:
+        retired_block = _RETIRED_BLOCK.format(retired="\n".join(
+            f"- {name}"
+            + (f" → extend `{r['replaced_by']}`" if r.get("replaced_by") else "")
+            + (f" ({r['reason']})" if r.get("reason") else "")
+            for name, r in sorted(retired.items())))
     return [
         {"role": "system",
          "content": _SKILL_EXTRACT_PROMPT.format(
@@ -422,6 +438,7 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
              workflow_authoring=workflow_authoring_reference()
                  or "(authoring reference unavailable — rely on workflow_write's validation errors)",
              existing=", ".join(existing) or "(none)",
+             retired=retired_block,
              principles=principles_block)},
         {"role": "user", "content": "\n\n".join(user_parts)},
     ]
@@ -442,9 +459,11 @@ def _resolve_gap_observations(workspace: Path) -> int:
     Matching uses both exact and normalized name comparison: a gap "Release Runbook"
     matches skill "release-runbook" via normalization."""
     from durin.agent.skill_observations import apply_dispositions, open_observations
+    from durin.agent.skill_retirements import retired_skills
 
     existing = set(_list_skills(workspace))
     existing_normalized = {_norm(s): s for s in existing}
+    retired_normalized = {_norm(s) for s in retired_skills(workspace)}
 
     done = []
     for r in open_observations(workspace):
@@ -457,6 +476,10 @@ def _resolve_gap_observations(workspace: Path) -> int:
         # Fallback: normalized match
         elif _norm(gap_name) in existing_normalized:
             done.append({"id": r.get("id"), "disposition": "applied"})
+        # A gap asking for a skill someone retired is closed, not kept as a
+        # standing request to re-create it.
+        elif _norm(gap_name) in retired_normalized:
+            done.append({"id": r.get("id"), "disposition": "declined"})
 
     if not done:
         return 0

@@ -129,6 +129,29 @@ def _next_id(workspace: Path) -> int:
     return max(ids, default=0) + 1
 
 
+def _route_new_skill_ref(workspace: Path, skill: str, kind: str,
+                         issue: str) -> tuple[str, str, str]:
+    """Where a ``new:<name>`` gap belongs.
+
+    A gap for a retired skill that has a replacement is a request to extend
+    that replacement: it becomes an ``improvement`` on it, noting the retired
+    name, instead of a gap that would ask for the retired skill again.
+    """
+    if not skill.startswith("new:"):
+        return skill, kind, issue
+    name = skill[4:]
+    from durin.agent.skill_retirements import retired_skills
+
+    retired = retired_skills(workspace).get(name)
+    target = retired.get("replaced_by") if retired else None
+    if target and (_skills_dir(workspace) / target / "SKILL.md").is_file():
+        note = f" (proposed as the new skill `{name}`, which is retired"
+        if retired.get("reason"):
+            note += f": {retired['reason']}"
+        return target, "improvement", issue.strip() + note + ")"
+    return skill, kind, issue
+
+
 def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
                     improvement: str, principle: str | None = None,
                     session: str | None = None) -> dict:
@@ -147,6 +170,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
         return {"error": "issue is required"}
     if not improvement or not improvement.strip():
         return {"error": "improvement is required"}
+
+    skill, kind, issue = _route_new_skill_ref(workspace, skill, kind, issue)
 
     _skills_dir(workspace).mkdir(parents=True, exist_ok=True)
     store = _store_init(workspace)

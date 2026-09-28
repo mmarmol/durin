@@ -404,7 +404,7 @@ before it is applied:
 | `evolve` | `apply_skill_edit` — bounded find/replace on the skill body; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
 | `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
 | `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
-| `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected`, and nothing may depend on it (below) |
+| `retire` | `remove_skill` — delete outright (git-recoverable) and record it as retired, with the optional `replaced_by` | target must be in `selected`, and nothing may depend on it (below) |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
 
@@ -445,6 +445,21 @@ exists as a distinct action from `evolve` because an `evolve`-only model can onl
 push a fully-obsolete skill toward an empty body, leaving dead clutter;
 `remove_skill` is the same git-recoverable delete used by the manual admin
 removal path.
+
+**Retired skills stay retired.** Removing a workspace skill records it in
+`skills/.retired.jsonl` (`durin/agent/skill_retirements.py`) in the same
+commit: when, by whom, why, and what replaces it. That covers a person's
+removal, a curation `retire` (whose `replaced_by` names the skill that covers it
+now) and the workspace sources of a fuse (replaced by the target). Every
+autonomous path then leaves the name alone:
+- the dream's `skill_write` door refuses a retired name, with the notice;
+- `log_observation` turns a `new:<retired>` gap into an `improvement` on the
+  replacement;
+- `_resolve_gap_observations` declines any other open gap for a retired name;
+- the skill extractor's prompt lists the retired skills and their replacements.
+
+A person can still create a retired skill in-session; creating it clears the
+record.
 
 **Step 7 — resolve observation dispositions.** The judge's response also
 carries a per-observation verdict (`applied` / `declined` / `keep`) for each
