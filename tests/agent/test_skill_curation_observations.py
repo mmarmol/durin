@@ -95,11 +95,13 @@ def test_declined_disposition_remembered_and_shown_to_judge(tmp_path):
 
 def test_applied_observations_archived_on_next_run(tmp_path):
     ws = tmp_path / "ws"
-    _mk(ws, "stable")
+    _mk(ws, "stable", "Step 2: build from local dist, never from PyPI.")
     ss.mark_curated(ws, "stable")
     _obs(ws, skill="stable")
+    # Already incorporated: the judge quotes the text that shows it.
     curate_catalog(ws, judge=lambda p: json.dumps({
-        "actions": [], "observations": [{"id": 1, "disposition": "applied"}]}))
+        "actions": [], "observations": [{"id": 1, "disposition": "applied",
+                                         "evidence": "build from local dist"}]}))
     assert (ws / "skills" / ".observations.jsonl").read_text().count('"APPLIED"') == 1
 
     _obs(ws, skill="stable", issue="another problem entirely")
@@ -108,6 +110,71 @@ def test_applied_observations_archived_on_next_run(tmp_path):
     assert '"APPLIED"' not in active
     archive = (ws / "skills" / ".observations.archive.jsonl").read_text()
     assert "wheel step is wrong" in archive
+
+
+def _record(ws, oid):
+    rows = [json.loads(line) for line in
+            (ws / "skills" / ".observations.jsonl").read_text().splitlines() if line.strip()]
+    return next(r for r in rows if r["id"] == oid)
+
+
+def test_an_applied_claim_whose_change_did_not_land_stays_open_with_a_note(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "evolve", "name": "stable", "old": "text that is not in the skill",
+                     "new": "fixed", "rationale": "obs #1"}],
+        "observations": [{"id": 1, "disposition": "applied"}]}))
+
+    rec = _record(ws, 1)
+    assert rec["status"] == "OPEN"
+    assert "evolve" in rec["attempts"][-1]["note"]
+
+
+def test_an_applied_claim_with_no_change_and_no_evidence_stays_open(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "stable")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [], "observations": [{"id": 1, "disposition": "applied"}]}))
+
+    assert _record(ws, 1)["status"] == "OPEN"
+
+
+def test_evidence_that_is_not_in_the_skill_does_not_count(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "Step 2: install from PyPI.")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [], "observations": [{"id": 1, "disposition": "applied",
+                                         "evidence": "build from local dist"}]}))
+
+    assert _record(ws, 1)["status"] == "OPEN"
+
+
+def test_an_edit_waiting_for_approval_is_not_applied(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+    monkeypatch.setattr(ss, "apply_skill_edit", lambda *a, **k: {
+        "error": "edit needs review", "pending_approval": "apr-7"})
+
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "evolve", "name": "stable", "old": "old step here",
+                     "new": "new step here", "rationale": "obs #1"}],
+        "observations": [{"id": 1, "disposition": "applied"}]}))
+
+    rec = _record(ws, 1)
+    assert rec["status"] == "OPEN"
+    assert "apr-7" in rec["attempts"][-1]["note"]
 
 
 def test_new_prefixed_observations_stay_out_of_curation_prompt(tmp_path):
@@ -162,6 +229,8 @@ def test_judge_can_promote_a_principle(tmp_path):
     assert res["applied"] == 1
     ps = active_principles(ws)
     assert len(ps) == 1 and "verification" in ps[0]["text"]
+    # A cross-skill record is settled by a landed cross-skill change.
+    assert open_observations(ws, skill="all") == []
 
 
 def test_judge_can_retire_a_principle(tmp_path):

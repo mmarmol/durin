@@ -100,6 +100,10 @@ def _norm(text: str) -> str:
 
 
 _SIMILARITY_THRESHOLD = 0.5
+# Attempt notes kept per record, and their length: enough to show the judge
+# what already failed without the record growing every night.
+_MAX_ATTEMPTS = 5
+_NOTE_CHARS = 300
 
 
 def _same_issue(a: str, b: str) -> bool:
@@ -276,6 +280,7 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
     records = _read_records(_active_path(workspace))
     by_id = {int(r.get("id", 0)): r for r in records}
     counts = {"applied": 0, "declined": 0, "kept": 0}
+    noted = 0
     for d in dispositions:
         rec = by_id.get(int(d.get("id", 0)))
         disp = d.get("disposition")
@@ -292,14 +297,22 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
             counts["declined"] += 1
         elif disp == "keep":
             counts["kept"] += 1
+            # What was tried and did not land stays on the record, so the next
+            # pass sees it instead of trying the same thing blind.
+            if d.get("note"):
+                attempts = rec.setdefault("attempts", [])
+                attempts.append({"at": _today(), "note": str(d["note"])[:_NOTE_CHARS]})
+                del attempts[:-_MAX_ATTEMPTS]
+                noted += 1
         else:
             logger.warning("unknown disposition %r for observation %s", disp, d.get("id"))
     sha = None
-    if counts["applied"] or counts["declined"]:
+    if counts["applied"] or counts["declined"] or noted:
         _write_records(_active_path(workspace), records)
         store = _store_init(workspace)
         sha = store.auto_commit(
-            f"observations: {counts['applied']} applied, {counts['declined']} declined")
+            f"observations: {counts['applied']} applied, {counts['declined']} declined, "
+            f"{noted} attempts noted")
     return {**counts, "commit": sha}
 
 

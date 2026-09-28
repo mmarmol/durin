@@ -133,11 +133,19 @@ how many times the same issue recurred. This is your primary evidence for
 
 Answer EVERY record below with a disposition in the `observations` output
 array: `applied` (you emitted an action incorporating it, OR the current
-skill body ALREADY incorporates the suggestion — it is resolved either way),
+skill ALREADY incorporates the suggestion — it is resolved either way),
 `declined` (you judged the suggestion itself wrong or harmful — it is
 remembered and never re-shown as open; do NOT use this for suggestions that
 are correct but already addressed), or `keep` (plausible but not yet
 actionable; it stays open and may recur).
+
+`applied` is checked, not taken on trust. It stands only when an action of
+yours on that skill lands this pass, or — for "already incorporated" — when you
+add `"evidence"`: text copied exactly from the skill's current files that shows
+the fix is there. Otherwise the record stays open and a note of what was
+tried is added to it. A record's `attempts` list shows earlier tries that did
+not land; do not repeat one that failed — fix what it says, or use
+`restructure` when the fix needs a script or a workflow.
 
 ```json
 {{ observations_json }}
@@ -198,6 +206,7 @@ carries one disposition per open observation shown above:
 ],
  "observations": [
   {"id": 1, "disposition": "applied"},
+  {"id": 3, "disposition": "applied", "evidence": "<exact text from the skill showing the fix is already there>"},
   {"id": 2, "disposition": "keep"}
 ]}
 ```

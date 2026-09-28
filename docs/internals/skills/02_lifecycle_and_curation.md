@@ -466,6 +466,22 @@ carries a per-observation verdict (`applied` / `declined` / `keep`) for each
 OPEN record it was shown; dispositions for ids the judge was **not** shown are
 ignored, and `apply_dispositions` writes the batch in one commit.
 
+An `applied` verdict is checked against what this pass actually did. It stands
+when a change landed on that record's skill:
+- an `evolve` that committed something;
+- an applied `restructure`;
+- a `fuse` (target and sources);
+- a `retire`;
+- for `skill: "all"`, a principle change.
+
+For "the skill already had the fix", it stands when the judge quotes
+`evidence` that `_applied_holds` finds, whitespace-insensitive, in the skill's
+current files. Otherwise the record stays OPEN and gets an `attempts` note (the
+last few kept) saying what was tried: the failed edit's error, or the approval
+it is waiting for. The next pass shows the judge that note. Before this check,
+a fix whose edit never landed — a script the edit could not reach, an approval
+still pending — was archived as applied and never came back.
+
 **Step 8 — stamp.** Every skill still present in `selected` after the actions
 run gets `mark_curated`, which stamps `provenance.dream_processed_through`
 (the current body hash) and `curation_rules` (the current
