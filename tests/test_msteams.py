@@ -839,8 +839,11 @@ async def test_start_logs_install_hint_when_pyjwt_missing(make_channel, monkeypa
 
     await ch.start()
 
-    # No durin extra carries PyJWT, so the hint names the package itself.
-    assert errors == ["PyJWT not installed. Run: pip install PyJWT"]
+    # No durin extra carries PyJWT, so the hint names the package itself, with
+    # the crypto extra: Teams tokens are RS256, which needs cryptography.
+    assert errors == [
+        "PyJWT or cryptography not installed. Run: pip install 'PyJWT[crypto]'"
+    ]
 
 
 def test_save_refs_prunes_webchat_and_stale_refs(make_channel):
