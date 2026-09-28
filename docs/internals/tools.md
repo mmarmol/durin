@@ -17,10 +17,10 @@ running user-defined workflows (see [workflow.md](workflow.md)), and more. It pr
 - **A permission gate** (`AgentMode`) that restricts which tools are visible to
   and callable by the model based on the active session mode — without any
   special-cased logic in the runner loop.
-- **Result governance** — two complementary mechanisms that prevent tool outputs
-  from overflowing the model's context window: per-tool spill-to-disk for large
-  single results, and a per-turn aggregate budget that retroactively spills the
-  largest results when the total exceeds the configured limit.
+- **Result governance** — mechanisms that keep tool output from overflowing the
+  context while keeping it recoverable: an over-cap result is saved and replaced
+  by a pointer, a per-turn budget saves the largest results, and old results are
+  pruned in batches near the input budget.
 
 ---
 
@@ -50,11 +50,17 @@ silent no-op.
 **3. Result governance — a result arrives whole, or as a working pointer to itself.**
 Every tool result goes through `_normalize_tool_result()` in the runner, in
 this order:
+
+0. **Cap payloads.** In a list of content blocks, an oversized image or audio
+   payload becomes a placeholder; it is not saved.
 1. **Redact.** Every string in the result is redacted, dict keys included, at
    any depth of a dict or list. Only a typed content block keeps its binary
    payload untouched.
 2. **Coerce.** A dict or untyped list becomes its JSON text, so the size check
-   below sees what the model would receive.
+   below sees what the model would receive. A list that mixes text with an
+   image or audio block stays a list, since it cannot be saved as one text:
+   each of its text blocks over the cap is saved on its own, as step 3
+   describes, and replaced by its reference.
 3. **Spill.** If the text exceeds the run's per-result cap (`max_tool_result_chars`,
    which follows the model's context window when unset — see
    [Paging under the run's cap](#paging-under-the-runs-cap)), the whole result is
@@ -87,8 +93,11 @@ this order:
    most recent session folders, so a wide workflow fan-out, where every node
    and worker saves into its own folder, never pushes out a chat's saved
    results.
-4. **Cut.** Only when the spill is impossible (no workspace), the text is cut
-   within the cap, marker included.
+4. **Cut.** Only when the spill is impossible (no workspace, or the write
+   failed), the text is cut within the cap, marker included. A text block
+   still in a list — not saved, or under a configured per-result cap above
+   `MAX_BLOCK_TEXT_CHARS` — is cut at `MAX_BLOCK_TEXT_CHARS`; nothing cut
+   here is on disk.
 
 The runner re-applies this to every tool message on each iteration. Because a
 normalized result already fits, the pass leaves it unchanged. Around it:
@@ -461,11 +470,12 @@ when budget enforcement fires.
 
 ### Secret redaction
 
-`_normalize_tool_result()` calls `redact_secrets()` on every tool result before
-anything else happens to it, so a secret in a string value reaches neither the
-model context nor a spill file. This strips any stored secret value whose
-`scope` grants access to the tool that produced the result, plus
-credential-shaped patterns. A structured result is walked recursively: every
+`_normalize_tool_result()` calls `redact_secrets()` on every tool result right
+after the block caps, before it is coerced or saved, so a secret in a string
+value reaches neither the model context nor a spill file. This replaces every
+stored secret value (at least `_MIN_REDACTABLE_LEN` characters) with
+`«redacted:NAME»`, whatever its scope, plus credential-shaped patterns
+(`«redacted»`). A structured result is walked recursively: every
 string value inside a dict or list is redacted, which covers batch reads such
 as `read_file(paths=...)`. Dict keys are redacted the same way. When two keys
 redact to the same marker (two different tokens both become `«redacted»`), the
@@ -503,7 +513,7 @@ through byte-for-byte.
 | `tools.exec.enable` | `bool` | `true` | Enables/disables the `exec` shell tool |
 | `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600). On POSIX the command runs as its own process group, so a timeout or a cancelled turn kills everything it started, not just the shell |
 | `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
-| `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution. In a chat the person is asked to approve the refused command once; elsewhere the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
+| `tools.exec.deny_patterns` | `list[str]` | `[]` (added to a built-in set) | Regex patterns that block matching commands before execution. In a chat the person is asked to approve the refused command once; elsewhere the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
 | `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list; when set, a command matching none is refused like a deny match. Nothing exempts the hard floor |
 | `tools.exec.allowed_env_keys` | `list[str]` | `[]` | Extra env vars forwarded to subprocesses (beyond the minimal curated set) |
 | `tools.my.enable` | `bool` | `true` | Enables/disables the `my` self-inspection tool |
@@ -528,7 +538,7 @@ through byte-for-byte.
 ### CLI / TUI / webui surfaces
 
 Tools are not configured directly through the CLI or webui — they take effect via
-`durin config set tools.<key> <value>` or by editing `~/.durin/config.toml`. The
+`durin config set tools.<key> <value>` or by editing `~/.durin/config.json`. The
 webui Settings panel surfaces the MCP server list (add, remove, toggle) which
 controls which MCP tools are registered.
 
@@ -566,15 +576,16 @@ build time, mode gate at `_run_tool` time) closes the window where a model using
 a cached schema from a previous mode might still execute a disallowed tool.
 
 **Why two spill mechanisms?**
-Per-tool spill (live, in `truncate_with_spill`) and per-turn budget enforcement
-(retroactive, in `_enforce_turn_budget`) address different failure modes. A single
-`exec` call that returns 5 MB of build output needs live truncation so the result
-message itself never becomes huge. But when the LLM batches ten medium-sized tool
-calls each returning 25 000 chars, no individual result triggers the per-tool cap
+Per-result saving (`_normalize_tool_result`, and `truncate_with_spill` inside
+`exec`) and per-turn budget enforcement (retroactive, in `_enforce_turn_budget`)
+address different failure modes. A single `exec` call that returns 5 MB of build
+output needs live truncation so the result message itself never becomes huge.
+But when the LLM batches ten medium-sized tool
+calls each returning 25 000 chars, no individual result triggers the per-result cap
 yet the aggregate (250 000 chars) overflows the context. The retroactive pass
-catches that. The two mechanisms are independent and composable: a result that
-was already spilled per-tool is marked as persisted and skipped by the aggregate
-pass.
+catches that. A result `_normalize_tool_result` already saved carries the
+`[tool output persisted]` marker and is skipped by the aggregate pass; exec's
+head-and-tail rendering carries none, so a large batch can save it again whole.
 
 **Why deferred MCP tools?**
 MCP servers are third-party and unbounded in number. Shipping every MCP tool

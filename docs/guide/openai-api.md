@@ -14,8 +14,8 @@ default `127.0.0.1:8765` — the same address as the dashboard), not on
 
 The API exists only while the websocket channel runs. The gateway turns that
 channel on by itself while the dashboard is enabled (`gateway.webui_enabled`,
-the default); if you switched the dashboard off, set
-`channels.websocket.enabled` to `true`.
+the default), unless `channels.websocket.enabled` is explicitly `false`; if you
+switched the dashboard off, set `channels.websocket.enabled` to `true`.
 
 Start the gateway first — the API lives inside it, there is no separate server
 process:
@@ -61,7 +61,8 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
   drive from the dashboard, use [durin's API](api.md)). Omit it and everything
   shares one `api:default` session.
 - **`model` is optional.** If sent, it must match the id `GET /v1/models`
-  reports — the configured model's name, not `"durin"`.
+  reports — the model the agent is running (a model switch from the dashboard
+  shows there without a restart), not `"durin"`.
 - **Client-defined tools are rejected.** durin runs its own tools inside the
   turn; a request carrying `tools`, `tool_choice`, `functions`, or
   `function_call` gets a 400 rather than silently ignoring them.
@@ -76,7 +77,9 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
   behalf.
 - **Other files** go through `multipart/form-data` with the fields `message`,
   `session_id`, `model` (optional), and one or more `files` parts. A multipart
-  request is always answered without streaming.
+  request is always answered without streaming; one without `message` asks
+  durin to analyze the files. Each image or file may be up to 10 MB (larger →
+  `413`).
 
 ### curl
 
@@ -90,7 +93,7 @@ curl http://127.0.0.1:8765/v1/chat/completions -H "Authorization: Bearer $DURIN_
 from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key=DURIN_TOKEN)
-model = client.models.list().data[0].id  # the configured model
+model = client.models.list().data[0].id  # the model durin is running
 
 reply = client.chat.completions.create(
     model=model,
@@ -135,7 +138,8 @@ dropped instead, so a retrying client does not queue duplicate turns.
 
 Responses report real token usage for the turn — `prompt_tokens`,
 `completion_tokens`, and `total_tokens` (their sum) — the actual counts the
-model billed, summed across every LLM call the turn made. For `stream: true`,
+model billed, summed across the turn's own model calls; a compaction or
+sub-agent it triggers is not counted. For `stream: true`,
 usage rides the same `finish_reason: "stop"` chunk rather than a separate
 frame after it.
 
@@ -151,7 +155,7 @@ tool-heavy work, or stream instead:
 ```json
 {
   "gateway": {
-    "apiRequestTimeout": 300
+    "api_request_timeout": 300
   }
 }
 ```
@@ -192,10 +196,17 @@ things to get right:
 1. **Terminate TLS in front of it.** Put a reverse proxy (Caddy, nginx,
    Traefik) in front and let it hold the certificate; the token travels in the
    `Authorization` header and should never cross a network in the clear. A
-   tailnet or VPN works equally well.
+   tailnet or VPN works equally well. A `stream: true` response carries
+   `X-Accel-Buffering: no`, so a proxy that honours that header (nginx does)
+   passes it through as it is generated; with any other proxy, make sure
+   response buffering is off for `/v1/chat/completions`, or the streamed text
+   arrives all at once when the turn ends.
 2. **Bind beyond loopback deliberately.** The default `127.0.0.1` accepts only
    local callers. Change it only behind a proxy, firewall, or private network —
-   the token is the only gate on the API itself.
+   the token is the only gate on the API itself. Binding all interfaces
+   (`0.0.0.0` or `::`) also requires `channels.websocket.token` or
+   `token_issue_secret` to be set; without one the websocket channel, and with
+   it this API, does not start.
 
 ## Prompt for the consuming agent
 
@@ -237,7 +248,11 @@ Request shape:
 ## Operational notes
 - durin may run tools before answering; a turn can take a few minutes. Set your
   client timeout to at least 180 s and prefer `"stream": true` for long tasks.
-- HTTP 504 means durin exceeded its own timeout — retry once or simplify.
+- HTTP 504 `Request timed out…`: if the turn had started, durin keeps working
+  and saves it — don't resend; ask for the outcome on the same `session_id` or
+  use `"stream": true`. A request still waiting behind another on that
+  `session_id` is dropped; resend it once the earlier one finishes. HTTP 504
+  `Turn exceeded…`: the hard limit — simplify.
 - Requests on one `session_id` are queued and run one at a time. Use different
   session ids for independent threads.
 - Treat durin as a capable teammate: state the goal and the context, not

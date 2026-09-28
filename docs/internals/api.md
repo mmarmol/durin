@@ -301,6 +301,11 @@ no id). A request carrying `tools`, `tool_choice`, `functions`, or
 silently ignoring the field would leave a caller waiting for tool-call callbacks
 that never come.
 
+The model is the agent's own. Every request reads the model the loop runs now
+(`_live_model`, falling back to the `model_name` the gateway started with), so
+`GET /v1/models` reports it, a request naming any other `model` is rejected
+with 400, and a model switch from the dashboard applies without a restart.
+
 Turns run through `AgentLoop.process_direct` under a per-session `asyncio.Lock`
 held in the closure, so concurrent calls on one session queue instead of
 colliding. Each turn runs in its own task (`_start_turn`, strongly referenced
@@ -316,7 +321,9 @@ format has no place for progress, and without a callback the loop would
 publish it for the nonexistent `api` channel.
 
 Streaming hands back a `StreamingResponse` fed by a queue that
-`process_direct`'s `on_stream` callback fills. `on_stream_end` deliberately does
+`process_direct`'s `on_stream` callback fills. It sends `X-Accel-Buffering: no`,
+so a buffering reverse proxy (nginx) passes chunks through as they come instead
+of holding them until the turn ends. `on_stream_end` deliberately does
 nothing: it marks generation-segment boundaries, and a tool-using turn continues
 past them, so the HTTP stream closes only when the turn ends. A
 completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
@@ -625,7 +632,7 @@ Every error response is RFC 9457 `application/problem+json` with
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for automations; gated by `X-Durin-Hook-Secret`, not a bearer token |
 | `POST /v1/chat/completions` | OpenAI-compatible chat; bearer token with the `chat:write` scope (see below) |
-| `GET /v1/models` | Reports the configured model id; same `chat:write` gate |
+| `GET /v1/models` | Reports the model the agent runs now; same `chat:write` gate |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
 | `Mount /` | SPA static files with `index.html` fallback for history-mode routing |
 
@@ -643,7 +650,7 @@ Every error response is RFC 9457 `application/problem+json` with
   freshest token lives in a module-level store in `http.ts` (`setCurrentToken`),
   updated by the proactive pre-expiry refresh and the 401 reauth path — never in
   React state, so a token rotation does not change the `token` prop and cannot
-  re-fire `[token]`-keyed effects (which previously reset every view ~each TTL).
+  re-fire `[token]`-keyed effects, which would reset every view on each rotation.
 
 ---
 

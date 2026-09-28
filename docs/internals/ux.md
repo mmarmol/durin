@@ -314,7 +314,19 @@ more OCR than `documents.ocr.inline_max_pages` allows — the reason is folded i
 the same way rather than dropped: `[File: <name> — could not be read inline:
 <reason>. Saved on disk at <path>]`. For an over-budget scan the reason is
 itself the instruction to ingest the document as a background job, so the agent
-can act on it without asking the user for anything.
+can act on it without asking the user for anything. A file in a format nothing
+converts gets the same line, with `<ext> is not a format durin reads` as the
+reason; images and audio stay in the media for the content builder.
+
+Audio is transcribed into the input before sending (`auto`/`preview`), so only
+the text is sent. With transcription `off` the recording itself is attached and
+sent, for the agent loop to pass to a model that takes audio.
+
+Before sending a message with attachments, the composer measures it against the
+frame cap the bootstrap reports (`max_message_bytes`). Each attachment has its own limit, but
+a message travels as one WebSocket frame, and a frame over the cap closes the
+connection. A message over it is not sent: an inline error says so, and the
+draft and its attachments stay.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
@@ -754,8 +766,8 @@ top of the thread renders a "Beginning of conversation" label instead.
 | `channels.send_tool_hints` | `false` | Stream tool-call hint messages to the channel |
 | `channels.show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `channels.send_max_retries` | `3` | Max outbound delivery attempts (initial send included) |
-| `channels.transcription_provider` | `"groq"` | Voice transcription backend (`"groq"` or `"openai"`) |
-| `channels.transcription_language` | `null` | Optional ISO-639-1 hint for audio transcription |
+| `channels.transcription_provider` | `"groq"` | Unused by the gateway: channels transcribe with the top-level `transcription` settings |
+| `channels.transcription_language` | `null` | Unused by the gateway: set the language under `transcription` |
 
 **Appearance**
 

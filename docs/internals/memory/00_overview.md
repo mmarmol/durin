@@ -432,11 +432,12 @@ external API availability or cost. The cross-encoder reranker (a local ONNX mode
 closest thing to inference in the search pipeline, and even it is optional. LLMs appear
 only in the cold path (dream consolidation, ingestion) where latency is not per-user-turn.
 
-**Temporal decay was removed.** The search pipeline no longer applies any recency
-weighting. Every hit carries a `valid_from` field; the agent reasons about which
-information is current given the question's intent. Pre-filtering by age without
-knowing the question's temporal context produced incorrect results on factual,
-atemporal queries.
+**No temporal decay.** No score decays with age. Every hit carries a
+`valid_from` field; the agent reasons about which information is current given
+the question's intent. Pre-filtering by age without knowing the question's
+temporal context gives incorrect results on factual, atemporal queries. The one
+recency signal is the entity-aware rerank: entries tagged with an entity the
+query names rank newest-first in that entity's match list.
 
 **A sequence of passes, not one monolithic consolidation.** Each dream pass has a bounded,
 independent scope. Extract is idempotent (per-session cursors). Derived_from is a

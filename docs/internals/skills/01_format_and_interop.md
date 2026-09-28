@@ -188,8 +188,8 @@ creation-time tooling; the runtime loader accepts what it finds.
 
 Every authoring path also refuses a bundled file that does not parse
 (`_lint_bundle` → `_lint_script` in `durin/agent/skills_store.py`: `.py`,
-`.sh`, `.json`, `.toml`, `.yaml`). The paths are a person's save, the agent's
-draft publish (`skill_publish`), and the dream's create, edit (curation
+`.sh`, `.json`, `.toml`, `.yaml`/`.yml`). The paths are a person's save, the
+agent's draft publish (`skill_publish`), and the dream's create, edit (curation
 `evolve`, in-session `skill_edit`, approval replays), restructure and fuse.
 The refusal names the file and the parse error, and nothing is written — a
 draft stays where it is. An import is not linted: it is third-party content a

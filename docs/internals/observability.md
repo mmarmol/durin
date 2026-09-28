@@ -166,7 +166,7 @@ logger the row is dropped, like every other tool event.
 around the entire node execution (reset in `finally` — nodes run on pooled
 executor threads), so each workflow node writes its own
 `workflow_<run>_<node>` telemetry file with its tool events and
-`provider.call` records. Before this binding, workflow runs emitted no
+`provider.call` records. Without this binding a workflow run would emit no
 telemetry at all.
 
 At the start of each turn, `AgentLoop._run_agent_loop` calls

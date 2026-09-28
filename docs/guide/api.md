@@ -1,10 +1,10 @@
 # durin's API
 
-The gateway serves an HTTP API under `/api/v1`: the same surface the web
-dashboard uses to manage sessions, memory, skills, schedules, workflows and
-settings — and to **chat**. Any program can send durin a message, watch the
-turn as it runs (text, reasoning, tool calls), catch up after a disconnect,
-and stop it.
+The gateway serves an HTTP API under `/api/v1`: the surface the web dashboard
+uses to manage sessions, memory, skills, schedules, workflows and settings. It
+also lets any program **chat** in the dashboard's conversations: send durin a
+message, watch the turn as it runs (text, reasoning, tool calls), catch up
+after a disconnect, and stop it.
 
 It is served on the websocket channel's host and port (`channels.websocket`,
 default `127.0.0.1:8765` — the dashboard's address), not on `gateway.port`,
@@ -12,8 +12,8 @@ which only answers `/health`.
 
 The API exists only while the websocket channel runs. The gateway turns that
 channel on by itself while the dashboard is enabled (`gateway.webui_enabled`,
-the default); if you switched the dashboard off, set
-`channels.websocket.enabled` to `true`.
+the default), unless `channels.websocket.enabled` is explicitly `false`; if you
+switched the dashboard off, set `channels.websocket.enabled` to `true`.
 
 Start the gateway first:
 
@@ -23,17 +23,22 @@ durin gateway start
 
 The full route list, with request and response schemas, is the OpenAPI
 contract at `contract/openapi-v1.json` in the repository, generated from the
-code. This guide covers what the contract cannot: chatting, the event stream,
-and how a client should use them.
+service route table. The event stream, `GET /api/v1/health`, the webhook
+ingress (`POST /api/v1/hooks/{hook}`) and the MCP OAuth callback are mounted
+outside that table, so the contract does not list them. This guide covers what
+the contract cannot: chatting, the event stream, and how a client should use
+them.
 
 Looking to plug in a client that already speaks OpenAI? Use the
-[OpenAI-compatible API](openai-api.md) instead: a single request per message,
-text only.
+[OpenAI-compatible API](openai-api.md) instead: one request per message,
+answered with text only (no tool or progress events).
 
 ## Tokens
 
-Every `/api/v1` route requires a bearer token (`Authorization: Bearer <token>`).
-Issue one with only the scopes the program needs:
+Every `/api/v1` route requires a bearer token (`Authorization: Bearer <token>`),
+except `GET /api/v1/health`, the webhook ingress (which checks its own secret
+header) and the MCP OAuth callback. Issue one with only the scopes the program
+needs:
 
 ```bash
 durin auth token issue --scopes chat:write,sessions:read --label my-app
@@ -61,7 +66,10 @@ side, and can be watched live from both; messages sent through the API are
 labelled "Sent through the API".
 
 Only dashboard conversations accept messages from the API. Other channels'
-sessions (`slack:…`, `telegram:…`) can be read but not written to.
+sessions (`slack:…`, `telegram:…`) can be read; a token with `channels:write`
+can also post into their conversation as durin with `POST /api/v1/channels/post`
+(the post is recorded in that session unless `record` is `false`; no turn
+runs).
 
 ### Send a message
 
@@ -81,15 +89,18 @@ Answers `202` at once — the turn runs on the server, detached from the request
 | Field | Meaning |
 |---|---|
 | `content` | the message text (may be empty when `media` is attached) |
-| `media` | optional images/documents: `[{"data_url": "data:image/png;base64,…", "name": "chart.png"}]` |
+| `media` | optional images, documents, audio or video: `[{"data_url": "data:image/png;base64,…", "name": "chart.png"}]`; a refused attachment answers `422` with the cause in `details.reason`. Attached audio is transcribed into the message text. With `transcription.mode: off` the clip stays attached for the model; a clip that is not transcribed otherwise (transcription disabled or failed) stays attached and is named in the text |
 | `steer` | `true` to inject the message into the turn already running instead of queueing it |
 | `client_msg_id` | your id for the message (≤ 64 characters); minted and returned when you omit it |
 
-If a turn is already running, the message waits and enters the conversation
-when it finishes (`message_queued`, then `queued_consumed`), unless it is a
-`steer`. Errors are `application/problem+json`: `401` no token, `403` missing
-scope or a sender outside `channels.websocket.allowFrom`, `413` body over
-`channels.websocket.max_message_bytes`, `422` invalid key or message.
+If a turn is already running and the message is not a `steer`, it waits
+(`message_queued`) and the same turn takes it after answering
+(`queued_consumed` lists your `client_msg_id`); to find the turn that answers
+it, match on that, not on `turn_end.client_msg_id`. Errors are
+`application/problem+json`: `401` no token, `403` missing scope or a sender
+outside `channels.websocket.allow_from` (a token sends as `api:<token id>`),
+`413` body over `channels.websocket.max_message_bytes`, `422` invalid key or
+message.
 
 ### Watch the conversation
 
@@ -127,8 +138,10 @@ without a turn; send them with the plain form.
 ## Events
 
 Each event is `event: <name>` plus a JSON `data:` line that repeats the name in
-its `event` field. They are exactly the frames the dashboard receives over its
-WebSocket.
+its `event` field. They are the frames the dashboard receives over its
+WebSocket for the conversation, without the voice-mode `voice_*` frames. Like
+every dashboard connection, the stream also gets the gateway-wide
+`runtime_model_updated`, `dream_progress` and `concurrency_snapshot` frames.
 
 | Event | Meaning |
 |---|---|
@@ -138,16 +151,18 @@ WebSocket.
 | `reasoning_delta` / `reasoning_end` | the model's reasoning, only when the channel's `show_reasoning` is on |
 | `turn_end` | the turn is over — every turn sends exactly one: `outcome` is `completed`, `stopped` or `failed`; `client_msg_id` names the message that opened it |
 | `goal_status` | `status: "running"` (with `started_at`) or `"idle"` |
-| `goal_state` | the state of an active goal |
-| `message_queued` / `queued_consumed` | your message is waiting behind a running turn / the turn took it (`client_msg_ids`) |
-| `api_status` | the model provider is being retried |
+| `goal_state` | the conversation's live state in `goal_state`: whether a sustained goal is `active` (with its `objective`), plus the agent `mode` when not the default, and the `pending_question` or `pending_approval` a turn waits on |
+| `message_queued` / `queued_consumed` | a message is waiting behind a running turn (`client_msg_id`) / the turn took it (`client_msg_ids`) |
+| `api_status` | the model provider is being retried (`status.kind: "retry_wait"`), or durin stopped retrying it (`giving_up`, `exhausted_persistent`; `status.final: true`) |
 | `session_updated` | the conversation's title or metadata changed |
 | `lagged` | your stream fell too far behind and was closed (see below) |
 
 Tool activity rides in `tool_events` on those `message` events: one entry per
 tool call with `phase` (`start` on a `tool_hint`, then `end` or `error` on a
-`progress`), `call_id`, `name`, `arguments`, and `result` or `error` once it
-finishes. Match a call's start and end by `call_id`.
+`progress`; a long call such as a sub-agent or a workflow also sends `running`
+updates), `call_id`, `name`, `arguments`, and `result` or `error` once it
+finishes. The same `call_id` arrives more than once: keep the latest entry per
+`call_id`, and ignore names and phases you don't recognise.
 
 **Ignore events you don't recognise** — new ones may be added.
 
@@ -159,10 +174,12 @@ which does both in the right order).
 
 **Reattach after a disconnect.** Reopen `events`, then read what you missed
 from the history: `GET /api/v1/sessions/{key}/webui-thread` (the conversation
-as the dashboard shows it, paged newest-first with `?before=<cursor>`) or
-`GET /api/v1/sessions/{key}/messages` (the raw session). On reopen, a turn
-still in flight announces itself with `goal_status: running`. A turn's output
-is recorded even while nobody is watching.
+as the dashboard shows it, newest page first; for the page before, pass the
+response's `data.prevCursor` as `?before=`, and a `null` cursor means you have
+reached the start) or `GET /api/v1/sessions/{key}/messages` (the raw
+session). On reopen, a turn still in flight announces itself with
+`goal_status: running`. A turn's output is recorded even while nobody is
+watching.
 
 **Treat streamed text as a preview.** When the turn ends, the history holds
 the authoritative reply; re-read it if your stream dropped text (see
@@ -178,34 +195,42 @@ watchers.
 `ask_user_question` tool: a `tool_events` entry with `phase: "start"`,
 `name: "ask_user_question"` and the question in `arguments`. Answer by sending
 a plain message; it goes straight into the waiting turn (`queued_consumed`
-confirms it).
+confirms it). While a stream or a dashboard tab watches the conversation, the
+turn waits up to `agents.defaults.ask_user_answer_timeout_s`; with nobody
+watching it stops waiting after 30 seconds. Past that the turn ends with the
+question pending, and your next message answers it in a new turn — so keep a
+stream open while a turn may ask.
 
-**Queue or steer.** A message sent while a turn runs waits for it to finish;
-with `steer: true` it is injected into the running turn as guidance instead.
+**Queue or steer.** A message sent while a turn runs waits until that turn has
+answered, and the same turn then takes it (`queued_consumed` lists your
+`client_msg_id`) — match on that, not on `turn_end.client_msg_id`. With
+`steer: true` it is injected into the running turn as guidance instead.
 
-**Browsers.** `EventSource` cannot send an `Authorization` header; read the
-stream with `fetch` and a stream reader (or an SSE library that supports
-headers).
+**Browsers.** The gateway sends no CORS headers, so a web page can call it only
+from the gateway's own origin or through a proxy. `EventSource` cannot send an
+`Authorization` header; read the stream with `fetch` and a stream reader (or an
+SSE library that supports headers).
 
 ## What a token cannot do
 
 A message sent with a token comes from a program, not from the person at the
 dashboard. A turn it opens or joins therefore does **not** carry the authority
 to approve privileged actions: installing an MCP server, or importing, editing
-or installing dependencies for a skill. durin records such a request instead of
-running it, and it waits on the dashboard's Pending page and in
-`durin approvals` for a person to act on. The approval decision route
-(`POST /api/v1/approvals/{id}/decision`) refuses API tokens: only the
-dashboard session decides a request there. The domain write routes are a
-separate matter: they act with the operator authority their scope grants,
-without an approval request — a token with `mcp:write` can add an MCP server,
-and one with `skills:write` can install a quarantined skill through the skills
-routes. Such a change is recorded as the token's (an operator's), never as the
-person's. A shell
-command that would need the person's approval is refused. A message sent with a
-token never answers an approval request the conversation is waiting on, even
-"yes": only the person can. Asking the person (or program) a question and
-waiting for the answer still works.
+or installing dependencies for a skill. A request that would need a person's
+approval is recorded instead of run, and it waits on the dashboard's Pending
+page and in `durin approvals` for a person to act on; what
+`install_policy: auto`, the skills judge or a clean scan already allows still
+runs. The approval decision route (`POST /api/v1/approvals/{id}/decision`)
+refuses API tokens: only the dashboard session decides a request there. The
+domain write routes are a separate matter: they act with the operator
+authority their scope grants, without an approval request — a token with
+`mcp:write` can add an MCP server, and one with `skills:write` can install a
+quarantined skill through the skills routes. Such a change is recorded as the
+token's (an operator's), never as the person's. A shell command that would
+need the person's approval is refused. A message sent with a token never
+answers an approval request the conversation is waiting on, even "yes": only
+the person can. Asking the person (or program) a question and waiting for the
+answer still works.
 
 ## A Python example
 
@@ -240,7 +265,10 @@ with httpx.stream("POST", f"{BASE}/messages", headers=HEADERS,
 The API listens where the dashboard does. To reach it remotely, bind the
 websocket channel to an interface (`channels.websocket.host`), put it behind a
 reverse proxy with HTTPS, and keep tokens scoped and revocable. For streams,
-turn proxy response buffering off (durin sends `X-Accel-Buffering: no` for
-nginx) and allow long-lived responses; the 15-second keepalives keep idle
-streams open. See [Configuration](configuration.md) for `channels.websocket`,
-`token_issue_secret` and `gateway.public_url`.
+the proxy must not buffer responses: durin sends `X-Accel-Buffering: no`, which
+nginx honours; with any other proxy, turn response buffering off. Allow
+long-lived responses; the 15-second keepalives keep idle streams open. See
+[Channels](channels.md#web--dashboard-websocket) for `channels.websocket`,
+including `token` and `token_issue_secret` (binding `0.0.0.0` or `::` requires
+one of them), and [Configuration](configuration.md#gateway) for
+`gateway.public_url`.

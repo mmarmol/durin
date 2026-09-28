@@ -22,7 +22,7 @@ them look like.
 
 ## Authoring a node
 
-Every node has:
+Every work node (`"kind": "work"`, the default) has:
 
 - **A prompt** — its role framing, e.g. "Review this diff for correctness
   bugs and report GRAVE / MINOR / NONE."
@@ -41,10 +41,12 @@ Every node has:
   access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
   `cases`) default to `mode: "explore"` (read-only) — a deliberate gate
   that can inspect but not modify. You can override either default by
-  setting `mode` explicitly. When you do, prefer the neutral `read` mode
-  for a read-only work step and avoid `plan`: the interactive modes carry
-  conversational framing (e.g. "the parent should /build") that can derail
-  a step running unattended.
+  setting `mode` explicitly, and for a gate you usually should: prefer
+  `read` (what the seeds use) for any read-only step, including a routing
+  one; `explore` and `plan` carry interactive framing (e.g. "the parent
+  should /build") that can derail a step running unattended. Neither `read`
+  nor `explore` can run commands, so a gate that runs a check needs `build`
+  (as `debug`'s `verify` does) or a script node.
 
 ## Script nodes: deterministic steps with no agent turn
 
@@ -60,8 +62,9 @@ A script node has two forms — pick exactly one:
 - **`command`** — an inline shell command, run via `bash -c`, e.g.
   `"command": "npm test"`.
 - **`script`** — a file under `<workspace>/workflows/scripts/`, run by extension:
-  `.py` under Python, `.sh` under `bash`, anything else must be directly
-  executable (a shebang line). Use this for anything longer than a one-liner.
+  `.py` under the interpreter durin runs on, `.sh` under `bash`, anything
+  else must be directly executable (a shebang line). Use this for anything
+  longer than a one-liner.
 
 The I/O contract is plain Unix:
 
@@ -77,10 +80,11 @@ The I/O contract is plain Unix:
   re-runs sees why it failed.
 - **The exit code decides pass/fail.** On a routing script node
   (`on_pass`/`on_fail`), exit `0` is `PASS`; anything else is `FAIL`. On a
-  `cases` (multi-way) script node, the **last non-empty line of stdout** picks
-  the case, but the process must still exit `0` — a non-zero exit there (or on
-  a plain, non-routing script node) ends the run as a failure instead of a
-  verdict, since a script that crashed mid-way has nothing trustworthy to say.
+  `cases` (multi-way) script node, the **last line of stdout that equals one
+  of its case labels** picks the case, but the process must still exit `0` —
+  a non-zero exit there (or on a plain, non-routing script node) ends the run
+  as a failure instead of a verdict, since a script that crashed mid-way has
+  nothing trustworthy to say.
 - **Work dir.** The script's current directory is the run's shared working
   folder — the same folder an agent step with `tools: "default"` reads and
   writes, so a script step can read files an earlier step produced, or leave
@@ -92,16 +96,26 @@ The I/O contract is plain Unix:
   subprocess environment is controlled by `env`: `"clean"` (the default) gives
   the script a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`,
   `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`) plus those `DURIN_*` vars; `"inherit"`
-  gives it the full environment your durin gateway runs in — opt into it only
-  when the script genuinely needs an ambient variable durin doesn't forward.
+  gives it the environment your durin gateway runs in, minus any variable that
+  holds a stored secret (such as a provider key durin loaded for its model) —
+  opt into it only when the script genuinely needs an ambient variable durin
+  doesn't forward.
+- **Secrets.** Neither `env` mode carries your stored secrets. A script that
+  needs a credential names it in `secrets` (e.g. `["GITHUB_TOKEN"]`); each
+  must exist in the secret store with the `exec` scope
+  (`durin secret grant GITHUB_TOKEN --to exec` adds it) and is injected as an
+  env var of that name. A missing secret, or one without that scope, fails
+  the node instead of running the script without it.
 - **Timeout.** A script node has its own `timeout` in seconds, or falls back to
   `workflow.script_timeout` (default 300s). A script that runs past it is
-  killed and the node fails.
+  killed and the run aborts at that node (retryable with `resume_run_id`) —
+  even on a gate, a timeout does not loop back.
 
-A script node has no `model`, `prompt`, `tools`, `mode`, or session — those
-fields don't apply and the workflow parser rejects them if you set one. It can't
-be a parallel branch or fan-out worker either: a script already does its own
-iteration internally, so wrapping it in the engine's fan-out would be redundant.
+A script node takes none of a work node's agent fields (`model`, `persona`,
+`prompt`, `tools`, `mode`, `context`, `session`, `skills`, `mcps`, `approval`,
+…) — the workflow parser rejects them. It can run as a parallel branch beside
+agent branches, but not as a dynamic fan-out `worker`, which must be a work
+node.
 
 ### Example: implement, then gate on the real test suite
 
@@ -139,11 +153,12 @@ right there; a failing run (any other exit code) routes back to `implement` with
 the test output as loop-back feedback, bounded by the workflow's usual
 `max_visits` loop guard.
 
-The same swap upgrades the development seeds: when you copy `debug` or
-`execute-plan` into your own workflow, replace their agent verify gate with a
-script node running *your* project's real check (`pytest -q`, `npm test`,
-`cargo test`) — the seeds ship with an agent gate only because they can't know
-your command.
+The same swap upgrades the `debug` seed: when you copy it into your own
+workflow, replace its agent `verify` gate with a script node running *your*
+project's real check (`pytest -q`, `npm test`, `cargo test`) — the seed ships
+with an agent gate only because it can't know your command. `execute-plan` has
+no separate gate; add a script gate between `implement`'s `DONE` case and
+`review`.
 
 ## Routing: deciding what happens next
 
@@ -158,14 +173,16 @@ goes:
 - **Multi-way** (`cases`): the node declares a set of named outcomes, e.g.
   `{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`, and
   ends its reply with exactly one of those labels. `null` ends the run;
-  any other value is the id of the node to go to next.
+  any other value is the id of the node to go to next. A case named
+  `default` catches a reply that matches no label; without one, the run
+  aborts.
 
 The verdict is elicited from the model as a **forced tool call**
 (not just hoped for in free text), so a routing node's output is
 reliable — a pass/fail or label that cannot be derailed by a stray sentence.
 If the forced call is unavailable, a text-parse fallback applies: a binary
 gate reads its verdict from the **first non-empty line** (PASS/FAIL), and a
-multi-way node from the **last non-empty line** (a matched case label).
+multi-way node from the **last line that equals one of its case labels**.
 
 One special multi-way target is reserved: `__needs_input__`. Routing there
 ends the run with status `needs_input` and the node's own output (its
@@ -195,8 +212,9 @@ redo a step. Loops are bounded so they can't run forever:
 - **`max_visits`** on the workflow (default 3) or a specific node caps how
   many times that node may run, clamped by a hard global ceiling
   (`workflow.max_node_visits`, default 25) no node can exceed regardless of
-  what the definition says. If a node's budget runs out, the run ends with
-  status `exhausted` rather than looping silently forever.
+  what the definition says — a node in a nested sub-workflow included. If a
+  node's budget runs out, the run ends with status `exhausted` rather than
+  looping silently forever.
 - **Pass awareness.** On a revisit, the node is told which pass it's on
   ("Pass 2 of 3"), and on its last allowed pass it's told explicitly that
   no further iteration will happen — so it delivers a final, complete
@@ -230,10 +248,10 @@ default (`"fresh"`) for a node whose job is a clean look each time (an
 independent reviewer, for instance — persistence would just accumulate its
 own bias).
 
-The `execute-plan`, `debug`, and `writing-plans` seed workflows ship with
-persistent sessions on their looping steps (`implement`, `diagnose`+`fix`, and
-`revise` respectively) — each carries context across iterations as the node
-refines its work in response to loop feedback.
+The `execute-plan`, `debug`, `writing-plans`, and `build-specs` seed workflows
+ship with persistent sessions on their looping steps (`implement`,
+`diagnose`+`fix`, `revise`, and `assemble` respectively) — each carries context
+across iterations as the node refines its work in response to loop feedback.
 
 ## Passing work between steps
 
@@ -255,19 +273,20 @@ refines its work in response to loop feedback.
   steps (and across a loop's revisits) instead of handing copies down a
   chain. That folder is normally fresh every run; passing a `work_key` (a
   ticket id, a thread id — anything that names the recurring subject) picks
-  a STABLE folder shared by every run with the same key instead, so a node
-  declaring `reuse: "if-unchanged"` can find and skip work an earlier run on
+  a STABLE folder shared by every run *of that workflow* with the same key
+  instead, so a node declaring `reuse: "if-unchanged"` (which needs
+  `output_schema` and `output_file`) can find and skip work an earlier run on
   the same subject already did. Runs sharing a `work_key` also take turns:
   if one is still going when another with the same key starts, the second
   waits for the first to finish (and then, usually, gets to reuse what it
-  just produced) instead of both writing into the same folder at once. A
-  keyed folder is not pruned along with ordinary run folders — it expires on
-  its own after 30 days of no activity instead, so a recurring subject you
-  keep coming back to keeps its folder, but an abandoned one does not linger
-  forever. An automation's own automatic `work_key` (from its channel
-  trigger) is narrower still: it only applies when the trigger's `correlate`
-  pattern captured this key from the message — a plain thread reply never
-  becomes a `work_key` on its own.
+  just produced) instead of both writing into the same folder at once; after
+  30 minutes of waiting it fails. A keyed folder is not pruned along with
+  ordinary run folders — it expires on its own after 30 days of no activity
+  instead, so a recurring subject you keep coming back to keeps its folder,
+  but an abandoned one does not linger forever. An automation's own automatic
+  `work_key` (from a channel or webhook trigger) is narrower still: it only
+  applies when the trigger's `correlate` pattern captured this key from the
+  message — a plain thread reply never becomes a `work_key` on its own.
 - **Declared input/output.** A workflow can declare an `input` (optional
   `text` and/or `file`, plus a free-text `description`) and `output`
   descriptor. Declaring `file: true` input means the workflow expects
@@ -287,22 +306,31 @@ refines its work in response to loop feedback.
 A parallel node runs several branches at once and merges their text
 outputs into the next node's input:
 
-- **Static** — a fixed list of branches, each its own node with its own
-  prompt, all seeing the same input (e.g. "review this diff for security /
+- **Static** — `branches` lists the nodes to run, each its own work or script
+  node, all seeing the same input (e.g. "review this diff for security /
   performance / readability" as three parallel reviewers).
-- **Dynamic** — a single worker template mapped over a runtime list (e.g.
-  one search worker per query the plan step produced). The upstream node
-  emits the list as a JSON array (or newline-separated text as a
-  fallback).
+- **Dynamic** — `worker` names a single work node mapped over a runtime list,
+  and `list_from` names the node whose output is that list (e.g. one search
+  worker per query the plan step produced). The list is a JSON array (or
+  newline-separated text as a fallback) of at most 50 items; any beyond that
+  are dropped.
+- **Runtime-selected** — `branches_from` names a node whose output lists which
+  declared work or script nodes to run this pass (a JSON array, or
+  comma-separated ids on its last line); an optional `branches` list declares
+  the pool it may pick from.
 
-`max_concurrency` (default 2) bounds how many branches or workers run at
-once; extra ones queue and run in later waves.
+`max_concurrency` bounds how many branches or workers run at once; extra ones
+queue and run in later waves. Without it, a parallel node runs at most
+`workflow.parallel_llm_concurrency` (default 2) agent branches or workers at
+once, and at most `workflow.parallel_script_concurrency` (default 4) script
+branches; a node's own value replaces both.
 
 For **writing** branches — ones that create or edit files — `reconcile`
 decides how their work comes back together:
 
-- `read` — read-only branches; nothing is written back (the default, for
-  analysis/review branches).
+- `read` (the default) — branches run in the shared folder with no private
+  copy; give them a read-only mode, since a writing `read` branch lands its
+  changes unchecked.
 - `choose` — each branch writes into its own private copy of the run's
   files; a judge picks the best one to keep, discarding the rest. A
   `choose` node requires a `criteria` string (how the judge should pick
@@ -312,7 +340,8 @@ decides how their work comes back together:
   rather than silently picking one.
 
 Dynamic fan-out workers always share the folder directly (no per-worker
-isolation), so `reconcile` only applies to static branches.
+isolation), so `reconcile` only applies to static and runtime-selected
+branches.
 
 ## Asking for more information
 
@@ -330,7 +359,18 @@ the graph **at the node that asked** — same run id, same shared working
 folder, same node sessions, and the same visit counts already spent —
 rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
-their intake step.
+their intake step. `resume_run_id` also retries a run that ended `aborted` at
+a named node: the failed node re-runs with its exact input, in the same
+folder.
+
+**Approval gates.** Set `"approval": true` on a work node to pause the run
+after it for a person's sign-off: the run ends `needs_input` with the node's
+output as the proposal. A reply of `approve`, `yes` or `ok` continues past the
+node, `reject` or `no` cancels the run, and any other reply is revision
+feedback — the node re-runs with it and pauses again with a new proposal. The
+agent's `run_workflow` cannot resume an approval pause; a person answers it
+from the dashboard or through the API. An approval node can't route, be
+`detached`, use `context: "shared"`, or run as a parallel branch.
 
 A stale pause with no good answer left — the environment it needs is gone,
 the person who'd know has moved on — doesn't have to sit there forever:
@@ -350,8 +390,9 @@ clean up.
 ## Where things live
 
 - **Definitions:** `<workspace>/workflows/<name>.json` — a small
-  git-versioned directory; every run snapshots the definitions it used, so
-  you can see how a workflow evolved over time.
+  git-versioned directory: edits from the editor or the agent's workflow
+  tools are committed as they happen, and a run the agent starts first
+  snapshots any hand edits, so you can see how a workflow evolved over time.
 - **Run records:** each run writes a manifest under
   `<workspace>/workflows-runs/<name>/<run_id>.json` with the outcome and a
   per-node trace (status, verdict, and the session each node produced). A
@@ -361,14 +402,13 @@ clean up.
 - **Node sessions:** every node's conversation is a normal, searchable
   durin session (`workflow:<run_id>:<node_id>:...`), so a node's reasoning
   is navigable after the fact the same way a sub-agent's is.
-- **Retention:** both the shared working folder
-  (`<workspace>/.workflow/<run_id>/work/`, gitignored) and the run
-  manifests are pruned automatically, keeping the most recent runs per
-  workflow. `workflow.keep_runs` (default 20) controls how many are kept;
-  a run still waiting on your input is never pruned — resume or cancel it
-  to let it retire like any other finished run — and completed runs keep
-  their history entry until they age out — copy out any deliverable you
-  need to keep before then.
+- **Retention:** run working folders
+  (`<workspace>/.workflow/<run_id>/work/`, gitignored) are pruned each time
+  a run starts, keeping the `workflow.keep_runs` (default 20) most recent
+  across all workflows; run manifests are pruned to that many per workflow.
+  A running run, or one waiting on your input, is never pruned — resume or
+  cancel a paused one to let it retire like any other finished run. Copy out
+  any deliverable you need to keep before its run ages out.
 
 ## Editing visually
 

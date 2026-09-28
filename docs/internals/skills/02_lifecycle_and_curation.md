@@ -124,7 +124,8 @@ entirely) when both are empty:
 
 The sub-agent (`ToolRegistry` built by `_build_skill_extract_tools`) carries
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
-`SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, and runs
+`SkillAcquireSeedTool`, `ListWorkflowsTool`, `WorkflowWriteTool`,
+`WorkflowScriptWriteTool`, and `DependentsTool`, and runs
 with a bounded `max_iterations=8`. Its system prompt
 (`_SKILL_EXTRACT_PROMPT`) fixes a strict frontmatter and size contract
 before it ever writes: every skill it authors MUST carry `name` and
@@ -163,11 +164,13 @@ After the sub-agent run, `_resolve_gap_observations` walks the OPEN `new:*`
 observations and marks a gap `APPLIED` when a skill now exists under its
 working name. Matching is **tolerant**, not exact-only: an exact match closes
 the gap, and failing that, both the gap's working name and every existing
-skill name are passed through `_norm` (lowercase, non-alphanumeric collapsed to
-hyphens, trimmed) for a normalized comparison — so a gap logged as `"Release
-Runbook"` still closes against a skill authored as `release-runbook`. An
-unmatched gap stays OPEN and is offered again to the next pass. The count of
-gaps closed this way travels on the pass's own telemetry event as
+skill name are passed through `name_key` (`durin/agent/skill_retirements.py`:
+lowercase, non-alphanumeric collapsed to hyphens, trimmed) for a normalized
+comparison — so a gap logged as `"Release Runbook"` still closes against a
+skill authored as `release-runbook`. A gap whose name is a retired skill is
+declined. Any other unmatched gap stays OPEN and is offered again to the next
+pass. The count of gaps closed this way travels on the pass's own telemetry
+event as
 `gaps_closed` (`03_telemetry_and_effectiveness.md`), alongside `skills_touched`.
 
 `run_skill_extract_pass` is a sync wrapper (`asyncio.run`) over the async
@@ -313,8 +316,9 @@ provenance.
   take).
 - **Routing.** A `new:<name>` gap whose name is an existing skill is logged as
   an `improvement` on that skill rather than as a request for a duplicate. A
-  gap for a retired skill is routed to its replacement (Retired skills stay
-  retired, below).
+  gap for a retired skill whose replacement exists is routed to that
+  replacement; any other gap for a retired name is declined by the next
+  skill-extract pass (Retired skills stay retired, below).
 - **Lifecycle.** `OPEN` → `APPLIED`, `DECLINED` or `UPSTREAM`. The first two are
   set in bulk by `apply_dispositions` from the curation judge's per-observation
   verdicts, or one at a time by `resolve_observation` when the user resolves a
@@ -490,7 +494,7 @@ skill back without a person:
 - a `skill_import` install of a retired name takes no shortcut (no `allow`
   auto-install, no judge): a person decides, shown why it was retired;
 - `log_observation` turns a `new:<retired>` gap into an `improvement` on the
-  replacement;
+  replacement, when one is recorded and exists;
 - `_resolve_gap_observations` declines any other open gap for a retired name;
 - the skill extractor's prompt lists the retired skills and their replacements.
 
@@ -654,7 +658,7 @@ decisions about external content are never made silently.
 | `run_skill_extract_pass` / `_skill_extract_async` | `durin/memory/dream_passes.py` | Agentic dream pass: mine sessions + logged gaps, author or acquire skills via a sub-agent. |
 | `_skill_extract_messages` | `durin/memory/dream_passes.py` | Assembles the sub-agent's input (sessions + gaps); returns `None` when there's nothing to mine. |
 | `_recent_sessions_text` | `durin/memory/dream_passes.py` | Head+tail windowing of recent session transcripts for the extract prompt. |
-| `_resolve_gap_observations` / `_norm` | `durin/memory/dream_passes.py` | Closes `new:*` gap observations by exact or normalized name match against newly-authored skills. |
+| `_resolve_gap_observations` | `durin/memory/dream_passes.py` | Closes `new:*` gaps by exact or `name_key` match; declines a gap for a retired name. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Hindsight pass: detects generalizing corrections/gaps from a session's turns, tail-truncated; logs via `log_observation`. |
 | `log_observation` / `open_observations` / `suppressed_observations` | `durin/agent/skill_observations.py` | Append-with-dedup, and read the OPEN view plus the settled (DECLINED + UPSTREAM) view the curation judge consumes. |
 | `apply_dispositions` / `archive_resolved` | `durin/agent/skill_observations.py` | Bulk status transition from judge verdicts; move APPLIED records to the archive file at the next pass's start. |

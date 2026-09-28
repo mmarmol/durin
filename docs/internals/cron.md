@@ -55,7 +55,7 @@ flowchart TD
 
 `start()` acquires `_lock`, loads the store (or raises on an unrecoverable corrupt store — see below), calls `_recompute_next_runs()`, saves, releases, and calls `_arm_timer()`.
 
-`_recompute_next_runs` settles every enabled job whose `next_run_at_ms` is missing or already in the past; a still-future `next_run_at_ms` is left untouched so an interval job keeps its elapsed progress across restarts. An occurrence that fell into the downtime is never dropped silently. A recurring job's miss is written to its `run_history` as a `skipped` record whose `error` names the missed instant (the webui's history table lists it; `last_status` keeps describing the job's last real run), and the next run is recomputed from now — the missed occurrence is not caught up. A one-shot `at` job within `cron.missed_oneshot_grace_s` of its time stays due, so the first tick fires it late; one past the grace is retired the way a run one-shot is (disabled, or deleted under `delete_after_run`) with the same `skipped` record, and since nothing ever ran, `last_status`/`last_error` carry the miss so `durin cron list` and the webui show it. Recomputing an `at` schedule that lies in the past yields `None`, which used to leave the job enabled with no next run and nothing said.
+`_recompute_next_runs` settles every enabled job whose `next_run_at_ms` is missing or already in the past; a still-future `next_run_at_ms` is left untouched so an interval job keeps its elapsed progress across restarts. An occurrence that fell into the downtime is never dropped silently. A recurring job's miss is written to its `run_history` as a `skipped` record whose `error` names the missed instant (the webui's history table lists it; `last_status` keeps describing the job's last real run), and the next run is recomputed from now — the missed occurrence is not caught up. A one-shot `at` job within `cron.missed_oneshot_grace_s` of its time stays due, so the first tick fires it late; one past the grace is retired the way a run one-shot is (disabled, or deleted under `delete_after_run`) with the same `skipped` record, and since nothing ever ran, `last_status`/`last_error` carry the miss so `durin cron list` and the webui show it. Recomputing an `at` schedule that lies in the past yields `None`; retiring the job this way keeps it from staying enabled with no next run and nothing said.
 
 ### Offline mutations and the action log
 
@@ -139,11 +139,9 @@ building an `agent_turn` prompt: the automations runtime classifies the
 workflow's own result and owns its own run bookkeeping (see
 `durin/automations/runtime.py`).
 
-**Legacy `loop_trigger` jobs.** The loops subsystem this section used to
-describe is gone, but `CronPayload` still parses `payload.kind ==
+**`loop_trigger` jobs.** `CronPayload` parses `payload.kind ==
 "loop_trigger"` and its `loop` field (`durin/cron/types.py`) so an
-unmigrated, hand-edited, or pre-cutover persisted store still loads without
-crashing. `sync_all` unconditionally prunes every surviving `loop:*` job at
+unmigrated, hand-edited, or older persisted store loads without crashing. `sync_all` unconditionally prunes every surviving `loop:*` job at
 gateway boot regardless of whether a same-named loop or automation still
 exists, and the boot migration (`durin.automations.migrate.migrate_loops`,
 run just before `sync_all`) prunes them too on the same occasion — deliberate

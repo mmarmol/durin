@@ -11,21 +11,29 @@ view of how that works; the mechanics live in
 There is a deliberate split, and durin picks based on what you ask:
 
 - **Read it now.** "What does this contract say?", "Summarise this PDF." durin
-  converts the file to clean text into the current turn, answers, and saves
-  **nothing**. Good for one-off questions.
+  converts the file to clean text into the current turn, answers, and adds
+  **nothing** to memory or the Library (an attachment is kept in durin's media
+  folder). Good for one-off questions.
 - **Remember it.** "Keep this," "learn this book," "remember this report." durin
   stores the document in your **Library**: the original is kept, and overnight it
   is understood (see below). Good for anything you will refer back to.
 
 When it is ambiguous, durin reads it now and offers to keep it.
 
-You give durin a document by **attaching it in chat** (the composer's attach
-button in the web dashboard accepts documents, not just images), by pointing at a
-**path on disk**, or just by asking it to read or remember a file you name.
+You give durin a document by **attaching it in chat**, by pointing at a **path
+on disk**, or just by asking it to read or remember a file you name. The web
+dashboard's attach button accepts documents, not just images: up to 3 per
+message, 25 MB each, and about 27 MB for all of a message's attachments
+together with the default `channels.websocket.max_message_bytes`. A message
+over that total is not sent; the composer says so and keeps your text and
+files. Notebooks and ZIP archives are read from a path.
 
 **Supported formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`), Excel
 (`.xls`/`.xlsx`), EPUB, HTML, CSV, JSON, XML, Jupyter notebooks (`.ipynb`), and
-ZIP archives of these. A few office formats like ODT/RTF are not covered yet.
+ZIP archives of these. Legacy `.doc`/`.ppt`, ODT and RTF are not supported —
+save them as `.docx`, `.pptx` or PDF first. The dashboard refuses them when you
+attach them. From another channel, durin is told the file arrived, where it was
+saved, and that it cannot read it.
 
 ## Scanned PDFs
 
@@ -43,14 +51,15 @@ have, and says the engine is the reason the rest is blank.
 **What the built-in engine can read.** The models installed with OCR read
 Chinese, Japanese, and Latin-script languages — English, Spanish, French,
 German, Portuguese, and several dozen more — entirely offline. Scripts
-outside that set fail in two different ways, and durin is honest about both.
+outside that set fail in two different ways.
 A Cyrillic or Greek page comes back as confident-looking garbage: the engine
 reads the letterforms as Latin lookalikes, and nothing in its output flags
 the result as wrong. A page in Arabic — or any script the models cannot
-match at all — comes back with no text; durin then checks whether the page
-holds printed text at all, and reports that the engine detected printed text
-but could not read it, instead of calling the page blank. A genuinely empty
-page is still reported as blank.
+match at all — comes back with no text; in a document whose other pages
+read, it is silently left out. When no page yields any text, durin reports
+that the engine detected printed text it could not read, instead of calling
+the document blank. A document of genuinely empty pages is still reported as
+blank.
 
 **Reading other scripts.** For a script outside the built-in set, pick a
 **recognition language** next to the OCR toggle in **Settings → Documents**
@@ -73,11 +82,12 @@ measured against real scans, plausible-but-wrong readings score in the same
 range as legitimate noisy-but-correct ones, so no threshold can tell them
 apart.
 
-A short scan is read on the spot, the same as any other document. Ask durin to
-remember a longer one — a whole scanned book — and it does not make you wait:
-the original is kept right away and its pages are transcribed in the
-background. Watch its progress from the dashboard's work panel, or just ask
-durin how it's going.
+A scan with up to `documents.ocr.inline_max_pages` pages needing OCR (default 5)
+is read on the spot, the same as any other document. A longer one — a whole
+scanned book — cannot be read into the conversation; durin remembers it
+instead, without making you wait: the original is kept right away and its pages
+are transcribed in the background. Watch its progress from the dashboard's work
+panel, or just ask durin how it's going.
 
 Until that finishes there is no text to work with, and durin says so rather
 than guessing at what the book contains. When it does finish, the book joins
@@ -112,8 +122,9 @@ Two things bridge a Library document back into everyday use:
 The night after you remember a document, durin's background **dream** does a few
 things to it — no work happens while you wait:
 
-- **Outlines it** — a whole-document summary plus a line per section, so durin can
-  scan what the document covers without re-reading it.
+- **Outlines it** — a short summary plus a line per section, written from the
+  document's opening sections (later sections in a long document get none), so
+  durin can scan what the document covers without re-reading it.
 - **Pulls out its key things** — the subjects, people, concepts, and cases it is
   about, linked back to the document as their source.
 - **Files it under a topic** — the Library keeps a clean, maintained map of the

@@ -23,8 +23,9 @@ An automation has four parts:
 An automation can carry any mix of these, OR-ed together — any one firing starts a
 run. With none at all, it fires only when you tell it to.
 
-- **Schedule** — the same shapes as a cron job (`at`, `every`, or `cron` with an
-  expression and timezone), plus the task text the run receives.
+- **Schedule** — the same shapes as a cron job (`at` with `at_ms`, a Unix time in
+  milliseconds; `every` with `every_ms`; or `cron` with `expr` and an optional
+  `tz`), plus the `task` text the run receives.
 - **Channel** — a message arriving on `email`, `telegram`, `slack`, `discord`, or
   `whatsapp` that matches a `filters` map (sender, chat, or a channel-specific
   field, all exact matches; `subject_contains` — email only — and the other
@@ -37,11 +38,14 @@ run. With none at all, it fires only when you tell it to.
 - **Webhook** — a `POST` to `/api/v1/hooks/{hook}` from an external service (a CI
   pipeline, a monitoring tool, anything that can send JSON). Get the shared secret
   from `GET /api/v1/automations/hooks-secret`, and send it as the
-  `X-Durin-Hook-Secret` header on every call.
+  `X-Durin-Hook-Secret` header on every call. The run's task is the body's `text`,
+  or the whole JSON body when it has none, capped at 4000 characters.
 - **Chain** — another automation's outcome (`achieved`, `completed`, `failed`, or
-  `any` of those three) triggers this one. Chain a few automations together to build
-  a pipeline of standing work that reacts to itself, not only to the outside world.
-  durin refuses to save a chain that would loop back on itself, naming the cycle.
+  `any` of those three) triggers this one; the chained run's task is the upstream
+  run's final output (its outcome summary when there is none). Chain a few
+  automations together to build a pipeline of standing work that reacts to itself,
+  not only to the outside world. durin refuses to save a chain that would loop back
+  on itself, naming the cycle.
 
 A **`correlate`** pattern (channel or webhook triggers) is worth calling out on its
 own: a one-capture-group regex that pulls an id out of the message — a ticket
@@ -50,15 +54,21 @@ reaches the same paused run, even if it lands in a completely different thread.
 Without `correlate`, resumption is scoped to the plain thread the message arrived
 on.
 
+**One run at a time, by default.** With `"concurrency": "single"` (the default),
+an automation has at most one active run, a paused run included. While it lasts,
+a schedule tick is skipped, a manual fire is refused, and a channel, webhook or
+chain firing waits its turn — dropped if it is still waiting after
+`automations.queue_ttl_s`. `"concurrency": "parallel"` lets runs overlap.
+
 ## Where it speaks
 
 Two separate channels, because they answer different questions:
 
 - **Delivery** (`delivery.channel`/`to`/`notify`) is the routine report: did the run
   succeed, and is that worth telling someone. `notify` controls how chatty it is —
-  `always` (default), `failures_only`, `when_notable` (skip a completed run whose
-  workflow routed to a "nothing to report" label — configurable via
-  `silent_labels`), or `never`.
+  `always` (default), `failures_only`, `when_notable` (skip a completed run that
+  *ended* on a silent route label — `NOTHING_TO_REPORT` by default; set
+  `silent_labels` to change the list), or `never`.
 - **Help** (`help.channel`/`to`) is the backstop for anything that needs a human:
   an operator question the workflow asked, an approval pause, an escalation. It's
   also where a failure or a stuck condition surfaces if `delivery` stayed quiet, and
@@ -70,11 +80,12 @@ Two separate channels, because they answer different questions:
 outcome comes back into that same conversation regardless of `delivery`/`notify` —
 you asked, so you hear back, every time, success or failure.
 
-**A counterpart gets answered in place.** When a workflow's question is tagged for
-the *other party* rather than the operator (durin's own internal convention — you
-won't normally write this tag yourself; the seed workflows that correspond with an
-external party already do), the reply goes back on the same channel thread the
-triggering message arrived on, not to `help`. A reply on that thread resumes the run.
+**A counterpart gets answered in place.** When a workflow's question is meant for
+the *other party* rather than the operator — its `needs_input` text starts with the
+literal tag `[TO:counterpart]` (no shipped workflow uses it; add it to your own) —
+the question goes out, without the tag, on the same channel thread the triggering
+message arrived on, not to `help`. A reply on that thread resumes the run. A run
+with no triggering thread (a schedule or manual fire) asks in `help` instead.
 
 ## When it stops
 
@@ -106,11 +117,13 @@ Every weekday morning this fires a reminder; any reply on the matching email thr
 (matched by the `INV-4471`/`INV-(\d+)` correlation, so it works even from a fresh
 reply, not just the original thread) resumes the same standing case. `life.intent`
 is a plain-language label for what "done" means; `life.achieved_when` is what
-actually decides it — here, the `chase-invoice` workflow itself routes to a `PAID`
-label once the payment clears, and that's the only thing that ends this automation.
-`max_attempts` plus `on_stuck` bound how many unpaid reminders happen before durin
-says something beyond the routine delivery notice (`notify`, `escalate_pause` and
-disable, or stay quiet).
+actually decides it: `any_completed` (the default) or `label:<LABEL>` — the route
+label the run ended on, matched exactly. Here the `chase-invoice` workflow itself
+ends on a `PAID` label once the payment clears, and that's the only thing that ends
+this automation. `max_attempts` plus `on_stuck` bound how many unpaid reminders
+happen before durin says something beyond the routine delivery notice: `notify`
+(the default) tells the `help` destination, `escalate_pause` tells it and disables
+the automation, and `keep` stays quiet.
 
 **This is single-case, not a template: "chase invoice 4471" means one dedicated
 automation named for that invoice**, not a generic "chase invoices" automation
@@ -123,9 +136,10 @@ result" definition can serve an ongoing, non-case-shaped purpose indefinitely.
 
 ## Answering a paused run
 
-A workflow can pause mid-run — an operator question, or a `WorkNode` approval gate.
-While paused, an automation's run waits in the `help` channel (or, for a
-counterpart-tagged question, on the triggering thread itself) for a reply:
+A workflow can pause mid-run — an operator question, or an approval gate (a work
+node with `"approval": true`). While paused, an automation's run waits in the
+`help` channel (or, for a counterpart-tagged question, on the triggering thread
+itself) for a reply:
 
 - **Reply in the channel.** A plain reply on the thread durin asked in resumes the
   run automatically — no separate action needed. For an approval, replying
@@ -141,7 +155,7 @@ counterpart-tagged question, on the triggering thread itself) for a reply:
 Either path resumes the exact paused run — same workflow state, same working
 folder — not a new one.
 
-## Managing automations today
+## Managing automations
 
 The web dashboard's Automations section lists every definition — its triggers,
 what it runs, and its life condition — with a "Needs you" tray for pending
@@ -156,7 +170,7 @@ is running to wait for, so it stops immediately and does not resume. Resolving
 one refreshes it out of the tray immediately. The section also has an editor
 for creating a definition or changing an existing one's triggers, workflow,
 delivery, help routing, and life condition visually, the same way the
-Workflows pane already lets you build a flow graph visually. Clicking a
+Workflows pane lets you build a flow graph visually. Clicking a
 definition opens its detail: a "Run now" button to fire a manual run on
 demand, a pause/resume control that flips whether the automation is currently
 enabled (it works just as well on one a life condition already disabled —
@@ -166,11 +180,12 @@ shows its cause, outcome, and delivery record (or approval record, for a run a
 human resolved) — with a link into the Workflows pane's own run detail for the
 full execution trace (nodes, sessions, artifacts). Stopping an in-flight run
 is a request, not instant: it asks the run to stop at its next workflow step
-(the step already in progress finishes and is kept), then shows as
-interrupted — never delivered as an outcome, whatever the delivery policy
-says. Clicking Stop again while that request is pending offers a second,
-stronger option instead of repeating the same no-op: Force stop interrupts a
-work node's turn mid-flight rather than waiting for the next step boundary.
+(an agent step in progress finishes and is kept; a running script step is
+killed), then shows as interrupted — never delivered as an outcome, whatever
+the delivery policy says. Clicking Stop again while that request is pending
+offers a second, stronger option instead of repeating the same no-op: Force
+stop interrupts a work node's turn mid-flight rather than waiting for the next
+step boundary.
 Beyond the dashboard, an automation can also be defined and driven through:
 
 - **The agent, in chat.** Describe the standing work you want — "each time an email

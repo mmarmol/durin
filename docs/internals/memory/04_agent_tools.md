@@ -428,8 +428,9 @@ its re-ingest matches the finished case first — a no-op returning the text,
 the marker never consulted — and the tool layer's reference write (run
 whenever no job is pending) heals the missed indexing.
 
-`id` and `reference` are emitted first in the response so they survive the 16 KB
-agent-result head-truncation on large documents.
+`id` and `reference` are emitted first in the response so they stay in view
+when a large document's result is over the run's per-result cap: the runner
+saves the whole result and the model sees a preview of its head.
 
 **Return:**
 
@@ -507,9 +508,10 @@ normalised to one ref by `durin/memory/drill.py::reference_ref_for_uri`. The com
 of artifact-keyed recall sits on `read_file`, not `memory_drill`: a text read
 opens with the memory entries that mention the file — see the `read_file` row in
 [tools.md](../tools.md). Both blocks lead their result rather than trailing it
-because the loop truncates an over-cap tool result from the tail, so a trailing
-block never reaches the model on a long document. Both halves are gated by
-`memory.artifact_recall` (`enabled`, `max_notes`). The webui's reference detail
+because `read_file` counts its block against its page, and an over-cap result
+reaches the model as a preview of its head (the whole result is saved), so a
+trailing block would be the part the model does not see. Both halves are gated
+by `memory.artifact_recall` (`enabled`, `max_notes`). The webui's reference detail
 (`graph_api._entities_derived_from`) shares the same candidate helper.
 
 **Return (single):**

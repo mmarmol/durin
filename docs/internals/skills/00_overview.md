@@ -190,7 +190,9 @@ core tool calls `skills_store.dream_create_skill`, which runs the composition
 gate (`02_lifecycle_and_curation.md`), refuses outright if no description can
 be derived from the body either (frontmatter or prose), writes `SKILL.md` (+
 any bundled `files`), then hands off to `_finalize_skill` with `ramp="write"` —
-which backfills the frontmatter as described above. One call, one commit.
+which backfills the frontmatter as described above. One call, one commit. It
+refuses a retired skill's name (in-session, unless the call carries
+`override_retired`) and a bundled file that does not parse (`_lint_bundle`).
 
 **Dream skill-extract pass.** `durin/memory/dream_passes.py::run_skill_extract_pass`
 runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
@@ -229,16 +231,19 @@ cleanup sweep for an abandoned draft.
 **`skill_publish`** promotes a finished draft. It runs the same body/description
 integrity check `skill_write` enforces (`_skill_md_integrity`) and the
 composition gate against the draft's `SKILL.md` *before* moving anything, so a
-malformed or rejected draft is left exactly as it was, for revision. It then
+malformed or rejected draft is left exactly as it was, for revision. It also
+refuses a retired name unless the call carries `override_retired`, and a draft
+whose bundled file does not parse; both leave the draft as it was. It then
 refuses if a skill of the same name is already active — nothing is clobbered —
 moves the draft directory into `skills/<name>/`, and hands off to
 `_finalize_skill` with `ramp="publish"`. Because both ramps converge on that
 same core, a draft with a derivable body but no explicit `description:` field
 gets the identical frontmatter backfill the quick ramp gets — a published
 skill is never left with an empty indexed description. `skill_publish` carries
-the same `override_composition` escape hatch `skill_write`'s in-session door
-does (the user's explicit word, after seeing the gate's reason); there is no
-dream-side "hard" variant for it, because dream never builds drafts.
+the same `override_composition` and `override_retired` escape hatches
+`skill_write`'s in-session door does (the user's explicit word, after seeing
+the gate's reason); there is no dream-side "hard" variant for it, because
+dream never builds drafts.
 
 **`skill_discard`** deletes `skill-drafts/<name>/` outright. It never touches
 the active registry — there is nothing to gate, since nothing was ever
@@ -274,7 +279,7 @@ ever reads from.
 
 **skill-creator** (the builtin skill for authoring skills) scaffolds new
 skills into `skill-drafts/` and finalizes with `skill_publish`, matching this
-ramp — it no longer writes into `skills/` directly.
+ramp; it never writes into `skills/` directly.
 
 There is no web or CLI surface for drafts; the scratch area is reachable only
 through the same in-loop tools that read and write the rest of the workspace.
@@ -351,7 +356,8 @@ any auto workspace skill with an OPEN observation even if its body is
 unchanged. An LLM judge proposes `evolve` (surgical edit), `restructure`
 (agentic doctrine repair via `restructure_skill_agentic`), `fuse` (merge
 near-duplicates via `dream_fuse_skills`), `retire` (delete via `remove_skill`,
-git-recoverable), `principle` (add a cross-cutting rule), or `retire_principle`
+git-recoverable, recorded as retired so the dream does not re-create it),
+`principle` (add a cross-cutting rule), or `retire_principle`
 actions. The judge receives OPEN observations as evidence and DECLINED history
 to prevent re-proposing rejected changes. Imported skills are `mode=manual` and
 are not auto-curated — instead, they are handled by the suggestion path
@@ -483,9 +489,9 @@ to the scan report, and makes it inert for the agent. Approve re-gates through
 
 **Broken frontmatter is not "no provenance".** A YAML typo in the hand-written
 fields (an unquoted `:` in a plain multi-line description is the classic) makes
-the whole frontmatter unparseable, which used to read as "no provenance" and
-expel a legitimately-gated skill — destroying its original provenance on
-re-import. `_durin_blob` now falls back to a metadata-only parse
+the whole frontmatter unparseable. Read as "no provenance", that would expel a
+legitimately-gated skill and destroy its original provenance on re-import, so
+`_durin_blob` falls back to a metadata-only parse
 (`skills_frontmatter.recover_metadata`): the `metadata.durin` blob is
 machine-written and parses on its own even when the prose above it is broken,
 so mode and provenance survive the typo. The sweep additionally logs one OPEN
@@ -626,13 +632,12 @@ file and exec tools while building — nothing under `skill-drafts/` is trusted
 yet, because nothing there is visible to the agent's own retrieval — without
 weakening the gate a finished skill must pass to become visible.
 
-**The registry is not a workspace subdirectory.** Before this design, `skills/`
-was writable by the same generic tools as everywhere else in the workspace,
-which made the security gate only as strong as every caller's discipline in
-choosing to route through `skill_write`/`skill_edit` instead of a raw file
-write. Refusing the write at the tool layer removes that discipline
-requirement: there is no path into `skills/` from a generic tool call, gated or
-not.
+**The registry is not a workspace subdirectory.** If the generic tools could
+write to `skills/` as they write everywhere else in the workspace, the security
+gate would be only as strong as every caller's discipline in routing through
+`skill_write`/`skill_edit` instead of a raw file write. Refusing the write at
+the tool layer removes that requirement: there is no path into `skills/` from a
+generic tool call, gated or not.
 
 **Attribute before you quarantine.** A no-provenance skill is quarantined
 either way — the security posture does not change based on whether it can be

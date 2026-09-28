@@ -132,17 +132,25 @@ hour while it runs; deciding a request past its expiry expires just that one.
 ## Inside the TUI
 
 - `/sessions` — modal picker over saved sessions (Esc to cancel)
-- `/model` or `Ctrl+L` — modal picker over configured presets
+- `/model` or `Ctrl+L` — modal picker: the default model, configured presets,
+  recent models, and the models of each configured provider
 - `/memory list|show|search|drill` — inspect the agent's memory
 - `/remember <fact>` / `/forget <id>` — author memory directly
 - `/compact [hint]` / `/copy` / `/name <name>` — session ergonomics
-- Drag-and-drop a file path into the input to attach it
+- Drag-and-drop an image or audio file into the input to attach it; any other
+  file stays in the message as a path for the agent to read
 - Attach or record audio — transcribed to text locally before reaching the
   agent (`[stt]`/`[voice]` extras; see [install.md](install.md)).
-  Default engine: Parakeet TDT v3 (~30× real-time on CPU, 25 European
-  languages). Use `sensevoice` for Chinese/Japanese/Korean, or configure a
+  Default engine: Parakeet TDT v3 (runs on CPU; European languages). Use
+  `sensevoice` for Chinese/Japanese/Korean, or configure a
   cloud provider (Groq/OpenAI). In the TUI: drag an audio file or `/voice`
   to record. In the webui: attach a clip or use the 🎙 mic button.
 - `@<prefix>` — fuzzy-complete a workspace file
 - `!cmd` / `!!cmd` — shell shortcut (publishes / silent)
 - `Alt+Enter` — newline; `Enter` — submit; `Esc` — cancel turn (also with `unified_session` on)
+- `Ctrl+P` — command palette; `Ctrl+Y` — copy the last reply; `Ctrl+R` — retry
+  the last message; `Ctrl+G` — send the input as a steer into the running turn;
+  `Ctrl+Shift+L` — reasoning effort; `Ctrl+Shift+P` — persona; `Ctrl+B` —
+  sidebar; `Ctrl+T` — light/dark theme; `Ctrl+Q` or `Ctrl+D` — quit
+- `/hotkeys` — list the terminal UI's keyboard shortcuts (the app's and the
+  input box's) and the legacy prompt's

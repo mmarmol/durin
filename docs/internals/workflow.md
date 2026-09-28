@@ -152,9 +152,11 @@ metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 limits that stdin does not). The rest of the subprocess environment is controlled
 by the node's `env` field: `"clean"` (the default) starts from a minimal allowlist
 (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`,
-`DURIN_HOME` — only those present); `"inherit"` is the full gateway process environment, opt-in
+`DURIN_HOME` — only those present); `"inherit"` is the gateway process environment, opt-in
 per node (see [security.md](security.md)). Neither mode carries stored
-secrets — they live in the secret store, not the gateway environment — so a node
+secrets: the gateway's environment also holds credentials it loaded from the
+store for its own clients (provider API keys), so `inherit` leaves out every
+variable whose value is a stored secret (`ScriptNodeRunner._base_env`). A node
 that must authenticate declares the names it needs in **`secrets`**: each is
 resolved from the store into the subprocess env (the entry's `scope` must allow
 the `exec` consumer, the same grant the exec tool honours), validated pre-flight
@@ -221,7 +223,7 @@ A node may declare **named inputs** (`inputs_from`): its input becomes one label
 `[source-id]` per named node — the source's last recorded output this run, falling back on
 a resumed run to the manifest's `resume_inputs` seeds — always followed by an `[upstream]`
 block carrying the walk's current edge text, so loop-back feedback and route context are
-never lost and a script chain between producer and consumer no longer needs courier files.
+never lost and a script chain between producer and consumer needs no courier files.
 A work node may declare a **structured output** (`output_schema`): the node runner forces a
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
@@ -774,9 +776,7 @@ reads the run manifest (rendering the run's `work_dir`, each node's latest-pass
 `duration_s`, and a capped listing of the working folder's current files — the
 mid-run window onto a run's artifacts) and, while a node is executing, names it
 as the currently-running entry in that same per-node list (from the manifest's
-`active_node`) — previously that list showed only nodes that had already
-finished, so a multi-minute node was invisible in the tool's answer for its
-whole duration. `tasks(action='stop', id=…)` requests cancellation, graceful by
+`active_node`). `tasks(action='stop', id=…)` requests cancellation, graceful by
 default and hard with `force=true` (or on a repeat stop) — see **Cooperative
 cancellation** below; a run with a pending cancel reports as `stopping` and is
 still counted among the running work. The same
@@ -1071,15 +1071,15 @@ capped `detail` field, so push-fed panels (the TUI sidebar) can show a paused
 run and what it is waiting for without polling the tasks API or reading the
 manifest.
 
-**Node session durability.** A node's session used to persist once, when its
-agent turn returned — a node that failed mid-turn, or a gateway that died
-mid-node, lost every round that turn had already completed. `NodeCheckpointHook`
-(`durin/workflow/node_progress.py`) now persists the node's conversation after
-every agent round instead, composed alongside the progress hook via
-`CompositeHook` (unconditionally — a node's session is durable whether or not
-anything is watching its progress) so a failing checkpoint can never abort the
-node. When the turn itself raises, the failure path prefers the hook's last
-checkpoint over the pre-turn snapshot whenever it is strictly longer, so a
+**Node session durability.** `NodeCheckpointHook`
+(`durin/workflow/node_progress.py`) persists the node's conversation after
+every agent round, so a node that fails mid-turn, or a gateway that dies
+mid-node, keeps the rounds already completed. The hook is composed alongside
+the progress hook via `CompositeHook` (unconditionally — a node's session is
+durable whether or not anything is watching its progress) so a failing
+checkpoint can never abort the node. When the turn itself raises, the failure
+path prefers the hook's last checkpoint over the pre-turn snapshot whenever it
+is strictly longer, so a
 node that completed three rounds before its provider call failed keeps those
 three rounds navigable in its persisted session instead of reverting to how it
 looked before the turn began.
@@ -1271,11 +1271,13 @@ End-to-end for a single `run_workflow` call:
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
-  control global defaults. `max_node_visits` caps how many times any node can iterate (a safety
-  ceiling on visit budgets declared per-node). `keep_runs` bounds, per workflow name, both how many
-  runs' working folders (`.workflow/<run_id>/`) are retained on disk and how many terminal run
-  manifests are kept (see §4a Retention) — older ones are pruned automatically, so deliverables
-  that must outlive retention should be copied to the workspace proper or elsewhere.
+  control global defaults, and every run honours them: the `run_workflow` tool, an HTTP or
+  editor launch, an automation, and a nested sub-workflow. `max_node_visits` caps how many times
+  any node can iterate (a safety ceiling on visit budgets declared per-node). `keep_runs` bounds
+  how many runs' working folders (`.workflow/<run_id>/`) are retained on disk, across all
+  workflows, and, per workflow name, how many terminal run manifests are kept (see §4a
+  Retention) — older ones are pruned automatically, so deliverables that must outlive retention
+  should be copied to the workspace proper or elsewhere.
   `workflow.script_timeout` (default 300s) is the default per-node timeout for a script
   node (a node's own `timeout` overrides it); `workflow.script_output_max_chars`
   (default 16000) caps a script node's captured stdout — the edge text it passes on

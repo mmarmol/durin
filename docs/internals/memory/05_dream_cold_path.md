@@ -97,10 +97,8 @@ compaction first waits for the table to go quiet (no new version for ten
 seconds, capped at three minutes), takes its row count and rollback version
 only then, and when a write lands during the rewrite anyway waits again and
 retries up to four times; the version prune that follows a verified rewrite
-is skipped, not failed, if a writer commits in between. Before this the box's
-nightly compaction failed every night from 2026-09-18 and the table was back
-to hundreds of versions within days. The `memory.index.compacted` event
-carries `attempts` and `quiet_wait_ms`.
+is skipped, not failed, if a writer commits in between. The
+`memory.index.compacted` event carries `attempts` and `quiet_wait_ms`.
 
 **3. Per-session cursor → idempotent, lossless.** The extract pass tracks
 progress with a single integer **per-session cursor** (turns already processed).
@@ -393,7 +391,8 @@ warning and is skipped, never aborting the pass. Gated by
 `run_skill_extract_pass(workspace, *, provider, model, max_sessions=3)` is the
 **only agentic pass**: it spins up an `AgentRunner` sub-agent with
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
-`SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, mining the
+`SkillAcquireSeedTool`, `ListWorkflowsTool`, `WorkflowWriteTool`,
+`WorkflowScriptWriteTool`, and `DependentsTool`, mining the
 newest sessions (plus any logged skill gaps)
 for a recurring step-by-step **procedure**. Each session gets its share of the
 input window and is trimmed on its own, keeping its start and its end — the end
@@ -404,7 +403,8 @@ observations recorded from those sessions about existing skills
 logged mid-session can carry that slice's failed guesses; the corrections that
 held are often on a skill that already covers the area. The prompt tells the
 extractor to encode only facts a session shows working, and not to author a
-skill for a procedure a correction shows an existing skill already covers. When it finds one it prefers
+skill for a procedure a correction shows an existing skill already covers.
+When it finds a procedure worth a skill, it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
 over authoring from scratch, then calls `skill_write`. Its prompt lists the
 retired skills with their replacements, and its `skill_write` door refuses a
@@ -540,10 +540,7 @@ everything that changes state — tombstone checks (loaded once per run),
 merges, cache writes, telemetry — is applied one pair at a time in candidate
 order after each chunk. The verdict cache is flushed every few pairs, on a
 timer, and on exit, so an interrupted run — a kill, a deploy, a budget stop —
-keeps what it judged. Before this the pass had no budget, judged one pair per
-provider round-trip and saved its cache only at the very end; a large
-workspace's typed duplicate window fed it enough pairs to run past the next
-nightly trigger, and any interruption discarded the night.
+keeps what it judged.
 
 **Provider failures stop the run; they are never remembered against a pair.**
 The judge tells a parse failure (the model answered outside the envelope — a

@@ -46,8 +46,9 @@ configured, the tool is absent from the LLM's tool list entirely. The capability
 **Auxiliary models resolve independently per purpose.** The `agents.aux_models.vision`,
 `agents.aux_models.audio`, and `agents.aux_models.memory` config fields each accept
 either a named preset reference or an inline `model + provider` pair. `resolve_aux_preset`
-always returns a `ModelPresetConfig` — never `None` — degrading to the default preset
-when no purpose-specific override is set.
+returns a `ModelPresetConfig`, degrading to the default preset when no purpose-specific
+override is set. `automations` (and legacy `loops`) return `None` when no override
+resolves, so those calls ride the agent's live model.
 
 **A model name only means something under its provider.** Every specific-model knob
 (`skills.security.llm_judge`, `memory.dream.model_override` — deprecated in favor of
@@ -56,7 +57,7 @@ when no purpose-specific override is set.
 CONFIGURED providers only — deliberately without `_match_provider`'s any-key-bearing
 last resort. A name no configured provider recognizably serves falls back to the WHOLE
 default preset (specific-or-default) with a loud log; pairing a foreign name with the
-default provider is never correct (it produced silent per-call 404s in production).
+default provider is never correct.
 Provider and model always travel together: consumers build their provider from the
 same resolved preset (`make_provider(cfg, preset=...)`), and a failed purpose invoke
 emits `aux.invoke_failure` naming the pair, because most aux consumers are
@@ -140,13 +141,14 @@ Every turn starts with `config.resolve_preset(name)` (`durin/config/schema.py`).
 Otherwise `resolve_default_preset()` constructs an implicit preset from `agents.defaults`
 fields, layering in any per-model parameter overrides declared under the active provider's
 `models` dict and cross-referencing the capability snapshot for token bounds. The result
-is a `ModelPresetConfig` — a frozen bundle of `model`, `provider`, `max_tokens`,
-`context_window_tokens`, `temperature`, `reasoning_effort`, and
-`preemptive_compact_ratio`. The per-(provider, model) catalog lookup
+is a `ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
+`context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
+`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`. The
+per-(provider, model) catalog lookup
 (`catalog_model_caps`, `durin/providers/provider_catalog.py`) supplies the token
 bounds when no explicit override exists; `openai_codex` is not in the catalog, so
 each codex slug inherits the matching `openai` entry's caps (window / output
-limit) — resolution no longer skips the catalog for codex.
+limit).
 
 ### 4.2 Provider matching
 
@@ -221,8 +223,7 @@ subclasses, Bedrock; `FallbackProvider` reports its primary's flag). The agent
 runner reads the flag to decide liveness semantics per request: on a
 natively-streaming provider a hung request is detected by stream *silence*, so
 the runner relaxes the wall clock to a generous 30-minute backstop and an
-actively-generating call may run as long as it needs (long workflow-synthesis
-and dream calls died at the old tight cap mid-generation). The backstop is kept
+actively-generating call may run as long as it needs. The backstop is kept
 rather than dropped because the watchdog counts chunks, not payload — a gateway
 that emits heartbeat chunks can keep resetting it while the backend is wedged,
 and unattended runs (workflows, dream, cron) need a hard upper bound. On
@@ -305,8 +306,10 @@ For purpose `"memory"`:
    provider.
 3. Otherwise — return the default preset unchanged.
 
-The function always returns a `ModelPresetConfig`. Bridge tools and dream passes build
-their provider from this preset using the same factory path as the primary model.
+It returns a `ModelPresetConfig` for every purpose except `automations` (and legacy
+`loops`), which returns `None` when no override resolves, so the call rides the agent's
+live model. Bridge tools and dream passes build their provider from this preset using
+the same factory path as the primary model.
 
 ### 4.9 Per-turn provider snapshot
 
@@ -322,13 +325,13 @@ turn from mid-session provider changes on other sessions.
 
 The OpenAI-compatible request is sent in the **OpenAI-standard shape by default**,
 and only degraded for the specific endpoints that prove they need it — rather than
-carrying per-model allowlists that rot as providers ship new models. Four behaviors
+carrying per-model allowlists that rot as providers ship new models. These behaviors
 implement this:
 
 - **Assistant content rides alongside `tool_calls`.** `_sanitize_messages` keeps the
-  model's own narration on tool-call turns. Blanking it (the earlier default) hid
-  what the model had already said, so models that narrate every step — GLM in
-  particular — re-emitted the same acknowledgment on each tool step of a turn.
+  model's own narration on tool-call turns. Blanking it hides what the model already
+  said, and models that narrate every step (GLM in particular) then repeat the same
+  acknowledgment on each tool step.
 - **Surrogate scrub.** Lone UTF-16 surrogate code points emitted by byte-level
   reasoning models (GLM, Kimi, MiMo) are replaced with U+FFFD before the body is
   UTF-8 encoded; otherwise one bad code point raises `UnicodeEncodeError` and sinks
@@ -349,8 +352,10 @@ single time. The OpenAI-compat provider recovers these shapes: a `reasoning_cont
 the endpoint's message schema does not have (send the history without it, and leave
 it off that model's later requests — an error saying the field is missing, required
 or empty keeps it), content sent alongside `tool_calls` (blank
-it — the backstop for the default above), and an unsupported `temperature` or
-token-limit param (drop it via the `_OMIT` sentinel that `_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
+it — the backstop for the default above), an unsupported `temperature` or
+token-limit param (drop it via the `_OMIT` sentinel that `_build_kwargs` honors),
+and a tool result missing the `name` an endpoint requires (added back from the
+call it answers — see 4.11). A new model whose endpoint quietly drops support for a param
 is absorbed here without a code edit; the base-class default is no recovery.
 
 ### 4.11 The model's reasoning in later requests
@@ -389,8 +394,7 @@ Provider rules the serialization honors:
   and remembers what a model or endpoint refused so later requests do not
   fail the same way:
   - the binding field on an endpoint without it is left out from then on;
-  - a forced tool on a model that refuses one (Opus 5.5, Fable 5.1, Mythos
-    5.1) becomes `auto` for that model;
+  - a forced tool on a model that refuses one becomes `auto` for that model;
   - a disabled thinking on a model that always thinks is left out for that
     model;
   - a thinking block the API no longer accepts (a signature, or content that
@@ -403,10 +407,10 @@ Provider rules the serialization honors:
   earlier assistant turns lack `reasoning_content`, so a turn stored without
   reasoning gets the single-space pad above. The pad follows DeepSeek's API —
   the `deepseek` provider, or a base URL on `api.deepseek.com` — rather than
-  the model name, so a new DeepSeek model is covered without a code change. It
-  is skipped when the effort is `none` and for `deepseek-chat`, the legacy
-  non-thinking alias. Other hosts serving DeepSeek weights keep their own
-  contract.
+  the model name, so a new DeepSeek model is covered without a code change.
+  Without an explicit effort it skips `deepseek-chat`, the legacy non-thinking
+  alias; `none` or `minimal` skips it on every model. Other hosts serving
+  DeepSeek weights keep their own contract.
 - **Providers that take no reasoning back.** `ProviderSpec.echo_reasoning`
   is false for Mistral, whose assistant message schema forbids extra fields,
   and for Groq, whose non-reasoning models reject any reasoning field — and a
@@ -447,12 +451,12 @@ Provider rules the serialization honors:
 | `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |
 | `ProvidersConfig` | `durin/config/schema.py` | Container with one `ProviderConfig` field per provider name |
-| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens`, `temperature`, `reasoning_effort`, `preemptive_compact_ratio` |
+| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
 | `AuxModelConfig` | `durin/config/schema.py` | Aux bridge config: `preset` (named preset ref) or inline `model` + `provider` |
-| `AuxModelsConfig` | `durin/config/schema.py` | Container: `vision`, `audio`, `memory` (each `AuxModelConfig | None`) |
+| `AuxModelsConfig` | `durin/config/schema.py` | Container: `vision`, `audio`, `memory`, `subagents`, `automations`, and legacy `loops` (each an optional `AuxModelConfig`) |
 | `Config._match_provider` | `durin/config/schema.py` | Ordered provider walk returning `(ProviderConfig, spec_name)` |
 | `Config.resolve_preset` | `durin/config/schema.py` | Return `ModelPresetConfig` from named preset or implicit default |
-| `resolve_aux_preset` | `durin/memory/model_resolve.py` | Resolve purpose-specific preset for out-of-loop calls; never returns `None` |
+| `resolve_aux_preset` | `durin/memory/model_resolve.py` | Resolve purpose-specific preset for out-of-loop calls; returns `None` only for an unset `automations` (or legacy `loops`) override |
 
 ---
 
@@ -555,6 +559,9 @@ agents:
 | `agents.aux_models.vision` | `null` | Vision bridge model; disables interpret_image tool when unset |
 | `agents.aux_models.audio` | `null` | Audio bridge model; disables interpret_audio tool when unset |
 | `agents.aux_models.memory` | `null` | Dream pass model; falls back to `memory.dream.model_override` then default preset |
+| `agents.aux_models.subagents` | `null` | Model for spawned subagents; unset = the subagent inherits the parent session's model |
+| `agents.aux_models.automations` | `null` | Model for automations' semantic trigger-filter calls; unset = the agent's live model |
+| `agents.aux_models.loops` | `null` | Legacy: read only to fill an unset `aux_models.automations`; set `automations` instead |
 | `memory.dream.model_override` | `null` | Per-dream model name override (fallback when `aux_models.memory` not set) |
 
 ### Provider-selection surfaces
@@ -619,9 +626,11 @@ blocks. A model that supports caching natively may be served through a gateway t
 strips the field. Gating on the provider spec (not the model's inherent capability)
 prevents sending cache markers to gateways that reject them.
 
-**Why does `resolve_aux_preset` never return `None`?**
+**Why does `resolve_aux_preset` fall back to the default preset?**
 Bridge tools and dream passes are invoked from contexts that already own a running
 provider. Forcing a fallback to the default preset means they always have a valid,
 callable model — the user's own model, with the user's own credentials. Returning
 `None` would push the "what model do we use?" decision to every call site, multiplying
-the failure modes.
+the failure modes. The one exception is `automations` (and legacy `loops`): with no
+override, `None` tells the caller to run on the agent's live model, which a runtime
+model switch keeps current where the default preset would not.
