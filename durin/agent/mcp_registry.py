@@ -240,12 +240,16 @@ def _hit_from_server(obj: dict, *, registry: str) -> McpServerHit:
 
 
 class _DefaultHTTP:
-    """Minimal async JSON GET, used when no http client is injected."""
+    """Minimal async JSON GET, used when no http client is injected.
+    ``timeout`` is per request, in seconds."""
+
+    def __init__(self, timeout: float = 15.0) -> None:
+        self._timeout = timeout
 
     async def get_json(self, url: str) -> dict:
         import httpx
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             return resp.json()

@@ -16,8 +16,22 @@ from pathlib import Path
 
 from durin.agent.mcp_github import GithubMeta, classify_official, parse_repo_url
 
-_RETRY_ATTEMPTS = 4
+_RETRY_ATTEMPTS = 6
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# Per-request timeout for the registry crawls, in seconds. The official
+# registry lists well over a hundred pages and answers some of them in about a
+# minute (with the odd 500 in between), so the interactive client's 15 s
+# failed the weekly build.
+_CRAWL_TIMEOUT_S = 120.0
+
+
+def crawl_registries():
+    """The official and GitHub registry clients the catalog build crawls
+    with, patient enough for their slowest pages."""
+    from durin.agent.mcp_registry import GithubMcpRegistry, OfficialMcpRegistry, _DefaultHTTP
+
+    return (OfficialMcpRegistry(http=_DefaultHTTP(timeout=_CRAWL_TIMEOUT_S)),
+            GithubMcpRegistry(http=_DefaultHTTP(timeout=_CRAWL_TIMEOUT_S)))
 # Seconds between GraphQL batches in CI. GitHub's secondary rate limit trips on
 # bursts of unspaced requests; ~1s/batch keeps the weekly crawl under it. The
 # default GITHUB_TOKEN has tighter secondary limits than a user PAT.
@@ -243,14 +257,12 @@ def main() -> None:
     import httpx
 
     from durin.agent.mcp_github import _GQL, resolve_token
-    from durin.agent.mcp_registry import GithubMcpRegistry, OfficialMcpRegistry
 
     token = resolve_token()
     if not token:
         print("No GitHub token found — enrichment will be empty.", file=sys.stderr)
 
-    registry = OfficialMcpRegistry()
-    gh_registry = GithubMcpRegistry()
+    registry, gh_registry = crawl_registries()
 
     def sync_fetch_page(*, cursor=None, updated_since=None):
         return asyncio.run(registry.fetch_page(cursor=cursor, updated_since=updated_since))
