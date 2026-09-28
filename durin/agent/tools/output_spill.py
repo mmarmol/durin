@@ -46,6 +46,26 @@ def _spill_filename(tool_name: str, content: str) -> str:
     return f"{safe_tool}_{ts}_{digest}.txt"
 
 
+def write_spill(
+    content: str,
+    tool_name: str,
+    workspace: Path | None,
+) -> tuple[Path | None, str | None]:
+    """Write ``content`` to a new spill file.
+
+    Returns ``(path, None)``, or ``(None, reason)`` when the file cannot be
+    written. The caller redacts ``content`` first: this writes it as given.
+    """
+    root = _spill_root(workspace)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / _spill_filename(tool_name, content)
+        atomic_write_text(path, content)
+    except Exception as e:
+        return None, str(e)[:80]
+    return path, None
+
+
 def truncate_with_spill(
     content: str,
     tool_name: str,
@@ -80,16 +100,7 @@ def truncate_with_spill(
         content = redact(content)
         n = len(content)
 
-    root = _spill_root(workspace)
-    spill_path: Path | None = None
-    spill_error: str | None = None
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-        spill_path = root / _spill_filename(tool_name, content)
-        atomic_write_text(spill_path, content)
-    except Exception as e:
-        spill_error = str(e)[:80]
-        spill_path = None
+    spill_path, spill_error = write_spill(content, tool_name, workspace)
 
     head_budget = max(0, int(max_chars * head_ratio))
     # Reserve room for the footer (~400 chars) within the budget.

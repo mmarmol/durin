@@ -226,3 +226,93 @@ async def test_outside_an_agent_run_the_historical_limit_applies(tmp_path: Path)
 
     assert "(End of file" in result
     assert len(result) > 16_000
+
+
+_DOC_SECRET = "doc-secret-value-0123456789"
+_DOC_TAIL = "THE_LAST_PARAGRAPH"
+
+
+def _fake_long_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A document whose extracted text is far over one page, holding a
+    stored secret and a marker at its very end."""
+    import durin.security.secrets as secrets
+    import durin.utils.document as document
+    from durin.security.secrets import SecretRedactor
+
+    body = "\n".join(f"Paragraph {i}: the quick brown fox jumps over the lazy dog." for i in range(1_200))
+    text = f"{body}\nkey {_DOC_SECRET}\n{_DOC_TAIL}"
+    monkeypatch.setattr(document, "extract_text", lambda fp: text)
+    monkeypatch.setattr(secrets, "build_redactor", lambda: SecretRedactor({"DOC_KEY": _DOC_SECRET}))
+
+
+async def _read_to_the_end(tool: ReadFileTool, path: str) -> str:
+    """Follow read_file's own continuation footers from the first page on."""
+    pages: list[str] = []
+    offset = 1
+    for _ in range(40):
+        page = await tool.execute(path=path, offset=offset)
+        pages.append(page)
+        nxt = re.search(r"Use offset=(\d+) to continue", page)
+        if nxt is None:
+            break
+        offset = int(nxt.group(1))
+    return "\n".join(pages)
+
+
+@pytest.mark.asyncio
+async def test_an_office_document_over_its_page_is_saved_and_read_back(
+    tmp_path: Path, run_cap: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_long_document(monkeypatch)
+    doc = tmp_path / "report.docx"
+    doc.write_bytes(b"PK")
+    tool = ReadFileTool(workspace=tmp_path)
+
+    page = await tool.execute(path=str(doc))
+
+    assert parse_persisted_reference(_as_delivered(page, run_cap, tmp_path)) is None
+    assert "Document text cut at" in page
+    assert "convert_to_markdown" not in page
+    saved = re.search(r'read_file\(path="([^"]+)"\)', page)
+    assert saved is not None
+    assert _DOC_SECRET not in Path(saved.group(1)).read_text(encoding="utf-8")
+    assert _DOC_TAIL in await _read_to_the_end(tool, saved.group(1))
+
+
+@pytest.mark.asyncio
+async def test_a_batch_with_a_document_over_its_share_still_fits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_long_document(monkeypatch)
+    doc = tmp_path / "report.docx"
+    doc.write_bytes(b"PK")
+    small = tmp_path / "notes.txt"
+    small.write_text("a short note", encoding="utf-8")
+
+    result = await _batch([str(doc), str(small)], 16_000, tmp_path)
+    delivered = _as_delivered(result, 16_000, tmp_path)
+
+    assert parse_persisted_reference(delivered) is None
+    assert len(delivered) <= 16_000
+    assert 'read_file(path=\\"' in json.dumps(result["results"][0]["content"])
+
+
+@pytest.mark.asyncio
+async def test_an_office_document_that_cannot_be_saved_says_why(
+    tmp_path: Path, run_cap: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import durin.agent.tools.output_spill as output_spill
+
+    _fake_long_document(monkeypatch)
+
+    def _refuse(path: Path, content: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(output_spill, "atomic_write_text", _refuse)
+    doc = tmp_path / "report.docx"
+    doc.write_bytes(b"PK")
+
+    page = await ReadFileTool(workspace=tmp_path).execute(path=str(doc))
+
+    assert "could not be saved" in page
+    assert "disk full" in page

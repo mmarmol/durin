@@ -398,6 +398,12 @@ keeps its own limits there too.
   `char_offset=0` on a line of 2,000 chars or less reads the normal page.
 - A page that cannot hold even one line shows the line's head with the same
   pointer, never an empty page.
+- An office document (`.docx`, `.xlsx`, `.pptx`) whose text is larger than its
+  page, or than its share of a batch, has its whole text saved, redacted, to
+  `<workspace>/.durin/spills/`. The page is the head of the text plus the
+  `read_file` call that pages through the saved file, sized so both fit. The
+  same tool reads it back, so this works in runs that have no document tool.
+  If the file cannot be written, the page says so and why.
 
 `grep` sizes its output the same way. A matching or context line over 2,000
 chars is shortened to a 2,000-char window that ends with the `read_file` call

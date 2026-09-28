@@ -782,17 +782,34 @@ class ReadFileTool(_FsTool):
 
         # A batch page's share (``budget``) is measured JSON-encoded, the
         # way the batch arrives.
-        room = (budget if budget is not None else self._page_budget()) - self._FOOTER_ROOM
-        head = result[:room] if budget is None else _json_head(result, room)
-        if len(head) < len(result):
-            result = (
-                head
-                + f"\n\n(Document text cut at {len(head):,} of {len(result):,} chars; "
-                "convert_to_markdown returns the whole text, and a result that "
-                "large is saved to a file you can read in pages.)"
-            )
+        page = budget if budget is not None else self._page_budget()
+        measure = len if budget is None else _json_len
+        if measure(result) <= page - self._FOOTER_ROOM:
+            return result
+        # The whole text goes to a file this same tool pages through, since
+        # a run may have no other way to open the document. It is redacted
+        # before it touches disk; the page itself is redacted by the runner.
+        from durin.agent.tools.output_spill import write_spill
+        from durin.security.secrets import redact_secrets
 
-        return result
+        saved, error = write_spill(redact_secrets(result), "read_file", self._workspace)
+        # Sized with the full length in the note, which the head's length
+        # can only shorten, so head and note fit the page together.
+        room = page - measure(self._document_cut_note(saved, error, len(result), len(result)))
+        head = result[:room] if budget is None else _json_head(result, room)
+        return head + self._document_cut_note(saved, error, len(head), len(result))
+
+    @staticmethod
+    def _document_cut_note(saved: Path | None, error: str | None, shown: int, total: int) -> str:
+        if saved is None:
+            return (
+                f"\n\n(Document text cut at {shown:,} of {total:,} chars; the rest could "
+                f"not be saved to a file: {error or 'unknown error'}.)"
+            )
+        return (
+            f"\n\n(Document text cut at {shown:,} of {total:,} chars. The whole text is "
+            f'saved: read it with read_file(path="{saved}"), one page per call.)'
+        )
 
 
 # ---------------------------------------------------------------------------
