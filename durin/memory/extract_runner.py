@@ -184,7 +184,7 @@ def run_extract_for_session(
         from durin.agent.skill_signals import discover_skill_signals
         from durin.agent.skill_usage import extract_skill_calls
         signals = discover_skill_signals(
-            workspace, text, skill_loads=extract_skill_calls(new_msgs),
+            workspace, text, skill_loads=extract_skill_calls(new_msgs, workspace=workspace),
             llm_invoke=llm_invoke, model=model, session=jsonl_path.stem,
         )
     learned: list[dict] = []

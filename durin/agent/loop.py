@@ -3928,7 +3928,7 @@ class AgentLoop:
         # messages (the same slice _save_turn persists) so calls aren't
         # re-counted every turn as the conversation accumulates.
         _new_messages = ctx.all_messages[ctx.save_skip:]
-        _skill_calls = extract_skill_calls(_new_messages)
+        _skill_calls = extract_skill_calls(_new_messages, workspace=self.workspace)
         if _skill_calls:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
             emit_skill_used(_skill_calls, session_key=ctx.session.key)

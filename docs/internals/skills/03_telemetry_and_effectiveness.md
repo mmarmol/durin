@@ -163,10 +163,15 @@ things the agent did to a skill during a turn:
   `skill_view`).
 - `edit` — `skill_edit` modified the skill.
 - `run` — an `exec` command ran a file inside `skills/<name>/` other than its
-  `SKILL.md` (a bundled script). The call carries `ok` from the result's last
-  `Exit code:` line, when the result shows one. The hindsight signal pass shows
-  a failed run next to the skill ("script failed"), so a script that keeps
-  failing becomes a correction on its skill instead of going unseen.
+  `SKILL.md` (a bundled script): the file is the program of a command segment,
+  or the first argument of an interpreter (`python3 -u …`, past env
+  assignments and wrappers like `timeout 60`), and it exists in this
+  workspace's skills folder. Listing or printing a skill's files is not a run.
+  The call carries `ok` from the result's last `Exit code:` line when the
+  command is that run alone — in a pipeline or a chain the exit code is
+  another command's. The hindsight signal pass shows a failed run next to the
+  skill ("script failed"), so a script that keeps failing becomes a
+  correction on its skill instead of going unseen.
 
 Each event payload is the call dict itself: `{skill, op, turn}`, optionally
 carrying `iteration` and `session_key`. Because this fires per call rather than

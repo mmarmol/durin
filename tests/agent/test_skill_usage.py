@@ -57,6 +57,43 @@ def test_running_a_skill_script_is_a_run_call_with_its_outcome():
         {"skill": "athena-boto3-query", "op": "run", "turn": 1, "ok": True}]
 
 
+def test_listing_or_reading_a_skills_scripts_is_not_a_run():
+    listed = _exec_turn("ls skills/athena-logs/scripts/", "ls: cannot access\n\nExit code: 2")
+    read = _exec_turn("cat skills/athena-logs/scripts/athena_query.py", "import boto3\n\nExit code: 0")
+
+    assert extract_skill_calls(listed) == []
+    assert extract_skill_calls(read) == []
+
+
+def test_a_script_run_in_a_pipeline_has_no_outcome():
+    """The exit code is the pipeline's last command, not the script's."""
+    turn = _exec_turn("python3 skills/athena-logs/scripts/athena_query.py | head -5",
+                      "row\n\nExit code: 0")
+
+    assert extract_skill_calls(turn) == [{"skill": "athena-logs", "op": "run", "turn": 1}]
+
+
+def test_a_wrapped_script_run_counts():
+    turn = _exec_turn("timeout 60 python3 -u skills/athena-logs/scripts/athena_query.py",
+                      "ValueError\n\nExit code: 1")
+
+    assert extract_skill_calls(turn) == [
+        {"skill": "athena-logs", "op": "run", "turn": 1, "ok": False}]
+
+
+def test_only_this_workspaces_skill_scripts_count(tmp_path):
+    script = tmp_path / "skills" / "athena-logs" / "scripts" / "athena_query.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('ok')\n", encoding="utf-8")
+    ours = _exec_turn(f"python3 {script}", "ok\n\nExit code: 0")
+    theirs = _exec_turn("python3 /opt/other-repo/skills/athena-logs/scripts/athena_query.py",
+                        "ok\n\nExit code: 0")
+
+    assert extract_skill_calls(ours, workspace=tmp_path) == [
+        {"skill": "athena-logs", "op": "run", "turn": 1, "ok": True}]
+    assert extract_skill_calls(theirs, workspace=tmp_path) == []
+
+
 def test_printing_a_skill_file_with_exec_is_not_a_run():
     turn = _exec_turn("cat skills/athena-logs/SKILL.md", "---\nname: athena-logs\n\nExit code: 0")
     assert extract_skill_calls(turn) == []
