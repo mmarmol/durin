@@ -104,7 +104,9 @@ The full content of each `auto` skill, as JSON (name -> body):
 ```
 
 The bundled files of those skills (scripts, references), as JSON
-(name -> path -> text; long files are cut). A fix that belongs in one of these
+(name -> path -> text; long files are cut, and once the review's room for them
+is used up a file shows only a "not shown this pass" marker — never evolve
+text you cannot see). A fix that belongs in one of these
 files — a script that fails, a query with wrong columns — is an `evolve` with
 that file's path in `file`, and `old` copied exactly from it:
 

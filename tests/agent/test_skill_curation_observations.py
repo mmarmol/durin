@@ -177,6 +177,139 @@ def test_an_edit_waiting_for_approval_is_not_applied(tmp_path, monkeypatch):
     assert "apr-7" in rec["attempts"][-1]["note"]
 
 
+def _filed_approval(ws, status: str = "pending") -> str:
+    from durin.agent import approval_store
+
+    rec = approval_store.create(ws, kind="skill_edit", summary="edit stable", detail={},
+                                payload={}, change_hash="h", session_key=None, context="")
+    if status != "pending":
+        approval_store.transition(ws, rec["id"], expect=("pending",), to=status)
+    return rec["id"]
+
+
+def _evolve_filed_for_approval(ws, monkeypatch, approval_id: str) -> None:
+    monkeypatch.setattr(ss, "apply_skill_edit", lambda *a, **k: {
+        "error": "edit needs review", "pending_approval": approval_id})
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "evolve", "name": "stable", "old": "old step here",
+                     "new": "new step here", "rationale": "obs #1"}],
+        "observations": [{"id": 1, "disposition": "applied"}]}))
+    monkeypatch.undo()
+
+
+def test_a_rejected_edit_declines_its_observation(tmp_path, monkeypatch):
+    """The person said no: the record is settled, not re-proposed every night."""
+    from durin.agent import approval_store
+
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+    approval_id = _filed_approval(ws)
+    _evolve_filed_for_approval(ws, monkeypatch, approval_id)
+    approval_store.transition(ws, approval_id, expect=("pending",), to="rejected")
+
+    curate_catalog(ws, judge=lambda p: '{"actions": []}')
+
+    assert _record(ws, 1)["status"] == "DECLINED"
+
+
+def test_an_applied_edit_settles_its_observation(tmp_path, monkeypatch):
+    from durin.agent import approval_store
+
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+    approval_id = _filed_approval(ws)
+    _evolve_filed_for_approval(ws, monkeypatch, approval_id)
+    approval_store.transition(ws, approval_id, expect=("pending",), to="applied")
+
+    curate_catalog(ws, judge=lambda p: '{"actions": []}')
+
+    assert _record(ws, 1)["status"] == "APPLIED"
+
+
+def test_an_observation_waiting_for_a_person_is_not_shown_again(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable")
+    _evolve_filed_for_approval(ws, monkeypatch, _filed_approval(ws))
+    ss.mark_curated(ws, "stable")
+
+    calls = []
+    res = curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
+
+    assert res["reviewed"] == 0 and calls == []
+    assert _record(ws, 1)["status"] == "OPEN"
+
+
+def test_a_lesson_already_in_force_settles_its_observation(tmp_path):
+    """The judge proposes the principle an "all" record asks for, but it is
+    already active: the lesson is in place, so the record is applied."""
+    ws = tmp_path / "ws"
+    _mk(ws, "stable")
+    log_observation(ws, skill="all", kind="improvement", issue="scripts skip dry runs",
+                    improvement="every script offers a dry run")
+    add_principle(ws, "Every script offers a dry run.")
+
+    curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "principle", "text": "Every script offers a dry run.",
+                     "rationale": "obs #1"}],
+        "observations": [{"id": 1, "disposition": "applied"}]}))
+
+    assert _record(ws, 1)["status"] == "APPLIED"
+
+
+def test_an_observation_nothing_can_land_stops_pulling_its_skill_in(tmp_path):
+    """After repeated attempts that land nothing, the record waits for a
+    person instead of costing a review every night; a new report of it
+    lets curation try again."""
+    ws = tmp_path / "ws"
+    _mk(ws, "stable", "old step here")
+    _obs(ws, skill="stable")
+    failing = json.dumps({
+        "actions": [{"type": "evolve", "name": "stable", "old": "text that is not there",
+                     "new": "fixed", "rationale": "obs #1"}],
+        "observations": [{"id": 1, "disposition": "applied"}]})
+    for _ in range(3):
+        ss.mark_curated(ws, "stable")
+        curate_catalog(ws, judge=lambda p: failing)
+    assert _record(ws, 1).get("stalled_at")
+
+    ss.mark_curated(ws, "stable")
+    calls = []
+    curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
+    assert calls == []
+
+    _obs(ws, skill="stable")
+    assert not _record(ws, 1).get("stalled_at")
+
+
+def test_the_bundled_files_shown_to_the_judge_have_one_budget(tmp_path):
+    """Every selected skill may carry scripts; the prompt takes at most one
+    budget of them, the skills with open observations first."""
+    from durin.agent.skill_curation import _BUNDLES_TOTAL_CHARS
+
+    ws = tmp_path / "ws"
+    for i in range(12):
+        _mk(ws, f"s{i:02d}")
+        scripts = ws / "skills" / f"s{i:02d}" / "scripts"
+        scripts.mkdir()
+        for j in range(2):
+            (scripts / f"run{j}.py").write_text(
+                f"# marker s{i:02d}-{j}\n" + "print('x')\n" * 800, encoding="utf-8")
+    _obs(ws, skill="s11")
+
+    calls = []
+    curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
+
+    shown = calls[0].count("print('x')") * len("print('x')\n")
+    assert shown <= _BUNDLES_TOTAL_CHARS
+    assert "marker s11-0" in calls[0] and "marker s11-1" in calls[0]
+
+
 def test_an_evolve_can_fix_a_bundled_script(tmp_path):
     """A fix that belongs in a skill's script must be reachable: the judge sees
     the script and can aim an evolve at it."""

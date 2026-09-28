@@ -394,8 +394,10 @@ left for human review and never auto-incorporated.
 
 **Step 5 — build the prompt and call the judge.** `_build_prompt` renders
 `templates/agent/skill_curation.md` with: the selected skills' full content,
-their bundled text files (`_bundle_view`: each file cut to a bounded head, and
-a per-skill total, so a fix that belongs in a script is reviewable), light
+their bundled text files (`_bundle_views`: each file cut to a bounded head,
+within a per-skill total and one total for the whole review, skills with open
+observations first, so a fix that belongs in a script is reviewable; a file
+past the budget shows only a "not shown this pass" marker), light
 usage context, the upstream drift bodies (if any), the OPEN observations
 scoped to the selected skills plus any `"all"` cross-cutting record, a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
@@ -507,15 +509,26 @@ when a change landed on that record's skill:
 - an applied `restructure`;
 - a `fuse` (target and sources);
 - a `retire`;
-- for `skill: "all"`, a principle change.
+- for `skill: "all"`, a principle change, or a proposed principle that is
+  already active (the lesson is in force).
 
 For "the skill already had the fix", it stands when the judge quotes
 `evidence` that `_applied_holds` finds, whitespace-insensitive, in the skill's
-current files. Otherwise the record stays OPEN and gets an `attempts` note (the
-last few kept) saying what was tried: the failed edit's error, or the approval
-it is waiting for. The next pass shows the judge that note. Before this check,
-a fix whose edit never landed — a script the edit could not reach, an approval
-still pending — was archived as applied and never came back.
+current files — for `"all"`, in an active principle. Otherwise the record stays
+OPEN and gets an `attempts` note (the last few kept) saying what was tried: the
+failed edit's error, or the approval it was filed as. The next pass shows the
+judge that note.
+
+A record never stays OPEN forever by itself:
+- **An edit filed for approval** is settled by the person's decision: at the
+  start of each pass (`_settle_decided_edits`) an applied request makes the
+  record APPLIED and a rejected one DECLINED. While the request is open, the
+  record is not shown to the judge and does not pull its skill in, so the
+  same edit is not proposed again.
+- **A record nothing can land** — `_STALL_ATTEMPTS` failed attempts — gets
+  `stalled_at` (event `skill.observation_stalled`) and stops pulling its skill
+  into every pass. It stays OPEN for a person to resolve by hand; a new report
+  of the same issue clears the mark and curation tries again.
 
 **Step 8 — stamp.** Every skill still present in `selected` after the actions
 run gets `mark_curated`, which stamps `provenance.dream_processed_through`

@@ -42,7 +42,9 @@ whichever ramp produced it (see below). `skill.used` marks the *use* signal (a
 skill was loaded or edited during a turn). `skill.observation_logged` marks
 the *feedback* signal (something was noted for later review), and
 `skill.observation_resolved` closes a single observation the user resolves by
-hand. `skill.curation_action` and `skill.curation_run` mark the *judgment*
+hand, and `skill.observation_stalled` (`{skill, kind, attempts}`) marks one
+curation stopped trying after repeated attempts that landed nothing — it now
+waits for a person. `skill.curation_action` and `skill.curation_run` mark the *judgment*
 signal (what the daily judge did, item-by-item and in aggregate).
 `skill.suggestion_resolved` closes the loop for manual skills specifically —
 it records what the *user* decided about a suggestion the judge could not

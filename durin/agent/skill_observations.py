@@ -118,6 +118,9 @@ _SIMILARITY_THRESHOLD = 0.5
 # what already failed without the record growing every night.
 _MAX_ATTEMPTS = 5
 _NOTE_CHARS = 300
+# Attempts that land nothing before a record stops pulling its skill into
+# every curation pass and waits for a person (or a new report of the issue).
+_STALL_ATTEMPTS = 3
 
 
 def _same_issue(a: str, b: str) -> bool:
@@ -210,6 +213,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
         if _same_issue(str(rec.get("issue", "")), issue):
             rec["count"] = int(rec.get("count", 1)) + 1
             rec["last_seen"] = _today()
+            # A new report is new evidence: curation tries a stalled one again.
+            rec.pop("stalled_at", None)
             if session and session not in rec.get("sessions", []):
                 rec.setdefault("sessions", []).append(session)
             _write_records(_active_path(workspace), records)
@@ -398,9 +403,18 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
             # pass sees it instead of trying the same thing blind.
             if d.get("note"):
                 attempts = rec.setdefault("attempts", [])
-                attempts.append({"at": _today(), "note": str(d["note"])[:_NOTE_CHARS]})
+                entry = {"at": _today(), "note": str(d["note"])[:_NOTE_CHARS]}
+                if d.get("approval"):
+                    # Went to a person; their decision settles the record.
+                    entry["approval"] = str(d["approval"])
+                attempts.append(entry)
                 del attempts[:-_MAX_ATTEMPTS]
                 noted += 1
+                failed = [a for a in attempts if not a.get("approval")]
+                if len(failed) >= _STALL_ATTEMPTS and not rec.get("stalled_at"):
+                    rec["stalled_at"] = _today()
+                    _emit("skill.observation_stalled", skill=rec.get("skill", ""),
+                         kind=rec.get("kind", ""), attempts=len(failed))
         else:
             logger.warning("unknown disposition %r for observation %s", disp, d.get("id"))
     sha = None

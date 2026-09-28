@@ -559,9 +559,11 @@ def request_edit_autonomously(workspace: Path, name: str, *, old: str, new: str,
     if outcome.status == "applied":
         return {**(outcome.result or {}), "approval_id": outcome.record["id"],
                 "approved_by": "judge"}
-    return {"error": outcome.message,
-            "pending_approval": (outcome.record or {}).get("id"),
-            "verdict": scan.after, "findings": scan.findings}
+    result = {"error": outcome.message, "verdict": scan.after, "findings": scan.findings}
+    if outcome.status == "pending":
+        # Still open for a person; any other outcome (a failed run) is an error.
+        result["pending_approval"] = (outcome.record or {}).get("id")
+    return result
 
 
 def register_all() -> None:

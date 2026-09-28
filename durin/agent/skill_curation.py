@@ -67,29 +67,70 @@ def _parse_judge_output(raw: object) -> dict | None:
 
 
 _MIN_EVIDENCE_CHARS = 12
-# How much of a skill's bundled files the judge sees: enough to aim an edit at
-# a script line, bounded so one large bundle cannot crowd out the catalog.
+# How much of the bundled files the judge sees: enough to aim an edit at a
+# script line, bounded per file, per skill, and for the whole review — every
+# selected skill may carry scripts, and one batch can hold many skills.
 _BUNDLE_FILE_CHARS = 6000
 _BUNDLE_SKILL_CHARS = 12000
+_BUNDLES_TOTAL_CHARS = 48000
+_NOT_SHOWN = "[not shown this pass: the review's room for bundled files is used up]"
 
 
-def _bundle_view(workspace: Path, name: str) -> dict[str, str]:
+def _bundle_view(workspace: Path, name: str, budget: int = _BUNDLE_SKILL_CHARS) -> dict[str, str]:
     """A skill's bundled text files for the judge, each cut to a bounded
-    head with a marker when longer."""
+    head with a marker when longer, within ``budget`` for the skill."""
     skill_dir = ss._skills_dir(workspace) / name
     if not skill_dir.is_dir():
         return {}
     view: dict[str, str] = {}
-    budget = _BUNDLE_SKILL_CHARS
     for rel, text in ss.read_bundle_files(skill_dir).items():
         if budget <= 0:
-            view[rel] = "[not shown: the skill's bundled files exceed what the review shows]"
+            view[rel] = _NOT_SHOWN
             continue
         cap = min(_BUNDLE_FILE_CHARS, budget)
         view[rel] = text if len(text) <= cap else (
             text[:cap] + f"\n[... cut: {len(text) - cap} more chars not shown ...]")
         budget -= len(view[rel])
     return view
+
+
+def _bundle_views(workspace: Path, names: list[str]) -> dict[str, dict[str, str]]:
+    """Bundled files for the skills under review, in ``names`` order, within
+    one budget for the whole prompt; a skill past it shows its file names."""
+    views: dict[str, dict[str, str]] = {}
+    remaining = _BUNDLES_TOTAL_CHARS
+    for name in names:
+        view = _bundle_view(workspace, name, budget=min(_BUNDLE_SKILL_CHARS, remaining))
+        if view:
+            views[name] = view
+            remaining -= sum(len(t) for t in view.values() if t != _NOT_SHOWN)
+    return views
+
+
+def _settle_decided_edits(workspace: Path) -> set[int]:
+    """Settle the OPEN records whose last attempt is an edit that went to a
+    person: applied makes them APPLIED, rejected DECLINED. Returns the ids
+    still waiting for that decision, which this pass leaves alone — shown
+    again, the judge would propose the same edit."""
+    from durin.agent import approval_store
+
+    waiting: set[int] = set()
+    decided: list[dict] = []
+    for rec in so.open_observations(workspace):
+        attempts = rec.get("attempts") or []
+        approval_id = attempts[-1].get("approval") if attempts else None
+        if not approval_id:
+            continue
+        status = (approval_store.get(workspace, str(approval_id)) or {}).get("status")
+        if status == "applied":
+            decided.append({"id": rec.get("id"), "disposition": "applied"})
+        elif status == "rejected":
+            decided.append({"id": rec.get("id"), "disposition": "declined"})
+        elif status in ("pending", "approved"):
+            waiting.add(int(rec.get("id", 0)))
+    if decided:
+        so.apply_dispositions(workspace, decided)
+    return waiting
 
 
 def _applied_holds(workspace: Path, rec: dict, disposition: dict, landed: set[str]) -> bool:
@@ -101,11 +142,15 @@ def _applied_holds(workspace: Path, rec: dict, disposition: dict, landed: set[st
     if skill in landed:
         return True
     evidence = disposition.get("evidence")
-    if skill == "all" or not isinstance(evidence, str):
+    if not isinstance(evidence, str):
         return False
     needle = _squash(evidence)
     if len(needle) < _MIN_EVIDENCE_CHARS:
         return False
+    if skill == "all":
+        # A cross-skill lesson is in place when an active principle says it.
+        return any(needle in _squash(str(p.get("text", "")))
+                   for p in so.active_principles(workspace))
     skill_dir = ss._skills_dir(workspace) / skill
     if not skill_dir.is_dir():
         return False
@@ -155,6 +200,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     # Records APPLIED during the previous pass got their cycle of visibility —
     # move them to the archive before building this pass's evidence.
     so.archive_resolved(workspace)
+    waiting = _settle_decided_edits(workspace)
 
     # Only the evolving WORKSPACE set: dream-created + forked skills. Pristine
     # builtins (source="builtin") are the stable seed — not re-curated/forked
@@ -180,15 +226,18 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     delta += sorted(n for n in backfilled_names if n not in delta)
     # Observation-driven delta: an OPEN observation pulls its skill in even
     # when the body is unchanged. ("all"/"new:*" records carry no reviewable
-    # skill; they ride along in the prompt / the skill-extract pass.)
-    open_obs = so.open_observations(workspace)
+    # skill; they ride along in the prompt / the skill-extract pass.) A record
+    # waiting for a person's decision on its edit, or one curation stopped
+    # trying (stalled), stays out.
+    open_obs = [r for r in so.open_observations(workspace)
+                if int(r.get("id", 0)) not in waiting and not r.get("stalled_at")]
     delta += sorted(n for n in {r.get("skill") for r in open_obs}
                     if n in auto and n not in delta)
     if not delta:
         _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
              backfilled=backfilled)
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
-                "observations": {**_NO_OBS, "open": len(open_obs)},
+                "observations": {**_NO_OBS, "open": len(so.open_observations(workspace))},
                 "principles": len(so.active_principles(workspace))}
 
     selected = delta[:budget]
@@ -198,7 +247,9 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                     len(delta), budget, deferred)
 
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
-    bundles = {n: view for n in selected if (view := _bundle_view(workspace, n))}
+    # Skills with open observations first: their fix may be in a script.
+    with_obs = {r.get("skill") for r in open_obs}
+    bundles = _bundle_views(workspace, sorted(selected, key=lambda n: n not in with_obs))
 
     import shutil as _shutil
     upstream: dict[str, str] = {}
@@ -270,11 +321,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     # not by the judge saying so.
     landed: set[str] = set()
     attempts: dict[str, list[str]] = {}
+    # The approval an edit was filed as, by skill: its decision settles the
+    # records later (_settle_decided_edits).
+    approvals: dict[str, str] = {}
 
     def _attempt(skill: Any, what: str, res: dict) -> None:
         detail = res.get("error") or "no change was committed"
         if res.get("pending_approval"):
             detail = f"waiting for approval {res['pending_approval']}"
+            approvals[str(skill)] = str(res["pending_approval"])
         attempts.setdefault(str(skill), []).append(f"{what}: {detail}")
 
     for a in actions:
@@ -395,6 +450,10 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             if ok:
                 applied += 1
                 landed.add("all")
+            elif r.get("error") == "principle already exists":
+                # The lesson is already in force: what an "all" record asks for
+                # is in place.
+                landed.add("all")
             else:
                 _attempt("all", "principle", r)
                 logger.warning("curation: principle action rejected: %s", r.get("error"))
@@ -420,13 +479,16 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         rec = shown.get(d.get("id"))
         if rec is None:
             continue
+        skill = str(rec.get("skill") or "")
         if d.get("disposition") == "applied" and not _applied_holds(workspace, rec, d, landed):
-            skill = str(rec.get("skill") or "")
             note = "; ".join(attempts.get(skill, [])) or (
                 "marked applied, but no change landed on the skill and no evidence "
                 "was quoted from it")
-            dispositions.append({"id": d.get("id"), "disposition": "keep", "note": note})
-            continue
+            d = {"id": d.get("id"), "disposition": "keep", "note": note}
+        elif d.get("disposition") == "keep" and attempts.get(skill):
+            d = {**d, "note": "; ".join(attempts[skill])}
+        if d.get("disposition") == "keep" and skill in approvals:
+            d = {**d, "approval": approvals[skill]}
         dispositions.append(d)
     obs_res = (so.apply_dispositions(workspace, dispositions)
                if dispositions else dict(_NO_OBS))
