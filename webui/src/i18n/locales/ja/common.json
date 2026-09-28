@@ -1310,7 +1310,7 @@
     "timeoutHint": "設定済みのデフォルトを使用",
     "scriptEnv": "環境変数",
     "scriptEnvClean": "クリーン（最小限 + DURIN_*）",
-    "scriptEnvInherit": "全環境変数を継承",
+    "scriptEnvInherit": "ゲートウェイの環境を継承（保存済みシークレットを除く）",
     "scriptSecrets": "シークレット",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "保存済みのシークレット名が環境変数として注入されます。それぞれ 'exec' スコープを許可している必要があります。",

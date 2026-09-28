@@ -1310,7 +1310,7 @@
     "timeoutHint": "memakai default yang dikonfigurasi",
     "scriptEnv": "Environment",
     "scriptEnvClean": "Bersih (minimal + DURIN_*)",
-    "scriptEnvInherit": "Warisi environment penuh",
+    "scriptEnvInherit": "Warisi environment gateway (tanpa secret tersimpan)",
     "scriptSecrets": "Secret",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Nama secret tersimpan yang disuntikkan sebagai variabel lingkungan. Masing-masing harus mengizinkan scope 'exec'.",

@@ -1310,7 +1310,7 @@
     "timeoutHint": "使用已設定的預設值",
     "scriptEnv": "環境變數",
     "scriptEnvClean": "乾淨（僅基本 + DURIN_*）",
-    "scriptEnvInherit": "繼承完整環境",
+    "scriptEnvInherit": "繼承閘道環境（不含已儲存的密鑰）",
     "scriptSecrets": "密鑰",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "已儲存的密鑰名稱會作為環境變數注入。每一個都必須允許 'exec' 範圍。",

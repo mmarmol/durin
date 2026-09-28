@@ -1310,7 +1310,7 @@
     "timeoutHint": "使用已配置的默认值",
     "scriptEnv": "环境变量",
     "scriptEnvClean": "纯净（最小化 + DURIN_*）",
-    "scriptEnvInherit": "继承完整环境变量",
+    "scriptEnvInherit": "继承网关环境（不含已存储的密钥）",
     "scriptSecrets": "密钥",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "已存储的密钥名称会作为环境变量注入。每一个都必须允许 'exec' 范围。",

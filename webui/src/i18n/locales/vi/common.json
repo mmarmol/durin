@@ -1310,7 +1310,7 @@
     "timeoutHint": "dùng mặc định đã cấu hình",
     "scriptEnv": "Biến môi trường",
     "scriptEnvClean": "Sạch (tối thiểu + DURIN_*)",
-    "scriptEnvInherit": "Kế thừa toàn bộ môi trường",
+    "scriptEnvInherit": "Kế thừa môi trường gateway (không gồm secret đã lưu)",
     "scriptSecrets": "Bí mật",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Tên secret đã lưu được tiêm vào dưới dạng biến môi trường. Mỗi secret phải cho phép scope 'exec'.",

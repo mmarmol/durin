@@ -1310,7 +1310,7 @@
     "timeoutHint": "설정된 기본값을 사용합니다",
     "scriptEnv": "환경 변수",
     "scriptEnvClean": "정리됨 (최소 + DURIN_*)",
-    "scriptEnvInherit": "전체 환경 변수 상속",
+    "scriptEnvInherit": "게이트웨이 환경 상속(저장된 시크릿 제외)",
     "scriptSecrets": "시크릿",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "저장된 시크릿 이름이 환경 변수로 주입됩니다. 각각 'exec' 범위를 허용해야 합니다.",

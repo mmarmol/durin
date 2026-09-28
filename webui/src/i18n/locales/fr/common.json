@@ -1310,7 +1310,7 @@
     "timeoutHint": "utilise le délai configuré par défaut",
     "scriptEnv": "Environnement",
     "scriptEnvClean": "Propre (minimal + DURIN_*)",
-    "scriptEnvInherit": "Hériter de l’environnement complet",
+    "scriptEnvInherit": "Hériter de l'environnement du gateway (sans secrets stockés)",
     "scriptSecrets": "Secrets",
     "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
     "scriptSecretsHint": "Noms de secrets stockés, injectés comme variables d’environnement. Chacun doit autoriser le scope 'exec'.",
