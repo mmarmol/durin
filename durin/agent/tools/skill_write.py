@@ -131,10 +131,14 @@ class SkillWriteTool(Tool, ContextAware):
         # A skill someone retired stays retired unless a person brings it back:
         # the dream's door never does, and in-session only the user's explicit
         # word (override_retired) does — the agent may call this on its own.
+        # Off the event loop: the first read of the retirements takes the
+        # skills store's lock, which the dream worker may hold.
+        import asyncio
         if not (kwargs.get("override_retired") and self._gate_mode == "override"):
             from durin.agent.skill_retirements import retired_refusal
-            refusal = retired_refusal(self._workspace, str(kwargs.get("name", "")),
-                                      can_override=self._gate_mode == "override")
+            refusal = await asyncio.to_thread(
+                retired_refusal, self._workspace, str(kwargs.get("name", "")),
+                can_override=self._gate_mode == "override")
             if refusal is not None:
                 return json.dumps(refusal, ensure_ascii=False)
 
@@ -147,7 +151,6 @@ class SkillWriteTool(Tool, ContextAware):
         # the SYNC llm_invoke (_run_blocking), which would otherwise freeze the
         # gateway loop for the whole judge round-trip. On the worker thread
         # _run_blocking sees no running loop and takes its clean asyncio.run branch.
-        import asyncio
         result = await asyncio.to_thread(
             dream_create_skill,
             self._workspace,

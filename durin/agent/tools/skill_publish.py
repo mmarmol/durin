@@ -66,10 +66,12 @@ class SkillPublishTool(Tool, ContextAware):
         from durin.agent.skills_store import Attribution, publish_draft_skill
 
         # Publishing under a retired name brings that skill back: the user's
-        # explicit word (override_retired) only.
+        # explicit word (override_retired) only. Checked off the event loop:
+        # the first read of the retirements takes the skills store's lock.
         if not kwargs.get("override_retired"):
-            refusal = retired_refusal(self._workspace, str(kwargs.get("name", "")),
-                                      can_override=True)
+            refusal = await asyncio.to_thread(
+                retired_refusal, self._workspace, str(kwargs.get("name", "")),
+                can_override=True)
             if refusal is not None:
                 return json.dumps(refusal, ensure_ascii=False)
         attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())

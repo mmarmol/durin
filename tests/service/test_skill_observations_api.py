@@ -84,6 +84,46 @@ async def test_resolve_applied_and_declined(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resolving_waits_for_the_skills_lock_off_the_event_loop(tmp_path):
+    """Another writer (the dream worker) may hold the skills store's lock;
+    the gateway's event loop keeps serving while the resolve waits for it."""
+    import asyncio
+    import threading
+    import time
+
+    from durin.agent import skills_store as ss
+
+    ws = tmp_path
+    _log(ws, issue="a")
+    held = threading.Event()
+
+    def hold_the_lock():
+        with ss._store(ws).write_lock():
+            held.set()
+            time.sleep(0.6)
+
+    holder = threading.Thread(target=hold_the_lock)
+    holder.start()
+    held.wait(5)
+    beats: list[float] = []
+
+    async def heartbeat():
+        for _ in range(12):
+            beats.append(time.monotonic())
+            await asyncio.sleep(0.05)
+
+    svc = SkillsService(workspace=ws)
+    beating = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0.12)
+    await svc.resolve_observation(ResolveObservationCommand(id=1, disposition="applied"),
+                                  Principal.local())
+    await beating
+    holder.join()
+
+    assert max(b - a for a, b in zip(beats, beats[1:])) < 0.3
+
+
+@pytest.mark.asyncio
 async def test_resolve_upstream_takes_the_record_off_the_queue(tmp_path):
     """The exit for an observation on a skill durin ships: curation never acts on
     it, so the API must accept a disposition that neither claims a local change

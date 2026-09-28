@@ -118,6 +118,42 @@ async def test_a_retired_name_is_matched_in_any_spelling(tmp_path: Path) -> None
     assert rec["skill"] == "athena-boto3-query"
 
 
+@pytest.mark.asyncio
+async def test_the_retirement_check_waits_off_the_event_loop(tmp_path: Path) -> None:
+    """The first read of the retirements reads the skills history under the
+    store's lock, which the dream worker may hold; the gateway keeps serving."""
+    import asyncio
+    import threading
+    import time
+
+    _skill(tmp_path, "seed")
+    ss._store_init(tmp_path).auto_commit("skill: seed")
+    held = threading.Event()
+
+    def hold_the_lock():
+        with ss._store(tmp_path).write_lock():
+            held.set()
+            time.sleep(0.6)
+
+    holder = threading.Thread(target=hold_the_lock)
+    holder.start()
+    held.wait(5)
+    beats: list[float] = []
+
+    async def heartbeat():
+        for _ in range(12):
+            beats.append(time.monotonic())
+            await asyncio.sleep(0.05)
+
+    beating = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0.12)
+    await _create(SkillWriteTool(tmp_path, gate_mode="override", composition_judge=None), "fresh")
+    await beating
+    holder.join()
+
+    assert max(b - a for a, b in zip(beats, beats[1:])) < 0.3
+
+
 def test_skills_removed_before_retirements_were_recorded_count_as_retired(
         tmp_path: Path) -> None:
     """A store whose removals predate the records reads them from its history:

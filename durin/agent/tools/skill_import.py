@@ -263,7 +263,7 @@ class SkillImportTool(Tool, ContextAware):
         # Bringing back a skill someone retired is the same kind of decision:
         # no shortcut and no judge; the person is told why it was retired.
         from durin.agent.skill_retirements import retirement_for
-        retired = retirement_for(self._workspace, gate["name"])
+        retired = await asyncio.to_thread(retirement_for, self._workspace, gate["name"])
         needs_person = replacing or retired is not None
         if not needs_person and (action == "allow"
                                  or (action == "confirm" and self._install_policy == "auto")):

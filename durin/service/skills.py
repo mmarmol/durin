@@ -839,7 +839,10 @@ class SkillsService:
         if cmd.disposition not in ("applied", "declined", "upstream"):
             raise ValidationFailedError(
                 "disposition must be 'applied', 'declined' or 'upstream'")
-        res = so.resolve_observation(self._workspace, cmd.id, cmd.disposition)
+        # Off the event loop: the write waits for the skills store's lock,
+        # which the dream worker may hold.
+        res = await asyncio.to_thread(
+            so.resolve_observation, self._workspace, cmd.id, cmd.disposition)
         if res.get("error"):
             raise NotFoundError(str(res["error"]), details=res)
         return _skills_result(200, res)
