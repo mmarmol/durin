@@ -302,9 +302,15 @@ provenance.
   existing record instead of creating a duplicate; `count >= 2` is the
   recurrence signal curation looks for. An issue that matches an `APPLIED`
   record — still active, or already archived — is a regression. That record
-  comes back `OPEN` (out of the archive when needed) with its count bumped,
-  so a fix that did not hold reads as recurring, not as a first report.
-  `DECLINED` records are not reopened.
+  comes back `OPEN` (out of the archive when needed) with its count bumped
+  and the new report's improvement (the old one is the fix that did not
+  hold), so it reads as recurring, not as a first report. `DECLINED` records
+  are not reopened.
+- **Concurrency.** The gateway (`skill_observe`, the webui) and the dream
+  worker (signal pass, curation) both update these files, so every
+  read-modify-write of observations, principles and retirements holds the
+  skills store's write lock (`GitStore.write_lock`, the lock its commits
+  take).
 - **Routing.** A `new:<name>` gap whose name is an existing skill is logged as
   an `improvement` on that skill rather than as a request for a duplicate. A
   gap for a retired skill is routed to its replacement (Retired skills stay
@@ -469,16 +475,26 @@ removal path.
 `skills/.retired.jsonl` (`durin/agent/skill_retirements.py`) in the same
 commit: when, by whom, why, and what replaces it. That covers a person's
 removal, a curation `retire` (whose `replaced_by` names the skill that covers it
-now) and the workspace sources of a fuse (replaced by the target). Every
-autonomous path then leaves the name alone:
+now) and the workspace sources of a fuse (replaced by the target). A store
+whose removals predate these records gets them from its skills history the
+first time they are read: `skill(<name>): remove` commits and fuse sources,
+unless the name exists again. Names are compared in one form (`name_key`:
+`athena_logs` and `Athena Logs` are `athena-logs`). No path brings a retired
+skill back without a person:
 - the dream's `skill_write` door refuses a retired name, with the notice;
+- the in-session `skill_write` and `skill_publish` refuse it too, unless the
+  call carries `override_retired` — set only on the user's explicit word,
+  after the refusal was shown to them, like `override_composition`;
+- a `skill_import` install of a retired name takes no shortcut (no `allow`
+  auto-install, no judge): a person decides, shown why it was retired;
 - `log_observation` turns a `new:<retired>` gap into an `improvement` on the
   replacement;
 - `_resolve_gap_observations` declines any other open gap for a retired name;
 - the skill extractor's prompt lists the retired skills and their replacements.
 
-A person can still create a retired skill in-session; creating it clears the
-record.
+A skill that lands again — created, published or imported, and committed —
+clears its record in that same commit. One that goes to quarantine does not
+exist, so its record stands.
 
 **Step 7 — resolve observation dispositions.** The judge's response also
 carries a per-observation verdict (`applied` / `declined` / `keep`) for each

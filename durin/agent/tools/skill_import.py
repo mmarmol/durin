@@ -260,8 +260,13 @@ class SkillImportTool(Tool, ContextAware):
         # pre-authorization) apply only to a fresh name; replacing routes
         # through approval.request with no judge, same as any other request.
         replacing = replace and (self._workspace / "skills" / gate["name"]).exists()
-        if not replacing and (action == "allow"
-                              or (action == "confirm" and self._install_policy == "auto")):
+        # Bringing back a skill someone retired is the same kind of decision:
+        # no shortcut and no judge; the person is told why it was retired.
+        from durin.agent.skill_retirements import retirement_for
+        retired = retirement_for(self._workspace, gate["name"])
+        needs_person = replacing or retired is not None
+        if not needs_person and (action == "allow"
+                                 or (action == "confirm" and self._install_policy == "auto")):
             # Nothing to decide (safe, trusted, no code), or the operator granted
             # flagged installs ahead of time in config. A dangerous verdict is
             # never covered by policy: only a person can accept that one.
@@ -276,8 +281,8 @@ class SkillImportTool(Tool, ContextAware):
         else:
             prepared = kinds.prepare_skill_install(
                 self._workspace, qdir, gate=gate, source=src, replace=replace,
-                attribution=attribution)
-            judge = None if replacing else kinds.install_judge(
+                attribution=attribution, retired=retired)
+            judge = None if needs_person else kinds.install_judge(
                 qdir, action=action, findings=gate["findings"], settings=self._judge)
             outcome = await approval.request(
                 self._workspace, prepared, session_key=session_key,

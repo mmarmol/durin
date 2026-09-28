@@ -16,6 +16,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from durin.agent.skill_retirements import OVERRIDE_RETIRED_HELP
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import (
@@ -65,6 +66,7 @@ _PARAMETERS = tool_parameters_schema(
             "prose anyway — their word wins. Never set it on your own judgment."
         ),
     ),
+    override_retired=BooleanSchema(description=OVERRIDE_RETIRED_HELP),
     required=["name", "content", "rationale"],
     description=(
         "Create a new skill (a step-by-step procedure to follow later). Writes "
@@ -126,14 +128,15 @@ class SkillWriteTool(Tool, ContextAware):
                 return json.dumps({"error": "each files entry needs path and content"})
             files[str(entry["path"])] = str(entry["content"])
 
-        # A skill someone retired stays retired for the autonomous door; a
-        # person creating it in-session is taken at their word.
-        if self._gate_mode == "hard":
-            from durin.agent.skill_retirements import retired_skills, retirement_notice
-            retired = retired_skills(self._workspace).get(str(kwargs.get("name", "")))
-            if retired is not None:
-                return json.dumps({"error": retirement_notice(retired), "retired": True},
-                                  ensure_ascii=False)
+        # A skill someone retired stays retired unless a person brings it back:
+        # the dream's door never does, and in-session only the user's explicit
+        # word (override_retired) does — the agent may call this on its own.
+        if not (kwargs.get("override_retired") and self._gate_mode == "override"):
+            from durin.agent.skill_retirements import retired_refusal
+            refusal = retired_refusal(self._workspace, str(kwargs.get("name", "")),
+                                      can_override=self._gate_mode == "override")
+            if refusal is not None:
+                return json.dumps(refusal, ensure_ascii=False)
 
         # The user's explicit word may skip the gate in-session; the dream's
         # instance runs gate_mode="hard" and ignores the override outright.

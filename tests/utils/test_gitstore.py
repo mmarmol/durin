@@ -246,6 +246,23 @@ class TestSubtreeMode:
         assert s.auto_commit("noop") is None
         assert s.log()[0].message == "skill(a): create"
 
+    def test_the_stores_own_lock_file_is_not_committed(self, tmp_path):
+        """auto_commit takes a cross-process lock whose file lives in the
+        tree; committing it put a lock file into every skills history."""
+        from dulwich.repo import Repo
+
+        root = tmp_path / "skills"
+        s = self._store(root)
+        _write(root, "a/SKILL.md", "# a\n")
+        s.auto_commit("skill(a): create")
+        _write(root, "a/SKILL.md", "# a, edited\n")
+        s.auto_commit("skill(a): edit")
+
+        assert (root / ".git-worktree.lock").exists()
+        with Repo(str(root)) as repo:
+            tracked = {e.path.decode() for e in repo[repo[repo.head()].tree].items()}
+        assert ".git-worktree.lock" not in tracked
+
     def test_commit_ids_are_real_git_ids(self, tmp_path):
         # The ids the store reports must be the repository's own commit ids,
         # so they match `git log` and a real short id resolves.

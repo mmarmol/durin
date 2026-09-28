@@ -514,12 +514,6 @@ def _gap_evidence(workspace: Path, gaps: list[dict]) -> str:
             "Where this contradicts a gap's text, this wins.\n\n" + "\n\n".join(blocks))
 
 
-def _norm(s: str) -> str:
-    """Normalize a skill name for gap matching: lowercase, replace non-alphanumeric
-    with hyphens, strip hyphens from edges."""
-    import re
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
-
 
 def _resolve_gap_observations(workspace: Path) -> int:
     """Mark gap observations APPLIED when their working name now exists as a
@@ -529,11 +523,11 @@ def _resolve_gap_observations(workspace: Path) -> int:
     Matching uses both exact and normalized name comparison: a gap "Release Runbook"
     matches skill "release-runbook" via normalization."""
     from durin.agent.skill_observations import apply_dispositions, open_observations
-    from durin.agent.skill_retirements import retired_skills
+    from durin.agent.skill_retirements import name_key, retired_skills
 
     existing = set(_list_skills(workspace))
-    existing_normalized = {_norm(s): s for s in existing}
-    retired_normalized = {_norm(s) for s in retired_skills(workspace)}
+    existing_normalized = {name_key(s): s for s in existing}
+    retired_normalized = {name_key(s) for s in retired_skills(workspace)}
 
     done = []
     for r in open_observations(workspace):
@@ -544,11 +538,11 @@ def _resolve_gap_observations(workspace: Path) -> int:
         if gap_name in existing:
             done.append({"id": r.get("id"), "disposition": "applied"})
         # Fallback: normalized match
-        elif _norm(gap_name) in existing_normalized:
+        elif name_key(gap_name) in existing_normalized:
             done.append({"id": r.get("id"), "disposition": "applied"})
         # A gap asking for a skill someone retired is closed, not kept as a
         # standing request to re-create it.
-        elif _norm(gap_name) in retired_normalized:
+        elif name_key(gap_name) in retired_normalized:
             done.append({"id": r.get("id"), "disposition": "declined"})
 
     if not done:

@@ -286,6 +286,44 @@ def test_confirm_replace_still_needs_a_person_even_when_the_judge_would_clear_it
     assert (ws / "skills" / "a" / "SKILL.md").read_text() == original
 
 
+def _retired_after_first_install(tmp_path: Path, session: str) -> tuple[Path, SkillImportTool]:
+    from durin.agent import skills_store as ss
+
+    src = _src_skill(tmp_path / "src", "a")
+    ws = tmp_path / "ws"
+    tool = _tool(ws, session=session, allowlist=[str((tmp_path / "src").resolve())])
+    _run(tool, action="fetch", source=str(src))
+    assert _run(tool, action="install", name="a")["ok"] is True
+    ss.remove_skill(ws, "a", reason="folded into b")
+    _run(tool, action="fetch", source=str(src))
+    return ws, tool
+
+
+def test_reinstalling_a_retired_skill_needs_a_person_even_when_allow(tmp_path):
+    """Bringing back a skill someone retired is an ownership decision, like
+    replacing one: no allow shortcut, and the person sees why it was retired."""
+    ws, tool = _retired_after_first_install(tmp_path, "cron:nightly")
+
+    out = _run(tool, action="install", name="a")
+
+    assert out["status"] == "pending"
+    assert not (ws / "skills" / "a").exists()
+    [rec] = approval_store.list_records(ws, status="pending", include_legacy=False)
+    assert "retired" in rec["summary"] and "folded into b" in rec["summary"]
+
+
+def test_a_person_who_approves_a_retired_skill_brings_it_back(tmp_path):
+    from durin.agent.skill_retirements import retired_skills
+
+    ws, tool = _retired_after_first_install(tmp_path, CHAT)
+
+    out = _install_answering(tool, "a", "approve")
+
+    assert out["status"] == "applied", out
+    assert (ws / "skills" / "a" / "SKILL.md").is_file()
+    assert "a" not in retired_skills(ws)
+
+
 def test_legacy_confirm_override_kwargs_are_ignored(tmp_path):
     """confirm/override left the model-writable schema; passing them anyway
     (a stale caller, or a model that remembers the old contract) must not

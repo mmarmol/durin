@@ -1088,6 +1088,11 @@ def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
                                "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
+    # The skill exists again, so it is no longer retired; the callers that
+    # may bring back a retired name took the user's word first. A quarantined
+    # skill returned above and stays retired.
+    from durin.agent.skill_retirements import clear_retirement
+    clear_retirement(workspace, name)
     store = _store_init(workspace)
     sha = store.auto_commit(commit_subject, trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
@@ -1154,10 +1159,6 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target = md.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
-    # Created again on purpose (the dream's own door refuses a retired name),
-    # so it is no longer retired.
-    from durin.agent.skill_retirements import clear_retirement
-    clear_retirement(workspace, name)
     composition = "overridden" if composition_override else "compliant"
     return _finalize_skill(workspace, name, md.parent, source="dream",
                            attribution=attribution, ramp="write", composition=composition,

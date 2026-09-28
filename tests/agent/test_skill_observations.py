@@ -187,6 +187,93 @@ def test_an_issue_that_returns_after_being_applied_reopens_its_record(tmp_path):
     assert not (ws / "skills" / ".observations.archive.jsonl").read_text().strip()
 
 
+def test_a_reopened_record_carries_the_new_reports_improvement(tmp_path):
+    """The fix that did not hold is the old improvement; what the regression
+    report says now is what curation needs."""
+    ws = tmp_path / "ws"
+    first = _log(ws, issue="step 2 uses the wrong output bucket",
+                 improvement="use the athena-results bucket")
+    apply_dispositions(ws, [{"id": first["id"], "disposition": "applied"}])
+    archive_resolved(ws)
+
+    _log(ws, issue="step 2 still uses the wrong output bucket",
+         improvement="the bucket is s3://mxhero-athena-out, read it from config")
+
+    [rec] = open_observations(ws)
+    assert rec["improvement"] == "the bucket is s3://mxhero-athena-out, read it from config"
+
+
+def test_a_reopen_cut_short_between_its_writes_keeps_the_record(tmp_path, monkeypatch):
+    """The record leaves the archive only once it is back in the active file:
+    a failure in between may duplicate it, never lose it."""
+    import pytest
+
+    from durin.agent import skill_observations as so
+
+    ws = tmp_path / "ws"
+    first = _log(ws, issue="step 2 uses the wrong output bucket")
+    apply_dispositions(ws, [{"id": first["id"], "disposition": "applied"}])
+    archive_resolved(ws)
+    real_write = so._write_records
+
+    def failing_active_write(path, records):
+        if path.name == ".observations.jsonl":
+            raise OSError("disk full")
+        real_write(path, records)
+
+    monkeypatch.setattr(so, "_write_records", failing_active_write)
+    with pytest.raises(OSError):
+        _log(ws, issue="step 2 still uses the wrong output bucket")
+    monkeypatch.setattr(so, "_write_records", real_write)
+
+    stored = so._read_records(so._active_path(ws)) + so._read_records(so._archive_path(ws))
+    assert any(r["id"] == first["id"] for r in stored)
+
+
+def _log_slowly_in_child(ws: str, i: int, out) -> None:
+    """Log one observation with a pause inside the read-modify-write, so
+    processes without a shared lock overwrite each other's record."""
+    import time
+    from pathlib import Path
+
+    from durin.agent import skill_observations as so
+
+    real_write = so._write_records
+
+    def slow_write(path, records):
+        time.sleep(0.2)
+        real_write(path, records)
+
+    so._write_records = slow_write
+    so.log_observation(Path(ws), skill=f"skill-{i}", kind="correction",
+                       issue=f"issue number {i}", improvement="fix it")
+    out.put(i)
+
+
+def test_observations_logged_by_several_processes_are_all_kept(tmp_path):
+    """The gateway and the dream worker both log observations; each
+    read-modify-write holds the skills store's lock."""
+    import multiprocessing as mp
+
+    from durin.agent import skill_observations as so
+
+    ws = tmp_path / "ws"
+    _log(ws, issue="seed so the store exists")
+    ctx = mp.get_context("spawn")
+    out = ctx.Queue()
+    procs = [ctx.Process(target=_log_slowly_in_child, args=(str(ws), i, out))
+             for i in range(4)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(60)
+    assert all(p.exitcode == 0 for p in procs)
+
+    records = so._read_records(so._active_path(ws))
+    assert {r["skill"] for r in records} >= {f"skill-{i}" for i in range(4)}
+    assert len({r["id"] for r in records}) == len(records)
+
+
 def test_a_declined_issue_that_returns_stays_declined(tmp_path):
     ws = tmp_path / "ws"
     first = _log(ws, issue="rename the skill to something shorter")

@@ -50,15 +50,101 @@ async def test_the_dream_does_not_recreate_a_removed_skill(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_a_person_can_still_create_it_in_session(tmp_path: Path) -> None:
+async def test_the_in_session_agent_brings_one_back_only_on_the_users_word(
+        tmp_path: Path) -> None:
+    """The agent may call skill_write on its own initiative; re-creating a
+    retired skill is the user's decision, as keeping a rejected prose body is."""
+    _skill(tmp_path, "athena-logs")
+    ss.remove_skill(tmp_path, "athena-logs", reason="never worked")
+    tool = SkillWriteTool(tmp_path, gate_mode="override", composition_judge=None)
+
+    refused = await _create(tool, "athena-logs")
+    assert refused.get("retired") and "override_retired" in refused.get("hint", "")
+    assert "athena-logs" in retired_skills(tmp_path)
+
+    created = json.loads(await tool.execute(
+        name="athena-logs", content=_body("athena-logs"),
+        rationale="the user asked for it back", override_retired=True))
+    assert created.get("ok"), created
+    assert "athena-logs" not in retired_skills(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_quarantined_recreation_leaves_the_retirement_in_place(tmp_path: Path) -> None:
+    """The skill does not exist after a quarantine, so it is still retired."""
     _skill(tmp_path, "athena-logs")
     ss.remove_skill(tmp_path, "athena-logs")
+    risky = "import os, requests\ntoken = os.environ['SECRET']\nrequests.get('https://x/y')\n"
+    tool = SkillWriteTool(tmp_path, gate_mode="override", composition_judge=None)
 
-    result = await _create(SkillWriteTool(tmp_path, gate_mode="override", composition_judge=None),
-                           "athena-logs")
+    out = json.loads(await tool.execute(
+        name="athena-logs", content=_body("athena-logs"), rationale="back",
+        override_retired=True, files=[{"path": "scripts/q.py", "content": risky}]))
 
-    assert result.get("ok"), result
+    assert out.get("quarantined") is True
+    assert "athena-logs" in retired_skills(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_publishing_a_draft_under_a_retired_name_needs_the_users_word(
+        tmp_path: Path) -> None:
+    from durin.agent.tools.skill_publish import SkillPublishTool
+
+    _skill(tmp_path, "athena-logs")
+    ss.remove_skill(tmp_path, "athena-logs")
+    draft = tmp_path / "skill-drafts" / "athena-logs"
+    draft.mkdir(parents=True)
+    (draft / "SKILL.md").write_text(_body("athena-logs"), encoding="utf-8")
+    tool = SkillPublishTool(tmp_path)
+
+    refused = json.loads(await tool.execute(name="athena-logs"))
+    assert refused.get("retired"), refused
+    published = json.loads(await tool.execute(name="athena-logs", override_retired=True))
+    assert published.get("ok"), published
     assert "athena-logs" not in retired_skills(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_retired_name_is_matched_in_any_spelling(tmp_path: Path) -> None:
+    _skill(tmp_path, "athena-logs")
+    _skill(tmp_path, "athena-boto3-query")
+    ss.remove_skill(tmp_path, "athena-logs", replaced_by="athena-boto3-query")
+
+    assert (await _create(_dream_door(tmp_path), "athena_logs")).get("retired")
+    log_observation(tmp_path, skill="new:Athena_Logs", kind="gap",
+                    issue="query the logs table", improvement="add the steps")
+
+    [rec] = open_observations(tmp_path)
+    assert rec["skill"] == "athena-boto3-query"
+
+
+def test_skills_removed_before_retirements_were_recorded_count_as_retired(
+        tmp_path: Path) -> None:
+    """A store whose removals predate the records reads them from its history:
+    removals and fuse sources, unless the name exists again."""
+    import shutil
+
+    for name in ("athena-logs", "kept", "x", "y"):
+        _skill(tmp_path, name)
+    store = ss._store_init(tmp_path)
+    store.auto_commit("skill: seed")
+    skills = tmp_path / "skills"
+    shutil.rmtree(skills / "athena-logs")
+    store.auto_commit("skill(athena-logs): remove")
+    shutil.rmtree(skills / "kept")
+    store.auto_commit("skill(kept): remove")
+    _skill(tmp_path, "kept")
+    store.auto_commit("skill(kept): created again")
+    shutil.rmtree(skills / "x")
+    shutil.rmtree(skills / "y")
+    _skill(tmp_path, "z")
+    store.auto_commit("skill: fuse ['x', 'y'] -> z: one procedure [dream]")
+
+    retired = retired_skills(tmp_path)
+
+    assert set(retired) == {"athena-logs", "x", "y"}
+    assert retired["x"]["replaced_by"] == "z"
+    assert (skills / ".retired.jsonl").is_file()
 
 
 @pytest.mark.asyncio

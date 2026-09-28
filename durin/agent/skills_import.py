@@ -470,6 +470,10 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
                 pass
 
     _update_md(dest / "SKILL.md", _stamp)
+    # Installed, so no longer retired; an autonomous install of a retired name
+    # went to a person first.
+    from durin.agent.skill_retirements import clear_retirement
+    clear_retirement(workspace, name)
     sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]",
                             trailers={**attribution_to_trailers(attribution),
                                       **approval_trailers(approval_id, approved_by)})
