@@ -291,7 +291,8 @@ at construction and re-points the window on every provider snapshot swap; a
 configured aux subagent model overrides it per spawn with that model's window
 (capped by its fallbacks' windows, as the main loop's snapshot is). The window
 goes on the child's `AgentRunSpec`, which is what turns on the runner's
-mid-turn precheck, history snip and pressure-gated microcompact for the child —
+mid-turn precheck, history snip, pruning of old tool results near the limit and
+the window-scaled per-result cap for the child —
 without it the child had no input budget at all and a long research task ended
 in the provider's context-length error instead of durin's own compaction. Each
 finished child writes one `subagent.run` telemetry row (task id, label, model,
@@ -477,23 +478,47 @@ consolidator, whose history carries no stamps) it is a tiktoken estimate of the
 messages plus the tool definitions — the same basis on both sides, which is what
 the iteration-0 overflow invariant above relies on.
 
-**Microcompaction** is gated on pressure: results beyond the most recent
-`_MICROCOMPACT_KEEP_RECENT` are only collapsed when the estimated prompt
-already exceeds `_MICROCOMPACT_PRESSURE_RATIO` of the input budget, so a
-turn with headroom to spare keeps stale tool results in full — they may
-still hold the answer to a question the user hasn't asked yet. A second gate
-is economic: rewriting a message invalidates every cached prompt prefix from
-that point on, and this pass runs on every iteration, so a pass that could
-reclaim less than `_MICROCOMPACT_MIN_RECLAIM_CHARS` in aggregate leaves the
-messages alone rather than force a cache write that costs more than the freed
-context is worth. When it does fire, the placeholder is informative rather
-than opaque:
+**Microcompaction** replaces old tool results by a pointer to their saved
+file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
+- **When.** A batch fires only when the prompt about to be sent is over
+  `_MICROCOMPACT_PRESSURE_RATIO` (80%) of the input budget. Below it every
+  result stays in full — it may still hold the answer to a question the user
+  hasn't asked yet.
+- **What.** Every result of `read_file`, `exec`, `grep`, `web_search`,
+  `web_fetch` or `list_dir` older than the protected recent ones, at once.
+  Skills, memory and other tools' results are never pruned, nor are results
+  shorter than `_MICROCOMPACT_MIN_CHARS` or ones made of content blocks.
+- **Protected.** The most recent prunable results — at most
+  `_MICROCOMPACT_KEEP_RECENT`, and only while together they fit in
+  `_MICROCOMPACT_PROTECT_RATIO` (20%) of the budget; the newest always.
+- **Worth it.** A batch rewrites the prompt from its first pruned result on,
+  which costs a prompt-cache write of everything after it, so it only fires
+  when it frees at least `_MICROCOMPACT_MIN_FREED_RATIO` (5%) of the budget.
+- **Sticky.** What a batch replaced stays replaced, with the same placeholder
+  byte for byte, for the rest of the run. Between batches a request is the
+  previous one plus new messages, which keeps the provider's prompt cache and
+  the usage-anchored size estimate valid; a result never reappears after it
+  was pruned. A new turn starts with nothing pruned and is measured from
+  scratch (its history carries no usage stamps), so it prunes again only if
+  it is over the threshold.
+- **Its own size checks.** In the request where a batch fires, the earlier
+  usage stamps measured prompts that still held the pruned results, so they
+  are dropped from that request's copy (they are never sent): the history
+  snip and the mid-turn precheck count it from scratch instead of cutting a
+  result the batch already made room for.
+- **No window, no pruning.** A run without a known context window has no
+  budget to measure against and prunes nothing.
+- **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,
+  estimate, budget, pruned and protected counts, freed tokens).
+
+The placeholder is informative rather than opaque:
 - it names the tool;
 - it quotes a short head snippet of what the output began with (omitted when
   the content is already a persisted reference, since its head is marker
   boilerplate);
 - it names the `read_file` call on the recoverable file, "instead of re-running
-  the call".
+  the call". A result that was never saved is saved on the spot; a run without
+  a workspace keeps an honest "no longer in context" marker instead.
 
 **Task state mid-turn.** The prompt built for a turn carries the `<task-state>`
 block: goal, decisions and findings, todos. The loop hands the runner a

@@ -11,26 +11,6 @@ from durin.providers.base import LLMResponse
 # Several tests call the runner's internals directly, before run() would
 # resolve a window-scaled cap, so specs carry an explicit one.
 _MAX_TOOL_RESULT_CHARS = 16_000
-# Captured at import time, before the autouse fixture below patches it to 0.
-from durin.agent.runner import (  # noqa: E402
-    _MICROCOMPACT_MIN_RECLAIM_CHARS as _RECLAIM_FLOOR_DEFAULT,
-)
-
-
-@pytest.fixture(autouse=True)
-def _neutralize_reclaim_floor(monkeypatch):
-    """Microcompaction refuses to rewrite anything unless the pass can reclaim
-    ``_MICROCOMPACT_MIN_RECLAIM_CHARS`` in aggregate — a cache-economics gate,
-    since a rewrite invalidates the cached prompt prefix from that point on.
-
-    The tests below exercise the *mechanism* (which results get collapsed, what
-    the placeholder says, that the spill stays recoverable) with deliberately
-    small fixtures, so the gate is neutralized here. The gate itself is covered
-    by ``test_microcompact_skipped_below_reclaim_floor``.
-    """
-    monkeypatch.setattr(
-        "durin.agent.runner._MICROCOMPACT_MIN_RECLAIM_CHARS", 0, raising=False,
-    )
 
 
 def _make_loop(tmp_path):
@@ -424,91 +404,157 @@ async def test_runner_backfill_only_mutates_model_context_not_returned_messages(
 
 
 # ---------------------------------------------------------------------------
-# Microcompact (stale tool result compaction)
+# Pruning of old tool results (rare batches near the limit)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_microcompact_replaces_old_tool_results():
-    """Tool results beyond _MICROCOMPACT_KEEP_RECENT should be summarized."""
-    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+def _results(count: int, chars: int, name: str = "exec", prefix: str = "c") -> list[dict]:
+    """``count`` calls of ``name``, each answered with a ``chars``-long result.
 
-    total = _MICROCOMPACT_KEEP_RECENT + 5
-    long_content = "x" * 600
-    messages: list[dict] = [{"role": "system", "content": "sys"}]
-    for i in range(total):
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
-        })
-        messages.append({
-            "role": "tool", "tool_call_id": f"c{i}", "name": "read_file",
-            "content": long_content,
-        })
-
-    runner = AgentRunner(MagicMock())
-    result = runner._microcompact(_microcompact_spec(), messages)
-    tool_msgs = [m for m in result if m.get("role") == "tool"]
-    stale_count = total - _MICROCOMPACT_KEEP_RECENT
-    compacted = [m for m in tool_msgs if "result trimmed" in str(m.get("content", ""))]
-    preserved = [m for m in tool_msgs if m.get("content") == long_content]
-    assert len(compacted) == stale_count
-    assert len(preserved) == _MICROCOMPACT_KEEP_RECENT
+    Digits cycle rather than one repeated character: a single repeated
+    character tiktoken-compresses far below the ~4 chars/token an estimate
+    assumes, which would undercut the pressure math.
+    """
+    content = "".join(str(i % 10) for i in range(chars))
+    out: list[dict] = []
+    for i in range(count):
+        out.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"{prefix}{i}", "type": "function", "function": {"name": name, "arguments": "{}"}}]})
+        out.append({"role": "tool", "tool_call_id": f"{prefix}{i}", "name": name, "content": content})
+    return out
 
 
-@pytest.mark.asyncio
-async def test_microcompact_preserves_short_results():
-    """Short tool results (< _MICROCOMPACT_MIN_CHARS) should not be replaced."""
-    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
-
-    total = _MICROCOMPACT_KEEP_RECENT + 5
-    messages: list[dict] = []
-    for i in range(total):
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
-        })
-        messages.append({
-            "role": "tool", "tool_call_id": f"c{i}", "name": "exec",
-            "content": "short",
-        })
-
-    runner = AgentRunner(MagicMock())
-    result = runner._microcompact(_microcompact_spec(), messages)
-    assert result is messages  # no copy needed — all stale results are short
+def _conversation(*parts: list[dict]) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "go"}]
+    for part in parts:
+        messages.extend(part)
+    return messages
 
 
-@pytest.mark.asyncio
-async def test_microcompact_skips_non_compactable_tools():
-    """Non-compactable tools (e.g. 'message') should never be replaced."""
-    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
-
-    total = _MICROCOMPACT_KEEP_RECENT + 5
-    long_content = "y" * 1000
-    messages: list[dict] = []
-    for i in range(total):
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "message", "arguments": "{}"}}],
-        })
-        messages.append({
-            "role": "tool", "tool_call_id": f"c{i}", "name": "message",
-            "content": long_content,
-        })
-
-    runner = AgentRunner(MagicMock())
-    result = runner._microcompact(_microcompact_spec(), messages)
-    assert result is messages  # no compactable tools found
+def _windowed_spec(tmp_path=None, window: int = 8_000):
+    return _microcompact_spec(context_window_tokens=window, workspace=tmp_path, session_key="sess")
 
 
-@pytest.mark.asyncio
-async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_path):
-    """A stale result that was already spilled keeps its file path + read_file
-    hint so the model can still recover it — not an opaque placeholder."""
-    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+def _tool_contents(view: list[dict]) -> list[str]:
+    return [str(m["content"]) for m in view if m.get("role") == "tool"]
+
+
+def test_no_pruning_below_the_trigger():
+    """Well under 80% of the input budget, every old result stays in full."""
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    messages = _conversation(_results(14, 1_200))
+    state = _PruneState()
+    view = AgentRunner(MagicMock())._microcompact(
+        _microcompact_spec(context_window_tokens=200_000), messages, MagicMock(), state=state,
+    )
+    assert view == messages
+    assert state.batches == 0
+
+
+def test_one_batch_prunes_old_results_and_keeps_the_newest(tmp_path):
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    messages = _conversation(_results(14, 1_200))
+    state = _PruneState()
+    view = AgentRunner(MagicMock())._microcompact(_windowed_spec(tmp_path), messages, MagicMock(), state=state)
+    contents = _tool_contents(view)
+    assert state.batches == 1
+    assert "result trimmed" in contents[0]
+    assert 'read_file(path="' in contents[0]
+    assert "instead of re-running" in contents[0]
+    assert contents[-1] == _tool_contents(messages)[-1]
+
+
+def test_pruned_results_stay_pruned_and_the_prompt_only_grows_at_its_end(tmp_path):
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    runner, state = AgentRunner(MagicMock()), _PruneState()
+    spec = _windowed_spec(tmp_path, window=32_000)
+    messages = _conversation(_results(60, 1_200))
+    first = runner._microcompact(spec, messages, MagicMock(), state=state)
+    assert state.batches == 1
+    grown = messages + _results(1, 1_200, prefix="n")
+    second = runner._microcompact(spec, grown, MagicMock(), state=state)
+    assert second[: len(first)] == first
+    assert state.batches == 1
+
+
+def test_after_a_batch_new_results_do_not_prune_on_every_call(tmp_path):
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    runner, state = AgentRunner(MagicMock()), _PruneState()
+    spec = _windowed_spec(tmp_path, window=32_000)
+    messages = _conversation(_results(60, 1_200))
+    runner._microcompact(spec, messages, MagicMock(), state=state)
+    for n in range(10):
+        messages = messages + _results(1, 1_200, prefix=f"n{n}-")
+        runner._microcompact(spec, messages, MagicMock(), state=state)
+    assert state.batches == 1
+
+
+def test_a_batch_must_free_enough(tmp_path):
+    """Over the trigger, but pruning would free less than 5% of the budget:
+    nothing is rewritten, since a rewrite costs a cache write from there on."""
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    memory = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "m0", "type": "function", "function": {"name": "memory_search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "m0", "name": "memory_search", "content": "memory hit " * 2_000},
+    ]
+    messages = _conversation(memory, _results(4, 520))
+    state = _PruneState()
+    view = AgentRunner(MagicMock())._microcompact(_windowed_spec(tmp_path), messages, MagicMock(), state=state)
+    assert state.batches == 0
+    assert view == messages
+
+
+def test_protection_of_recent_results_is_bounded_by_tokens(tmp_path):
+    """The newest results stay in full only while together they fit in a
+    fifth of the budget; the newest always does."""
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    messages = _conversation(_results(4, 6_000))
+    view = AgentRunner(MagicMock())._microcompact(
+        _windowed_spec(tmp_path), messages, MagicMock(), state=_PruneState(),
+    )
+    contents = _tool_contents(view)
+    assert contents[-1] == _tool_contents(messages)[-1]
+    assert all("result trimmed" in c for c in contents[:-1])
+
+
+def test_no_window_means_no_pruning():
+    """Without a known window there is no budget to measure against."""
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    messages = _conversation(_results(30, 5_000))
+    state = _PruneState()
+    view = AgentRunner(MagicMock())._microcompact(_microcompact_spec(), messages, MagicMock(), state=state)
+    assert view == messages
+    assert state.batches == 0
+
+
+def test_short_and_non_prunable_results_are_never_pruned(tmp_path):
+    from durin.agent.runner import AgentRunner, _PruneState
+
+    skills = _results(3, 3_000, name="skill_view", prefix="s")
+    short = _results(10, 300, prefix="short")
+    messages = _conversation(skills, short, _results(12, 1_200))
+    state = _PruneState()
+    view = AgentRunner(MagicMock())._microcompact(_windowed_spec(tmp_path), messages, MagicMock(), state=state)
+    assert state.batches == 1
+    for original, seen in zip(messages, view):
+        if original.get("role") != "tool":
+            continue
+        if original["name"] == "skill_view" or len(original["content"]) < 500:
+            assert seen == original
+
+
+def test_a_pruned_result_that_was_already_saved_keeps_its_path(tmp_path):
+    """A result that was already spilled keeps its file path and read_file
+    hint, so it stays recoverable — not an opaque placeholder."""
+    from durin.agent.runner import AgentRunner, _PruneState
 
     spill_path = tmp_path / ".durin" / "tool-results" / "sess" / "c0.txt"
     spill_path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,120 +566,32 @@ async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_
         "Original size: 50000 chars\n"
         f"Preview:\n{preview}\n...\n(Read the saved file if you need the full output.)"
     )
-
-    total = _MICROCOMPACT_KEEP_RECENT + 3
-    messages: list[dict] = [{"role": "system", "content": "sys"}]
-    for i in range(total):
-        messages.append({
-            "role": "assistant", "content": "",
-            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
-        })
-        messages.append({
-            "role": "tool", "tool_call_id": f"c{i}", "name": "read_file",
-            "content": marker if i == 0 else "x" * 600,
-        })
-
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(workspace=tmp_path, session_key="sess")
-    result = runner._microcompact(spec, messages)
-
-    stale = result[2]  # oldest tool result (i=0)
-    content = str(stale["content"])
-    assert str(spill_path) in content        # recovery path preserved
-    assert "read_file" in content            # recovery hint present
-    assert preview not in content            # 1200-char preview dropped (actually compacted)
-    assert "began:" not in content           # no head snippet for already-spilled content
+    messages = _conversation(_results(14, 1_200))
+    messages[3] = {**messages[3], "content": marker}  # the oldest result
+    view = AgentRunner(MagicMock())._microcompact(
+        _windowed_spec(tmp_path), messages, MagicMock(), state=_PruneState(),
+    )
+    content = _tool_contents(view)[0]
+    assert str(spill_path) in content
+    assert "read_file" in content
+    assert preview not in content
+    assert "began:" not in content
 
 
-@pytest.mark.asyncio
-async def test_microcompact_spills_unpersisted_result_and_references_file(tmp_path):
-    """A stale raw (never-spilled) result gets spilled to disk and the
-    placeholder references the new file so it stays recoverable."""
-    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+def test_a_pruned_result_that_was_never_saved_is_saved_on_the_spot(tmp_path):
+    from durin.agent.runner import AgentRunner, _PruneState
 
-    original = "RAW-" + "z" * 600
-    total = _MICROCOMPACT_KEEP_RECENT + 3
-    messages: list[dict] = [{"role": "system", "content": "sys"}]
-    for i in range(total):
-        messages.append({
-            "role": "assistant", "content": "",
-            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "grep", "arguments": "{}"}}],
-        })
-        messages.append({
-            "role": "tool", "tool_call_id": f"c{i}", "name": "grep",
-            "content": original,
-        })
-
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(workspace=tmp_path, session_key="sess")
-    result = runner._microcompact(spec, messages)
-
-    stale = result[2]  # oldest tool result (i=0)
-    content = str(stale["content"])
-    assert "read_file" in content            # recovery hint present
+    messages = _conversation(_results(14, 1_200))
+    original = _tool_contents(messages)[0]
+    view = AgentRunner(MagicMock())._microcompact(
+        _windowed_spec(tmp_path), messages, MagicMock(), state=_PruneState(),
+    )
+    content = _tool_contents(view)[0]
     spill_file = tmp_path / ".durin" / "tool-results" / "sess" / "c0.txt"
-    assert spill_file.exists()               # spilled on the spot
+    assert spill_file.exists()
     assert spill_file.read_text() == original
-    assert str(spill_file) in content        # placeholder points at it
-    assert result[-1]["content"] == original  # recent results untouched
-
-
-def _many_compactable_tool_results(count: int, chars: int) -> list[dict]:
-    """``count`` standalone tool-result messages for a compactable tool.
-
-    Content cycles through digits rather than repeating a single character:
-    a uniformly-repeated character tiktoken-compresses far below the ~4
-    chars/token an estimate assumes, undercutting the pressure-ratio math.
-    """
-    content = "".join(str(i % 10) for i in range(chars))
-    return [
-        {
-            "role": "tool",
-            "tool_call_id": f"c{i}",
-            "name": "exec",
-            "content": content,
-        }
-        for i in range(count)
-    ]
-
-
-def test_microcompact_skipped_under_token_pressure_threshold():
-    """Far below the pressure threshold, old tool results stay verbatim."""
-    from durin.agent.runner import AgentRunner
-
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(context_window_tokens=200_000)
-    messages = _many_compactable_tool_results(count=14, chars=600)
-    result = runner._microcompact(spec, messages, MagicMock())
-    assert result is messages
-
-
-def test_microcompact_fires_over_threshold_with_informative_placeholder():
-    """Over the pressure threshold, stale results become head-snippet pointers."""
-    from durin.agent.runner import AgentRunner
-
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(context_window_tokens=8_000)
-    messages = _many_compactable_tool_results(count=14, chars=600)
-    result = runner._microcompact(spec, messages, MagicMock())
-    stale = result[0]["content"]
-    assert "result trimmed" in stale
-    assert "began:" in stale
-
-
-def test_a_trimmed_result_points_at_reading_the_file_not_rerunning(tmp_path):
-    """The placeholder names the read that brings the result back, so the
-    model reads it instead of repeating the original (possibly slow or
-    costly) call."""
-    from durin.agent.runner import AgentRunner
-
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(context_window_tokens=8_000, workspace=tmp_path, session_key="sess")
-    messages = _many_compactable_tool_results(count=14, chars=600)
-    result = runner._microcompact(spec, messages, MagicMock())
-    stale = result[0]["content"]
-    assert 'read_file(path="' in stale
-    assert "instead of re-running" in stale
+    assert str(spill_file) in content
+    assert "began:" in content
 
 
 def test_governance_repairs_orphans_after_snip():
@@ -811,34 +769,3 @@ def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
         assert non_system[0]["role"] in ("user", "tool"), (
             f"Safety net should ensure first non-system is user/tool, got {non_system[0]['role']}"
         )
-
-
-def test_microcompact_skipped_below_reclaim_floor(monkeypatch):
-    """A pass that can only reclaim a trickle leaves the messages untouched.
-
-    Rewriting invalidates the cached prompt prefix from the first rewritten
-    message onward, and this pass runs on every iteration — so trading a whole
-    cached prefix for a few hundred tokens is a losing exchange on a provider
-    that serves most of the prompt from cache.
-    """
-    from durin.agent.runner import AgentRunner
-
-    monkeypatch.setattr(
-        "durin.agent.runner._MICROCOMPACT_MIN_RECLAIM_CHARS",
-        _RECLAIM_FLOOR_DEFAULT,
-        raising=False,
-    )
-    runner = AgentRunner(MagicMock())
-    spec = _microcompact_spec(context_window_tokens=8_000)
-
-    # 14 results of 600 chars: 4 are stale, reclaiming 2,400 chars — under the
-    # floor, so nothing is rewritten even though the pressure gate is open.
-    thin = _many_compactable_tool_results(count=14, chars=600)
-    assert runner._microcompact(spec, thin, MagicMock()) is thin
-
-    # Same shape, results large enough that the stale ones clear the floor.
-    chars = (_RECLAIM_FLOOR_DEFAULT // 4) + 100
-    fat = _many_compactable_tool_results(count=14, chars=chars)
-    result = runner._microcompact(spec, fat, MagicMock())
-    assert result is not fat
-    assert "result trimmed" in str(result[0]["content"])

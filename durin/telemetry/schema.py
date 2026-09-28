@@ -334,6 +334,20 @@ class HistoryMediaPrunedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class ToolResultsPrunedEvent(TypedDict):
+    """Old tool results were replaced by pointers to their saved files in one
+    batch: the prompt about to be sent was over the pruning threshold of the
+    input budget and the batch freed enough of it. Between batches the
+    replaced results stay replaced, so each event marks one prompt rewrite."""
+    iteration: int
+    session_key: NotRequired[str | None]
+    estimated_tokens: int
+    budget_tokens: int
+    pruned_count: int
+    protected_count: int
+    freed_tokens: int
+
+
 class ContextCompositionEvent(TypedDict):
     """Per-turn breakdown of the prompt we send to the LLM.
 
@@ -1952,6 +1966,7 @@ EVENTS: dict[str, type] = {
     "context.composition": ContextCompositionEvent,
     "turn.memory_usage": TurnMemoryUsageEvent,
     "history_media.pruned": HistoryMediaPrunedEvent,
+    "tool_results.pruned": ToolResultsPrunedEvent,
     # Agent mode
     "agent_mode.turn_start": AgentModeTurnStartEvent,
     "agent_mode.switch": AgentModeSwitchEvent,

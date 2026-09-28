@@ -72,23 +72,27 @@ _MAX_OUTPUT_RESERVATION = 32_768
 _EMERGENCY_TRIM_FLOOR_CHARS = 800
 _EMERGENCY_TRIM_MARKER = "\n…[truncated: context budget]"
 _EMERGENCY_TRIM_MAX_PASSES = 64
+# Old tool results leave the model's context only in rare batches, each
+# replacing them by a pointer to their saved file. A batch fires when the
+# prompt about to be sent is over this share of the input budget. Below it
+# every result stays in full — it may hold the answer to a question not
+# asked yet — and the prompt only grows at its end, which keeps the
+# provider's prompt cache and the usage-anchored size estimate valid.
+_MICROCOMPACT_PRESSURE_RATIO = 0.8
+# The most recent results (at most this many) stay in full as long as
+# together they fit in _MICROCOMPACT_PROTECT_RATIO of the budget; the newest
+# always does.
 _MICROCOMPACT_KEEP_RECENT = 10
+_MICROCOMPACT_PROTECT_RATIO = 0.2
+# A batch rewrites the prompt from its first pruned result on, which costs a
+# cache rewrite of everything after it; it only fires when it frees at least
+# this share of the budget, so results are pruned many at a time, not one per
+# call.
+_MICROCOMPACT_MIN_FREED_RATIO = 0.05
+# Results shorter than this are never pruned: the pointer would be about as
+# long as the result.
 _MICROCOMPACT_MIN_CHARS = 500
-# Microcompaction only pays for itself when the prompt is actually
-# crowding the window; below this fraction of the input budget the
-# model keeps full tool results (they may hold answers to questions
-# the user hasn't asked yet).
-_MICROCOMPACT_PRESSURE_RATIO = 0.5
 _MICROCOMPACT_HEAD_CHARS = 120
-# Minimum aggregate characters a microcompaction pass must be able to reclaim
-# before it rewrites anything. Rewriting invalidates the cached prompt prefix
-# from the first rewritten message onward, and this pass runs on every
-# iteration, so trading a whole cached prefix for a few hundred tokens is a
-# losing exchange on any provider that serves most of the prompt from cache.
-# Anchored at roughly one full-size tool result (``max_tool_result_chars``
-# defaults to 16,000): below that, the pass is not reclaiming even a single
-# result's worth and can wait for the next iteration.
-_MICROCOMPACT_MIN_RECLAIM_CHARS = 10_000
 
 # Per-result cap when nothing sets one explicitly: it follows the model's
 # context window (tiers by window size), and never takes more than 30% of
@@ -292,6 +296,22 @@ _LOOP_BLOCK_MESSAGE = (
     "or reconsider whether this tool is the right one for the task."
 )
 
+
+
+@dataclass(slots=True)
+class _PruneState:
+    """The old tool results a run has replaced by pointers to their saved files.
+
+    Kept for the whole run, so every later request carries the same
+    placeholders byte for byte: between batches a request is the previous
+    one plus new messages. Keys pair the tool call id with a hash of the
+    result, so a provider that reuses call ids cannot swap one result's
+    pointer onto another.
+    """
+
+    placeholders: dict[str, str] = field(default_factory=dict)
+    pruned: set[str] = field(default_factory=set)
+    batches: int = 0
 
 
 @dataclass(slots=True)
@@ -590,6 +610,10 @@ class AgentRunner:
         # turn starts fresh because environment state may have changed.
         seen_failed_calls: set[str] = set()
 
+        # Old tool results this run replaced by pointers; kept for the whole
+        # run so later requests carry the same placeholders (see _microcompact).
+        prune_state = _PruneState()
+
         # Unknown-tool loop guard. Counter per hallucinated tool name
         # across this turn. Trips when any name's count exceeds
         # ``max_unknown_tool_attempts``.
@@ -642,7 +666,9 @@ class AgentRunner:
                                 "iteration": iteration,
                                 "session_key": spec.session_key,
                             })
-                messages_for_model = self._microcompact(spec, messages_for_model, provider)
+                messages_for_model = self._microcompact(
+                    spec, messages_for_model, provider, state=prune_state, iteration=iteration,
+                )
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model, provider)
                 # Snipping may have created new orphans; clean them up.
@@ -2526,76 +2552,134 @@ class AgentRunner:
             offset += 1
         return updated
 
+    @staticmethod
+    def _prune_key(message: dict[str, Any], idx: int) -> str | None:
+        """Identity of a tool result across a run's requests: its call id and
+        a hash of its content. None for a result that is not plain text."""
+        content = message.get("content")
+        if not isinstance(content, str):
+            return None
+        digest = hashlib.sha1(content.encode("utf-8", "replace")).hexdigest()[:16]
+        return f"{message.get('tool_call_id') or idx}:{digest}"
+
     def _microcompact(
         self,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
         provider: LLMProvider | None = None,
+        state: _PruneState | None = None,
+        iteration: int = 0,
     ) -> list[dict[str, Any]]:
-        """Replace old compactable tool results with a recoverable one-line reference.
+        """Replace old compactable tool results by a pointer to their saved file, in rare batches.
 
-        Results beyond the most recent ``_MICROCOMPACT_KEEP_RECENT`` are
-        collapsed to a short placeholder to reclaim context. Unlike a blind
-        drop, the placeholder keeps a pointer to the spilled file so the model
-        can ``read_file`` to recover the full output: already-spilled results
-        keep their existing path, never-spilled results are spilled on the spot.
-
-        Gated on token pressure: below ``_MICROCOMPACT_PRESSURE_RATIO`` of the
-        input budget, messages are returned untouched — freeing context that
-        the prompt doesn't need yet isn't worth losing full tool results the
-        model may still need to answer a later question.
+        Results this run already replaced are replaced again with the same
+        placeholder, byte for byte, so between batches a request is the
+        previous one plus new messages. A new batch fires only when the
+        prompt about to be sent is over ``_MICROCOMPACT_PRESSURE_RATIO`` of the
+        input budget and replacing every eligible result frees at least
+        ``_MICROCOMPACT_MIN_FREED_RATIO`` of it. The most recent results stay
+        in full (up to ``_MICROCOMPACT_KEEP_RECENT`` of them, within
+        ``_MICROCOMPACT_PROTECT_RATIO`` of the budget; the newest always).
+        The placeholder keeps the saved file's path so the model can read the
+        result back: already-spilled results keep their path, never-spilled
+        ones are spilled on the spot. Without a known context window there is
+        no budget to measure against, so nothing new is pruned.
         """
-        compactable_indices: list[int] = []
-        for idx, msg in enumerate(messages):
-            if msg.get("role") == "tool" and msg.get("name") in _COMPACTABLE_TOOLS:
-                compactable_indices.append(idx)
-
-        if len(compactable_indices) <= _MICROCOMPACT_KEEP_RECENT:
-            return messages
+        if state is None:
+            state = _PruneState()
+        view = messages
+        if state.pruned:
+            for idx, msg in enumerate(messages):
+                if msg.get("role") != "tool":
+                    continue
+                key = self._prune_key(msg, idx)
+                if key in state.pruned:
+                    if view is messages:
+                        view = list(messages)
+                    view[idx] = {**msg, "content": state.placeholders[key]}
 
         _provider = provider if provider is not None else self.provider
         budget = self._input_budget(spec, _provider)
-        if budget is not None and budget > 0:
-            try:
-                estimate, _ = estimate_prompt_tokens_chain(
-                    _provider,
-                    spec.model,
-                    messages,
-                    self._active_tool_definitions(spec),
-                )
-            except Exception:
-                estimate = None
-            if estimate is not None and estimate <= budget * _MICROCOMPACT_PRESSURE_RATIO:
-                return messages
-
-        stale = compactable_indices[: len(compactable_indices) - _MICROCOMPACT_KEEP_RECENT]
-        eligible = [
-            idx for idx in stale
-            if isinstance(messages[idx].get("content"), str)
-            and len(messages[idx]["content"]) >= _MICROCOMPACT_MIN_CHARS
+        if budget is None or budget <= 0:
+            return view
+        prunable = [
+            idx for idx, msg in enumerate(view)
+            if msg.get("role") == "tool" and msg.get("name") in _COMPACTABLE_TOOLS
         ]
-        if not eligible:
-            return messages
+        if len(prunable) < 2:
+            return view
+        try:
+            estimate, _ = estimate_prompt_tokens_chain(
+                _provider, spec.model, view, self._active_tool_definitions(spec),
+            )
+        except Exception:
+            return view
+        if estimate <= budget * _MICROCOMPACT_PRESSURE_RATIO:
+            return view
 
-        # Rewriting a message invalidates every cached prompt prefix from that
-        # point on, and the rewrite happens on each iteration. Below a floor
-        # the reclaimed context is not worth forcing a cache write — providers
-        # that serve most of the prompt from cache would pay more for the
-        # re-write than the freed tokens are worth. (The same trade-off the
-        # Anthropic context-editing API exposes as ``clear_at_least``.)
-        reclaimable = sum(len(messages[idx]["content"]) for idx in eligible)
-        if reclaimable < _MICROCOMPACT_MIN_RECLAIM_CHARS:
-            return messages
+        protected: set[int] = set()
+        protected_tokens = 0
+        for idx in reversed(prunable):
+            if len(protected) >= _MICROCOMPACT_KEEP_RECENT:
+                break
+            tokens = estimate_message_tokens(view[idx])
+            if protected and protected_tokens + tokens > budget * _MICROCOMPACT_PROTECT_RATIO:
+                break
+            protected.add(idx)
+            protected_tokens += tokens
 
-        updated: list[dict[str, Any]] | None = None
-        for idx in eligible:
-            content = messages[idx]["content"]
-            summary = self._microcompact_reference(spec, messages[idx], idx, content)
-            if updated is None:
-                updated = [dict(m) for m in messages]
-            updated[idx]["content"] = summary
+        batch: list[tuple[int, str]] = []
+        freed = 0
+        for idx in prunable:
+            if idx in protected:
+                continue
+            msg = view[idx]
+            key = self._prune_key(messages[idx], idx)
+            content = msg.get("content")
+            if (
+                key is None
+                or key in state.pruned
+                or not isinstance(content, str)
+                or len(content) < _MICROCOMPACT_MIN_CHARS
+            ):
+                continue
+            placeholder = state.placeholders.get(key)
+            if placeholder is None:
+                placeholder = self._microcompact_reference(spec, msg, idx, content)
+                state.placeholders[key] = placeholder
+            freed += max(0, estimate_message_tokens(msg) - estimate_message_tokens({**msg, "content": placeholder}))
+            batch.append((idx, key))
+        if not batch or freed < budget * _MICROCOMPACT_MIN_FREED_RATIO:
+            return view
 
-        return updated if updated is not None else messages
+        if view is messages:
+            view = list(messages)
+        for idx, key in batch:
+            state.pruned.add(key)
+            view[idx] = {**view[idx], "content": state.placeholders[key]}
+        # The usage stamps on earlier assistant messages measured requests
+        # that still held these results, so they overstate this one: without
+        # them the size checks that follow (history snip, the mid-turn
+        # precheck) count this request from scratch instead of cutting results
+        # the batch already made room for. The stamps are bookkeeping that is
+        # never sent, and the next request is stamped with the pruned size.
+        for idx, msg in enumerate(view):
+            if msg.get("role") == "assistant" and "usage_prompt_tokens" in msg:
+                view[idx] = {k: v for k, v in msg.items() if k != "usage_prompt_tokens"}
+        state.batches += 1
+        _logger = current_telemetry()
+        if _logger is not None:
+            with suppress(Exception):
+                _logger.log("tool_results.pruned", {
+                    "iteration": iteration,
+                    "session_key": spec.session_key,
+                    "estimated_tokens": int(estimate),
+                    "budget_tokens": int(budget),
+                    "pruned_count": len(batch),
+                    "protected_count": len(protected),
+                    "freed_tokens": int(freed),
+                })
+        return view
 
     def _microcompact_reference(
         self,
