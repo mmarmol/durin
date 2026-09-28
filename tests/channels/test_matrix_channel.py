@@ -312,7 +312,7 @@ async def test_start_returns_cleanly_when_matrix_unavailable(monkeypatch) -> Non
 
     assert result is None
     channel.logger.error.assert_called_once()
-    assert "durin-ai[matrix]" in channel.logger.error.call_args[0][0]
+    assert "durin-agent[matrix]" in channel.logger.error.call_args[0][0]
 
 
 @pytest.mark.asyncio
