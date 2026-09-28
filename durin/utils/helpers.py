@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import re
 import shutil
 import time
@@ -470,6 +471,35 @@ def _render_structured_value(out: list[str], value: Any, indent: str, label: str
     out.append(f"{head} {text}" if head else f"{indent}{text}")
 
 
+def _pageable_text(text: str) -> str:
+    """``text`` as it is saved for line paging.
+
+    A one-line JSON object or array — the text a structured result became
+    once in the context, which is what a later save sees — is saved as
+    :func:`render_structured_result` renders it; any other text as is.
+    """
+    stripped = text.strip()
+    if "\n" in stripped or not stripped.startswith(("{", "[")):
+        return text
+    try:
+        value = json.loads(stripped)
+    except ValueError:
+        return text
+    if not isinstance(value, (dict, list)):
+        return text
+    return render_structured_result(value)
+
+
+def _same_file_text(path: Path, text: str) -> bool:
+    """Whether ``path`` already holds exactly ``text``."""
+    try:
+        if path.stat().st_size != len(text.encode("utf-8")):
+            return False
+        return path.read_text(encoding="utf-8") == text
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def maybe_persist_tool_result(
     workspace: Path | None,
     session_key: str | None,
@@ -510,11 +540,18 @@ def maybe_persist_tool_result(
     except Exception:
         logger.exception("Failed to clean stale tool result buckets in {}", root)
     path = bucket / f"{safe_filename(tool_call_id)}.txt"
-    # Always write unconditionally: the current call's content is authoritative.
-    # Skipping when the file exists leaves stale bytes when tool_call_id is reused
-    # (e.g. the positional tool_0 fallback in runner.py).
-    file_text = spill_text if spill_text is not None else text_payload
-    _write_text_atomic(path, file_text)
+    file_text = spill_text if spill_text is not None else _pageable_text(text_payload)
+    # The current call's content is authoritative: a reused tool_call_id (the
+    # positional tool_N fallback in the runner) must not keep stale bytes.
+    # A result saved again unchanged — every iteration of a turn whose cap
+    # is below the size it was kept at — is not rewritten; its bucket is
+    # still marked as in use, as the write would have, so cleanup keeps
+    # ranking it by its last use.
+    if _same_file_text(path, file_text):
+        with suppress(OSError):
+            os.utime(bucket)
+    else:
+        _write_text_atomic(path, file_text)
 
     return _render_tool_result_reference(
         path,

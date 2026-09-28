@@ -68,7 +68,15 @@ this order:
 
    A structured result is saved as a line-pageable rendering: one
    `key: value` line per scalar and every multi-line string verbatim. Its JSON
-   would be a single line that no line-based reader can page.
+   would be a single line that no line-based reader can page. A result that is
+   already one line of JSON text is saved the same way; that is what a
+   structured result looks like once it is in the context, when a pruning
+   batch or the turn budget saves it later.
+
+   A result saved again unchanged (for example on every iteration of a turn
+   whose cap is below the size it was kept at) is not rewritten. Its folder is
+   still marked as in use, as a write would have marked it, so the folder
+   cleanup below keeps ranking it by its last use.
 
    Saved results are cleaned up by age (`_TOOL_RESULT_RETENTION_SECS`, a week)
    and by count: each kind of session — the channel prefix of its folder,
