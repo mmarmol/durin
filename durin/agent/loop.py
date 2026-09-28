@@ -2205,7 +2205,11 @@ class AgentLoop:
             return items
 
         active_session_key = session.key if session else session_key
-        file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
+        file_states = self._file_state_store.for_session(active_session_key)
+        # Each run starts without "unchanged since last read" stubs: an
+        # earlier run's read may be gone from the history this run sends.
+        file_states.forget_reads()
+        file_state_token = bind_file_states(file_states)
         telemetry_token = None
         # Optional HTTPS push sink. Default OFF; opt-in via
         # cfg.telemetry.push.enabled. Captured here so the cleanup

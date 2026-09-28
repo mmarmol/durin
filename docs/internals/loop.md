@@ -516,6 +516,13 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   budget to measure against and prunes nothing.
 - **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,
   estimate, budget, pruned and protected counts, freed tokens).
+- **Tools hear about it.** Before each request, the runner compares the
+  model-facing copy with the run's messages. Each tool result that no longer
+  reaches the model whole is reported once to its tool through
+  `Tool.result_left_context(arguments)`: one a batch replaced, one the
+  precheck cut, or one the history snip dropped. `read_file` uses it to stop
+  answering a repeat read of that file with the "unchanged since last read"
+  stub, which would point at content the model no longer has.
 
 The placeholder is informative rather than opaque:
 - it names the tool;

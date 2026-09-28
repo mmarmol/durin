@@ -404,6 +404,13 @@ keeps its own limits there too.
   count. A file whose batch page was cut to its share does not count as
   already read: a later read of it returns its page, not the "unchanged since
   last read" stub.
+- That stub only answers while the earlier read's result is in what the model
+  sees. Each run starts without stubs (the chat loop calls
+  `FileStates.forget_reads()` when it binds the session's read state), since
+  the history it sends may have been compacted, saved cut or trimmed. Within a
+  run, a read whose result a batch pruned, the precheck cut or the history snip
+  dropped is forgotten through `result_left_context`. Read-before-edit tracking
+  is unaffected.
 - A line over 2,000 chars is shortened with the call that reads the rest of it:
   `offset=<line>, limit=1, char_offset=<n>`. A one-line file (minified JSON, a
   saved tool output) is read in character pages through `char_offset`.

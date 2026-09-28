@@ -376,6 +376,25 @@ class ReadFileTool(_FsTool):
         paths = arguments.get("paths")
         return len(paths) if isinstance(paths, list) and paths else 1
 
+    def result_left_context(self, arguments: dict[str, Any]) -> None:
+        """A read whose result the model no longer has must not answer a
+        repeat read with the "unchanged since last read" stub: the stub
+        points at that result. The next read of the file returns its page."""
+        if not isinstance(arguments, dict):
+            return
+        paths = arguments.get("paths")
+        if not isinstance(paths, list):
+            paths = [arguments.get("path")]
+        for raw in paths:
+            if not isinstance(raw, str) or not raw:
+                continue
+            try:
+                entry = self._file_states.get(self._resolve(raw))
+            except Exception:  # noqa: BLE001
+                continue
+            if entry is not None:
+                entry.can_dedup = False
+
     async def execute(
         self,
         path: str | None = None,

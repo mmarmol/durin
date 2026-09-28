@@ -347,6 +347,9 @@ class _PruneState:
     # from its messages) or this run's before its last batch — so size checks
     # count those messages from scratch instead of trusting the stamps.
     trusted_from: int = 0
+    # Tool calls whose result has stopped reaching the model whole and whose
+    # tool was told so; each tool hears about a result once.
+    left_context: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -807,6 +810,8 @@ class AgentRunner:
                         await hook.after_iteration(context)
                         break
                 effective_max_tokens = self._effective_max_tokens(spec, estimate_tokens, provider)
+
+            self._notify_results_left_context(spec, messages, messages_for_model, prune_state)
 
             context = AgentHookContext(
                 iteration=iteration,
@@ -2751,6 +2756,54 @@ class AgentRunner:
                     "freed_tokens": int(freed),
                 })
         return view
+
+    @staticmethod
+    def _notify_results_left_context(
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        view: list[dict[str, Any]],
+        state: _PruneState,
+    ) -> None:
+        """Tell a tool, once per call, when its result stops reaching the
+        model whole: a batch replaced it with a pointer, a size check cut it,
+        or old history was dropped. A tool can hold state that assumes the
+        model still has the result — read_file answers a repeat read with
+        "unchanged since last read" — and must reset it."""
+        shown = {m.get("tool_call_id"): m.get("content") for m in view if m.get("role") == "tool"}
+        missing = object()
+        left = [
+            m["tool_call_id"]
+            for m in messages
+            if m.get("role") == "tool"
+            and m.get("tool_call_id")
+            and m["tool_call_id"] not in state.left_context
+            and shown.get(m["tool_call_id"], missing) != m.get("content")
+        ]
+        if not left:
+            return
+        calls: dict[str, tuple[str, Any]] = {}
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except ValueError:
+                        arguments = {}
+                calls[call.get("id")] = (function.get("name"), arguments)
+        for call_id in left:
+            state.left_context.add(call_id)
+            name, arguments = calls.get(call_id, (None, None))
+            tool = spec.tools.get(name) if name else None
+            if tool is None or not isinstance(arguments, dict):
+                continue
+            try:
+                tool.result_left_context(arguments)
+            except Exception:  # noqa: BLE001
+                logger.exception("result_left_context failed for {} ({})", name, call_id)
 
     def _microcompact_reference(
         self,
