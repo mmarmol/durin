@@ -500,14 +500,18 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   byte for byte, for the rest of the run. Between batches a request is the
   previous one plus new messages, which keeps the provider's prompt cache and
   the usage-anchored size estimate valid; a result never reappears after it
-  was pruned. A new turn starts with nothing pruned and is measured from
-  scratch (its history carries no usage stamps), so it prunes again only if
-  it is over the threshold.
-- **Its own size checks.** In the request where a batch fires, the earlier
-  usage stamps measured prompts that still held the pruned results, so they
-  are dropped from that request's copy (they are never sent): the history
-  snip and the mid-turn precheck count it from scratch instead of cutting a
-  result the batch already made room for.
+  was pruned. A new run starts with nothing pruned, so it prunes again only
+  if it is over the threshold.
+- **Which usage stamps to trust.** Size estimates anchor on the latest usage
+  stamp, but a run trusts only the stamps it produced after its last batch.
+  The stamps on the messages it starts from measured another run's requests
+  — possibly pruned ones: a workflow node's synthesis, re-entry or persistent
+  revisit starts from an earlier run's messages, stamps included — and the
+  stamps from before a batch measured prompts that still held the pruned
+  results. Those are dropped from the model-facing copy (they are never
+  sent), so the request is counted from scratch: the pruning check, the
+  history snip and the mid-turn precheck see the prompt actually sent, never
+  one that looks smaller or larger than it is.
 - **No window, no pruning.** A run without a known context window has no
   budget to measure against and prunes nothing.
 - **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,

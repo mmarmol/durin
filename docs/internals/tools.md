@@ -370,7 +370,9 @@ the run's context window with `result_char_cap()`: 16,000 chars below a
 the window (at about 4 chars per token), and 16,000 when no window is known.
 An explicit value — in the configuration or from a caller such as the dream
 passes — always wins. The loop saves a turn under the same cap its model
-window gives a run, so a result kept whole in the run is saved whole.
+window gives a run, so a result kept whole in the run is saved whole. A turn
+that runs on a per-turn model override with a larger window can keep larger
+results; those are saved cut, with a pointer to the full copy.
 
 `AgentRunner.run()` publishes the resolved cap through a context
 variable (`set_result_char_cap` / `current_result_char_cap` in
