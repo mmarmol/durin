@@ -292,8 +292,10 @@ configured aux subagent model overrides it per spawn with that model's window
 (capped by its fallbacks' windows, as the main loop's snapshot is). The window
 goes on the child's `AgentRunSpec`, which is what turns on the runner's
 mid-turn precheck, history snip, pruning of old tool results near the limit and
-the window-scaled per-result cap for the child —
-without it the child had no input budget at all and a long research task ended
+the window-scaled per-result cap for the child. The spec also carries the
+workspace the child's own tools read, so an oversized or pruned result is saved
+where the child can read it back —
+without the window the child had no input budget at all and a long research task ended
 in the provider's context-length error instead of durin's own compaction. Each
 finished child writes one `subagent.run` telemetry row (task id, label, model,
 window, stop reason, iterations, summed prompt/completion tokens, duration) into
