@@ -64,15 +64,27 @@ def _saved_path(ref: object) -> Path:
     return Path(parsed[0])
 
 
-def test_a_one_line_json_result_is_saved_as_lines(tmp_path: Path) -> None:
-    rows = [{"id": i, "note": f"row {i} " + "x" * 40} for i in range(400)]
-    text = json.dumps({"rows": rows}, ensure_ascii=False)
+def test_a_one_line_json_result_is_saved_as_indented_json(tmp_path: Path) -> None:
+    rows = [{"id": i, "ok": i % 2 == 0, "note": f"row {i} " + "x" * 40} for i in range(400)]
+    text = json.dumps({"rows": rows, "next": None}, ensure_ascii=False)
 
     saved = _saved_path(maybe_persist_tool_result(tmp_path, "sess", "call_1", text, max_chars=16_000))
 
-    lines = saved.read_text(encoding="utf-8").splitlines()
+    body = saved.read_text(encoding="utf-8")
+    # Still the same JSON — a script or jq can use the file — and pageable
+    # by line, with each field on its own line.
+    assert json.loads(body) == json.loads(text)
+    lines = body.splitlines()
     assert len(lines) > 400
-    assert any(line.strip().startswith("note: row 5 ") for line in lines)
+    assert any(line.strip().startswith('"note": "row 5 ') for line in lines)
+
+
+def test_one_line_json_with_a_repeated_key_is_saved_as_is(tmp_path: Path) -> None:
+    text = '{"a": 1, "a": 2, "pad": "' + "p" * 20_000 + '"}'
+
+    saved = _saved_path(maybe_persist_tool_result(tmp_path, "sess", "call_1", text, max_chars=16_000))
+
+    assert saved.read_text(encoding="utf-8") == text
 
 
 def test_one_line_text_that_is_not_json_is_saved_as_is(tmp_path: Path) -> None:

@@ -69,9 +69,12 @@ this order:
    A structured result is saved as a line-pageable rendering: one
    `key: value` line per scalar and every multi-line string verbatim. Its JSON
    would be a single line that no line-based reader can page. A result that is
-   already one line of JSON text is saved the same way; that is what a
-   structured result looks like once it is in the context, when a pruning
-   batch or the turn budget saves it later.
+   already one line of JSON text — a structured result once it is in the
+   context, when a pruning batch or the turn budget saves it later, or a
+   command's or an API's JSON output — is saved indented, one field per line.
+   It stays the same JSON, so a script or `jq` can still use the file. JSON
+   with a key repeated in one object is saved as is, since re-indenting it
+   would drop the repeats.
 
    A result saved again unchanged (for example on every iteration of a turn
    whose cap is below the size it was kept at) is not rewritten. Its folder is

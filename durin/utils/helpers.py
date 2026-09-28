@@ -475,19 +475,30 @@ def _pageable_text(text: str) -> str:
     """``text`` as it is saved for line paging.
 
     A one-line JSON object or array — the text a structured result became
-    once in the context, which is what a later save sees — is saved as
-    :func:`render_structured_result` renders it; any other text as is.
+    once in the context, or a command's or an API's JSON output — is saved
+    indented, one field per line. It stays the same JSON, so a script or
+    ``jq`` can still use the file. JSON that would not survive the round
+    trip (a key repeated in one object) and any other text are saved as is.
     """
     stripped = text.strip()
     if "\n" in stripped or not stripped.startswith(("{", "[")):
         return text
     try:
-        value = json.loads(stripped)
+        value = json.loads(stripped, object_pairs_hook=_unique_keys)
     except ValueError:
         return text
     if not isinstance(value, (dict, list)):
         return text
-    return render_structured_result(value)
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A JSON object's pairs as a dict, refusing a repeated key, which a
+    dict would silently collapse."""
+    out = dict(pairs)
+    if len(out) != len(pairs):
+        raise ValueError("repeated key")
+    return out
 
 
 def _same_file_text(path: Path, text: str) -> bool:
