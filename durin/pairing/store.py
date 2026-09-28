@@ -189,8 +189,8 @@ def format_pairing_reply(code: str) -> str:
     return (
         "Hi there! This assistant only responds to approved users.\n\n"
         f"Your pairing code is: `{code}`\n\n"
-        "To get access, ask the owner to approve this code:\n"
-        f"- In this chat: send `/pairing approve {code}`"
+        "To get access, send this code to the owner. They approve it with "
+        f"`/pairing approve {code}` from their own durin chat."
     )
 
 

@@ -40,7 +40,7 @@ try:
     from nio.exceptions import EncryptionError
 
     MATRIX_AVAILABLE = True
-except ImportError:  # optional extra `durin-ai[matrix]` not installed
+except ImportError:  # optional extra `durin-agent[matrix]` not installed
     MATRIX_AVAILABLE = False
 
 from durin.bus.events import OutboundMessage
@@ -281,7 +281,7 @@ class MatrixChannel(BaseChannel):
         """Start Matrix client and begin sync loop."""
         if not MATRIX_AVAILABLE:
             self.logger.error(
-                "Matrix dependencies not installed. Run: pip install 'durin-ai[matrix]' "
+                "Matrix dependencies not installed. Run: pip install 'durin-agent[matrix]' "
                 "(or enable channels.matrix and let auto_install_extras handle it)."
             )
             return

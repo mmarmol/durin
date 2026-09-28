@@ -111,7 +111,7 @@ class WecomChannel(BaseChannel):
     async def start(self) -> None:
         """Start the WeCom bot with WebSocket long connection."""
         if not WECOM_AVAILABLE:
-            self.logger.error("SDK not installed. Run: pip install durin-ai[wecom]")
+            self.logger.error("WeCom SDK not installed. Run: pip install wecom-aibot-sdk")
             return
 
         if not self.config.bot_id or not self.config.secret:
