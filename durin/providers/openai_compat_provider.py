@@ -257,6 +257,9 @@ _FIELD_REJECTED_MARKERS = (
     "unsupported", "not supported", "not permitted", "not allowed",
     "unknown", "unrecognized",
 )
+# How endpoints word "this field is required" (Kimi: missing; DeepSeek: must be
+# passed back, not empty) — the opposite case, which stripping cannot fix.
+_FIELD_REQUIRED_MARKERS = ("missing", "required", "must", "empty")
 
 
 def _strip_reasoning_content(
@@ -481,6 +484,9 @@ class OpenAICompatProvider(LLMProvider):
         # per unique combo per process — enough to verify the config is
         # firing in production without per-request spam.
         self._parallel_tool_calls_logged: set[tuple[str, bool, str]] = set()
+        # Models whose endpoint rejected reasoning_content on input messages;
+        # their later requests leave it out instead of failing once per call.
+        self._reasoning_rejected_models: set[str] = set()
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -717,14 +723,19 @@ class OpenAICompatProvider(LLMProvider):
         text = (response.content or "").lower()
         # Endpoint whose message schema has no reasoning_content (a custom
         # base URL the registry knows nothing about): send the history without
-        # it. Checked first because the field name also contains "content". An
-        # error saying the field is missing (Kimi, DeepSeek) is the opposite
-        # case and keeps it.
-        if "reasoning_content" in text and any(
-            marker in text for marker in _FIELD_REJECTED_MARKERS
+        # it, now and on that model's later requests. Checked first because
+        # the field name also contains "content". An error saying the field is
+        # missing, required or empty (Kimi, DeepSeek) is the opposite case and
+        # keeps it.
+        if (
+            "reasoning_content" in text
+            and any(marker in text for marker in _FIELD_REJECTED_MARKERS)
+            and not any(marker in text for marker in _FIELD_REQUIRED_MARKERS)
         ):
             stripped = _strip_reasoning_content(kw.get("messages"))
             if stripped is not None:
+                if isinstance(kw.get("model"), str):
+                    self._reasoning_rejected_models.add(kw["model"])
                 return {**kw, "messages": stripped}
         # Gateway rejects assistant content sent alongside tool_calls: blank it
         # (the old unconditional behavior, now applied only where it's needed).
@@ -909,14 +920,14 @@ class OpenAICompatProvider(LLMProvider):
                     # absent key and a legacy "" persisted before this fix.
                     msg["reasoning_content"] = " "
 
-        # Earlier reasoning goes back under the field this provider reads, or
-        # not at all where its message schema forbids extra fields.
-        reasoning_field = spec.reasoning_input_field if spec else "reasoning_content"
-        if reasoning_field != "reasoning_content":
+        # Earlier reasoning stays off the request where the message schema
+        # rejects it: a provider whose spec says so, or a model whose endpoint
+        # already refused it in this process (_recover_request_for_error).
+        if (spec is not None and not spec.echo_reasoning) or (
+            model_name in self._reasoning_rejected_models
+        ):
             for msg in kwargs["messages"]:
-                value = msg.pop("reasoning_content", None)
-                if reasoning_field and value is not None:
-                    msg[reasoning_field] = value
+                msg.pop("reasoning_content", None)
 
         # Non-standard sampling params ride in extra_body: ollama / LM Studio
         # read top_k and repeat_penalty there (the OpenAI schema has no

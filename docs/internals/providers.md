@@ -346,8 +346,9 @@ The self-healing net is `_recover_request_for_error(kw, response)`. On a
 *non-transient* error the retry loop calls it once; a provider overrides it to strip
 the piece the endpoint just rejected and return a mutated request the loop retries a
 single time. The OpenAI-compat provider recovers these shapes: a `reasoning_content`
-the endpoint's message schema does not have (send the history without it — an error
-saying the field is *missing* keeps it), content sent alongside `tool_calls` (blank
+the endpoint's message schema does not have (send the history without it, and leave
+it off that model's later requests — an error saying the field is missing, required
+or empty keeps it), content sent alongside `tool_calls` (blank
 it — the backstop for the default above), and an unsupported `temperature` or
 token-limit param (drop it via the `_OMIT` sentinel that `_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
 is absorbed here without a code edit; the base-class default is no recovery.
@@ -391,11 +392,12 @@ Provider rules the serialization honors:
   is skipped when the effort is `none` and for `deepseek-chat`, the legacy
   non-thinking alias. Other hosts serving DeepSeek weights keep their own
   contract.
-- **Providers with their own field, or none.** `ProviderSpec.reasoning_input_field`
-  names where earlier reasoning goes on input messages: `reasoning_content` by
-  default, `reasoning` for Groq, and nowhere for Mistral, whose assistant
-  message schema forbids extra fields. A custom endpoint that rejects
-  `reasoning_content` is covered by the recovery in 4.10.
+- **Providers that take no reasoning back.** `ProviderSpec.echo_reasoning`
+  is false for Mistral, whose assistant message schema forbids extra fields,
+  and for Groq, whose non-reasoning models reject any reasoning field — and a
+  turn from another provider carries one (an empty `reasoning_content` after
+  Anthropic thinking). Their requests leave `reasoning_content` out. A custom
+  endpoint that rejects it is covered by the recovery in 4.10.
 - **Tool results carry no `name`.** The Chat Completions tool message is
   `role`, `tool_call_id` and `content`; strict endpoints (Groq documents a 400)
   reject a `name` there, so it is dropped on the way out. The runner keeps it
@@ -407,7 +409,7 @@ Provider rules the serialization honors:
 
 | Symbol | File | Role |
 |---|---|---|
-| `ProviderSpec` | `durin/providers/registry.py` | Frozen metadata for one provider: `name`, `keywords`, `env_key`, `backend`, gateway/local/oauth/direct flags, `strip_model_prefix`, `thinking_style`, `reasoning_input_field`, `supports_prompt_caching` |
+| `ProviderSpec` | `durin/providers/registry.py` | Frozen metadata for one provider: `name`, `keywords`, `env_key`, `backend`, gateway/local/oauth/direct flags, `strip_model_prefix`, `thinking_style`, `echo_reasoning`, `supports_prompt_caching` |
 | `PROVIDERS` | `durin/providers/registry.py` | Ordered tuple of all `ProviderSpec` entries; order controls match priority |
 | `LLMProvider` | `durin/providers/base.py` | Abstract base: `chat()`, `chat_stream()`, `chat_stream_with_retry()`, retry logic, message sanitization, `generation` settings |
 | `LLMResponse` | `durin/providers/base.py` | Response dataclass: `content`, `tool_calls`, `finish_reason`, `usage`, structured error fields (`error_kind`, `error_status_code`, `error_should_retry`) |

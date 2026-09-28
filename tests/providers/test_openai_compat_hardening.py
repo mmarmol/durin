@@ -11,8 +11,8 @@ behave:
 3. DeepSeek thinking-mode ``reasoning_content`` is padded with a single space,
    not an empty string (DeepSeek V4 Pro rejects ``""``).
 4. Strict message schemas: tool results go out without ``name``, earlier
-   reasoning goes under the provider's own field or nowhere, and an endpoint
-   that rejects ``reasoning_content`` is retried without it.
+   reasoning stays off providers that reject it, and an endpoint that rejects
+   ``reasoning_content`` is retried without it and not sent it again.
 """
 
 from unittest.mock import patch
@@ -254,10 +254,13 @@ def test_tool_results_go_out_without_a_name() -> None:
     assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
 
 
-def test_groq_takes_earlier_reasoning_in_its_own_field() -> None:
+def test_groq_gets_no_reasoning_on_earlier_turns() -> None:
+    """Groq's non-reasoning models reject a reasoning field on input messages,
+    and a turn from another provider carries one (an empty string after
+    Anthropic thinking), so none goes to Groq."""
     assistant = _kwargs_for("groq")["messages"][1]
 
-    assert assistant["reasoning"] == "I should search."
+    assert "reasoning" not in assistant
     assert "reasoning_content" not in assistant
 
 
@@ -288,6 +291,38 @@ def test_an_endpoint_that_rejects_reasoning_content_is_retried_without_it() -> N
     assert all("reasoning_content" not in m for m in recovered["messages"])
     assert recovered["messages"][1]["content"] == ""  # not the content-blanking recovery
     assert kw["messages"][1]["reasoning_content"] == "I should search."
+
+
+def test_a_model_whose_endpoint_rejected_reasoning_content_is_not_sent_it_again() -> None:
+    """One refusal is enough: later requests to that model leave it out
+    instead of failing once per call; other models keep it."""
+    provider = _provider()
+
+    def build(model: str) -> dict:
+        return provider._build_kwargs(
+            [dict(m) for m in _REASONED_TOOL_TURN], tools=None, model=model,
+            max_tokens=100, temperature=0.7, reasoning_effort=None, tool_choice=None)
+
+    first = build("strict-model")
+    assert first["messages"][1]["reasoning_content"] == "I should search."
+    provider._recover_request_for_error(
+        first, _error("'messages.1.assistant.reasoning_content' is unsupported"))
+
+    assert "reasoning_content" not in build("strict-model")["messages"][1]
+    assert build("other-model")["messages"][1]["reasoning_content"] == "I should search."
+
+
+def test_an_error_about_an_empty_reasoning_content_does_not_strip_it() -> None:
+    """The field is required there; sending the history without it only
+    repeats the failure."""
+    provider = _provider()
+    kw = {"messages": [dict(m) for m in _REASONED_TOOL_TURN], "model": "m"}
+
+    recovered = provider._recover_request_for_error(
+        kw, _error("empty reasoning_content is not allowed"))
+
+    assert recovered is None or all(
+        "reasoning_content" in m for m in recovered["messages"] if m["role"] == "assistant")
 
 
 def test_a_provider_asking_for_reasoning_content_is_not_stripped_of_it() -> None:

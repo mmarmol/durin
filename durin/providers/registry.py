@@ -76,11 +76,11 @@ class ProviderSpec:
     # whose API returns the actual answer in "reasoning" instead of "content".
     reasoning_as_content: bool = False
 
-    # Where earlier reasoning goes back on input assistant messages.
-    # "reasoning_content" — the common field (DeepSeek, Kimi, GLM, MiMo, ...)
-    # "reasoning"         — the provider's own field (Groq)
-    # ""                  — nowhere: the message schema forbids extra fields (Mistral)
-    reasoning_input_field: str = "reasoning_content"
+    # Whether earlier reasoning goes back on input assistant messages as
+    # reasoning_content (the common field: DeepSeek, Kimi, GLM, MiMo, ...).
+    # False where the message schema rejects it: Mistral forbids extra fields,
+    # and Groq's non-reasoning models reject any reasoning field.
+    echo_reasoning: bool = True
 
     @property
     def label(self) -> str:
@@ -379,7 +379,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Mistral",
         backend="openai_compat",
         default_api_base="https://api.mistral.ai/v1",
-        reasoning_input_field="",
+        echo_reasoning=False,
     ),
     # Step Fun (阶跃星辰): OpenAI-compatible API
     ProviderSpec(
@@ -488,7 +488,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Groq",
         backend="openai_compat",
         default_api_base="https://api.groq.com/openai/v1",
-        reasoning_input_field="reasoning",
+        echo_reasoning=False,
     ),
     # Qianfan (百度千帆): OpenAI-compatible API
     ProviderSpec(
