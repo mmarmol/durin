@@ -60,10 +60,13 @@ JSON:"""
 
 
 def build_skill_signal_prompt(turns: str, skill_loads: list[dict]) -> str:
+    # A skill counts as loaded whether the agent opened it with skill_view or
+    # read its SKILL.md directly; missing either makes a covered procedure
+    # look like a gap.
     loads = ", ".join(
         f"{c.get('skill')}@{c.get('turn')}"
         for c in skill_loads
-        if c.get("op") == "read" and c.get("skill")
+        if c.get("op") in ("read", "view") and c.get("skill")
     ) or "(none recorded)"
     # Tail-truncate: a correction lands AT THE END of an interaction (the user
     # reacts to what the agent just did), so keep the most recent turns — unlike

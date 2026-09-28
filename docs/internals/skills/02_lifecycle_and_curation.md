@@ -258,7 +258,8 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 — a one-off nitpick specific to the current task is explicitly excluded:
 
 - **`correction`** — while a skill was loaded (visible in the turns'
-  `SKILLS LOADED` list, built from turn-indexed `skill_calls`), the user
+  `SKILLS LOADED` list, built from turn-indexed `skill_calls`; a skill opened
+  with `skill_view` and one whose `SKILL.md` was read both count), the user
   redirected or corrected the output in a way that implies the skill itself
   should change.
 - **`gap`** — the agent completed a multi-step procedure that no loaded skill

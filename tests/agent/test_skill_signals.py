@@ -52,6 +52,15 @@ def test_build_prompt_includes_turn_indexed_loads_header():
     assert "the turns" in p
 
 
+def test_a_skill_loaded_with_skill_view_counts_as_loaded():
+    """skill_view is the dedicated load tool; a skill it loaded must not look
+    unloaded, or the pass reports a procedure that skill covers as a gap."""
+    p = build_skill_signal_prompt(
+        "the turns", [{"skill": "mxhero-support-api", "op": "view", "turn": 3}])
+    assert "mxhero-support-api@3" in p
+    assert "(none recorded)" not in p
+
+
 def test_prompt_keeps_most_recent_turns_when_truncating():
     # Corrections land at the END of an interaction, so truncation must keep the
     # tail, not the head (unlike entity discovery, which head-truncates).
