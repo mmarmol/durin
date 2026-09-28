@@ -103,6 +103,15 @@ The full content of each `auto` skill, as JSON (name -> body):
 {{ catalog_json }}
 ```
 
+The bundled files of those skills (scripts, references), as JSON
+(name -> path -> text; long files are cut). A fix that belongs in one of these
+files — a script that fails, a query with wrong columns — is an `evolve` with
+that file's path in `file`, and `old` copied exactly from it:
+
+```json
+{{ bundles_json }}
+```
+
 ## Recent usage (context only)
 
 Which skills were used recently. Context only — NOT a value signal:
@@ -200,7 +209,7 @@ carries one disposition per open observation shown above:
 ```json
 {"actions": [
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
-  {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
+  {"type": "evolve", "name": "<skill>", "file": "<SKILL.md, or a bundled file's path>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
   {"type": "restructure", "name": "<skill>", "intent": "<what to fix and how — e.g. lift the decode snippet into scripts/decode.py taking the image path as an argument and invoke it by path>", "rationale": "<why>"},
   {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>", "replaced_by": "<the skill that covers it now, if any>"}
 ],
@@ -213,7 +222,8 @@ carries one disposition per open observation shown above:
 
 For a `fuse`, `content` must be the full merged SKILL.md body of the new skill, and
 `sources` lists the names of the skills it replaces. For an `evolve`, `old` must be
-the exact text to replace within that skill's content, and `new` is the replacement.
+the exact text to replace within the file named in `file` (the skill's SKILL.md when
+omitted), and `new` is the replacement.
 For a `restructure`, give ONLY an `intent` — a precise instruction for what to
 bundle/author and how the body should change. You do NOT write the new files: an
 agentic sub-agent reads the skill, writes the script or authors the workflow with

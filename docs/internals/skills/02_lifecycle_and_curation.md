@@ -371,7 +371,9 @@ left for human review and never auto-incorporated.
 
 **Step 5 — build the prompt and call the judge.** `_build_prompt` renders
 `templates/agent/skill_curation.md` with: the selected skills' full content,
-light usage context, the upstream drift bodies (if any), the OPEN observations
+their bundled text files (`_bundle_view`: each file cut to a bounded head, and
+a per-skill total, so a fix that belongs in a script is reviewable), light
+usage context, the upstream drift bodies (if any), the OPEN observations
 scoped to the selected skills plus any `"all"` cross-cutting record, a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
 active principles, the **composition doctrine and workflow catalog** (the same
@@ -401,7 +403,7 @@ before it is applied:
 
 | Action | Effect | Guard |
 |---|---|---|
-| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
+| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body, or on one bundled file named in `file`; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
 | `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
 | `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
 | `retire` | `remove_skill` — delete outright (git-recoverable) and record it as retired, with the optional `replaced_by` | target must be in `selected`, and nothing may depend on it (below) |

@@ -67,6 +67,29 @@ def _parse_judge_output(raw: object) -> dict | None:
 
 
 _MIN_EVIDENCE_CHARS = 12
+# How much of a skill's bundled files the judge sees: enough to aim an edit at
+# a script line, bounded so one large bundle cannot crowd out the catalog.
+_BUNDLE_FILE_CHARS = 6000
+_BUNDLE_SKILL_CHARS = 12000
+
+
+def _bundle_view(workspace: Path, name: str) -> dict[str, str]:
+    """A skill's bundled text files for the judge, each cut to a bounded
+    head with a marker when longer."""
+    skill_dir = ss._skills_dir(workspace) / name
+    if not skill_dir.is_dir():
+        return {}
+    view: dict[str, str] = {}
+    budget = _BUNDLE_SKILL_CHARS
+    for rel, text in ss.read_bundle_files(skill_dir).items():
+        if budget <= 0:
+            view[rel] = "[not shown: the skill's bundled files exceed what the review shows]"
+            continue
+        cap = min(_BUNDLE_FILE_CHARS, budget)
+        view[rel] = text if len(text) <= cap else (
+            text[:cap] + f"\n[... cut: {len(text) - cap} more chars not shown ...]")
+        budget -= len(view[rel])
+    return view
 
 
 def _applied_holds(workspace: Path, rec: dict, disposition: dict, landed: set[str]) -> bool:
@@ -175,6 +198,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                     len(delta), budget, deferred)
 
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
+    bundles = {n: view for n in selected if (view := _bundle_view(workspace, n))}
 
     import shutil as _shutil
     upstream: dict[str, str] = {}
@@ -218,7 +242,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
 
     prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
                            declined_shown, principles, user_edits,
-                           workspace=workspace)
+                           workspace=workspace, bundles=bundles)
     raw = judge(prompt)
     parsed = _parse_judge_output(raw)
     if parsed is None:
@@ -324,7 +348,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                      applied=False)
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
-                                    rationale=a.get("rationale", "evolve"))
+                                    rationale=a.get("rationale", "evolve"),
+                                    file=str(a.get("file") or "SKILL.md"))
             # An edit that committed nothing (a no-op) changed nothing.
             ok = bool(r.get("ok")) and bool(r.get("commit"))
             applied += 1 if ok else 0
@@ -489,7 +514,8 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   declined: list[dict] | None = None,
                   principles: list[dict] | None = None,
                   user_edits: dict | None = None,
-                  workspace: Path | None = None) -> str:
+                  workspace: Path | None = None,
+                  bundles: dict | None = None) -> str:
     from durin.agent.skills_doctrine import composition_doctrine, workflow_catalog_text
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
@@ -497,6 +523,7 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                            workflow_catalog=(workflow_catalog_text(workspace)
                                              if workspace else "(no workflows installed)"),
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
+                           bundles_json=json.dumps(bundles or {}, ensure_ascii=False),
                            usage_json=json.dumps(usage, ensure_ascii=False),
                            upstream_json=json.dumps(upstream or {}, ensure_ascii=False),
                            observations_json=json.dumps(observations or [], ensure_ascii=False),

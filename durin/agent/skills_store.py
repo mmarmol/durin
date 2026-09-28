@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 # bundled script, and a missing workflow is authored so the skill can delegate
 # (curation `restructure` action; pre-doctrine skills re-enter the delta to be
 # repaired now that the vocabulary can express it).
-CURATION_RULES_VERSION = 4
+# v5: an `applied` disposition must rest on a landed change or quoted evidence,
+# and the judge sees bundled files and can aim an `evolve` at one (skills whose
+# script was never reviewable re-enter the delta once).
+CURATION_RULES_VERSION = 5
 
 
 @dataclass

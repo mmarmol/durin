@@ -177,6 +177,33 @@ def test_an_edit_waiting_for_approval_is_not_applied(tmp_path, monkeypatch):
     assert "apr-7" in rec["attempts"][-1]["note"]
 
 
+def test_an_evolve_can_fix_a_bundled_script(tmp_path):
+    """A fix that belongs in a skill's script must be reachable: the judge sees
+    the script and can aim an evolve at it."""
+    ws = tmp_path / "ws"
+    _mk(ws, "stable")
+    script = ws / "skills" / "stable" / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("client.get_waiter('query_succeeded')\n", encoding="utf-8")
+    ss.mark_curated(ws, "stable")
+    _obs(ws, skill="stable", issue="the script uses a waiter the installed botocore lacks")
+    prompts = []
+
+    def judge(prompt):
+        prompts.append(prompt)
+        return json.dumps({
+            "actions": [{"type": "evolve", "name": "stable", "file": "scripts/run.py",
+                         "old": "client.get_waiter('query_succeeded')",
+                         "new": "poll_until_done(client)", "rationale": "obs #1"}],
+            "observations": [{"id": 1, "disposition": "applied"}]})
+
+    curate_catalog(ws, judge=judge)
+
+    assert "get_waiter('query_succeeded')" in prompts[0]
+    assert script.read_text(encoding="utf-8") == "poll_until_done(client)\n"
+    assert _record(ws, 1)["status"] == "APPLIED"
+
+
 def test_new_prefixed_observations_stay_out_of_curation_prompt(tmp_path):
     ws = tmp_path / "ws"
     _mk(ws, "changed", "fresh body")       # in delta via change gate
