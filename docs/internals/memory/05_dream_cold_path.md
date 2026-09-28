@@ -397,7 +397,14 @@ warning and is skipped, never aborting the pass. Gated by
 newest sessions (plus any logged skill gaps)
 for a recurring step-by-step **procedure**. Each session gets its share of the
 input window and is trimmed on its own, keeping its start and its end — the end
-is where what finally worked lives. When it finds one it prefers
+is where what finally worked lives. Each logged gap also brings its own
+evidence (`_gap_evidence`): the end of the sessions it was logged from, and the
+observations recorded from those sessions about existing skills
+(`observations_from_sessions`), marked as overriding the gap's text. A gap
+logged mid-session can carry that slice's failed guesses; the corrections that
+held are often on a skill that already covers the area. The prompt tells the
+extractor to encode only facts a session shows working, and not to author a
+skill for a procedure a correction shows an existing skill already covers. When it finds one it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
 over authoring from scratch, then calls `skill_write`. Its prompt lists the
 retired skills with their replacements, and its `skill_write` door refuses a

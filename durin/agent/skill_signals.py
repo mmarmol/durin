@@ -43,6 +43,9 @@ Rules:
 - Only signals that generalize. A correction specific to THIS task (a particular \
 value, name, or one-off preference) is NOT a skill signal — skip it.
 - Ground every signal in the turns. Do not invent.
+- For a gap, the improvement states only what the turns show working in the \
+end — the commands, queries and names that succeeded — never an attempt that \
+failed or a guess the turns did not confirm.
 - Each signal is an object with:
   - "skill": the loaded skill's name, or "new:<working-name>" for a gap
   - "kind": "correction" or "gap"

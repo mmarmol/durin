@@ -260,6 +260,29 @@ def _reopen_applied(workspace: Path, records: list[dict], skill: str, issue: str
     return target
 
 
+def _session_ref(ref: str) -> str:
+    """One form for a session reference: the signal pass records the session
+    file's stem (``websocket_x``), the in-session tool its key (``websocket:x``)."""
+    return str(ref).replace(":", "_")
+
+
+def observations_from_sessions(workspace: Path, sessions: list[str]) -> list[dict]:
+    """Records about existing skills logged from any of ``sessions``, active
+    or archived, whatever their status — what those sessions taught about the
+    skills they used."""
+    wanted = {_session_ref(s) for s in sessions if s}
+    if not wanted:
+        return []
+    workspace = Path(workspace)
+    out = []
+    for rec in _read_records(_active_path(workspace)) + _read_records(_archive_path(workspace)):
+        if str(rec.get("skill", "")).startswith("new:"):
+            continue
+        if wanted & {_session_ref(s) for s in rec.get("sessions") or []}:
+            out.append(rec)
+    return out
+
+
 def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
     """All OPEN observations, optionally filtered to one skill ref."""
     recs = [r for r in _read_records(_active_path(Path(workspace)))

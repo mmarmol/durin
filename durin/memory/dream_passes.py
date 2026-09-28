@@ -338,6 +338,14 @@ uncovered while working, with a working name. Treat each gap as a strong \
 candidate; when you author a skill for one, use its working name VERBATIM as \
 the skill name so the gap can be closed automatically.
 
+Encode only facts the session shows working: commands and queries that \
+succeeded, names and fields confirmed by real output. Never encode a failed \
+attempt, a guess, or a reference document's claim that the session did not \
+confirm. When EVIDENCE FOR THE GAPS is given, it is what the session finally \
+did and what was corrected there — it overrides the gap's own text. If a \
+correction shows an existing skill already covers the procedure, do not \
+author a new skill for it.
+
 Every skill you write MUST carry YAML frontmatter with `name` and `description`.
 The description is the ONLY text the agent later reads to decide when the skill
 applies — state what the skill does and its concrete trigger conditions in 1-4
@@ -410,6 +418,9 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
             f" (seen x{r.get('count', 1)})"
             for r in gaps)
         user_parts.append(f"=== LOGGED GAPS ===\n{gap_lines}")
+        evidence = _gap_evidence(workspace, gaps)
+        if evidence:
+            user_parts.append(evidence)
     if sessions_text.strip():
         user_parts.append(sessions_text)
 
@@ -442,6 +453,66 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
              principles=principles_block)},
         {"role": "user", "content": "\n\n".join(user_parts)},
     ]
+
+
+_GAP_SESSION_TAIL_CHARS = 2000
+_GAP_RELATED_RECORDS = 5
+_GAP_EVIDENCE_TOTAL_CHARS = 12000
+
+
+def _session_tail(workspace: Path, ref: str, chars: int) -> str:
+    """The last ``chars`` of one session's conversation text, by its reference."""
+    from durin.memory.extract_runner import load_session
+    from durin.utils.helpers import safe_filename
+
+    path = Path(workspace) / "sessions" / f"{safe_filename(str(ref).replace(':', '_'))}.jsonl"
+    if not path.is_file():
+        return ""
+    _meta, msgs = load_session(path)
+    turns = "\n".join(
+        f"{str(m.get('role') or '?').upper()}: {m.get('content')}"
+        for m in msgs if m.get("content"))
+    return turns[-chars:]
+
+
+def _gap_evidence(workspace: Path, gaps: list[dict]) -> str:
+    """What each gap's own sessions ended with, and what was corrected in them.
+
+    A gap is logged from one slice of a session and its text can hold that
+    slice's guesses and failed attempts; the facts that held are at the
+    session's end and in the corrections recorded from it (often on a skill
+    that already covers the area). They go next to the gap, marked as
+    overriding its text."""
+    from durin.agent.skill_observations import observations_from_sessions
+
+    blocks: list[str] = []
+    used = 0
+    for gap in gaps:
+        refs = [str(s) for s in (gap.get("sessions") or []) if s][-2:]
+        if not refs:
+            continue
+        parts = []
+        for ref in refs:
+            tail = _session_tail(workspace, ref, _GAP_SESSION_TAIL_CHARS)
+            if tail:
+                parts.append(f"end of session {ref}:\n{tail}")
+        related = observations_from_sessions(workspace, refs)[:_GAP_RELATED_RECORDS]
+        if related:
+            parts.append("recorded from the same session(s):\n" + "\n".join(
+                f"- {r.get('skill')} ({r.get('kind')}): {r.get('issue')} → {r.get('improvement')}"
+                for r in related))
+        if not parts:
+            continue
+        block = f"[{gap.get('skill')}]\n" + "\n".join(parts)
+        if used + len(block) > _GAP_EVIDENCE_TOTAL_CHARS:
+            break
+        blocks.append(block)
+        used += len(block)
+    if not blocks:
+        return ""
+    return ("=== EVIDENCE FOR THE GAPS ===\n"
+            "What each gap's sessions ended with and what was corrected in them. "
+            "Where this contradicts a gap's text, this wins.\n\n" + "\n\n".join(blocks))
 
 
 def _norm(s: str) -> str:
