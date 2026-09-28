@@ -36,12 +36,15 @@ Two kinds:
 - "correction": while a skill was loaded (see "SKILLS LOADED" and the SKILL.md \
 read in the turns), the user corrected or redirected the output in a way that \
 means the SKILL ITSELF should change. Set "skill" to that loaded skill's name.
-- "gap": the agent completed a multi-step procedure that NO loaded skill covers \
-and that is likely to recur. Set "skill" to "new:<short-working-name>".
+- "gap": the agent completed a multi-step procedure that NO existing skill \
+covers and that is likely to recur. Set "skill" to "new:<short-working-name>".
 
 Rules:
 - Only signals that generalize. A correction specific to THIS task (a particular \
 value, name, or one-off preference) is NOT a skill signal — skip it.
+- A gap is only for work no skill in EXISTING SKILLS covers. If one covers it, \
+even in part, report a "correction" on that skill instead. If an OPEN GAP is \
+the same procedure, use its name. At most one gap per procedure.
 - Ground every signal in the turns. Do not invent.
 - For a gap, the improvement states only what the turns show working in the \
 end — the commands, queries and names that succeeded — never an attempt that \
@@ -56,13 +59,51 @@ failed or a guess the turns did not confirm.
 SKILLS LOADED (name @ turn):
 {loads}
 
+EXISTING SKILLS (name: what it covers):
+{catalog}
+
+OPEN GAPS (already flagged, not yet a skill):
+{open_gaps}
+
 CONVERSATION TURNS:
 {turns}
 
 JSON:"""
 
+# Bounds on the catalog the pass reads: every skill by name, each described
+# in a line, without letting a large catalog crowd out the turns.
+_CATALOG_DESCRIPTION_CHARS = 140
+_CATALOG_CHARS = 8000
+_OPEN_GAPS_SHOWN = 20
 
-def build_skill_signal_prompt(turns: str, skill_loads: list[dict]) -> str:
+
+def _catalog_text(workspace: Path) -> str:
+    from durin.agent.skills_store import list_skills_info
+
+    lines: list[str] = []
+    used = 0
+    for info in sorted(list_skills_info(workspace), key=lambda s: s["name"]):
+        desc = " ".join(str(info.get("description") or "").split())[:_CATALOG_DESCRIPTION_CHARS]
+        line = f"- {info['name']}: {desc}" if desc else f"- {info['name']}"
+        if used + len(line) > _CATALOG_CHARS:
+            lines.append("- (more skills not listed)")
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines) or "(none)"
+
+
+def _open_gaps_text(workspace: Path) -> str:
+    from durin.agent.skill_observations import open_observations
+
+    gaps = [r for r in open_observations(workspace)
+            if str(r.get("skill", "")).startswith("new:")][:_OPEN_GAPS_SHOWN]
+    return "\n".join(f"- {str(r['skill'])[4:]}: {str(r.get('issue', ''))[:120]}"
+                     for r in gaps) or "(none)"
+
+
+def build_skill_signal_prompt(turns: str, skill_loads: list[dict], *,
+                              catalog: str = "(none)", open_gaps: str = "(none)") -> str:
     # A skill counts as loaded whether the agent opened it with skill_view or
     # read its SKILL.md directly; missing either makes a covered procedure
     # look like a gap.
@@ -74,7 +115,8 @@ def build_skill_signal_prompt(turns: str, skill_loads: list[dict]) -> str:
     # Tail-truncate: a correction lands AT THE END of an interaction (the user
     # reacts to what the agent just did), so keep the most recent turns — unlike
     # entity discovery, which head-truncates because identity facts come early.
-    return _SKILL_SIGNAL_PROMPT.format(loads=loads, turns=turns[-12000:])
+    return _SKILL_SIGNAL_PROMPT.format(loads=loads, catalog=catalog, open_gaps=open_gaps,
+                                       turns=turns[-12000:])
 
 
 def parse_skill_signals(raw: str) -> list[dict]:
@@ -134,7 +176,9 @@ def discover_skill_signals(
     llm_invoke = llm_invoke or default_llm_invoke
     if not turns.strip():
         return []
-    prompt = build_skill_signal_prompt(turns, skill_loads or [])
+    prompt = build_skill_signal_prompt(
+        turns, skill_loads or [],
+        catalog=_catalog_text(workspace), open_gaps=_open_gaps_text(workspace))
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
     signals = parse_skill_signals(raw)

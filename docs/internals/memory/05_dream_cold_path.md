@@ -409,7 +409,9 @@ acquiring a published skill (search a registry, pull a safe allowlisted seed)
 over authoring from scratch, then calls `skill_write`. Its prompt lists the
 retired skills with their replacements, and its `skill_write` door refuses a
 retired name (`../skills/02_lifecycle_and_curation.md`). It does nothing on a
-one-off, and reuses/extends an existing local skill instead of duplicating. It
+one-off. It cannot edit a local skill; duplicates are stopped before they reach
+it — the signal pass sees the catalog, a gap named after an existing skill is
+logged as an improvement on that skill, and curation makes that change. It
 is a sync wrapper over the async runner so the cron can call it in a thread.
 
 ### Pass 4 — refine: dedup duplicate entities

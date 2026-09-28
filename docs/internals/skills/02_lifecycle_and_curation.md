@@ -262,9 +262,12 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
   with `skill_view` and one whose `SKILL.md` was read both count), the user
   redirected or corrected the output in a way that implies the skill itself
   should change.
-- **`gap`** — the agent completed a multi-step procedure that no loaded skill
-  covered and that looks likely to recur; its `skill` field is normalized to
-  `new:<working-name>`.
+- **`gap`** — the agent completed a multi-step procedure that no existing skill
+  covers and that looks likely to recur; its `skill` field is normalized to
+  `new:<working-name>`. The prompt carries the catalog (every skill's name and
+  a one-line description, bounded) and the open gaps. A procedure a skill
+  already covers, even in part, is a `correction` on that skill, and a
+  procedure an open gap names reuses that gap's name.
 
 Unlike entity discovery (which **head**-truncates, because identity facts tend
 to appear early), the skill-signal prompt **tail**-truncates the turns —
@@ -296,6 +299,10 @@ provenance.
   comes back `OPEN` (out of the archive when needed) with its count bumped,
   so a fix that did not hold reads as recurring, not as a first report.
   `DECLINED` records are not reopened.
+- **Routing.** A `new:<name>` gap whose name is an existing skill is logged as
+  an `improvement` on that skill rather than as a request for a duplicate. A
+  gap for a retired skill is routed to its replacement (Retired skills stay
+  retired, below).
 - **Lifecycle.** `OPEN` → `APPLIED`, `DECLINED` or `UPSTREAM`. The first two are
   set in bulk by `apply_dispositions` from the curation judge's per-observation
   verdicts, or one at a time by `resolve_observation` when the user resolves a

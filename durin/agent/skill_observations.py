@@ -137,13 +137,17 @@ def _route_new_skill_ref(workspace: Path, skill: str, kind: str,
                          issue: str) -> tuple[str, str, str]:
     """Where a ``new:<name>`` gap belongs.
 
-    A gap for a retired skill that has a replacement is a request to extend
+    A gap named after a skill that exists is feedback on that skill: it
+    becomes an ``improvement`` on it rather than a request for a duplicate. A
+    gap for a retired skill that has a replacement is a request to extend
     that replacement: it becomes an ``improvement`` on it, noting the retired
     name, instead of a gap that would ask for the retired skill again.
     """
     if not skill.startswith("new:"):
         return skill, kind, issue
     name = skill[4:]
+    if (_skills_dir(workspace) / name / "SKILL.md").is_file():
+        return name, "improvement", issue.strip() + " (proposed as a new skill; it already exists)"
     from durin.agent.skill_retirements import retired_skills
 
     retired = retired_skills(workspace).get(name)
