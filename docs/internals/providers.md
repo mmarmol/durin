@@ -366,6 +366,22 @@ Provider rules the serialization honors:
 - **Anthropic.** Every `thinking` and `redacted_thinking` block goes back
   unchanged and in its original order. A redacted block is opaque — its
   `data` is replayed as received and never shown as reasoning text.
+- **Current Claude models** (anything after Opus 4.6; `_is_current_claude`,
+  which matches the closed set of older names, so a new model needs no code
+  change):
+  - no `temperature` is sent, since any non-default value is rejected;
+  - an effort level becomes adaptive thinking plus `output_config.effort`,
+    because the `budget_tokens` mode is rejected;
+  - a forced tool is sent as `auto`, since these models think by default.
+  - When thinking is configured, the request also sets
+    `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta
+    `thinking-binding-controls-2026-08-01`). On models that bind thinking to
+    everything before it, an earlier tool result the runner trimmed then drops
+    the later thinking instead of failing the request.
+- **Recovery.** `AnthropicProvider._recover_request_for_error` retries once
+  without every thinking block when the API rejects one (a signature, or
+  content that changed before it), which Anthropic always allows, and without
+  `temperature` when that is what it rejected.
 - **DeepSeek.** See the reasoning pad above.
 
 ---

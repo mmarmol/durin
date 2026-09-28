@@ -21,6 +21,24 @@ from durin.providers.base import (
 
 _ALNUM = string.ascii_letters + string.digits
 
+# Claude models up to Opus 4.6 accept `temperature` and the budget_tokens
+# thinking mode; every later one rejects both. This set is closed — new models
+# fall on the other side — so it never needs updating.
+_OLDER_CLAUDE_RE = re.compile(
+    r"^claude-(?:(?:2|3|instant)(?:[-.]|$)|(?:opus|sonnet|haiku)-4(?:-[0-6])?(?:-\d{8}|-latest)?$)"
+)
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Lets a request set thinking.block_binding (what to do when earlier content
+# no longer matches the thinking that followed it).
+_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+
+
+def _is_current_claude(model_name: str) -> bool:
+    """A Claude model released after Opus 4.6 (not another vendor's model
+    served through an Anthropic-compatible API)."""
+    name = model_name.lower()
+    return name.startswith("claude-") and not _OLDER_CLAUDE_RE.match(name)
+
 
 def _gen_tool_id() -> str:
     return "toolu_" + "".join(secrets.choice(_ALNUM) for _ in range(22))
@@ -448,10 +466,6 @@ class AnthropicProvider(LLMProvider):
         max_tokens = max(1, max_tokens)
         thinking_enabled = bool(reasoning_effort) and reasoning_effort.lower() != "none"
 
-        # claude-opus-4-7 deprecated the `temperature` parameter entirely — the
-        # API returns 400 if it is present, on any code path.
-        omit_temperature = "opus-4-7" in model_name
-
         kwargs: dict[str, Any] = {
             "model": model_name,
             "messages": anthropic_msgs,
@@ -460,6 +474,36 @@ class AnthropicProvider(LLMProvider):
 
         if system:
             kwargs["system"] = system
+
+        if _is_current_claude(model_name):
+            # Models released after Opus 4.6 reject a non-default temperature
+            # and the budget_tokens thinking mode on every request: no sampling
+            # params, adaptive thinking, effort through output_config.
+            effort = (reasoning_effort or "").lower()
+            if effort in _EFFORT_LEVELS or effort == "adaptive":
+                # Earlier tool results the runner trimmed would otherwise make
+                # the API reject the thinking that follows them; drop_block
+                # drops that thinking instead.
+                kwargs["thinking"] = {
+                    "type": "adaptive",
+                    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+                }
+                if effort in _EFFORT_LEVELS:
+                    kwargs["output_config"] = {"effort": effort}
+                self._add_beta(kwargs, _THINKING_BINDING_BETA)
+            if anthropic_tools:
+                kwargs["tools"] = anthropic_tools
+                # These models think by default and refuse a forced tool.
+                tc = self._convert_tool_choice(tool_choice, thinking_enabled=True)
+                if tc:
+                    kwargs["tool_choice"] = tc
+            if self.extra_headers:
+                self._merge_headers(kwargs, self.extra_headers)
+            return kwargs
+
+        # claude-opus-4-7 deprecated the `temperature` parameter entirely — the
+        # API returns 400 if it is present, on any code path.
+        omit_temperature = "opus-4-7" in model_name or temperature is None
 
         if reasoning_effort == "adaptive":
             # Adaptive thinking: model decides when and how much to think
@@ -485,9 +529,48 @@ class AnthropicProvider(LLMProvider):
                 kwargs["tool_choice"] = tc
 
         if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
+            self._merge_headers(kwargs, self.extra_headers)
 
         return kwargs
+
+    @staticmethod
+    def _merge_headers(kwargs: dict[str, Any], headers: dict[str, str]) -> None:
+        """Add ``headers`` to the request, joining ``anthropic-beta`` values."""
+        merged = dict(kwargs.get("extra_headers") or {})
+        for key, value in headers.items():
+            if key.lower() == "anthropic-beta" and merged.get("anthropic-beta"):
+                betas = [b.strip() for b in f"{merged['anthropic-beta']},{value}".split(",") if b.strip()]
+                merged["anthropic-beta"] = ",".join(dict.fromkeys(betas))
+            else:
+                merged[key] = value
+        kwargs["extra_headers"] = merged
+
+    @classmethod
+    def _add_beta(cls, kwargs: dict[str, Any], beta: str) -> None:
+        cls._merge_headers(kwargs, {"anthropic-beta": beta})
+
+    def _recover_request_for_error(
+        self, kw: dict[str, Any], response: LLMResponse,
+    ) -> dict[str, Any] | None:
+        """Retry once without what the API just rejected.
+
+        A thinking block the API no longer accepts — its signature, or the
+        content before it changed (a trimmed earlier result) on a model that
+        binds thinking to its prefix — is dropped from the whole history,
+        which Anthropic always allows. A rejected sampling param is omitted.
+        """
+        text = (response.content or "").lower()
+        if "signature" in text or ("thinking" in text and "block" in text):
+            messages = kw.get("messages") or []
+            if any(isinstance(m, dict) and m.get("thinking_blocks") for m in messages):
+                return {**kw, "messages": [
+                    {k: v for k, v in m.items() if k != "thinking_blocks"}
+                    if isinstance(m, dict) else m
+                    for m in messages
+                ]}
+        if "temperature" in text and kw.get("temperature") is not None:
+            return {**kw, "temperature": None}
+        return None
 
     # ------------------------------------------------------------------
     # Response parsing
