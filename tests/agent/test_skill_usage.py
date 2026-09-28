@@ -32,6 +32,45 @@ def test_skill_call_records_the_turn_index():
         {"skill": "git-helper", "op": "read", "turn": 2}]
 
 
+def _exec_turn(command: str, output: str) -> list[dict]:
+    return [
+        {"role": "assistant", "tool_calls": [
+            {"id": "e1", "type": "function",
+             "function": {"name": "exec", "arguments": {"command": command}}}]},
+        {"role": "tool", "tool_call_id": "e1", "name": "exec", "content": output},
+    ]
+
+
+def test_running_a_skill_script_is_a_run_call_with_its_outcome():
+    """A skill's script failing again and again must be visible as use of that
+    skill; before, 31 failed runs of one script left no trace."""
+    failed = _exec_turn(
+        "python3 skills/athena-logs/scripts/athena_query.py --database logs_dev",
+        "ValueError: Waiter does not exist\n\nExit code: 1")
+    ok = _exec_turn(
+        "python3 /home/durin/.durin/workspace/skills/athena-boto3-query/scripts/athena_query.py --sql -",
+        "[{\"tab_name\": \"containers\"}]\n\nExit code: 0")
+
+    assert extract_skill_calls(failed) == [
+        {"skill": "athena-logs", "op": "run", "turn": 1, "ok": False}]
+    assert extract_skill_calls(ok) == [
+        {"skill": "athena-boto3-query", "op": "run", "turn": 1, "ok": True}]
+
+
+def test_printing_a_skill_file_with_exec_is_not_a_run():
+    turn = _exec_turn("cat skills/athena-logs/SKILL.md", "---\nname: athena-logs\n\nExit code: 0")
+    assert extract_skill_calls(turn) == []
+
+
+def test_the_signal_pass_sees_a_failed_skill_script():
+    from durin.agent.skill_signals import build_skill_signal_prompt
+
+    prompt = build_skill_signal_prompt(
+        "the turns", [{"skill": "athena-logs", "op": "run", "turn": 4, "ok": False}])
+
+    assert "athena-logs@4 (script failed)" in prompt
+
+
 def test_non_skill_read_and_other_tools_are_ignored():
     messages = [
         {"role": "assistant", "tool_calls": [

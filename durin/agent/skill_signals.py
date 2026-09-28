@@ -35,7 +35,10 @@ GENERALIZE to future runs, never one-off task nitpicks.
 Two kinds:
 - "correction": while a skill was loaded (see "SKILLS LOADED" and the SKILL.md \
 read in the turns), the user corrected or redirected the output in a way that \
-means the SKILL ITSELF should change. Set "skill" to that loaded skill's name.
+means the SKILL ITSELF should change — or one of the skill's scripts failed \
+(marked "script failed") because of the skill itself: a wrong default, a \
+missing API, a wrong column or path. Set "skill" to that skill's name and \
+say in the improvement what made it work, if the turns show it.
 - "gap": the agent completed a multi-step procedure that NO existing skill \
 covers and that is likely to recur. Set "skill" to "new:<short-working-name>".
 
@@ -106,12 +109,19 @@ def build_skill_signal_prompt(turns: str, skill_loads: list[dict], *,
                               catalog: str = "(none)", open_gaps: str = "(none)") -> str:
     # A skill counts as loaded whether the agent opened it with skill_view or
     # read its SKILL.md directly; missing either makes a covered procedure
-    # look like a gap.
-    loads = ", ".join(
-        f"{c.get('skill')}@{c.get('turn')}"
-        for c in skill_loads
-        if c.get("op") in ("read", "view") and c.get("skill")
-    ) or "(none recorded)"
+    # look like a gap. A run of one of its scripts shows with its outcome, so
+    # a script that keeps failing reaches the skill as feedback.
+    entries: list[str] = []
+    for c in skill_loads:
+        if not c.get("skill"):
+            continue
+        if c.get("op") in ("read", "view"):
+            entries.append(f"{c.get('skill')}@{c.get('turn')}")
+        elif c.get("op") == "run":
+            outcome = {True: "script ran", False: "script failed"}.get(
+                c.get("ok"), "script ran, outcome unknown")
+            entries.append(f"{c.get('skill')}@{c.get('turn')} ({outcome})")
+    loads = ", ".join(entries) or "(none recorded)"
     # Tail-truncate: a correction lands AT THE END of an interaction (the user
     # reacts to what the agent just did), so keep the most recent turns — unlike
     # entity discovery, which head-truncates because identity facts come early.

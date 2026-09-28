@@ -18,6 +18,10 @@ import re
 from typing import Any
 
 _SKILL_PATH_RE = re.compile(r"(?:^|/)skills/([^/]+)/SKILL\.md$")
+# A command that names a file inside a skill's folder, other than its SKILL.md:
+# a bundled script being run.
+_SKILL_RUN_RE = re.compile(r"(?:^|[\s/\"'=])skills/([A-Za-z0-9._-]+)/(?!SKILL\.md\b)[^\s\"';|&]+")
+_EXIT_CODE_RE = re.compile(r"Exit code: (-?\d+)")
 
 
 def _tool_name_and_args(tc: Any) -> tuple[str, dict]:
@@ -65,13 +69,34 @@ def emit_skill_used(calls: list[dict], session_key: str | None = None) -> None:
         pass
 
 
+def _run_outcome(result: Any) -> bool | None:
+    """Whether an exec result says the command succeeded: its last
+    ``Exit code:`` line, or None when the result does not show one."""
+    if not isinstance(result, str):
+        return None
+    codes = _EXIT_CODE_RE.findall(result)
+    return int(codes[-1]) == 0 if codes else None
+
+
 def extract_skill_calls(messages: list[dict]) -> list[dict]:
     calls: list[dict] = []
+    results = {m.get("tool_call_id"): m.get("content")
+               for m in messages if m.get("role") == "tool" and m.get("tool_call_id")}
     for i, message in enumerate(messages):
         turn = i + 1                       # messages[i] is turn i+1 (load_session)
         for tc in (message.get("tool_calls") or []):
             name, args = _tool_name_and_args(tc)
-            if name == "skill_view":
+            if name == "exec":
+                # Running a skill's bundled script is use of that skill, and
+                # its exit code says whether the script works.
+                command = str(args.get("command", ""))
+                ok = _run_outcome(results.get(tc.get("id")) if isinstance(tc, dict) else None)
+                for skill in dict.fromkeys(_SKILL_RUN_RE.findall(command)):
+                    call = {"skill": skill, "op": "run", "turn": turn}
+                    if ok is not None:
+                        call["ok"] = ok
+                    calls.append(call)
+            elif name == "skill_view":
                 skill = args.get("name")
                 if skill:
                     calls.append({"skill": skill, "op": "view", "turn": turn})

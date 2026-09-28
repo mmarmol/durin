@@ -152,7 +152,7 @@ newly authored versus merely edited was to diff the catalog by hand.
 
 Emitted once per entry returned by `extract_skill_calls`
 (`durin/agent/skill_usage.py`), right after `AgentLoop._state_save` records
-those entries into `session.metadata["skill_calls"]`. A "call" is one of three
+those entries into `session.metadata["skill_calls"]`. A "call" is one of four
 things the agent did to a skill during a turn:
 
 - `view` — the `skill_view` tool loaded the skill.
@@ -160,6 +160,11 @@ things the agent did to a skill during a turn:
   fallback path when the agent reads a skill file directly instead of using
   `skill_view`).
 - `edit` — `skill_edit` modified the skill.
+- `run` — an `exec` command ran a file inside `skills/<name>/` other than its
+  `SKILL.md` (a bundled script). The call carries `ok` from the result's last
+  `Exit code:` line, when the result shows one. The hindsight signal pass shows
+  a failed run next to the skill ("script failed"), so a script that keeps
+  failing becomes a correction on its skill instead of going unseen.
 
 Each event payload is the call dict itself: `{skill, op, turn}`, optionally
 carrying `iteration` and `session_key`. Because this fires per call rather than
