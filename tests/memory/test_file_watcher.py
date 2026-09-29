@@ -391,17 +391,26 @@ def _simulate_git(git_dir: Path) -> None:
             path.read_bytes()
 
 
-def test_every_watch_filters_out_reads_and_none_covers_git(tmp_path: Path) -> None:
+def test_every_watch_filters_out_reads_and_none_covers_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Pins how the observer is set up, on any platform: each top-level
     folder is watched on its own except `.git`, `archive` and `pending`, the
     root is watched non-recursively (for folders created later), and every
     watch subscribes only to create / modify / move / delete — never to
-    opens or closes, which the OS would otherwise report for every read."""
+    opens or closes, which the OS would otherwise report for every read.
+
+    FSEvents (macOS) may replay a folder's creation, made just before
+    `start()`, to that folder's fresh watch; the watcher then replaces the
+    watch, and a snapshot taken between the old watch's removal and the new
+    one's arrival would miss the folder. Folder events are therefore not
+    acted on here, so the snapshot is exactly what `start()` set up."""
     memory = tmp_path / "memory"
     for name in ("episodic", "entities", ".git", "archive", "pending"):
         (memory / name).mkdir(parents=True)
 
     watcher = MemoryFileWatcher(tmp_path)
+    monkeypatch.setattr(watcher, "_on_folder_appeared", lambda *args, **kwargs: None)
     watcher.start()
     try:
         watches = {Path(e.watch.path).name: e.watch for e in watcher._observer.emitters}
