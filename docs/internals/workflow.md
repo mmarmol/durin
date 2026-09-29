@@ -481,7 +481,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -522,9 +522,13 @@ this workflow carrying the same key instead of a fresh per-run one (`null` when 
 key was given); `typical_s` / `typical_total_s`
 — median per-node and median whole-run seconds, computed once here from the
 workflow's prior completed runs (§4g), so every reader shows the same baseline for
-the life of the run instead of recomputing it; and `spec_hash` / `durin_version` —
+the life of the run instead of recomputing it; `spec_hash` / `durin_version` —
 the workflow-definition hash and engine build this run walked with (see
-`durin/workflow/provenance.py`), carried forward unchanged on every later rewrite.
+`durin/workflow/provenance.py`), carried forward unchanged on every later rewrite;
+and `resumed` — `true` when the walk re-enters an existing run (a failure-resume,
+or a reply to a pause that goes back into the engine). A resume starts `runs` empty
+again, so on a resumed run they hold only the last walk's rows, not the earlier
+attempts'; the flag is carried forward on every rewrite.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -1070,7 +1074,9 @@ stay on one route. When they walked different sets (a router that sometimes skip
 sometimes answers briefly, sometimes investigates in full), no single number describes
 them and `typical_total_s` is recorded as `null`, which every surface shows as absent.
 The estimate is made at `start_run`, before the new run has taken any route, so it
-cannot pick the matching route's history instead.
+cannot pick the matching route's history instead. A `resumed` run is left out: its
+`runs` hold only the last walk's rows, so neither the nodes it walked nor the seconds
+it took are on record, and those partial rows would read as a route of their own.
 
 **Node labels.** Every frame's `label` comes from `node_label`
 (`durin/workflow/spec.py`): the author's `title` if set, else the node's

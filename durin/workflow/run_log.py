@@ -143,6 +143,7 @@ def start_run(
     typical_total_s: float | None = None,
     spec_hash: str | None = None,
     durin_version: str | None = None,
+    resumed: bool = False,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -155,7 +156,9 @@ def start_run(
     run used the default per-run folder. ``spec_hash``/``durin_version`` identify the
     workflow definition and the engine build that walked it (see
     ``durin/workflow/provenance.py``); both ``None`` when the caller does not supply
-    them (e.g. a caller with no workflow object)."""
+    them (e.g. a caller with no workflow object). ``resumed`` marks a walk that
+    re-enters an existing run (a failure-resume or a paused run's reply): its
+    ``runs`` start empty here, so they never hold the earlier attempts' rows."""
     if parent_run_id is None:
         prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
@@ -188,6 +191,9 @@ def start_run(
         # carry these two forward unchanged on every later rewrite.
         "spec_hash": spec_hash,
         "durin_version": durin_version,
+        # Sticky once set: every later rewrite carries it, and every resume of the
+        # run sets it again, so a reader knows ``runs`` covers only the last walk.
+        "resumed": resumed,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -219,6 +225,7 @@ def update_run(
         "typical_total_s": base.get("typical_total_s"),
         "spec_hash": base.get("spec_hash"),
         "durin_version": base.get("durin_version"),
+        "resumed": base.get("resumed", False),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -291,6 +298,7 @@ def finalize_run(
         "typical_total_s": prior.get("typical_total_s"),
         "spec_hash": prior.get("spec_hash"),
         "durin_version": prior.get("durin_version"),
+        "resumed": prior.get("resumed", False),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -598,6 +606,10 @@ def typical_total_duration(
     route — and when the runs measured here walked different sets, there is no
     single typical total and the result is None. The estimate is made before the
     new run has taken any route, so it cannot pick the matching one instead.
+
+    A resumed run is left out: a resume rewrites its manifest with only the
+    resumed walk's rows, so neither the nodes it walked nor the seconds it took
+    are on record, and its partial rows would read as a route of their own.
     """
     from statistics import median
 
@@ -607,6 +619,8 @@ def typical_total_duration(
         if rec.get("status") != "completed":
             continue
         manifest = read_manifest(workspace, name, rec["run_id"]) or {}
+        if manifest.get("resumed"):
+            continue
         rows = manifest.get("runs") or []
         # Same exclusion as typical_node_durations: a reused row's duration is not
         # what a fresh dispatch would have cost, so it must not count toward the

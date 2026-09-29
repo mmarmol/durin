@@ -525,7 +525,8 @@ class WorkflowEngine:
             effective_root = root_session_key or f"workflow:{run_id}:root"
             started_at = time.time()
             self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key)
+                                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
+                                 resumed=resume is not None)
 
             def _update() -> None:
                 self._update_manifest(workflow, run_id, runs)
@@ -670,7 +671,8 @@ class WorkflowEngine:
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
-                        parent_run_id=None, work_dir=None, work_key=None) -> None:
+                        parent_run_id=None, work_dir=None, work_key=None,
+                        resumed=False) -> None:
         if self._workspace is None:
             return
         typical = {}
@@ -697,7 +699,8 @@ class WorkflowEngine:
                               typical_s=typical, typical_total_s=typical_total,
                               spec_hash=provenance.node_hash(
                                   {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
-                              durin_version=provenance.durin_version())
+                              durin_version=provenance.durin_version(),
+                              resumed=resumed)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
