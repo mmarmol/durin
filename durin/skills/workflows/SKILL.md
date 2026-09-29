@@ -75,8 +75,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   malformed payload, and `output_file` has the ENGINE write the validated JSON into the
   working folder — prefer these over prose contracts plus downstream validation gates.
   A node with the file tools can also deliver a JSON draft from its working folder with
-  `deliver_file(path)` (same schema check), so a prompt that has it draft and check a
-  file first never makes it retype the payload into `deliver`.
+  `deliver_file(path)` (same schema check). A prompt that has it draft and check a file
+  first should tell it to finish by calling `deliver_file`: a turn that ends without a
+  delivery gets a forced one that asks for `deliver`, which means retyping the payload.
   A node with `output_file` may add `reuse: "if-unchanged"`: on a later run, if the node's
   definition and the runner's resolved model/provider/params all still match what actually
   produced that file, the engine skips the node entirely and reuses the artifact — free
