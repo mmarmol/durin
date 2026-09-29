@@ -18,6 +18,10 @@ What the OS is asked to report is kept to what the watcher acts on:
   never reports a subfolder's creation to a non-recursive watch, so the
   worker also reconciles the folder watches whenever it is idle, which
   also replaces the watch of a folder that was deleted and created again.
+  On Linux it also replaces the watch of a top-level folder whose
+  subfolder was deleted or created, because that is how a subfolder moved
+  out or in arrives, and the inotify backend loses track of both (see
+  `_request_rewatch`).
 - Every watch subscribes only to create / modify / move / delete. Without
   that filter the OS reports every file open and every read-only close,
   so any read of `memory/` — a `git rev-list`, a dream pass, a health
@@ -121,6 +125,11 @@ class MemoryFileWatcher:
         # Watch of each top-level folder, by folder path; None when the OS
         # refused it.
         self._folder_watches: dict[str, Any] = {}
+        # Whether watchdog runs on inotify (Linux), and the top-level folders
+        # whose watch the idle reconcile replaces there (see
+        # `_request_rewatch`); the set is guarded by `_cond`.
+        self._inotify = False
+        self._stale_watches: set[str] = set()
         self._running = False
         # N2: re-embed entity pages reactively (FTS via reindex_one_file is not
         # enough — nothing else embeds them at author/edit time). None disables
@@ -198,6 +207,7 @@ class MemoryFileWatcher:
         ]
         self._folder_watches = {}
         self._observer = Observer()
+        self._inotify = type(self._observer).__name__ == "InotifyObserver"
         self._observer.schedule(
             self._handler, str(self._memory_root),
             recursive=False, event_filter=self._event_kinds,
@@ -298,10 +308,14 @@ class MemoryFileWatcher:
 
         A folder that is gone may have left without its watch reporting it
         (on macOS the watch can be dropped here before its report arrives),
-        so the rows of its files are queued for removal here as well."""
+        so the rows of its files are queued for removal here as well.
+
+        On Linux it also replaces the watches `_request_rewatch` asked for."""
         observer = self._observer
         if observer is None:
             return
+        with self._cond:
+            stale, self._stale_watches = self._stale_watches, set()
         stopped = {
             emitter.watch for emitter in list(observer.emitters)
             if not emitter.should_keep_running()
@@ -326,6 +340,8 @@ class MemoryFileWatcher:
                 for file in self._indexed_files_under(child):
                     self._enqueue_path(str(file))
                 self._on_folder_appeared(path)
+            elif path in stale and self._folder_watches.get(path) is not None:
+                self._rewatch(child)
 
     def _indexed_files_under(self, folder: Path) -> list[Path]:
         """The files under `folder` the FTS index holds a row for."""
@@ -339,13 +355,18 @@ class MemoryFileWatcher:
         ]
 
     def _on_folder_appeared(self, path: str, *, moved_from: str | None = None) -> None:
-        """A folder was created or moved in; only top-level folders matter
-        here, since nested ones are covered by their top-level folder's
-        recursive watch. Runs on the observer's dispatch thread, or on the
-        worker thread from the idle reconcile."""
+        """A folder was created or moved in. A nested one is covered by its
+        top-level folder's recursive watch, which on Linux is replaced when
+        the folder did not move within it (see `_request_rewatch`). Runs on
+        the observer's dispatch thread, or on the worker thread from the
+        idle reconcile."""
         folder = Path(path)
-        if self._observer is None or folder.parent != self._memory_root:
-            return  # stopped, or a nested folder
+        if self._observer is None:
+            return
+        if folder.parent != self._memory_root:
+            if moved_from is None:
+                self._request_rewatch(path)
+            return
         if moved_from is not None:
             # The old watch follows the moved folder but would report it
             # under its old name.
@@ -376,14 +397,67 @@ class MemoryFileWatcher:
         out of memory/. Its files no longer exist at their old paths, so the
         FTS index is what names them; re-indexing each vanished path drops
         its rows. Where the folder landed in another watched folder, that
-        folder's watch reports the files at their new paths. Runs on the
-        observer's dispatch thread, or on the worker thread from the idle
-        reconcile."""
+        folder's watch reports the files at their new paths. On Linux that
+        watch, and the one a nested folder left, are then replaced (see
+        `_request_rewatch`). Runs on the observer's dispatch thread, or on
+        the worker thread from the idle reconcile."""
         folder = Path(path)
         if self._memory_root not in folder.parents:
             return
         for file in self._indexed_files_under(folder):
             self._enqueue_path(str(file))
+        self._request_rewatch(path)
+
+    def _request_rewatch(self, path: str) -> None:
+        """Have the idle reconcile replace the watch of the top-level folder
+        that holds `path`, a nested folder that was deleted or created.
+
+        Only on watchdog's inotify backend (Linux), which watches each
+        subfolder of a watch on its own and follows a subfolder only while
+        it moves within that watch. A subfolder moved out (into another
+        top-level folder, into archive/ or pending/, or out of memory/)
+        stays watched under the path it left: its later changes are
+        reported there, and once it is deleted after a folder of the same
+        name came and went at that path, watchdog's bookkeeping raises and
+        the watch's reader thread dies while the watch still looks alive. A
+        subfolder moved in is not watched at all. Either move reaches the
+        watch as a plain folder delete or create, so every one leads to a
+        replacement, which watches exactly the subfolders there now. It
+        waits for the worker to be idle so that a folder tree still being
+        deleted is walked after the delete, not during it: a subfolder that
+        vanishes mid-walk fails the new watch, which would leave the folder
+        unwatched."""
+        if not self._inotify:
+            return
+        try:
+            parts = Path(path).relative_to(self._memory_root).parts
+        except ValueError:
+            return
+        if len(parts) > 1:
+            with self._cond:
+                self._stale_watches.add(str(self._memory_root / parts[0]))
+
+    def _rewatch(self, folder: Path) -> None:
+        """Replace the watch of top-level `folder` and queue what the index
+        is behind on under it, since a change the old watch missed, or made
+        before the new one went live, was never reported: files with no row
+        or changed since theirs, and rows whose file is gone. An unchanged
+        file costs a `stat`, not a re-index. Runs on the worker thread."""
+        from durin.memory.search import IndexCoverage
+
+        path = str(folder)
+        self._unwatch_folder(path)
+        self._watch_folder(path)
+        coverage = IndexCoverage.load(self._workspace)
+        prefix = folder.relative_to(self._workspace).as_posix() + "/"
+        indexed = {self._workspace / rel for rel in coverage.mtimes if rel.startswith(prefix)}
+        try:
+            present = {p for p in folder.rglob("*.md") if p.is_file()}
+        except OSError:
+            present = set()
+        for file in sorted(indexed | present):
+            if file not in present or coverage.needs_scan(self._workspace, file):
+                self._enqueue_path(str(file))
 
     # ------------------------------------------------------------------
     # work queue

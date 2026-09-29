@@ -853,6 +853,211 @@ def test_a_folder_gone_without_a_report_has_its_rows_removed_by_the_reconcile(
 
 
 # ---------------------------------------------------------------------------
+# A subfolder moved into or out of a watch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ["archive/entities/person", "episodic/person"],
+    ids=["into-archive", "into-another-watched-folder"],
+)
+def test_a_subfolder_moved_out_of_a_watch_leaves_that_watch_working(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, destination: str,
+) -> None:
+    """watchdog's inotify backend (Linux) keeps watching a subfolder moved
+    out of a watch, under the path it left. When a folder of the same name
+    is then created and deleted there, and the moved folder is deleted after
+    that, its bookkeeping raises and the watch's reader thread dies while
+    the watch still looks alive. A later edit elsewhere in the folder the
+    subfolder left is still re-indexed."""
+    crashed: list[str] = []
+    monkeypatch.setattr(
+        threading, "excepthook",
+        lambda args: crashed.append(f"{args.thread.name}: {args.exc_value!r}"),
+    )
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    for page in (root / "entities" / "person" / "ada.md", root / "entities" / "org" / "acme.md"):
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(f"# {page.stem}\n", encoding="utf-8")
+    (root / destination).parent.mkdir(parents=True, exist_ok=True)
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        # Let the OS deliver whatever it still holds from the setup above.
+        time.sleep(1.0)
+        (root / "entities" / "person").rename(root / destination)
+        # Past watchdog's wait for the other half of a move.
+        time.sleep(1.0)
+        recreated = root / "entities" / "person" / "bob.md"
+        recreated.parent.mkdir()
+        recreated.write_text("# bob\n", encoding="utf-8")
+        assert _wait_until(lambda: recreated in reindexed), reindexed
+        shutil.rmtree(recreated.parent)
+        shutil.rmtree(root / destination)
+        time.sleep(1.0)
+
+        later = root / "entities" / "org" / "later.md"
+        later.write_text("# later\n", encoding="utf-8")
+        assert _wait_until(lambda: later in reindexed, timeout_s=5.0), (
+            f"not re-indexed; watchdog thread crashes: {crashed}"
+        )
+    finally:
+        watcher.stop()
+
+
+@pytest.mark.parametrize(
+    ("source", "destination"),
+    [
+        ("references/team", "corpus/team"),
+        ("references", "corpus/references"),
+        ("archive/entities/org", "entities/org"),
+    ],
+    ids=["from-another-watched-folder", "top-level-into-another", "restored-from-archive"],
+)
+def test_a_folder_moved_into_a_watch_has_its_later_edits_reindexed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, destination: str,
+) -> None:
+    """watchdog's inotify backend (Linux) never watches a folder that moves
+    into a watch from outside it, so edits inside it afterwards would go
+    unreported, or be reported under the path it came from. The moved files
+    are indexed at their new paths on arrival, and later edits and new
+    files there are re-indexed at their new paths."""
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    src = root / source
+    src.mkdir(parents=True)
+    (src / "roster.md").write_text("# roster\n", encoding="utf-8")
+    dst = root / destination
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        # Let the OS deliver whatever it still holds from the setup above.
+        time.sleep(1.0)
+        src.rename(dst)
+        assert _wait_until(lambda: dst / "roster.md" in reindexed), reindexed
+        # Past watchdog's wait for the other half of a move, and long enough
+        # for an idle reconcile.
+        time.sleep(1.5)
+        assert _wait_until(lambda: _drained(watcher))
+        reindexed.clear()
+
+        with (dst / "roster.md").open("a", encoding="utf-8") as fh:
+            fh.write("edited later\n")
+        (dst / "added.md").write_text("# added\n", encoding="utf-8")
+        later = {dst / "roster.md", dst / "added.md"}
+        assert _wait_until(lambda: later <= set(reindexed), timeout_s=5.0), reindexed
+    finally:
+        watcher.stop()
+
+
+def test_a_subfolder_tree_deleted_inside_a_watch_leaves_that_watch_working(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a tree of subfolders reaches the watch as one folder delete
+    per subfolder while the delete is still running. The folder that held
+    the tree keeps a working watch: a file written there afterwards is
+    re-indexed."""
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    tree = root / "corpus" / "tree"
+    for a in range(20):
+        for b in range(10):
+            leaf = tree / f"a{a}" / f"b{b}"
+            leaf.mkdir(parents=True)
+            (leaf / "doc.md").write_text("# doc\n", encoding="utf-8")
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        # Let the OS deliver whatever it still holds from the setup above.
+        time.sleep(1.0)
+        shutil.rmtree(tree)
+        # Long enough for the OS to report the deletes and for an idle
+        # reconcile.
+        time.sleep(1.5)
+        assert _wait_until(lambda: _drained(watcher))
+
+        later = root / "corpus" / "later.md"
+        later.write_text("# later\n", encoding="utf-8")
+        assert _wait_until(lambda: later in reindexed, timeout_s=5.0), reindexed
+    finally:
+        watcher.stop()
+
+
+@pytest.mark.parametrize("change", ["deleted", "created"])
+def test_a_replaced_watch_catches_up_on_only_what_the_index_is_behind_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    """On inotify a subfolder deleted or created (how one moved out or in
+    arrives) has its top-level folder's watch replaced once the worker has
+    drained what was queued and is idle, so a subfolder tree still being
+    deleted is walked after the delete, not during it. Under that folder,
+    the files changed since their row, the files with no row and the rows
+    whose file is gone are then queued; unchanged files and other folders
+    are not. Forced on here with no OS event reaching the watcher, so it
+    runs on any platform."""
+    monkeypatch.setattr(FileSystemEventHandler, "dispatch", lambda self, event: None)
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    people = root / "entities" / "person"
+    unchanged, changed, vanished = (
+        people / f"{name}.md" for name in ("unchanged", "changed", "vanished")
+    )
+    for path in (unchanged, changed, vanished):
+        EntityPage(type="person", name=path.stem, body="indexed").save(path)
+        reindex_one_file(watcher._workspace, path)
+    later = time.time() + 60
+    os.utime(changed, (later, later))
+    vanished.unlink()
+    unindexed = people / "unindexed.md"
+    EntityPage(type="person", name="unindexed", body="new").save(unindexed)
+    elsewhere = root / "episodic" / "elsewhere.md"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(_entry("elsewhere"), encoding="utf-8")
+
+    gate, calls = _blocked_worker(watcher, monkeypatch)
+    watcher._inotify = True
+    rewatch = watcher._rewatch
+
+    def recorded_rewatch(folder: Path) -> None:
+        calls.append(f"rewatch {folder.name}")
+        rewatch(folder)
+
+    monkeypatch.setattr(watcher, "_rewatch", recorded_rewatch)
+    try:
+        before = _folder_emitter(watcher, "entities")
+        subfolder = str(root / "entities" / "moved")
+        if change == "deleted":
+            watcher._on_folder_gone(subfolder)
+        else:
+            watcher._on_folder_appeared(subfolder)
+        # Still arriving while the worker is busy, as the rest of a burst would.
+        watcher._enqueue_path(str(root / "episodic" / "burst.md"))
+        gate.set()
+        assert _wait_until(
+            lambda: _folder_emitter(watcher, "entities") not in (None, before),
+        )
+        assert _wait_until(lambda: len(calls) >= 6), calls
+        assert _wait_until(lambda: _drained(watcher))
+    finally:
+        gate.set()
+        watcher.stop()
+
+    assert calls == [
+        "blocker.md", "burst.md", "rewatch entities",
+        "changed.md", "unindexed.md", "vanished.md",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # The backfill embeds through the embed server
 # ---------------------------------------------------------------------------
 
