@@ -161,7 +161,10 @@ class AutomationsRuntime:
                 reset_telemetry(token)
 
     async def try_fire(self, name: str, *, source: str, task: str | None = None,
-                         origin: dict | None = None) -> dict | None:
+                         origin: dict | None = None, paced: bool = False) -> dict | None:
+        """``paced``: the caller holds a slot of a capped lane until this
+        returns (the cron dispatch, holding its job slot), so the workflow
+        starts at once instead of queueing behind unpaced runs."""
         token = _bind_automations_telemetry(name)
         try:
             spec = load_automation(self._ws, name)
@@ -170,7 +173,7 @@ class AutomationsRuntime:
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 emit_tool_event("automations.fired", {"automation": name, "source": source, "skipped": True})
                 return None
-            return await self._run(spec, source=source, task=task, origin=origin)
+            return await self._run(spec, source=source, task=task, origin=origin, paced=paced)
         finally:
             if token is not None:
                 reset_telemetry(token)
@@ -552,7 +555,7 @@ class AutomationsRuntime:
 
     async def _run(self, spec: AutomationSpec, *, source: str, task: str | None,
                      origin: dict | None = None, run_id: str | None = None,
-                     chain_depth: int = 0) -> dict:
+                     chain_depth: int = 0, paced: bool = False) -> dict:
         run_id = run_id or self._run_id()
         run_log.start_run(self._ws, spec.name, run_id,
                            cause={"kind": source, "excerpt": task or "", "trigger_index": None},
@@ -576,7 +579,7 @@ class AutomationsRuntime:
                     else None)
         try:
             result = await self._exec(spec.workflow, task, run_id=wf_run_id, work_key=work_key,
-                                       root_session_key=f"automation:{spec.name}")
+                                       root_session_key=f"automation:{spec.name}", paced=paced)
         except Exception as exc:  # noqa: BLE001 — any execution failure ends the run honestly
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="failed",
                                            detail=str(exc), workflow_run_id=wf_run_id)

@@ -1890,14 +1890,15 @@ def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tm
     workflow's prompt ended up None, not merely empty) — instead of falling
     through to the generic agent-turn dispatch below, a real, tool-enabled
     turn on an unrelated free-form prompt would run in production if this
-    guard were ever removed."""
+    guard were ever removed. The job's slot stays held for the whole fire, so
+    the fire is paced: its workflow must not queue behind unpaced runs."""
     seen, _config, bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
 
     runtime = seen["automations_runtime"]
     fired: list[tuple] = []
 
-    async def _fake_try_fire(name, *, source, task=None, origin=None):
-        fired.append((name, source, task))
+    async def _fake_try_fire(name, *, source, task=None, origin=None, paced=False):
+        fired.append((name, source, task, paced))
         return None
 
     runtime.try_fire = _fake_try_fire
@@ -1911,7 +1912,7 @@ def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tm
     response = asyncio.run(cron.on_job(job))
 
     assert response is None
-    assert fired == [("a1", "schedule", "run the digest")]
+    assert fired == [("a1", "schedule", "run the digest", True)]
     assert seen["process_direct_called"] is False
     bus.publish_outbound.assert_not_awaited()
 

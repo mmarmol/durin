@@ -8,8 +8,8 @@ thread for minutes or hours (supervising a dream) shrinks that pool for its
 whole run; a few of them at once leave every other hop queued behind them.
 :func:`run_in_dedicated_thread` starts a named thread per job instead, so long
 jobs never compete with short hops for the pool. It suits jobs something
-upstream already paces; workflow runs, which nothing does, take a bounded pool
-of their own instead (``durin.workflow.run_threads``).
+upstream already paces; workflow runs nothing paces take a bounded pool of
+their own instead (``durin.workflow.run_threads``).
 """
 
 from __future__ import annotations

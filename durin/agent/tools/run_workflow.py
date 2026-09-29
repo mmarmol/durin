@@ -5,9 +5,11 @@ node runner (which runs each work node as a real agent turn with that node's too
 and model), runs it, and returns a result summary. The tool's ``execute`` is async
 but the engine is synchronous and its node runner calls ``asyncio.run`` internally,
 so the engine is driven on a worker thread — the inner ``asyncio.run`` then runs
-with no active loop, which is valid. A run can last an hour, so that thread comes
-from the bounded pool of workflow-run threads (``run_on_workflow_thread``), not
-from the event loop's few shared default-executor threads.
+with no active loop, which is valid. A run can last an hour, so that thread is a
+workflow-run thread (``run_on_workflow_thread``), never one of the event loop's
+few shared default-executor threads: a foreground run, which the calling turn
+waits on, starts on a thread of its own at once; a background run takes one
+from the bounded pool.
 """
 
 from __future__ import annotations
@@ -601,8 +603,12 @@ class RunWorkflowTool(Tool, ContextAware):
             return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
+        # Paced: the calling turn waits on this run, and a chat turn keeps its
+        # lane slot (a scheduled turn, its cron job) until the run ends, so the
+        # run must not queue behind background runs.
         engine_future = asyncio.ensure_future(run_on_workflow_thread(
             run_id, engine.run, workflow, task,
+            paced=True,
             root_session_key=root_session_key,
             input_files=input_files or None,
             output_format=output_format or None,

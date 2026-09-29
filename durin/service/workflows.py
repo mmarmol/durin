@@ -758,7 +758,11 @@ class WorkflowsService:
         run_id: str | None = None,
         root_session_key: str | None = None,
         work_key: str | None = None,
+        paced: bool = False,
     ) -> WorkflowResult:
+        # paced: the caller holds a slot of a capped lane for the whole run (a
+        # cron job firing a scheduled automation), so the run starts on a thread
+        # of its own instead of queueing for the bounded pool of unpaced runs.
         if self._app_config is None or self._sessions is None:
             raise UnavailableError("running a workflow is not available on this surface")
         try:
@@ -1010,11 +1014,11 @@ class WorkflowsService:
                     _release_claim()
 
         try:
-            # A run can last an hour: a thread from the bounded workflow-run
-            # pool, not one of the event loop's few shared default-executor
-            # threads.
+            # A run can last an hour: a workflow-run thread, not one of the
+            # event loop's few shared default-executor threads.
             result = await run_on_workflow_thread(
                 rid, _walk, workflow, task,
+                paced=paced,
                 root_session_key=root_session_key,
                 input_files=input_files,
                 output_format=output_format,

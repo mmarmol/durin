@@ -151,7 +151,7 @@ async def test_a_run_handed_a_thread_just_as_its_caller_is_cancelled_never_walks
     late: list = []
     threads: list[threading.Thread] = []
 
-    async def _handed_a_thread_late(run_id, func, /, *args, **kwargs):
+    async def _handed_a_thread_late(run_id, func, /, *args, paced=False, **kwargs):
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:

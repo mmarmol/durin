@@ -54,6 +54,29 @@ async def test_a_burst_runs_at_most_the_bound_at_once_and_every_run_finishes():
 
 
 @pytest.mark.asyncio
+async def test_a_paced_run_starts_at_once_while_unpaced_runs_fill_the_pool():
+    """A paced run's caller holds a capped slot (a turn, a cron job) for the
+    whole run: it never queues behind unpaced runs, and it takes no pool
+    thread either."""
+    gate = threading.Event()
+    holders = [asyncio.create_task(run_on_workflow_thread(f"h{i}", gate.wait, 10.0))
+               for i in range(MAX_CONCURRENT_RUNS)]
+    try:
+        await asyncio.sleep(0.05)
+        name = await asyncio.wait_for(
+            run_on_workflow_thread("fg", lambda: threading.current_thread().name, paced=True),
+            timeout=2.0)
+        queued = asyncio.create_task(run_on_workflow_thread("late", lambda: "ok"))
+        await asyncio.sleep(0.1)
+        assert not queued.done()          # the pool is still full of unpaced runs
+    finally:
+        gate.set()
+    assert name == "workflow-run-fg"
+    assert await asyncio.wait_for(queued, timeout=10.0) == "ok"
+    await asyncio.wait_for(asyncio.gather(*holders), timeout=10.0)
+
+
+@pytest.mark.asyncio
 async def test_runs_even_when_the_default_executor_is_full():
     loop = asyncio.get_running_loop()
     pool = ThreadPoolExecutor(max_workers=1)

@@ -479,10 +479,14 @@ so `cron_sync` writes and removes it through the same `register_system_job`/
 jobs (`docs/internals/cron.md` §4/§5 covers the general mechanism).
 
 When an `automation_trigger` job fires, the gateway's cron dispatch calls
-`AutomationsRuntime.try_fire(automation, source="schedule")` directly — no
+`AutomationsRuntime.try_fire(automation, source="schedule", paced=True)` directly — no
 `agent_turn` prompt is built, and no `origin` is passed: a scheduled fire has nobody
 waiting on it, so its outcome is governed entirely by the automation's own
-`delivery`/`help` configuration. A `payload.kind == "loop_trigger"` job — `CronPayload`
+`delivery`/`help` configuration. `paced=True` rides through to
+`WorkflowsService.execute`: the job keeps its cron slot until the fire returns, so its
+workflow starts at once on a thread of its own instead of queueing behind unpaced
+workflow runs while every other cron job waits for a slot (see
+[concurrency.md](concurrency.md)). Every other fire is unpaced. A `payload.kind == "loop_trigger"` job — `CronPayload`
 still parses this shape so an unmigrated or hand-edited persisted store loads without
 crashing — is logged and skipped rather than falling through to the generic
 `agent_turn` path (which has no handler for an empty free-form prompt): a belt-and-

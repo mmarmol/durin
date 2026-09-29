@@ -1473,9 +1473,12 @@ def _run_gateway(
             # it, so its outcome belongs to the automation's declared destination.
             # task comes from the CronPayload this job was synced from
             # (durin.automations.cron_sync's message=trig.task) — without it the
-            # workflow's prompt is None, not merely empty.
+            # workflow's prompt is None, not merely empty. Paced: this job keeps
+            # its cron slot until the fire returns, so its workflow must not
+            # queue behind unpaced runs while every other cron job waits too.
             await automations_runtime.try_fire(
-                job.payload.automation, source="schedule", task=job.payload.message or None)
+                job.payload.automation, source="schedule", task=job.payload.message or None,
+                paced=True)
             return None
 
         from durin.cron.outcome import CronTurnFailedError, turn_failed

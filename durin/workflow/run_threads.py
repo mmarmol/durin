@@ -1,13 +1,23 @@
-"""Workflow runs execute on a bounded pool of threads of their own.
+"""Workflow runs execute on threads of their own.
 
 The engine walk is synchronous and can hold its thread for an hour, so a run
 never borrows one of the event loop's default-executor threads, which every
-short blocking hop in the gateway shares. Nor does each run start a thread of
-its own: nothing upstream caps how many runs start at once (API launches,
-background ``run_workflow`` calls and ``parallel`` automations are unpaced),
-so a burst would become a thread per run. :func:`run_on_workflow_thread`
-runs at most :data:`MAX_CONCURRENT_RUNS` at once; the rest wait their turn in
-launch order, holding no thread while they wait.
+short blocking hop in the gateway shares. How a run gets its thread depends on
+what paces it:
+
+- A *paced* run's caller holds a slot of a capped lane for as long as the run
+  lasts: a turn waiting on its foreground ``run_workflow`` call (a chat turn
+  holds an interactive-lane slot, a scheduled turn its cron job), or a cron
+  job firing a scheduled automation. That cap already bounds how many paced
+  runs exist, and queueing one would keep its slot, and all the work waiting
+  for that lane, idle behind other runs. A paced run starts at once on a
+  thread of its own.
+- Every other run is unpaced: API launches and resumes, background
+  ``run_workflow`` calls, and automations fired by a channel, a chain, a chat
+  or by hand start as fast as they arrive, so a burst would become a thread
+  per run. Unpaced runs share a pool of at most :data:`MAX_CONCURRENT_RUNS`
+  threads; the rest wait their turn in launch order, holding no thread while
+  they wait. Paced runs never take a pool thread, so they never wait on one.
 """
 
 from __future__ import annotations
@@ -21,22 +31,23 @@ from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
+from durin.utils.dedicated_thread import run_in_dedicated_thread
+
 __all__ = ["MAX_CONCURRENT_RUNS", "run_on_workflow_thread"]
 
 _T = TypeVar("_T")
 
-# What the paced sources can have running together at their default caps:
-# a scheduled automation (or a cron turn's foreground run) runs inside a cron
-# job (cron.max_concurrent_jobs, 4) and a chat's foreground run_workflow call
-# inside a human-facing turn (agents.defaults.max_concurrent_interactive, 4).
-# Both can be full at once without either waiting on the other; only an
-# unpaced burst queues.
+# Unpaced runs executing at once. Nothing upstream caps those sources, so no
+# cap gives this number; eight is what the paced side can hold at its default
+# caps (agents.defaults.max_concurrent_interactive, 4, plus
+# cron.max_concurrent_jobs, 4), so a burst of unpaced runs takes no more
+# threads than paced work can.
 MAX_CONCURRENT_RUNS = 8
 
 _pool = ThreadPoolExecutor(
     max_workers=MAX_CONCURRENT_RUNS, thread_name_prefix="workflow-run")
 _admitted_lock = threading.Lock()
-_admitted = 0  # runs executing or waiting for a thread
+_admitted = 0  # unpaced runs executing or waiting for a thread
 
 
 def _finished(_future: Future) -> None:
@@ -46,17 +57,26 @@ def _finished(_future: Future) -> None:
 
 
 async def run_on_workflow_thread(
-    run_id: str, func: Callable[..., _T], /, *args: Any, **kwargs: Any,
+    run_id: str, func: Callable[..., _T], /, *args: Any, paced: bool = False,
+    **kwargs: Any,
 ) -> _T:
     """Run ``func(*args, **kwargs)`` on a workflow-run thread, named
     ``workflow-run-<run_id>`` while it runs, and return its result (or raise
     its exception) to the awaiting task.
 
-    Same contract as ``asyncio.to_thread``, on this pool instead of the
-    default executor: the caller's context variables are copied in;
-    cancelling the awaiting task drops a run still waiting for a thread, and
-    leaves a started one running to the end with its result dropped.
+    ``paced=True`` (the caller holds a capped slot for the whole run, see the
+    module docstring) starts a thread of its own at once; otherwise the run
+    takes a thread from the bounded pool, waiting for one when all are busy.
+
+    Same contract as ``asyncio.to_thread`` otherwise: the caller's context
+    variables are copied in; cancelling the awaiting task drops a run still
+    waiting for a pool thread, and leaves a started one running to the end
+    with its result dropped.
     """
+    if paced:
+        return await run_in_dedicated_thread(
+            f"workflow-run-{run_id}", func, *args, **kwargs)
+
     global _admitted
     call = functools.partial(contextvars.copy_context().run, func, *args, **kwargs)
 

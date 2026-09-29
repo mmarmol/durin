@@ -404,8 +404,10 @@ clean up.
   the run starts executing: durin executes a bounded number of runs at once,
   so in a burst (many API launches or background runs together) the extra
   ones wait their turn and start, in launch order, as others finish; the
-  gateway log notes each run that has to wait. A run paused on your input
-  does not count against that bound.
+  gateway log notes each run that has to wait. A run a chat is waiting on
+  (run in the foreground) and a scheduled automation don't count against
+  that bound and never wait: each starts at once. Neither does a run paused
+  on your input.
 - **Node sessions:** every node's conversation is a normal, searchable
   durin session (`workflow:<run_id>:<node_id>:...`), so a node's reasoning
   is navigable after the fact the same way a sub-agent's is.

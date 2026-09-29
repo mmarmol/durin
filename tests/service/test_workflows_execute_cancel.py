@@ -266,6 +266,36 @@ async def test_a_burst_of_runs_executes_at_most_the_run_bound_at_once(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_a_paced_run_starts_while_unpaced_runs_fill_the_pool(tmp_path):
+    """A scheduled automation runs inside its cron job and keeps that job's
+    slot until the run ends: it must not queue behind unpaced runs."""
+    import threading
+
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+    gate = threading.Event()
+    holders = [asyncio.create_task(run_on_workflow_thread(f"h{i}", gate.wait, 10.0))
+               for i in range(MAX_CONCURRENT_RUNS)]
+    try:
+        await asyncio.sleep(0.05)
+        with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+                get_default_model=lambda: "m")):
+            result = await asyncio.wait_for(svc.execute("quick", "task", paced=True), timeout=5.0)
+    finally:
+        gate.set()
+    await asyncio.wait_for(asyncio.gather(*holders), timeout=10.0)
+
+    assert result.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_normal_completion_leaves_no_cancel_flag(tmp_path):
     """A run that completes without ever being cancelled must not leave a
     stale flag behind either."""

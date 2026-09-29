@@ -412,13 +412,17 @@ The real runner drives the async `AgentRunner` synchronously per node, so the
 `run_workflow` tool (and `WorkflowsService.execute`) runs the whole (synchronous)
 engine on a worker thread — the inner `asyncio.run` then executes with no active event
 loop, which is valid even though the tool itself runs inside the agent's async tool
-loop. Because a run can hold that thread for an hour, it comes from a pool of
-workflow-run threads (`durin/workflow/run_threads.py::run_on_workflow_thread`, named
-`workflow-run-<run_id>` while the run executes) rather than from the event loop's
-shared default-executor threads. The pool runs at most `MAX_CONCURRENT_RUNS` at once;
-a run launched past that waits its turn, in launch order, before its manifest is
-written (see [concurrency.md](concurrency.md)). A sub-workflow runs inline on its
-parent's thread, and a paused run holds none, so neither takes a slot.
+loop. Because a run can hold that thread for an hour, it is a workflow-run thread
+(`durin/workflow/run_threads.py::run_on_workflow_thread`, named `workflow-run-<run_id>`
+while the run executes) rather than one of the event loop's shared default-executor
+threads. A foreground `run_workflow` call and a scheduled automation are paced — their
+caller holds a turn's lane slot or a cron job for the whole run — and start at once
+on a thread of their own. Every other run (background `run_workflow` calls, API
+launches and resumes, automations fired any other way) takes a thread from a pool that
+runs at most `MAX_CONCURRENT_RUNS` at once; a run launched past that waits its turn, in
+launch order, before its manifest is written (see [concurrency.md](concurrency.md)). A
+sub-workflow runs inline on its parent's thread, and a paused run holds none, so
+neither takes a slot.
 
 ## 3. Diagram
 
@@ -1202,7 +1206,7 @@ End-to-end for a single `run_workflow` call:
    `ScriptNodeRunner` (for script nodes), an `AgentJudgeRunner` (used only to **pick** a
    winner for parallel `choose`), and a `SubworkflowRunner` (for sub-workflow nodes)
    into the `WorkflowEngine`.
-3. **Run.** The engine runs on a workflow-run thread, once one is free. It walks the graph: an agent node
+3. **Run.** The engine runs on a workflow-run thread: at once in the foreground, once a pool thread is free in the background. It walks the graph: an agent node
    runs its body as an agent turn (persisting a lineage'd node session), a script node
    runs its `command`/`script` as a subprocess via the `ScriptNodeRunner` instead (no
    session), and either way the output threads to the next node; a **routing** node

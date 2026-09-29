@@ -768,7 +768,7 @@ async def test_counterpart_wake_answer_failure_after_exec_finalizes_failed(tmp_p
     ]
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         return results.pop(0)
 
     ids = iter([f"wake-fail-{i}" for i in range(10)])

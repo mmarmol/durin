@@ -52,7 +52,7 @@ def _runtime(tmp_path, results):
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         calls["exec"].append((name, task, resume_run_id))
         return results.pop(0)
 
