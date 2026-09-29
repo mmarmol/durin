@@ -1054,7 +1054,13 @@ estimate is the median of those. Summing the per-node medians instead would sum
 the union of the paths those runs took: a router with mutually exclusive
 branches has a median for every branch any prior run visited, while a single run
 walks one of them, and a node visited three times would contribute a single
-median rather than three passes.
+median rather than three passes. The median is only kept when those runs took the
+same route — the same set of nodes walked, so extra passes through a revision loop
+stay on one route. When they walked different sets (a router that sometimes skips,
+sometimes answers briefly, sometimes investigates in full), no single number describes
+them and `typical_total_s` is recorded as `null`, which every surface shows as absent.
+The estimate is made at `start_run`, before the new run has taken any route, so it
+cannot pick the matching route's history instead.
 
 **Node labels.** Every frame's `label` comes from `node_label`
 (`durin/workflow/spec.py`): the author's `title` if set, else the node's

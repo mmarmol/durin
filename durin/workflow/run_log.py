@@ -590,22 +590,35 @@ def typical_total_duration(
     exclusive branches counts all eight) and under-counts loops (a node visited
     three times contributes one median). None when no completed run recorded any
     node duration — absent rather than a guessed zero.
+
+    The median only compares like with like when those runs took the same route:
+    a router whose runs skip in 0 s, answer in minutes or investigate for half an
+    hour has a median that describes none of them. A run's route is the set of
+    nodes it walked — so extra passes through a revision loop stay on the same
+    route — and when the runs measured here walked different sets, there is no
+    single typical total and the result is None. The estimate is made before the
+    new run has taken any route, so it cannot pick the matching one instead.
     """
     from statistics import median
 
     totals: list[float] = []
+    routes: set[frozenset[str]] = set()
     for rec in list_runs(workspace, name, limit=limit):
         if rec.get("status") != "completed":
             continue
         manifest = read_manifest(workspace, name, rec["run_id"]) or {}
+        rows = manifest.get("runs") or []
         # Same exclusion as typical_node_durations: a reused row's duration is not
         # what a fresh dispatch would have cost, so it must not count toward the
         # run's total either.
-        durations = [float(r["duration_s"]) for r in manifest.get("runs") or []
+        durations = [float(r["duration_s"]) for r in rows
                      if r.get("duration_s") is not None and r.get("status") != "reused"]
         if durations:
             totals.append(sum(durations))
-    return float(median(totals)) if totals else None
+            routes.add(frozenset(r["node_id"] for r in rows if r.get("node_id")))
+    if not totals or len(routes) > 1:
+        return None
+    return float(median(totals))
 
 
 def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:

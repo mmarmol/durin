@@ -59,13 +59,38 @@ def test_typical_ignores_reused_node_rows(tmp_path):
 def test_typical_total_does_not_sum_branches_no_single_run_takes(tmp_path):
     """The per-node medians span every branch prior runs took; one run takes one
     of them. Summing them estimates a path that cannot happen."""
-    # Two prior runs of a router with two mutually exclusive branches.
+    # Three prior runs of a router, all down the same branch.
     _finish(tmp_path, "router", "r1", [("route", 5.0), ("branch-a", 500.0)])
-    _finish(tmp_path, "router", "r2", [("route", 5.0), ("branch-b", 520.0)])
+    _finish(tmp_path, "router", "r2", [("route", 5.0), ("branch-a", 520.0)])
+    _finish(tmp_path, "router", "r3", [("route", 5.0), ("branch-a", 900.0)])
 
-    assert run_log.typical_total_duration(tmp_path, "router") == 515.0
-    # What summing the per-node medians would have produced instead.
-    assert sum(run_log.typical_node_durations(tmp_path, "router").values()) == 1025.0
+    assert run_log.typical_total_duration(tmp_path, "router") == 525.0
+
+
+def test_typical_total_is_absent_when_prior_runs_took_different_routes(tmp_path):
+    """A router whose runs skip, answer a question, or investigate in full has no
+    single typical total: the median of a 0 s skip, a 6-minute answer and a
+    30-minute investigation describes none of them."""
+    _finish(tmp_path, "router", "r1", [("route", 0.2)])
+    _finish(tmp_path, "router", "r2", [("route", 0.2), ("answer", 360.0)])
+    _finish(tmp_path, "router", "r3", [("route", 0.2), ("investigate", 1800.0),
+                                       ("answer", 300.0)])
+
+    assert run_log.typical_total_duration(tmp_path, "router") is None
+    # Each node's own median still compares like with like.
+    assert run_log.typical_node_durations(tmp_path, "router") == {
+        "route": 0.2, "answer": 330.0, "investigate": 1800.0}
+
+
+def test_typical_total_treats_extra_loop_passes_as_the_same_route(tmp_path):
+    """A revision loop walks the same nodes, just more often: its runs still
+    estimate one another."""
+    _finish(tmp_path, "loop", "r1", [("draft", 10.0), ("judge", 5.0)])
+    _finish(tmp_path, "loop", "r2", [("draft", 10.0), ("judge", 5.0),
+                                     ("draft", 10.0), ("judge", 5.0)])
+    _finish(tmp_path, "loop", "r3", [("draft", 12.0), ("judge", 5.0)])
+
+    assert run_log.typical_total_duration(tmp_path, "loop") == 17.0
 
 
 def test_typical_total_counts_every_pass_of_a_looping_node(tmp_path):
