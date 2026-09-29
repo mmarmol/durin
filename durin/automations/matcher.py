@@ -317,8 +317,8 @@ class TriggerMatcher:
         # runtime.fire awaits the whole run, which can take many minutes, so
         # "fired" is recorded from its start callback: stamped when the run
         # begins, and already on record if the run later raises. A busy
-        # refusal or a failure before the run starts never calls it, so each
-        # match gets exactly one event_matched.
+        # refusal or a failure before the run starts never calls it, so a
+        # fire records exactly one of fired, failed, queued or passed_busy.
         started = False
 
         def on_started() -> None:
