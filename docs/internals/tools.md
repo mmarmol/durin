@@ -301,7 +301,8 @@ answering with an error that costs a round trip. `path` is read at its own
 `offset`, `limit` and `pages`, as it would be alone, so a page the model has
 not seen never comes back as the "unchanged since last read" stub of an
 earlier page; the files in `paths` are read from their start, and
-`char_offset` still needs `path` on its own. The others reject both.
+`char_offset` still needs `path` on its own. An empty `path` next to `paths`
+counts as not given, so the call reads `paths` alone. The others reject both.
 `memory_search` is parallel in a different sense — it takes one scalar `query`
 and no list parameter, and fans that query across the vector, lexical and grep
 paths inside a single call.

@@ -427,7 +427,8 @@ class ReadFileTool(_FsTool):
             # "unchanged since last read" stub of the page read before.
             lead = {"offset": offset, "limit": limit, "pages": pages}
             paths, path = self._batch_paths(path, paths), None
-        if paths is not None and path is None:
+        # An empty `path` counts as not given, as it does for the merge above.
+        if paths is not None and not path:
             if not isinstance(paths, list) or len(paths) == 0:
                 return "Error: paths must be a non-empty list"
             if len(paths) > MAX_READ_PATHS:

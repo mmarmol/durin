@@ -52,6 +52,18 @@ async def test_path_and_paths_together_are_read_as_one_batch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_an_empty_path_beside_paths_counts_as_not_given(tmp_path):
+    """`path=""` next to `paths` reads the `paths` batch, as if `path` were
+    absent, not a single read of an empty path."""
+    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+
+    out = await ReadFileTool(workspace=tmp_path).execute(path="", paths=["a.txt", "b.txt"])
+
+    assert out == await ReadFileTool(workspace=tmp_path).execute(paths=["a.txt", "b.txt"])
+
+
+@pytest.mark.asyncio
 async def test_merged_batch_shares_the_page_budget_like_a_paths_batch(tmp_path):
     body = "\n".join(f"line {i} " + "x" * 90 for i in range(2_000))
     for name in ("a", "b", "c"):
