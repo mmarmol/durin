@@ -1705,14 +1705,16 @@ class WebSocketChannel(BaseChannel):
                 max_bytes = _MAX_DOCUMENT_BYTES
             else:
                 max_bytes = _MAX_IMAGE_BYTES
-            # Documents dispatch on their suffix (convert_to_markdown /
-            # memory_ingest), so the saved file must keep the original
-            # extension — the client name supplies it.
-            name_hint = item.get("name") if is_document else None
+            # Every file keeps the sender's name, so the agent can tell the
+            # user's files apart. Documents also dispatch on their suffix
+            # (convert_to_markdown / memory_ingest), so theirs comes from the
+            # name; media keep the extension their MIME gives.
+            name = item.get("name")
             try:
                 saved = save_base64_data_url(
                     data_url, media_dir, max_bytes=max_bytes,
-                    filename_hint=name_hint,
+                    name=name if isinstance(name, str) else None,
+                    name_sets_extension=is_document,
                 )
             except FileSizeExceeded:
                 return _abort("size")
