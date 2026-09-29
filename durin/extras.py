@@ -40,9 +40,11 @@ REGISTRY: dict[str, FeatureExtra] = {
     "matrix": FeatureExtra("matrix", "matrix", "nio", True, "~45 MB", "Matrix channel"),
     "memory_vector": FeatureExtra("memory_vector", "memory", "fastembed", True, "~400 MB", "Vector memory"),
     "oauth": FeatureExtra("oauth", "oauth", "oauth_cli_kit", False, "~5 MB", "OAuth providers"),
-    "stt": FeatureExtra("stt", "stt", "sherpa_onnx", True, "~30 MB", "Audio transcription (Parakeet/SenseVoice)"),
+    # The speech engines import their package on first use and retry until it
+    # is there, so an install takes effect without a restart.
+    "stt": FeatureExtra("stt", "stt", "sherpa_onnx", False, "~30 MB", "Audio transcription (Parakeet/SenseVoice)"),
     "voice": FeatureExtra("voice", "voice", "sounddevice", False, "~5 MB", "Microphone recording"),
-    "tts": FeatureExtra("tts", "tts", "supertonic", True, "~260 MB", "Speech synthesis (Supertonic)"),
+    "tts": FeatureExtra("tts", "tts", "supertonic", False, "~260 MB", "Speech synthesis (Supertonic)"),
     "ocr": FeatureExtra("ocr", "ocr", "rapidocr", True, "~200 MB", "Local OCR (scanned PDFs)"),
 }
 

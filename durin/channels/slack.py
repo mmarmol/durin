@@ -229,12 +229,15 @@ class SlackChannel(BaseChannel):
         if not self._running:
             return  # stopped while retrying the initial connect
         self.logger.info("Slack Socket Mode WebSocket connected (events enabled)")
+        await self._watch_socket()
 
-        # Keepalive + watchdog: the SDK auto-reconnects on its own; only force a
-        # reconnect when the session stays down past the grace window.
+    async def _watch_socket(self, interval: float = SLACK_WATCHDOG_INTERVAL_S) -> None:
+        """Keepalive + watchdog: the SDK auto-reconnects on its own; only force a
+        reconnect when the session stays down past the grace window. A drop
+        and its recovery are both logged, so the log shows Slack coming back."""
         disconnected_since: float | None = None
         while self._running:
-            await asyncio.sleep(SLACK_WATCHDOG_INTERVAL_S)
+            await asyncio.sleep(interval)
             if not self._running or not self._socket_client:
                 break
             try:
@@ -242,6 +245,9 @@ class SlackChannel(BaseChannel):
             except Exception:
                 connected = False
             if connected:
+                if disconnected_since is not None:
+                    self.logger.info("Socket Mode reconnected after {:.0f}s",
+                                     time.monotonic() - disconnected_since)
                 disconnected_since = None
                 continue
             now = time.monotonic()
@@ -255,6 +261,9 @@ class SlackChannel(BaseChannel):
                     now - disconnected_since,
                 )
                 await self._connect_with_backoff()
+                if self._running:
+                    self.logger.info("Socket Mode reconnected after {:.0f}s",
+                                     time.monotonic() - disconnected_since)
                 disconnected_since = None
 
     async def _connect_with_backoff(self) -> None:

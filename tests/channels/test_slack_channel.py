@@ -1477,3 +1477,33 @@ async def test_click_and_typed_reply_in_a_channel_thread_share_a_session() -> No
 
     assert typed["session_key"] == clicked["session_key"] == "slack:C123:200.000"
     assert clicked["metadata"]["slack"]["thread_ts"] == "200.000"
+
+
+@pytest.mark.asyncio
+async def test_the_watchdog_logs_when_the_socket_comes_back() -> None:
+    """A dropped Socket Mode session was logged and its recovery was not, so
+    the log showed Slack going down and never coming back."""
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    states = iter([False, True])
+
+    class _Socket:
+        async def is_connected(self) -> bool:
+            try:
+                return next(states)
+            except StopIteration:
+                channel._running = False
+                return True
+
+    channel._socket_client = _Socket()
+    channel._running = True
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(m.record["message"]), level="INFO")
+    try:
+        await channel._watch_socket(interval=0)
+    finally:
+        logger.remove(sink_id)
+
+    assert [m for m in records if "Socket Mode" in m] == [
+        "Socket Mode disconnected; waiting for SDK auto-reconnect",
+        "Socket Mode reconnected after 0s",
+    ]

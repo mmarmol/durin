@@ -1664,8 +1664,8 @@ class MemoryDreamParseFailureEvent(TypedDict):
     yields nothing and the per-session cursor still advances.
     """
 
-    stage: str  # "extract" | "discover" | "learnings" | "derived_from" | "curation" | "suggestions"
-    source: NotRequired[str | None]  # entity ref or session stem
+    stage: str  # "extract" | "discover" | "learnings" | "derived_from" | "curation" | "suggestions" | "absorb_judge" | "tier2_judge"
+    source: NotRequired[str | None]  # entity ref, session stem, or a judged pair "a|b"
     raw_head: str  # first 200 chars of the raw response
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]

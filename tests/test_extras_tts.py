@@ -20,4 +20,6 @@ def test_tts_in_extras_registry():
     fe = REGISTRY["tts"]
     assert fe.extra == "tts"
     assert fe.module == "supertonic"
-    assert fe.needs_restart is True
+    # The engine imports supertonic on first use, so an install while the
+    # gateway runs needs no restart.
+    assert fe.needs_restart is False

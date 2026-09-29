@@ -84,3 +84,48 @@ def test_saved_file_lives_under_media_dir(tmp_path) -> None:
     result = save_base64_data_url(_data_url(b"ok"), tmp_path)
     assert result is not None
     assert result.startswith(str(tmp_path))
+
+
+def test_the_saved_file_keeps_the_senders_name_behind_a_unique_prefix(tmp_path) -> None:
+    """The agent names a file by its saved name, so a random one
+    ("3f9a1c2b7d4e.pdf") hid which of the user's files it was. The sender's
+    name stays, after a unique prefix, so two files with one name never
+    collide."""
+    from pathlib import Path
+
+    pdf = _data_url(b"%PDF-1.4", mime="application/pdf")
+    first = Path(save_base64_data_url(pdf, tmp_path, name="informe Q3 año.pdf",
+                                      name_sets_extension=True))
+    second = Path(save_base64_data_url(pdf, tmp_path, name="informe Q3 año.pdf",
+                                       name_sets_extension=True))
+    assert first.name.endswith("_informe-Q3-año.pdf")
+    assert first != second and first.parent == tmp_path
+
+
+def test_a_media_name_never_overrides_the_extension_its_mime_sets(tmp_path) -> None:
+    """An image or a recording is read by its content type: a name like
+    ``photo.jpeg`` on PNG bytes, or a recording named without a suffix,
+    keeps the extension its MIME gives."""
+    from pathlib import Path
+
+    from durin.utils.helpers import is_audio_path
+
+    png = Path(save_base64_data_url(_data_url(b"png"), tmp_path, name="photo.jpeg"))
+    assert png.name.endswith("_photo.png")
+    wav = save_base64_data_url(_data_url(b"sound", mime="audio/wav"), tmp_path, name="recording")
+    assert wav.endswith("_recording.wav") and is_audio_path(wav)
+
+
+def test_a_name_cannot_break_out_of_the_line_it_is_shown_on(tmp_path) -> None:
+    """The name reaches the agent's text and a file path: line breaks,
+    control characters and path separators become dashes, and a long name
+    is cut to a bounded size."""
+    from pathlib import Path
+
+    saved = Path(save_base64_data_url(
+        _data_url(b"%PDF", mime="application/pdf"), tmp_path,
+        name="../a\nb\x00c" + "é" * 300 + ".pdf", name_sets_extension=True,
+    ))
+    assert saved.parent == tmp_path
+    assert not any(ch in saved.name for ch in ("\n", "\x00", "/"))
+    assert saved.suffix == ".pdf" and len(saved.name.encode()) <= 160

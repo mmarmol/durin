@@ -131,7 +131,9 @@ Run/enable controls on every non-`automation_trigger` row, system rows
 included). This is a service-layer guard only: the scheduler's own
 `enable_job`/`run_job` methods stay unguarded, since internal callers like
 `cron_sync` legitimately mutate protected jobs directly through the
-`register_system_job`/`remove_system_job` door above.
+`register_system_job`/`remove_system_job` door above. A run-now executes the
+same job the schedule does, so the gateway log's "executing job" line ends
+with `run by hand` or `on schedule` to tell them apart.
 
 When an `automation_trigger` job fires, the gateway's `on_job` callback
 dispatches straight to the automations runtime's `try_fire` instead of

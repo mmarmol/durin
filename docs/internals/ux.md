@@ -301,9 +301,13 @@ directly in the composer.
 
 **Attachments.** The composer accepts image, audio, and document attachments
 (the accepted MIME set lives in `ThreadComposer` and mirrors the WebSocket
-channel's server-side whitelist). Images ride inline as base64 vision content;
-documents (PDF, Office, EPUB, …) are decoded to a file on the gateway — the
-original extension is preserved so extraction dispatches correctly — and their
+channel's server-side whitelist). Every attachment is saved on the gateway
+under the sender's file name behind a short unique prefix
+(`3f9a1c2b7d4e_informe-Q3.pdf`), so the agent can tell the user's files apart;
+the name's spaces, line breaks and path characters become dashes. Images ride
+inline as base64 vision content, and media keep the extension their content
+type gives. Documents (PDF, Office, EPUB, …) keep the original extension so
+extraction dispatches correctly, and their
 text is extracted and folded into the message by `extract_documents`
 (`durin/utils/document.py`) for the agent to read. The marker carries the file's
 **saved on-disk path** (`[File: <name> — saved on disk at <path>]`), not just the

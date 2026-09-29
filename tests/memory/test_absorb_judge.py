@@ -353,6 +353,51 @@ def test_parse_reads_the_last_envelope_when_the_model_restates_it() -> None:
     assert r.verdict == "different" and r.confidence == 77 and "two products" in r.reasoning
 
 
+@pytest.mark.parametrize("raw, confidence, reasoning", [
+    # A repeated marker left blank: 17 of one install's 26 failed replies in a
+    # week, each dropping a valid confidence for the empty copy after it.
+    ("===VERDICT===\ndifferent\n===CONFIDENCE===\n95\n===CONFIDENCE===\n===REASONING===\n"
+     "Both pages describe opposing characters from the same source.\n===END===",
+     95, "opposing characters"),
+    # A misspelled, a truncated and a short-fenced reasoning marker.
+    ("===VERDICT===\ndifferent\n===CONFIDENCE===\n92\n===RESONING===\n"
+     "\"Artífice\" describe una clase de personaje.\n===END===", 92, "clase de personaje"),
+    ("===VERDICT===\ndifferent\n===CONFIDENCE===\n96\n===REASON===\n"
+     "The pages describe two distinct authentication practices.\n===END===",
+     96, "authentication practices"),
+    ("===VERDICT===\ndifferent\n===CONFIDENCE===\n98\n===REASONING==\n"
+     "Los nombres son claramente distintos.\n===END===", 98, "claramente distintos"),
+])
+def test_parse_reads_through_the_marker_slips_live_judges_make(raw, confidence, reasoning) -> None:
+    r = _parse_response(raw)
+    assert r.verdict == "different" and r.confidence == confidence
+    assert reasoning in r.reasoning
+
+
+def test_a_repeated_marker_that_says_something_else_still_decides() -> None:
+    """Only a blank repeat defers to the copy before it. A repeat with other
+    content is the model's last word: unreadable, it fails — the parser never
+    falls back to an earlier verdict or confidence."""
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDICT===\ndifferent\n===CONFIDENCE===\n90\n===CONFIDENCE===\n"
+                        "different\n===REASONING===\nApellidos distintos.\n===END===")
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDICT===\nsame\n===CONFIDENCE===\n90\n===REASONING===\nx\n"
+                        "===VERDICT===\nnot the same, they are different\n===END===")
+
+
+def test_parse_reads_no_marker_it_cannot_name() -> None:
+    """A marker translated into another language, or a word close to no
+    marker, is not read as one: the reply fails and the retry restates the
+    envelope, and an unknown marker's text stays in the block it follows."""
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDIC===\ndifferent\n===CONFIANZA===\n95\n===RAZONAMIENTO===\n"
+                        "Son dos empresas distintas.\n===END===")
+    r = _parse_response("===VERDICT===\ndifferent\n===CONFIDENCE===\n80\n===REASONING===\n"
+                        "Distinct products.\n===NOTE===\nsee the lineage\n===END===")
+    assert "===NOTE===" in r.reasoning and "see the lineage" in r.reasoning
+
+
 def test_a_parse_failure_is_reported_to_telemetry(monkeypatch) -> None:
     """Three nights of ~1,500 envelope failures per night left nothing but log
     warnings. Each failed attempt must reach the `memory.dream.parse_failure`

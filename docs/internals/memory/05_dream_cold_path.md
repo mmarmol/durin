@@ -575,11 +575,20 @@ is already the evidence. No vocabulary or language list is involved.
 `===VERDICT=== … ===END===` envelope as the text between its marker and the
 next, so prose between blocks, emphasis around a word, a fenced reply, a
 percent or fractional confidence and a missing closing marker all parse on the
-first call; a block that is absent or holds no usable value is still an error —
-the judge never guesses. When a reply cannot be parsed the retry appends the
-parser's complaint to the prompt (the envelope is restated) instead of
-re-sending the same prompt blind. The template fingerprint the cache keys on
-does not include the appended note.
+first call. The slips judges make on the markers themselves parse too: a
+marker repeated with nothing after it never erases the value an earlier copy
+carried, and a marker name one letter off (`RESONING`), cut short (`REASON`)
+or fenced with one `=` too few still names its block when it could name no
+other. A block that is absent or holds no usable value is still an error — a
+repeat that says something else is the model's last word, and a marker
+translated into another language is not read as one — so the judge never
+guesses. When a reply cannot be parsed the retry appends the parser's
+complaint to the prompt (the envelope is restated) instead of re-sending the
+same prompt blind. The template fingerprint the cache keys on does not include
+the appended note. The investigating judge (Tier 2) reads its answer with the
+same parser, and every reply it could not read is reported as a
+`memory.dream.parse_failure` (stage `tier2_judge`), since a failed escalation
+sends the pair to a person.
 
 **Verdict cache.** A standing candidate pair whose members haven't changed
 re-emerges every run (alias overlap and embedding distance are deterministic),

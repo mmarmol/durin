@@ -706,13 +706,16 @@ class CronService:
                     fresh.enabled = False
         self._save_store()
 
-    async def _execute_job(self, job: CronJob) -> bool:
+    async def _execute_job(self, job: CronJob, *, by_hand: bool = False) -> bool:
         """Execute a single job. Returns ``False`` when nothing ran.
 
         Re-entrancy guard: if this job id is already mid-execution (a
         scheduled run still in flight, or a concurrent manual run-now), the
         call returns immediately instead of starting an overlapping run — a
         job never overlaps itself, whatever the pool size.
+
+        ``by_hand``: a run-now (dashboard, API or CLI) rather than the
+        schedule; the log says which, since both run the same job.
         """
         if job.id in self._executing:
             logger.warning(
@@ -724,7 +727,8 @@ class CronService:
         summary: str | None = None
         try:
             start_ms = _now_ms()
-            logger.info("Cron: executing job '{}' ({})", job.name, job.id)
+            logger.info("Cron: executing job '{}' ({}), {}", job.name, job.id,
+                        "run by hand" if by_hand else "on schedule")
 
             if job.payload.kind == "agent_turn":
                 job.payload.session_key = f"cron:{job.id}:run:{start_ms}"
@@ -1099,7 +1103,7 @@ class CronService:
             # block concurrent cron-store readers or deadlock a fresh instance.
             # A manual run takes a pool slot like a scheduled one.
             async with self._job_slots:
-                if not await self._execute_job(job):
+                if not await self._execute_job(job, by_hand=True):
                     return False
                 with self._lock:
                     self._persist_run_state(job)
