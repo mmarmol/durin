@@ -1,7 +1,5 @@
 """Tests for the shared inbound message deduplicator."""
 
-import json
-
 from durin.channels.dedup import MessageDeduplicator
 
 
@@ -36,29 +34,3 @@ def test_max_size_prunes_oldest(monkeypatch):
     assert len(d._seen) <= 3
     assert d.is_duplicate("m3") is True  # newest survived the prune
 
-
-def test_persistence_roundtrip(tmp_path):
-    p = tmp_path / "chan.json"
-    d1 = MessageDeduplicator(persist_path=p)
-    d1.is_duplicate("m1")
-    assert json.loads(p.read_text())  # written atomically on insert
-    d2 = MessageDeduplicator(persist_path=p)
-    assert d2.is_duplicate("m1") is True  # survives restart
-
-
-def test_persistence_drops_expired_on_load(tmp_path, monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr("durin.channels.dedup.time.time", lambda: now[0])
-    p = tmp_path / "chan.json"
-    d1 = MessageDeduplicator(ttl_seconds=100, persist_path=p)
-    d1.is_duplicate("m1")
-    now[0] += 200
-    d2 = MessageDeduplicator(ttl_seconds=100, persist_path=p)
-    assert d2.is_duplicate("m1") is False
-
-
-def test_corrupt_persist_file_is_ignored(tmp_path):
-    p = tmp_path / "chan.json"
-    p.write_text("{not json")
-    d = MessageDeduplicator(persist_path=p)
-    assert d.is_duplicate("m1") is False

@@ -106,7 +106,6 @@ pip install -e ".[memory,mcp,web]"
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
 | `discord` | `discord.py` | Discord channel. |
-| `matrix` | `matrix-nio`, `mistune`, `nh3` | Matrix channel (unencrypted rooms only). |
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
 | `stt` | `sherpa-onnx`, `av` (PyAV), `numpy` | Local audio transcription. PyAV bundles ffmpeg — no system ffmpeg required. Two engines selectable via config (see below). Models download on first use and are cached under `<durin_home>/models/stt/`. Prebuilt wheels for macOS arm64, Linux x86_64/aarch64, Windows x86_64. |
 | `voice` | `sounddevice` (PortAudio) | TUI microphone recording (`/voice`). macOS/Windows bundle PortAudio; Linux needs `apt install libportaudio2` (or your distro's equivalent). |

@@ -174,7 +174,9 @@ enabled channel it resolves `${secret:}` credential references with
 object), constructs the channel, injects the shared `TranscriptionService`
 (built once from `config.transcription`), and copies the global boolean
 overrides (`send_progress`, `send_tool_hints`, `show_reasoning`). Per-channel
-values in config can override the global defaults.
+values in config can override the global defaults. A section enabled for a
+channel durin does not have — a retired built-in, or a plugin that is not
+installed — is logged as a warning naming it, and nothing is started for it.
 
 Once `start_all` is called, a dedicated asyncio task is created for
 `_dispatch_outbound`, and one task per channel runs under a supervision loop
@@ -235,12 +237,12 @@ anything.
 ### Optional extras and channel availability
 
 Some built-in channels depend on a third-party SDK that ships as a pip extra
-(Slack, Discord, Matrix). Matrix and Slack both guard the SDK
-import in a `try`/`except ImportError` block and set a module-level
-availability flag (`MATRIX_AVAILABLE`, `SLACK_AVAILABLE`) rather than letting
-the import fail. Discord instead probes with `importlib.util.find_spec`
-before importing, setting `DISCORD_AVAILABLE` and only running `import
-discord` when the probe succeeds. Either way, all three modules stay
+(Slack, Discord). Slack guards the SDK import in a `try`/`except
+ImportError` block and sets a module-level availability flag
+(`SLACK_AVAILABLE`) rather than letting the import fail. Discord instead
+probes with `importlib.util.find_spec` before importing, setting
+`DISCORD_AVAILABLE` and only running `import discord` when the probe
+succeeds. Either way, both modules stay
 importable regardless of whether their extra is installed, so
 `discover_channel_names()` (`durin/channels/registry.py`) can enumerate them
 with zero imports, and `discover_all()` still surfaces them (webui channel
@@ -376,56 +378,27 @@ thread also marks that thread's history as already known, so the first reply
 in it does not re-fetch context the session already holds. A Telegram tap
 inside a forum topic follows the same rule: it keeps the topic's session, the
 same one a message typed in that topic uses, and its reply goes back into the
-topic. Feishu's `topic_isolation` (on by default) does the same for a group:
-the session key is `feishu:<chat>:<root_or_message_id>`, taking the message's
-`root_id` when it replies inside an existing topic and its own `message_id`
-when it opens one — either way, that id anchors every later reply, including
-a background workflow's or sub-agent's result, back into the same topic (see
-[loop.md](loop.md)).
+topic.
 
 ### Inbound deduplication
 
 Several transports redeliver events the gateway already handled: a
-reconnecting long-lived connection replays its recent window, a webhook
-retries when the handler acks slowly, or a crash leaves a sync cursor
-pointing at events the channel already processed once. `MessageDeduplicator`
+reconnecting long-lived connection replays its recent window, or the
+platform re-sends an event the handler acked slowly. `MessageDeduplicator`
 (`durin/channels/dedup.py`) centralizes the "have I seen this id recently?"
 check so channel adapters stop reimplementing their own TTL'd id cache. Each
 channel owns its own instance, keyed by whatever the platform calls its
 event or message id, and checks it before any side-effecting processing.
 
-**Two modes.** The default is in-memory: entries are pruned once the cache
-exceeds its size cap or ages past its TTL, and everything is lost on gateway
-restart — acceptable for transports that only redeliver within a live
-connection or a slow-ack window, never across a restart. Persistence is
-opt-in via a `persist_path` (a JSON file under the runtime `dedup/`
-subdirectory, written atomically) for transports whose redelivery window can
-outlive the process: Feishu's Lark WebSocket redelivers un-ACKed events
-after the gateway itself restarts, and only a persistent cache closes that
-gap there — an in-memory one would reprocess the replayed events as if they
-were new. Matrix's `nio` client resyncs from the last persisted sync token
-after a crash that lands between an event callback and the token-store
-write, replaying that window on the next start; there, the
-`_is_pre_startup_event` timestamp filter already drops that replay on its
-own, so the persistent cache's marginal value is defense in depth against
-clock skew rather than closing the gap — it can never false-drop a message,
-since Matrix event ids are unique.
-
-**Adoption by channel.** Slack, WhatsApp, WeCom, Weixin, and QQ use the
-shared helper in memory-only mode, each with its own cache size and a 300s
-TTL — bounding by TTL *and* size cap suits these transports, whose realistic
-redelivery windows are seconds. DingTalk and MS Teams also dedup in
-memory-only mode: DingTalk's stream SDK re-pushes a message when the gateway
-acks slowly, and Bot Framework retries a webhook delivery under the same
-condition — both are same-connection replays, not crash recovery, so
-memory-only is sufficient. Feishu and Matrix use the persistent mode
-described above, since only they need to survive a gateway restart.
-
-Weixin deliberately does not layer a content fingerprint (hashing
-sender+text, as some other bot frameworks do) on top of id-based dedup:
-that would drop a message a user legitimately sends twice in a row within
-the same TTL window — a short "ok" retyped after a typo, for instance —
-which id-based dedup does not.
+The cache lives in memory: entries are pruned once it exceeds its size cap
+or they age past the TTL, and everything is lost on gateway restart — the
+transports that use it only redeliver within a live connection or a slow-ack
+window, never across a restart. Slack and WhatsApp use it, each with its own
+cache size and a 300s TTL; bounding by TTL *and* size cap suits transports
+whose realistic redelivery windows are seconds. It deliberately does not
+layer a content fingerprint (hashing sender+text) on top of the id: that
+would drop a message a user legitimately sends twice in a row within the TTL
+— a short "ok" retyped after a typo, for instance.
 
 **Explicit non-adoptions.** Telegram, Discord, Email, and WebSocket don't
 use the shared helper because their transport already guarantees
@@ -638,7 +611,7 @@ separate audio file it should open, so it narrates that it cannot access the
 audio; the bare text reads as what the user said.
 
 WhatsApp is the reference implementation of this contract. Channels that
-transcribe locally (currently Telegram, Discord, Matrix, Feishu, and Weixin)
+transcribe locally (currently Telegram, Discord and the dashboard's WebSocket)
 apply the same idiom: on transcription success, return an empty `media` list
 and the transcript as the bare user message text; on failure, return the audio
 path so the `interpret_audio` tool remains a usable fallback.

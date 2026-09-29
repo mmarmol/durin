@@ -37,7 +37,6 @@ REGISTRY: dict[str, FeatureExtra] = {
     "mcp": FeatureExtra("mcp", "mcp", "mcp", True, "~10 MB", "MCP servers"),
     "slack": FeatureExtra("slack", "slack", "slack_sdk", True, "~10 MB", "Slack channel"),
     "discord": FeatureExtra("discord", "discord", "discord", True, "~10 MB", "Discord channel"),
-    "matrix": FeatureExtra("matrix", "matrix", "nio", True, "~45 MB", "Matrix channel"),
     "memory_vector": FeatureExtra("memory_vector", "memory", "fastembed", True, "~400 MB", "Vector memory"),
     "oauth": FeatureExtra("oauth", "oauth", "oauth_cli_kit", False, "~5 MB", "OAuth providers"),
     # The speech engines import their package on first use and retry until it

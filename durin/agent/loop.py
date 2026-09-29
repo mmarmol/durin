@@ -2347,8 +2347,8 @@ class AgentLoop:
             self._pending_usage[session_key] = dict(result.usage)
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
-            # Push final content through stream so streaming channels (e.g. Feishu)
-            # update the card instead of leaving it empty.
+            # Push final content through stream so a streaming channel updates
+            # the message it is editing instead of leaving it empty.
             if on_stream and on_stream_end:
                 await on_stream(result.final_content or "")
                 await on_stream_end(resuming=False)
@@ -3010,15 +3010,6 @@ class AgentLoop:
             # the reply goes to the topic, not the group's main thread.
             with suppress(ValueError):
                 outbound_metadata["message_thread_id"] = int(key.rsplit(":topic:", 1)[1])
-        if channel == "feishu" and key.startswith("feishu:") and key.count(":") >= 2:
-            # A topic session's key is feishu:<chat_id>:<root_or_message_id>.
-            # Feishu's Reply API keeps a reply inside that topic as long as it
-            # targets any message id that belongs to it, so the same anchor
-            # id doubles as both the reply target and the "we're in a topic"
-            # signal that feishu.py's send() reads.
-            anchor_id = key.split(":", 2)[2]
-            outbound_metadata["message_id"] = anchor_id
-            outbound_metadata["thread_id"] = anchor_id
         if origin_message_id := msg.metadata.get("origin_message_id"):
             outbound_metadata["origin_message_id"] = origin_message_id
         return OutboundMessage(

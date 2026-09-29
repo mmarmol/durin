@@ -257,7 +257,7 @@ def test_channel_format_hint_absent_for_unknown(tmp_path) -> None:
     prompt = builder.build_system_prompt(channel=None)
     assert "Format Hint" not in prompt
 
-    prompt2 = builder.build_system_prompt(channel="feishu")
+    prompt2 = builder.build_system_prompt(channel="acme")
     assert "Format Hint" not in prompt2
 
 

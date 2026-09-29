@@ -6,7 +6,7 @@ The UX subsystem is the unified I/O layer that sits between humans and the
 agent core. It covers:
 
 - **Three interactive surfaces** (CLI, TUI, WebUI) plus **broadcast channels**
-  (Slack, Telegram, Matrix, WhatsApp, and others) that all funnel input into
+  (Slack, Telegram, Discord, WhatsApp, and others) that all funnel input into
   the same `MessageBus` and receive output from it.
 - **Config and secrets**: the split-file config layout under
   `~/.durin/config.json.d/` and the separate secret store at
@@ -47,7 +47,7 @@ flowchart TD
         CLI["Interactive CLI\n(prompt_toolkit)"]
         TUI["Textual TUI\n(durin agent)"]
         WEB["WebUI\n(WebSocket channel)"]
-        EXT["External channels\n(Slack / Telegram / Matrix / etc.)"]
+        EXT["External channels\n(Slack / Telegram / Discord / etc.)"]
     end
 
     subgraph bus_core["Shared core"]

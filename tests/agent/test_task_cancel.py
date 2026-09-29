@@ -143,9 +143,9 @@ class TestDispatch:
 
         loop, bus = _make_loop()
         msg = InboundMessage(
-            channel="matrix",
+            channel="acme",
             sender_id="u1",
-            chat_id="!room:matrix.org",
+            chat_id="!room:example.org",
             content="hello",
             metadata={
                 "_wants_stream": True,

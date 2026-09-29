@@ -674,12 +674,7 @@ _CHANNEL_ABBREV = {
     "telegram": "tg",
     "slack": "slack",
     "discord": "dc",
-    "matrix": "matrix",
     "whatsapp": "wa",
-    "feishu": "feishu",
-    "dingtalk": "dt",
-    "qq": "qq",
-    "wecom": "wc",
 }
 
 

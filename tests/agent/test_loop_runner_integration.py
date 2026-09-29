@@ -211,7 +211,7 @@ async def test_streamed_flag_not_set_on_llm_error(tmp_path):
     loop.tools.get_definitions = MagicMock(return_value=[])
 
     msg = InboundMessage(
-        channel="feishu", sender_id="u1", chat_id="c1", content="hi",
+        channel="acme", sender_id="u1", chat_id="c1", content="hi",
     )
     result = await loop._process_message(
         msg,

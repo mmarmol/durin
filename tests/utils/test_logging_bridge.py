@@ -96,19 +96,19 @@ def test_redirect_durin_is_idempotent(tmp_path):
 
 
 def test_named_lib_redirect_keeps_fixed_label(tmp_path):
-    """The existing per-library redirect (nio/botpy/...) still tags records
-    with the fixed library name, unaffected by the record-name fallback."""
+    """The per-library redirect (websockets, …) still tags records with the
+    fixed library name, unaffected by the record-name fallback."""
     sink_file = tmp_path / "gateway.log"
     sink_id = _gateway_sink(sink_file)
     try:
-        redirect_lib_logging("nio", level="WARNING")
-        logging.getLogger("nio").warning("nio-warn-marker")
+        redirect_lib_logging("websockets", level="WARNING")
+        logging.getLogger("websockets").warning("websockets-warn-marker")
     finally:
         logger.remove(sink_id)
-        # Reset the nio logger so the fixed-label handler doesn't leak into
+        # Reset the logger so the fixed-label handler doesn't leak into
         # other tests.
-        logging.getLogger("nio").handlers = []
-        logging.getLogger("nio").propagate = True
+        logging.getLogger("websockets").handlers = []
+        logging.getLogger("websockets").propagate = True
 
     messages = [r["record"]["message"] for r in _read_jsonl(sink_file)]
-    assert any("[nio] nio-warn-marker" in m for m in messages), messages
+    assert any("[websockets] websockets-warn-marker" in m for m in messages), messages

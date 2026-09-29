@@ -785,12 +785,12 @@ class TestChannelCommonRegistration:
     def test_channel_common_edit_preserves_extras(self):
         """Editing Channel Common should not lose per-channel extras."""
         config = Config()
-        config.channels.feishu = {"enabled": True, "appId": "test123"}
+        config.channels.acme = {"enabled": True, "appId": "test123"}
         channels = config.channels.model_copy(deep=True)
         channels.send_tool_hints = True
         config.channels = channels
         assert config.channels.send_tool_hints is True
-        assert config.channels.feishu["appId"] == "test123"
+        assert config.channels.acme["appId"] == "test123"
 
 
 class TestMainMenuUpdate:
