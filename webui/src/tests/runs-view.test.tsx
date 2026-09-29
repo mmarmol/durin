@@ -331,7 +331,11 @@ describe("RunsView", () => {
 
     await user.click(screen.getByRole("button", { name: /summarize the week/ }));
 
-    expect(await screen.findByText("the weekly digest")).toBeInTheDocument();
+    // Bare findByText: the final output renders through MarkdownText's lazy
+    // Suspense boundary, whose fallback shows this same text first and can be
+    // swapped out between a resolved find and a chained check on it (see the
+    // "renders the final output as markdown" test below).
+    await screen.findByText("the weekly digest");
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "digest", "run-done");
 
     // Clicking the (now active) row again closes the detail.

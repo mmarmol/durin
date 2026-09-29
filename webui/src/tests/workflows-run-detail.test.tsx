@@ -168,7 +168,7 @@ describe("WorkflowsView run detail", () => {
     const history = screen.getByText(/^runs$/i, { selector: "span" }).parentElement as HTMLElement;
     // Click the older run (#1) and assert its detail comes back.
     await user.click(within(history).getByRole("button", { name: "#1" }));
-    expect(await screen.findByText("first answer")).toBeInTheDocument();
+    await screen.findByText("first answer");
   });
 
   it("shows a needs_input banner with the resume form and resumes into the same run_id", async () => {
@@ -328,7 +328,7 @@ describe("WorkflowsView run detail", () => {
 
     await user.click(within(history).getByRole("button", { name: "#2" }));
 
-    expect(await screen.findByText("persisted answer")).toBeInTheDocument();
+    await screen.findByText("persisted answer");
     // The node row renders without per-node output text (manifest records omit it).
     expect(screen.getByText("research#0")).toBeInTheDocument();
     expect(screen.queryByText("worker two output")).not.toBeInTheDocument();
