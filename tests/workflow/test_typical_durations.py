@@ -59,12 +59,13 @@ def test_typical_ignores_reused_node_rows(tmp_path):
 def test_typical_total_does_not_sum_branches_no_single_run_takes(tmp_path):
     """The per-node medians span every branch prior runs took; one run takes one
     of them. Summing them estimates a path that cannot happen."""
-    # Three prior runs of a router, all down the same branch.
+    # Two prior runs of a router with two mutually exclusive branches.
     _finish(tmp_path, "router", "r1", [("route", 5.0), ("branch-a", 500.0)])
-    _finish(tmp_path, "router", "r2", [("route", 5.0), ("branch-a", 520.0)])
-    _finish(tmp_path, "router", "r3", [("route", 5.0), ("branch-a", 900.0)])
+    _finish(tmp_path, "router", "r2", [("route", 5.0), ("branch-b", 520.0)])
 
-    assert run_log.typical_total_duration(tmp_path, "router") == 525.0
+    # What summing the per-node medians would produce: a run through both branches.
+    assert sum(run_log.typical_node_durations(tmp_path, "router").values()) == 1025.0
+    assert run_log.typical_total_duration(tmp_path, "router") is None
 
 
 def test_typical_total_is_absent_when_prior_runs_took_different_routes(tmp_path):
