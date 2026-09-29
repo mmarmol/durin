@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any, Callable
 
@@ -180,12 +182,14 @@ _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 60.0
 _MAX_INITIAL_CONNECT_RETRIES = 3
 _MAX_RECONNECT_RETRIES = 5
-# Upper bound on the initial connect. A server can hang here indefinitely —
-# most often an OAuth server whose interactive-auth abort the MCP SDK swallows,
-# leaving the HTTP request pending forever so _ready is never set. Since
-# connect_mcp_servers connects sequentially and run() awaits _connect_mcp before
-# its consume loop, an unbounded wait lets one un-authed server brick every
-# turn. Generous enough for legitimate cold starts (stdio npx, SSE handshakes).
+# Upper bound on each server's initial connect. A server can hang here
+# indefinitely — most often an OAuth server whose interactive-auth abort the MCP
+# SDK swallows, leaving the HTTP request pending forever so _ready is never set.
+# connect_mcp_servers returns only once every server has connected or failed,
+# and run() awaits _connect_mcp before its consume loop, so an unbounded wait
+# lets one un-authed server brick every turn. Servers connect concurrently, so
+# this bounds startup as a whole, not per server in sequence. Generous enough
+# for legitimate cold starts (stdio npx, SSE handshakes).
 _CONNECT_TIMEOUT = 30.0
 _KEEPALIVE_INTERVAL = 180.0
 _KEEPALIVE_TIMEOUT = 30.0
@@ -413,7 +417,14 @@ class MCPServerConnection:
         params = StdioServerParameters(command=command, args=args, env=env)
         errlog = _mcp_stderr_log()
         try:
-            errlog.write(f"\n=== MCP server '{self.name}' stdio session ===\n")
+            # The child writes its stderr straight into this shared file with no
+            # prefix, so the header is what dates a spawn failure (e.g. a missing
+            # interpreter) and ties it to one gateway process.
+            stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+            errlog.write(
+                f"\n=== {stamp} MCP server '{self.name}' stdio session "
+                f"(durin pid {os.getpid()}) ===\n"
+            )
             errlog.flush()
         except Exception:  # noqa: BLE001
             pass

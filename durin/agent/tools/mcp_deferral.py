@@ -17,10 +17,11 @@ unbounded third-party surface where definition bloat actually comes
 from. Below the threshold, everything registers exactly as before —
 one small server doesn't pay the discovery indirection.
 
-Deferral is decided once per process, after all servers connect
-(``AgentLoop._connect_mcp``). Tools are matched by the ``mcp_`` name
-prefix — the same convention ``ToolRegistry.get_definitions`` uses for
-its sort order.
+Deferral is re-checked after every server (re)registers and once more
+after all servers connect (``AgentLoop._connect_mcp``), which then logs
+the MCP schema size and deferral state once. Tools are matched by the
+``mcp_`` name prefix — the same convention
+``ToolRegistry.get_definitions`` uses for its sort order.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from durin.agent.tools.schema import (
 )
 from durin.utils.helpers import estimate_text_tokens
 
-__all__ = ["maybe_defer_mcp_tools"]
+__all__ = ["log_mcp_deferral_status", "maybe_defer_mcp_tools"]
 
 _BRIDGE_NAMES = frozenset({"mcp_find_tools", "mcp_invoke"})
 _FIND_MAX_SCHEMAS = 8
@@ -64,6 +65,10 @@ def _catalog_line(tool: Tool) -> str:
     return f"- {tool.name}: {desc}" if desc else f"- {tool.name}"
 
 
+def _schema_tokens(tools: list[Tool]) -> int:
+    return estimate_text_tokens(json.dumps([t.to_schema() for t in tools], default=str))
+
+
 def maybe_defer_mcp_tools(registry: ToolRegistry, config: Any) -> int:
     """Defer MCP tool definitions when they exceed the threshold.
 
@@ -78,9 +83,7 @@ def maybe_defer_mcp_tools(registry: ToolRegistry, config: Any) -> int:
     candidates = _deferrable_mcp_tools(registry)
     if not candidates:
         return 0
-    estimate = estimate_text_tokens(
-        json.dumps([t.to_schema() for t in candidates], default=str)
-    )
+    estimate = _schema_tokens(candidates)
     if estimate <= threshold:
         return 0
 
@@ -94,6 +97,31 @@ def maybe_defer_mcp_tools(registry: ToolRegistry, config: Any) -> int:
         len(candidates), estimate, threshold,
     )
     return len(candidates)
+
+
+def log_mcp_deferral_status(registry: ToolRegistry, config: Any) -> None:
+    """Log the MCP schema size and whether deferral is on, as one INFO line.
+
+    Below the threshold ``maybe_defer_mcp_tools`` changes nothing and logs
+    nothing, which leaves no trace of how large the MCP surface is. The
+    figure logged here is the same estimate the threshold is compared with
+    (deferral needs it strictly above ``threshold_tokens``), so a threshold
+    can be chosen from it. Silent when no MCP tools are registered.
+    """
+    candidates = _deferrable_mcp_tools(registry)
+    if not candidates:
+        return
+    threshold = int(getattr(config, "threshold_tokens", 0) or 0) if config is not None else 0
+    if not all(t.llm_visible for t in candidates):
+        state = "active"
+    elif config is None or not getattr(config, "enabled", False) or threshold <= 0:
+        state = "disabled"
+    else:
+        state = "inactive"
+    logger.info(
+        "MCP tool schemas: {} definitions, ~{} tokens; deferral {} (threshold {} tokens)",
+        len(candidates), _schema_tokens(candidates), state, threshold,
+    )
 
 
 _FIND_PARAMETERS = tool_parameters_schema(

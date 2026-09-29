@@ -10,11 +10,14 @@ Tools suffice.
 from __future__ import annotations
 
 import asyncio
+import re
 from types import SimpleNamespace
 from typing import Any
 
+from loguru import logger
+
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.mcp_deferral import maybe_defer_mcp_tools
+from durin.agent.tools.mcp_deferral import log_mcp_deferral_status, maybe_defer_mcp_tools
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
@@ -170,3 +173,49 @@ def test_invoke_without_deferral_rejects_visible_mcp_tool():
 
     result = asyncio.run(invoke.execute(name="mcp_srv_tool0"))
     assert "error" in result
+
+
+def _status_lines(registry: ToolRegistry, config: Any) -> list[str]:
+    logged: list[str] = []
+    sink = logger.add(
+        lambda message: logged.append(message.record["message"]),
+        level="INFO", format="{message}",
+    )
+    try:
+        log_mcp_deferral_status(registry, config)
+    finally:
+        logger.remove(sink)
+    return [line for line in logged if line.startswith("MCP tool schemas")]
+
+
+def test_status_line_reports_the_figure_the_threshold_is_compared_with():
+    registry, stubs = _registry()
+    [line] = _status_lines(registry, _cfg(threshold_tokens=10_000_000))
+    assert f"{len(stubs)} definitions" in line
+    tokens = int(re.search(r"~(\d+) tokens", line).group(1))
+
+    # Deferral needs the estimate strictly above the threshold: at the logged
+    # figure it stays off, one token below it the tools are deferred.
+    assert maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=tokens)) == 0
+    assert maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=tokens - 1)) == len(stubs)
+
+
+def test_status_line_says_whether_deferral_is_active():
+    registry, _ = _registry()
+    [below] = _status_lines(registry, _cfg(threshold_tokens=10_000_000))
+    assert "deferral inactive" in below
+    assert "threshold 10000000 tokens" in below
+
+    [off] = _status_lines(registry, _cfg(enabled=False))
+    assert "deferral disabled" in off
+    [zero] = _status_lines(registry, _cfg(threshold_tokens=0))
+    assert "deferral disabled" in zero
+
+    maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=1))
+    [above] = _status_lines(registry, _cfg(threshold_tokens=1))
+    assert "deferral active" in above
+
+
+def test_status_line_is_silent_without_mcp_tools():
+    registry, _ = _registry(mcp_count=0)
+    assert _status_lines(registry, _cfg()) == []

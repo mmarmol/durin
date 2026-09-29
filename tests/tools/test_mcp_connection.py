@@ -271,7 +271,7 @@ async def test_initial_connect_times_out_when_serve_hangs(monkeypatch) -> None:
     The real-world trigger is an OAuth server with an expired token: the MCP
     SDK's auth flow swallows the headless-abort exception and leaves the HTTP
     request pending, so neither success nor failure is ever signalled and
-    ``_ready`` is never set. Because connect_mcp_servers connects sequentially
+    ``_ready`` is never set. Because connect_mcp_servers waits for every server
     and ``run()`` awaits ``_connect_mcp`` *before* its consume loop, one such
     server bricks every turn. A bounded connect timeout converts the hang into
     an ordinary per-server failure so the agent loop can proceed.
@@ -898,3 +898,39 @@ async def test_stdio_errlog_routed_to_logfile(monkeypatch, tmp_path) -> None:
     assert captured["errlog"] is not _sys.stderr
     log = tmp_path / "mcp-stderr.log"
     assert log.exists() and "srv" in log.read_text()
+
+
+async def test_stdio_errlog_header_dates_the_session(monkeypatch, tmp_path) -> None:
+    """The session header names the server, the time and the gateway PID.
+
+    A server that dies at spawn (``/usr/bin/env: 'node': No such file``)
+    leaves only its stderr line after this header, so the header is what
+    dates the failure and ties it to one gateway process.
+    """
+    import os
+    import re
+    from datetime import datetime, timedelta
+
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
+
+    @asynccontextmanager
+    async def fake_stdio_client(params, errlog=None):
+        yield object(), object()
+
+    monkeypatch.setattr("mcp.client.stdio.stdio_client", fake_stdio_client)
+
+    conn = mc.MCPServerConnection("srv", MCPServerConfig(command="fake"), ToolRegistry())
+    await conn._open_stdio()
+
+    header = (tmp_path / "mcp-stderr.log").read_text().strip().splitlines()[-1]
+    match = re.fullmatch(
+        r"=== (\S+) MCP server 'srv' stdio session \(durin pid (\d+)\) ===", header
+    )
+    assert match, header
+    stamp = datetime.fromisoformat(match.group(1))
+    assert stamp.tzinfo is not None
+    assert abs(datetime.now(stamp.tzinfo) - stamp) < timedelta(minutes=1)
+    assert int(match.group(2)) == os.getpid()

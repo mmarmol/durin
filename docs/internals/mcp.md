@@ -21,7 +21,7 @@ flowchart TD
     subgraph Startup
         A["config.tools.mcp_servers"] --> B["AgentLoop._connect_mcp"]
         B --> C["connect_mcp_servers"]
-        C --> D["MCPServerConnection.start"]
+        C --> D["MCPServerConnection.start\n(all servers concurrently)"]
         D --> E["run() task spawned"]
         E --> F["_serve_once\n(open transport + ClientSession)"]
         F --> G["_register_capabilities\n(list_tools/resources/prompts)"]
@@ -79,11 +79,15 @@ flowchart TD
 
 ### Startup connect
 
-When `AgentLoop` initializes, it calls `_connect_mcp`, which calls `connect_mcp_servers` with all enabled entries from `config.tools.mcp_servers`. For each server, a new `MCPServerConnection` is instantiated and `start()` is called, which spawns an `asyncio` task running `run()` and waits up to 30 seconds for `_ready` to be set.
+When `AgentLoop` starts, it calls `_connect_mcp` before it consumes any message, which calls `connect_mcp_servers` with all enabled entries from `config.tools.mcp_servers`. For each server, a new `MCPServerConnection` is instantiated and `start()` is called, which spawns an `asyncio` task running `run()` and waits up to 30 seconds for `_ready` to be set. All servers start at the same time, each with its own 30-second bound, so startup waits for the slowest server rather than the sum of all of them, and a server that fails or hangs does not delay the others. A server that has not connected within its bound is cancelled and recorded as failed.
+
+Each server registers its tools as soon as its handshake completes, so the order in which servers finish varies between boots. Once every server has connected or failed, `connect_mcp_servers` re-registers each connected server's tools in config order, so `ToolRegistry.tool_names` (and every listing built from it, such as the deferred catalog in `mcp_find_tools`) lists servers in config order. The returned connections and the per-server error map follow config order too.
 
 `run()` calls `_serve_once()` in a loop. `_serve_once` opens the transport (`stdio`, `sse`, or `streamableHttp` — auto-detected from `cfg.type` or inferred from the config shape), enters a `ClientSession` context, calls `session.initialize()`, registers capabilities, sets `_ready`, then parks in `_wait_for_lifecycle_event` until a shutdown or reconnect event fires. The transport and session context are entered and exited in the same task, so anyio cancel scopes created by the SDK are torn down where they were created.
 
-After all servers have connected (or timed out), `maybe_defer_mcp_tools()` checks the aggregate schema token count. When it exceeds `tools.mcp_deferral.threshold_tokens`, the real tool definitions are hidden from the LLM and replaced by two bridge tools (`mcp_find_tools` and `mcp_invoke`). This decision is made once per process; changing the threshold requires a gateway restart.
+A stdio server's stderr goes to `~/.durin/logs/mcp-stderr.log`, one file shared by all servers, so server banners never reach the terminal. Each spawn first writes a header line with an ISO-8601 timestamp, the server name and the gateway's PID, for example `=== 2026-09-29T10:21:04.512-03:00 MCP server 'playwright' stdio session (durin pid 4242) ===`. The server's own lines follow without a prefix, so a spawn failure such as a missing interpreter is dated by the header before it. Servers start together, so lines from servers spawned in the same instant can interleave; the gateway log names the server whose connect failed.
+
+`maybe_defer_mcp_tools()` re-checks the aggregate MCP schema size after every server (re)registers and once more after all servers have connected. The size is a tiktoken estimate of the JSON definitions of every registered tool whose name starts with `mcp_` (tools, resources and prompts), excluding the two bridge tools. When it is strictly greater than `tools.mcp_deferral.threshold_tokens`, the real tool definitions are hidden from the LLM and replaced by two bridge tools (`mcp_find_tools` and `mcp_invoke`); the check only ever hides tools, it never shows them again. After each connect pass (startup, and a runtime connect or disconnect of one server), the gateway logs one INFO line with that estimate and the deferral state, for example `MCP tool schemas: 12 definitions, ~4180 tokens; deferral inactive (threshold 20000 tokens)`. The state is `active`, `inactive` (at or below the threshold) or `disabled` (`enabled` is false or the threshold is 0). Deferral turns on for any `threshold_tokens` below the logged figure.
 
 ### Capability registration
 
@@ -269,7 +273,9 @@ A webui sign-in resolves its OAuth redirect base through a fallback chain: the o
 
 **Headless OAuth: `NeedsInteractiveAuthError` instead of blocking.** Agent runs are non-interactive by design. Blocking an agent turn while waiting for a browser redirect would hang the session indefinitely. Raising an error immediately — naming the exact sign-in command — gives the user actionable information without blocking. After `durin mcp login`, the tokens are in the secret store and the next agent turn connects without user involvement.
 
-**Deferral decided once per process.** The decision of whether to hide MCP tool definitions behind bridge tools depends on the aggregate schema size of all connected servers. This can only be computed after all servers have connected. Recomputing it on every turn would be expensive and could cause the tool surface to change mid-conversation. A single decision at startup is stable and predictable; changing the threshold is a deliberate operator action that warrants a restart.
+**Concurrent connect, config-order registration.** Servers are independent processes or endpoints, so nothing requires connecting them one at a time; doing so makes startup pay every server's cold start in sequence, and a slow server holds back the tools of every server after it. Connecting them together bounds startup by the slowest server. Completion order is not stable between boots, so registration is put back into config order afterwards: tool listings, including the deferred catalog the model reads, stay identical from boot to boot.
+
+**Deferral re-checked on registration, never reversed.** Whether to hide MCP tool definitions behind bridge tools depends on the aggregate schema size of all connected servers, which grows as servers register. The check runs when the MCP surface changes rather than on every turn, which would be expensive. It only ever hides tools, so a reconnect or a refreshed tool list cannot flip the tool surface back and forth mid-conversation.
 
 **Injection scan is warning-only.** Blocking tool registration on injection findings would create a denial-of-service vector: a server operator could craft a description that causes durin to refuse to connect. Warnings let operators audit their servers while keeping the system operational. The defense against prompt injection from MCP tools lies in the agent's bounded tool permissions and the structural nature of the detection (forged role markers and runnable fences are absent from legitimate metadata).
 

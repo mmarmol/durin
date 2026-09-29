@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from loguru import logger
 
 from durin.agent.loop import AgentLoop
+from durin.agent.tools.base import Tool
 from durin.bus.queue import MessageBus
 from durin.config.schema import MCPServerConfig
 
@@ -24,6 +26,64 @@ def _loop(tmp_path: Path, mcp_servers: dict) -> AgentLoop:
         model="test-model",
         mcp_servers=mcp_servers,
     )
+
+
+class _ServerTool(Tool):
+    """A tool as an MCP server would register it (not a ToolLoader built-in)."""
+
+    _plugin_discoverable = False
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "server tool"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        return "ok"
+
+
+async def test_connect_mcp_logs_the_mcp_schema_status_once(tmp_path, monkeypatch):
+    """Deferral is re-checked after each server registers, but the MCP schema
+    total and deferral state are logged once, after every server is in."""
+
+    async def fake_connect(mcp_servers, registry, defer_cb=None, **kwargs):
+        for name in mcp_servers:
+            registry.register(_ServerTool(f"mcp_{name}_t"))
+            defer_cb()
+        return {name: object() for name in mcp_servers}
+
+    monkeypatch.setattr("durin.agent.tools.mcp.connect_mcp_servers", fake_connect)
+
+    loop = _loop(
+        tmp_path,
+        {"a": MCPServerConfig(url="https://a/mcp"), "b": MCPServerConfig(url="https://b/mcp")},
+    )
+    loop.app_config = SimpleNamespace(tools=SimpleNamespace(
+        mcp_deferral=SimpleNamespace(enabled=True, threshold_tokens=10_000_000),
+    ))
+    logged: list[str] = []
+    sink = logger.add(
+        lambda message: logged.append(message.record["message"]),
+        level="INFO", format="{message}",
+    )
+    try:
+        await loop._connect_mcp()
+    finally:
+        logger.remove(sink)
+
+    lines = [line for line in logged if line.startswith("MCP tool schemas")]
+    assert len(lines) == 1
+    assert "deferral inactive" in lines[0]
 
 
 async def test_connect_mcp_skips_disabled_servers(tmp_path, monkeypatch):

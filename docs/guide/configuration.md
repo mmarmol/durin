@@ -768,6 +768,10 @@ when the aggregate schema size is large:
 | `enabled` | `true` | Enable the deferral bridge |
 | `threshold_tokens` | `20000` | Schema size threshold; above this, `mcp_find_tools` / `mcp_invoke` replace individual tool definitions |
 
+After connecting its MCP servers, the gateway logs the measured size, e.g.
+`MCP tool schemas: 12 definitions, ~4180 tokens; deferral inactive (threshold 20000 tokens)`.
+Any `threshold_tokens` below that figure turns deferral on.
+
 ---
 
 ### `mcp_catalog_refresh`
