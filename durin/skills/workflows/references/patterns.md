@@ -225,7 +225,8 @@ later would no longer see the analysis. `inputs_from` composes the node's input 
 sources (labeled blocks, plus `[upstream]` with the current edge). `output_schema` makes a
 node deliver a validated payload via a forced tool call (invalid → immediate in-node retry
 with the exact error); with `output_file` the ENGINE writes the validated JSON into the
-working folder — downstream structural gates become unnecessary.
+working folder — downstream structural gates become unnecessary. A node that drafts its
+output in a working-folder file delivers it with `deliver_file(path)` instead of retyping it.
 
 ```json
 {

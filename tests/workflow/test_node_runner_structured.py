@@ -275,3 +275,166 @@ def test_early_valid_deliver_skips_the_discarded_synthesis_call_on_exhaustion(tm
     assert json.loads(resp.output) == {"queries": ["a", "b"]}
     assert nr.runner.run.await_count == 1          # no second (synthesis) AgentRunner.run call
     provider.chat_with_retry.assert_not_called()   # no forced deliver call either
+
+
+# ── `deliver_file`: deliver a JSON draft from the working folder, no retyping ──
+
+
+def _file_node(output_file=None, schema=SCHEMA):
+    spec = {"id": "plan", "kind": "work", "tools": "default", "prompt": "Plan.", "next": None}
+    if schema is not None:
+        spec["output_schema"] = schema
+    if output_file:
+        spec["output_file"] = output_file
+    return parse_workflow({"name": "d", "start": "plan", "nodes": [spec]}).nodes["plan"]
+
+
+def _work_dir(tmp_path):
+    d = tmp_path / "ws" / ".workflow" / "r1" / "work"
+    d.mkdir(parents=True)
+    return d
+
+
+def _run_calls(tmp_path, node, work_dir, calls, chat_responses=()):
+    """Run ``node`` in ``work_dir`` with a fake turn that makes ``calls`` in order:
+    each is a ``(tool, args)`` pair, or a plain callable run between calls (the
+    model editing its draft on disk). Returns the node's tool names, every tool
+    result in order, the node's response and the provider mock."""
+    seen: dict = {"results": []}
+
+    async def fake_run(spec):
+        seen["tools"] = spec.tools.tool_names
+        seen["deliver_description"] = (
+            spec.tools.get("deliver").description if "deliver" in spec.tools else None)
+        for call in calls:
+            if callable(call):
+                call()
+                continue
+            name, args = call
+            seen["results"].append(await spec.tools.execute(name, args))
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(tmp_path / "ws", fake_run, chat_responses)
+    resp = nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[],
+                             run_id="r1", iteration=1, root_session_key=None,
+                             output_dir=str(work_dir)))
+    return seen, resp, provider
+
+
+def _forced(payload):
+    return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=payload)])
+
+
+def test_deliver_file_is_offered_to_a_schema_node_with_a_working_folder(tmp_path):
+    work = _work_dir(tmp_path)
+    seen, _, _ = _run_calls(tmp_path, _file_node(), work, [("deliver", {"queries": ["a"]})])
+    assert "deliver_file" in seen["tools"]
+    assert "deliver_file" in seen["deliver_description"]   # deliver points to the file option
+
+
+def test_deliver_file_is_absent_without_a_schema_or_a_working_folder(tmp_path):
+    work = _work_dir(tmp_path)
+    seen, _, _ = _run_calls(tmp_path, _file_node(schema=None), work, [])
+    assert "deliver_file" not in seen["tools"]
+
+    # A node without file tools gets no working folder, so there is no draft to read.
+    got = {}
+
+    async def fake_run(spec):
+        got["tools"] = spec.tools.tool_names
+        got["deliver_description"] = spec.tools.get("deliver").description
+        await spec.tools.execute("deliver", {"queries": ["a"]})
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, _ = _runner_with_fake_run(tmp_path, fake_run)
+    nr(_req(_schema_node()))
+    assert "deliver_file" not in got["tools"]
+    assert "deliver_file" not in got["deliver_description"]
+
+
+def test_deliver_file_delivers_a_valid_draft_by_relative_or_absolute_path(tmp_path):
+    work = _work_dir(tmp_path)
+    (work / "draft.json").write_text(json.dumps({"queries": ["from", "file"]}), encoding="utf-8")
+
+    for path in ("draft.json", str(work / "draft.json")):
+        seen, resp, provider = _run_calls(
+            tmp_path, _file_node(), work, [("deliver_file", {"path": path})])
+        assert json.loads(resp.output) == {"queries": ["from", "file"]}
+        assert seen["results"][0].startswith("Delivered")
+        provider.chat_with_retry.assert_not_called()   # no forced end-of-turn call, no retyping
+
+
+def test_deliver_file_refuses_paths_outside_the_working_folder(tmp_path):
+    work = _work_dir(tmp_path)
+    outside = tmp_path / "ws" / "elsewhere.json"
+    outside.write_text(json.dumps({"queries": ["escaped"]}), encoding="utf-8")
+    (work / "link.json").symlink_to(outside)
+
+    seen, resp, provider = _run_calls(
+        tmp_path, _file_node(), work,
+        [("deliver_file", {"path": str(outside)}),
+         ("deliver_file", {"path": "../../../elsewhere.json"}),
+         ("deliver_file", {"path": "link.json"})],
+        chat_responses=[_forced({"queries": ["forced"]})])
+    assert len(seen["results"]) == 3
+    for refusal in seen["results"]:
+        assert "outside your working directory" in refusal
+        assert str(work) in refusal
+    # Nothing was captured: the forced end-of-turn delivery decided the output.
+    assert json.loads(resp.output) == {"queries": ["forced"]}
+    provider.chat_with_retry.assert_awaited_once()
+
+
+def test_deliver_file_names_the_failing_field_and_accepts_the_fixed_file(tmp_path):
+    """A schema rejection names the field, so the model edits the draft in place and
+    calls again — the payload is never retyped."""
+    work = _work_dir(tmp_path)
+    draft = work / "draft.json"
+    draft.write_text(json.dumps({"queries": []}), encoding="utf-8")   # minItems violation
+
+    def fix_in_place():
+        draft.write_text(json.dumps({"queries": ["fixed"]}), encoding="utf-8")
+
+    seen, resp, provider = _run_calls(
+        tmp_path, _file_node(), work,
+        [("deliver_file", {"path": "draft.json"}), fix_in_place,
+         ("deliver_file", {"path": "draft.json"})])
+    rejection = seen["results"][0]
+    assert "did not satisfy the output schema" in rejection
+    assert "at queries:" in rejection                 # the failing field, by path
+    assert "draft.json" in rejection and "deliver_file again" in rejection
+    assert json.loads(resp.output) == {"queries": ["fixed"]}
+    provider.chat_with_retry.assert_not_called()
+
+
+def test_deliver_file_reports_a_draft_it_cannot_read(tmp_path):
+    work = _work_dir(tmp_path)
+    (work / "broken.json").write_text('{"queries": ["a",]}', encoding="utf-8")
+
+    seen, _, _ = _run_calls(
+        tmp_path, _file_node(), work,
+        [("deliver_file", {"path": "broken.json"}),
+         ("deliver_file", {"path": "missing.json"})],
+        chat_responses=[_forced({"queries": ["forced"]})])
+    invalid, missing = seen["results"]
+    assert "not valid JSON" in invalid and "line 1" in invalid
+    assert "No file" in missing and "missing.json" in missing
+
+
+def test_delivery_replies_say_the_engine_writes_the_output_file(tmp_path):
+    """The engine writes output_file only when the step ends; both replies say so,
+    so the model does not hand-write a file the engine will overwrite."""
+    work = _work_dir(tmp_path)
+    (work / "draft.json").write_text(json.dumps({"queries": ["a"]}), encoding="utf-8")
+
+    seen, _, _ = _run_calls(
+        tmp_path, _file_node(output_file="plan.json"), work,
+        [("deliver", {"queries": ["a"]}), ("deliver_file", {"path": "draft.json"})])
+    for reply in seen["results"]:
+        assert "plan.json" in reply
+        assert "when this step ends" in reply
+        assert "do not write" in reply.lower()
+
+    # A node without output_file has no output file to mention.
+    seen, _, _ = _run_calls(tmp_path, _file_node(), work, [("deliver", {"queries": ["a"]})])
+    assert "when this step ends" not in seen["results"][0]
