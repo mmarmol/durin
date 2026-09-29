@@ -669,6 +669,28 @@ def test_converting_a_normal_route_check_to_cases_reaches_the_user_unapplied(tmp
     assert node.on_fail == "draft" and node.cases is None   # untouched
 
 
+def test_the_model_is_told_which_gate_fails_point_at_the_producer(tmp_path):
+    """"Improve the producer, not the gate" is only right for a gate whose FAIL sends
+    the work back to be redone; unscoped, it contradicts the rule that a gate failing
+    on a normal route is not trouble. And a script check converted to `cases` must
+    print its label as its last stdout line and exit 0, or the run aborts there."""
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    prompts = []
+
+    def invoke(prompt, *, model=None):
+        prompts.append(prompt)
+        return LLMResponse(text=json.dumps({
+            "target_id": "a", "field": "prompt", "current": "do it",
+            "proposed": "do it carefully", "reason": "a keeps looping"}), finish_reason="stop")
+
+    run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    (prompt,) = prompts
+    producer_rule = next(s for s in prompt.split(". ") if "PRODUCER" in s)
+    assert "sends the work back" in producer_rule
+    assert "last stdout line and exit 0" in prompt
+
+
 def test_legacy_pending_without_kind_reverts_as_prompt_edit(tmp_path):
     """A pending-validation marker written before the script-repair upgrade has no
     'kind' key at all; _maybe_auto_revert must still treat its absence as the

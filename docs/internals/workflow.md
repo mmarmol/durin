@@ -1366,10 +1366,13 @@ End-to-end for a single `run_workflow` call:
   forward branch (a check whose "no" is expected, e.g. "no note yet → go draft it"):
   a forward error path, such as a send step failing into a report step, is a real
   failure, so the count cannot tell the two apart from the edge shape. The model's
-  instructions draw the line instead: a gate that fails on a normal route is not
-  trouble, and the right proposal is converting it to a `cases` route with the same
-  targets, never hardening the step it routes to as if a run had failed. That
-  conversion is outside the editable scope, so it lands as a `structural`
+  instructions draw the line instead: "prefer improving the producer over the gate" is
+  scoped to a gate whose FAIL sends the work back to be redone; a gate that fails on a
+  normal route is not trouble, and the right proposal is converting it to a `cases`
+  route with the same targets, never hardening the step it routes to as if a run had
+  failed. Because a script check routed by `cases` must print its label as its last
+  stdout line and exit 0, the model says in the proposal's `reason` how the command
+  changes. That conversion is outside the editable scope, so it lands as a `structural`
   recommendation (below) for a person to apply.
 
   A script proposal on a node that **routes** (`on_pass`/`on_fail` or `cases` — a

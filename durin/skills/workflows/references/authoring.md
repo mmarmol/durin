@@ -134,8 +134,9 @@ buffer (the buffer passes through it untouched).
   what to fix. `command: "run-my-tests"` as a gate is the canonical use. The exit note reads
   `[script gate failed: exit code N]` only when `on_fail` leads back to the gate; into a
   step that never comes back to it, it is a plain `[exit code N]`.
-- A presence or "already done?" check is **multi-way**, not binary: print the label and exit
-  0 (`test -f note.json && echo REUSE || echo DRAFT`).
+- A presence or "already done?" check is **multi-way**, not binary: print the label as the
+  last stdout line and exit 0 (`test -f note.json && echo REUSE || echo DRAFT`). Converting
+  a pass/fail check to `cases` changes its script the same way.
 - **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
   A non-zero exit on a `cases` node is a node failure, not a route.
 - **Linear** (`next`): exit 0 continues with stdout as the edge; **non-zero aborts the run**
