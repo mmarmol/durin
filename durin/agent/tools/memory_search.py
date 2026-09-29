@@ -732,7 +732,7 @@ class MemorySearchTool(Tool):
             return await asyncio.to_thread(
                 self._run_archive_scope, query,
                 limit=limit, max_chars=warm_max_chars,
-                warm_excerpt_chars=warm_excerpt_chars,
+                warm_excerpt_chars=warm_excerpt_chars, t_start=t_start,
             )
 
         # Delegate the whole search to `run_search_pipeline` — query
@@ -1087,7 +1087,7 @@ class MemorySearchTool(Tool):
 
     def _run_archive_scope(
         self, query: str, *, limit: int, max_chars: int,
-        warm_excerpt_chars: int,
+        warm_excerpt_chars: int, t_start: float,
     ) -> dict[str, Any]:
         """On-demand walk of `memory/archive/**` for `scope='archive'` queries.
 
@@ -1107,6 +1107,12 @@ class MemorySearchTool(Tool):
         dumps rather than blocks comparable in size to every other
         section, and one large archived entry could burn most of the
         budget on its own excerpt.
+
+        The ``memory.recall`` row carries the main path's three timings:
+        the walk and match take the pipeline's place in ``duration_ms``,
+        the sectioning, cap and rendering after it are
+        ``postprocess_duration_ms``, and ``total_duration_ms`` runs from
+        ``t_start``, the call's start.
         """
         import re
 
@@ -1115,6 +1121,7 @@ class MemorySearchTool(Tool):
             split_frontmatter,
         )
 
+        t0 = time.monotonic()
         archive_root = self._workspace / "memory" / "archive"
         if not archive_root.is_dir():
             empty: dict[str, Any] = {
@@ -1192,6 +1199,7 @@ class MemorySearchTool(Tool):
             ))
             if len(hits) >= limit:
                 break
+        t_post = time.monotonic()
 
         # Archive path also uses sectioned rendering for parity with
         # the main path. Map each Result to a SectionedHit and call
@@ -1249,6 +1257,7 @@ class MemorySearchTool(Tool):
         kept = {h.uri for h in capped}
         kept_results = [r for r in hits if r.uri in kept]
         sectioned_rendered = render_sectioned(capped, max_chars=max_chars)
+        now = time.monotonic()
         emit_tool_event(
             "memory.recall",
             {
@@ -1257,7 +1266,9 @@ class MemorySearchTool(Tool):
                 "level": "warm",
                 "result_count": len(hits),
                 "strategy": "archive",
-                "duration_ms": 0.0,
+                "duration_ms": (t_post - t0) * 1000.0,
+                "postprocess_duration_ms": (now - t_post) * 1000.0,
+                "total_duration_ms": (now - t_start) * 1000.0,
                 "total_candidates": len(hits),
                 "keywords": None,
                 "rendered_chars": len(sectioned_rendered),

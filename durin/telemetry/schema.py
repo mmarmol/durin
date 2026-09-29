@@ -763,7 +763,9 @@ class MemoryRecallEvent(TypedDict):
     level: str
     result_count: int
     strategy: str
-    # The search pipeline alone (retrieval, fusion, reranks, sectioning).
+    # The search pipeline alone (retrieval, fusion, reranks, sectioning),
+    # timed on the worker thread; for scope='archive', the walk and match
+    # over the archived files.
     duration_ms: float
     total_candidates: int
     # The tool's work after the pipeline returns: hit conversion (entity

@@ -74,6 +74,42 @@ def test_recall_row_times_the_pipeline_the_post_work_and_the_whole_call(
     assert row["total_duration_ms"] >= row["duration_ms"] + row["postprocess_duration_ms"]
 
 
+def test_archive_recall_row_times_the_walk_the_post_work_and_the_whole_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """scope='archive' has no pipeline: its walk over archived files takes
+    that place in `duration_ms`, and its rendering is post-processing."""
+    import durin.memory.storage as storage
+    from durin.agent.tools.memory_search import MemorySearchTool
+
+    archived = tmp_path / "memory" / "archive" / "episodic"
+    archived.mkdir(parents=True)
+    (archived / "ep-001.md").write_text(
+        "---\nheadline: 'Trip to Paris'\nsummary: 'Visited the Louvre.'\n---\n"
+        "Body about the Paris trip.\n",
+        encoding="utf-8",
+    )
+    walk_s = 0.1
+    real_split = storage.split_frontmatter
+
+    def slow_split(text):
+        time.sleep(walk_s)
+        return real_split(text)
+
+    monkeypatch.setattr(storage, "split_frontmatter", slow_split)
+    rows = _capture_recall(monkeypatch)
+    _slow_render(monkeypatch)
+    tool = MemorySearchTool(workspace=tmp_path)
+
+    asyncio.run(tool.execute(query="Paris", scope="archive"))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["duration_ms"] >= walk_s * 1000
+    assert row["postprocess_duration_ms"] >= _SLOW_RENDER_S * 1000
+    assert row["total_duration_ms"] >= row["duration_ms"] + row["postprocess_duration_ms"]
+
+
 def test_post_search_work_does_not_block_the_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
