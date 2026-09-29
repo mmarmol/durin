@@ -169,6 +169,75 @@ def test_escalate_judge_raises_when_the_final_answer_still_lacks_the_envelope(
     assert len(runs) == 2, "exactly one final-answer step, never a loop"
 
 
+def test_an_unreadable_investigating_judge_reply_is_reported_to_telemetry(
+        tmp_path, monkeypatch):
+    """A failed Tier-2 answer sends the pair to a person. Each reply it could
+    not read must reach the parse-failure event the first judge emits, with
+    the raw head — two such pairs once reached Pending with no trace of what
+    the model had written."""
+    import pytest
+
+    import durin.memory.llm_invoke as llm_invoke
+    from durin.memory.absorb_judge import JudgeError
+    seen = []
+    monkeypatch.setattr(llm_invoke, "emit_parse_failure",
+                        lambda stage, **kw: seen.append((stage, kw)))
+    replies = ["===VERDICT===\nsame\n===CONFIDENCE===\nhigh\n===REASONING===\nx\n===END===",
+               "I think they are probably the same thing"]
+
+    class _FakeRunner:
+        def __init__(self, provider): pass
+
+        async def run(self, spec):
+            class _R:
+                final_content = replies.pop(0)
+                stop_reason = "completed"
+                messages = []
+                tool_events = []
+            return _R()
+
+    monkeypatch.setattr(tier2_judge, "AgentRunner", _FakeRunner)
+    monkeypatch.setattr(tier2_judge, "_resolve_provider_model",
+                        lambda: (object(), "fake-model"))
+    with pytest.raises(JudgeError):
+        tier2_judge.escalate_judge(tmp_path, "person:a", "person:b")
+    assert [stage for stage, _ in seen] == ["tier2_judge", "tier2_judge"]
+    assert all(kw["source"] == "person:a|person:b" for _, kw in seen)
+    assert seen[0][1]["raw"].startswith("===VERDICT===\nsame")
+    assert seen[1][1]["raw"].startswith("I think they are")
+
+
+def test_the_runners_out_of_iterations_text_is_no_unreadable_reply(tmp_path, monkeypatch):
+    """Running out of tool iterations leaves the runner's own text, not an
+    answer; the final step handles it, and telemetry stays for real replies."""
+    import durin.memory.llm_invoke as llm_invoke
+    seen = []
+    monkeypatch.setattr(llm_invoke, "emit_parse_failure",
+                        lambda stage, **kw: seen.append((stage, kw)))
+    runs = []
+
+    class _FakeRunner:
+        def __init__(self, provider): pass
+
+        async def run(self, spec):
+            runs.append(spec)
+            if len(runs) == 1:
+                return _ExhaustedResult()
+
+            class _Final:
+                final_content = _ENVELOPE
+                stop_reason = "completed"
+                messages = []
+                tool_events = []
+            return _Final()
+
+    monkeypatch.setattr(tier2_judge, "AgentRunner", _FakeRunner)
+    monkeypatch.setattr(tier2_judge, "_resolve_provider_model",
+                        lambda: (object(), "fake-model"))
+    tier2_judge.escalate_judge(tmp_path, "artifact:auth-page", "artifact:auth-spa")
+    assert seen == []
+
+
 def test_escalate_judge_does_not_spend_a_final_step_when_the_agent_answered(
         tmp_path, monkeypatch):
     runs = []

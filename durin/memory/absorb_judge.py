@@ -72,24 +72,63 @@ _RELATION_GUIDE = MERGE_VS_RELATE_RULE + RELATION_TYPE_GUIDE
 # and a missing closing marker all still parse — the model's drift costs
 # no extra call. A block that is absent or holds no usable value is still
 # an error: the judge never guesses a verdict.
-_MARKERS = ("===VERDICT===", "===CONFIDENCE===", "===REASONING===",
-            "===RESOLUTION===", "===END===")
-_RE_MARKER = re.compile("|".join(re.escape(m) for m in _MARKERS), re.IGNORECASE)
+_MARKER_NAMES = ("VERDICT", "CONFIDENCE", "REASONING", "RESOLUTION", "END")
+# A marker as judges write it: a name fenced by runs of two or more "=".
+_RE_MARKER = re.compile(r"={2,}([A-Za-z]+)={2,}")
 _RE_NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*%?")
 
 
-def _blocks(raw: str) -> dict[str, str]:
-    """``{marker: text after it up to the next marker}`` (markers upper-cased).
+def _marker(name: str) -> str | None:
+    """The envelope marker a written name stands for, or None.
 
-    The LAST occurrence of a marker wins: a model that restates the envelope
-    (the retry note shows it) answers after the restatement, and reading the
-    placeholder instead of the answer would be worse than a parse error.
+    Judges slip on the names: a letter dropped (``RESONING``), the name cut
+    short (``REASON``), an ``=`` missing from the fence. A name one edit away
+    from a marker, or its first four or more letters, still names it when it
+    names no other. A name close to none — a marker translated into the
+    reply's language — is not guessed at: the reply fails, and the retry
+    restates the envelope.
     """
-    found = list(_RE_MARKER.finditer(raw))
+    name = name.upper()
+    if name in _MARKER_NAMES:
+        return f"==={name}==="
+    near = [m for m in _MARKER_NAMES
+            if _one_edit_apart(name, m) or (len(name) >= 4 and m.startswith(name))]
+    return f"==={near[0]}===" if len(near) == 1 else None
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """True when one insertion, deletion or substitution turns ``a`` into ``b``."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    i = 0
+    while i < len(short) and short[i] == long_[i]:
+        i += 1
+    return short[i:] == long_[i + 1:]
+
+
+def _blocks(raw: str) -> dict[str, str]:
+    """``{marker: text after it up to the next marker}``, keyed by the marker
+    each written name stands for (:func:`_marker`); a name that stands for
+    none is no boundary, so its text stays in the block it follows.
+
+    The LAST copy of a marker wins: a model that restates the envelope (the
+    retry note shows it) answers after the restatement, and reading the
+    placeholder instead of the answer would be worse than a parse error. A
+    repeated marker left blank is a stutter, not an answer, so it never
+    erases what an earlier copy carried.
+    """
+    found = [(m, name) for m in _RE_MARKER.finditer(raw)
+             if (name := _marker(m.group(1))) is not None]
     out: dict[str, str] = {}
-    for k, m in enumerate(found):
-        end = found[k + 1].start() if k + 1 < len(found) else len(raw)
-        out[m.group(0).upper()] = raw[m.end():end]
+    for k, (m, name) in enumerate(found):
+        end = found[k + 1][0].start() if k + 1 < len(found) else len(raw)
+        text = raw[m.end():end]
+        if name in out and not text.strip():
+            continue
+        out[name] = text
     return out
 
 
@@ -322,8 +361,9 @@ def _parse_response(raw: str) -> JudgeResult:
     Raises :class:`JudgeError` if any block is missing or malformed.
     Tolerates: extra prose around and between the blocks, case variation,
     emphasis or code fences around a value, a confidence written as a
-    percentage or as a fraction of one, and a missing ``===END===`` after
-    the reasoning.
+    percentage or as a fraction of one, a missing ``===END===`` after the
+    reasoning, a marker repeated blank, and a marker name misspelled, cut
+    short or short-fenced (:func:`_marker`).
     """
     if not raw or not isinstance(raw, str):
         raise JudgeError("empty or non-string LLM response")

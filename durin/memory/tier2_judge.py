@@ -191,11 +191,19 @@ async def _escalate_async(
         fail_on_tool_error=False,
         workspace=Path(workspace),
     )
+    from durin.memory.llm_invoke import emit_parse_failure
+
+    # A failed answer sends the pair to a person, so every reply that could
+    # not be read is reported with its raw head, as the first judge does.
+    source = f"{ref_a}|{ref_b}"
     result = await AgentRunner(provider).run(spec)
     try:
         return _parse_response(result.final_content or "")
     except JudgeError:
-        pass
+        # Running out of tool iterations leaves the runner's own text, not
+        # an answer: the final step below is how that case is handled.
+        if str(getattr(result, "stop_reason", "") or "") != "max_iterations":
+            emit_parse_failure("tier2_judge", source=source, raw=result.final_content or "")
     # One more call, no tools: the agent must answer from what it has read.
     from durin.agent.tools.registry import ToolRegistry
     brief = _FINAL_BRIEF.format(
@@ -215,7 +223,11 @@ async def _escalate_async(
         workspace=Path(workspace),
     )
     final = await AgentRunner(provider).run(final_spec)
-    return _parse_response(final.final_content or "")
+    try:
+        return _parse_response(final.final_content or "")
+    except JudgeError:
+        emit_parse_failure("tier2_judge", source=source, raw=final.final_content or "")
+        raise
 
 
 def escalate_judge(
