@@ -249,6 +249,25 @@ def test_status_line_says_whether_deferral_is_active():
     assert "deferral active" in above
 
 
+def test_threshold_at_or_below_zero_disables_deferral():
+    registry, _ = _registry()
+    for threshold in (0, -5):
+        assert maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=threshold)) == 0
+        [line] = _status_lines(registry, _cfg(threshold_tokens=threshold))
+        assert "deferral disabled" in line
+    assert "mcp_srv_tool0" in _definition_names(registry)
+
+
+def test_deferred_tools_stay_hidden_when_the_threshold_is_raised():
+    """Deferral only hides tools, so a raised threshold needs a restart."""
+    registry, _ = _registry()
+    maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=1))
+
+    assert maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=10_000_000)) == 0
+    assert maybe_defer_mcp_tools(registry, _cfg(enabled=False)) == 0
+    assert "mcp_srv_tool0" not in _definition_names(registry)
+
+
 def test_status_line_is_silent_without_mcp_tools():
     registry, _ = _registry(mcp_count=0)
     assert _status_lines(registry, _cfg()) == []
