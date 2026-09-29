@@ -353,7 +353,7 @@ class MemoryDreamConfig(Base):
         default=3600,
         ge=0,
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
-        description="Wall-clock cap in seconds per extract and refine pass; the pass yields when crossed (extract after the current session, refine after the current chunk) and resumes on the next run; 0 = run to completion",
+        description="Wall-clock cap in seconds per extract, refine and skill-review pass; the pass yields when crossed (extract after the current session, refine after the current chunk, skill review after the current batch) and resumes on the next run; 0 = run to completion",
     )
 
     session_summaries_enabled: bool = Field(

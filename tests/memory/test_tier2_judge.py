@@ -203,6 +203,9 @@ def test_an_unreadable_investigating_judge_reply_is_reported_to_telemetry(
         tier2_judge.escalate_judge(tmp_path, "person:a", "person:b")
     assert [stage for stage, _ in seen] == ["tier2_judge", "tier2_judge"]
     assert all(kw["source"] == "person:a|person:b" for _, kw in seen)
+    # Why each was refused goes with it: a confidence that is no number, an
+    # answer with no verdict envelope.
+    assert all(kw.get("error") for _, kw in seen)
     assert seen[0][1]["raw"].startswith("===VERDICT===\nsame")
     assert seen[1][1]["raw"].startswith("I think they are")
 

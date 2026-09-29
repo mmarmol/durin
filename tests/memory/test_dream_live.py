@@ -274,3 +274,40 @@ def test_parse_failure_with_a_pair_source_deep_links_to_neither_entity() -> None
     assert "absorb_judge" in items[0]["summary"] and "person:ana|person:anna" in items[0]["summary"]
     assert items[0]["ref"] is None
     assert items[0]["ref_kind"] is None
+
+
+def test_a_refused_skill_review_batch_is_no_feed_item() -> None:
+    """The skill review splits a refused batch and retries it within the
+    pass: one refusal says nothing about what the pass got done, so it stays
+    a telemetry row and shows nothing in the feed."""
+    from durin.memory.dream_digest import map_dream_event
+
+    for stage in ("curation", "suggestions"):
+        assert map_dream_event(
+            "memory.dream.parse_failure",
+            {"stage": stage, "raw_head": '{"actions": [', "finish_reason": "length"}, 5) == []
+
+
+def test_what_a_skill_review_could_not_recover_is_one_warning() -> None:
+    captured: list[dict] = []
+    sink = DreamProgressSink(captured.append)
+    sink.log("skill.curation_unrecovered", {
+        "stage": "curation", "failed": 2, "stalled": 1,
+        "ended_early": "model_failing", "carried_over": 30})
+    [frame] = captured
+    item = frame["item"]
+    assert item["kind"] == "warning"
+    assert item["summary"] == (
+        "Skill curation: 2 skill(s) got no usable answer; 1 set aside after failing "
+        "pass after pass; stopped early as the model kept failing, 30 skill(s) left "
+        "for the next run")
+
+
+def test_a_skill_review_stopped_by_its_time_cap_says_so() -> None:
+    from durin.memory.dream_digest import map_dream_event
+
+    [item] = map_dream_event("skill.curation_unrecovered", {
+        "stage": "suggestions", "failed": 0, "stalled": 0,
+        "ended_early": "time_cap", "carried_over": 4}, 5)
+    assert item["summary"] == (
+        "Manual-skill suggestions: stopped at its time cap, 4 skill(s) left for the next run")

@@ -270,24 +270,23 @@ def run_full_dream(
             from durin.agent.skill_usage import collect_recent_skill_calls
             from durin.memory.llm_invoke import default_llm_invoke
 
-            def _judge(prompt: str) -> str:
-                # ONE completion via the memory preset (model + provider),
-                # the same call shape the refine pass's absorb judge uses.
-                return default_llm_invoke(prompt).text
-
+            # The judge is the memory preset's completion (model + provider),
+            # handed over whole: its finish reason tells an answer cut at the
+            # output limit from a complete one.
             usage = collect_recent_skill_calls(workspace, within_hours=24)
             summary = curate_catalog(
-                workspace, judge=_judge, usage=usage,
+                workspace, judge=default_llm_invoke, usage=usage,
                 drift_check=check_upstream_drift,
-                allowlist=list(config.skills.security.allowlist))
+                allowlist=list(config.skills.security.allowlist), max_seconds=max_s)
             skills_improved = summary.get("applied", 0)
             obs = summary.get("observations", {})
             logger.info(
                 "skill curation: reviewed={} applied={} deferred={} backfilled={} "
-                "judge_parse_failed={} "
+                "failed={} stalled={} "
                 "obs_applied={} obs_declined={} obs_kept={} obs_open={} principles={}",
                 summary["reviewed"], summary["applied"], summary["deferred"],
-                summary.get("backfilled", 0), summary.get("judge_parse_failed", False),
+                summary.get("backfilled", 0), summary.get("failed", 0),
+                summary.get("stalled", 0),
                 obs.get("applied", 0), obs.get("declined", 0), obs.get("kept", 0),
                 obs.get("open", 0), summary.get("principles", 0),
             )
@@ -303,14 +302,14 @@ def run_full_dream(
                 from durin.agent.skill_usage import collect_recent_skill_calls
                 from durin.memory.llm_invoke import default_llm_invoke
 
-                def _sg_judge(prompt: str) -> str:
-                    return default_llm_invoke(prompt).text
-
                 sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
-                sg = suggest_manual_skills(workspace, judge=_sg_judge, usage=sg_usage)
+                sg = suggest_manual_skills(workspace, judge=default_llm_invoke, usage=sg_usage,
+                                           max_seconds=max_s)
                 logger.info(
-                    "skill suggestions: reviewed={} suggested={} suppressed={}",
-                    sg["reviewed"], sg["suggested"], sg["suppressed"])
+                    "skill suggestions: reviewed={} suggested={} suppressed={} "
+                    "failed={} stalled={}",
+                    sg["reviewed"], sg["suggested"], sg["suppressed"],
+                    sg.get("failed", 0), sg.get("stalled", 0))
             except Exception:
                 logger.exception("skill suggestions step (non-fatal) failed")
 

@@ -82,8 +82,8 @@ flowchart TD
 
     subgraph Curation["curate_catalog (daily cron, final step)"]
         BACKFILL["backfill_surface_frontmatter\n(deterministic, pre-judge)"]
-        DELTA["delta = needs_curation OR open-observation OR backfilled"]
-        JUDGE["LLM judge:\nevolve / restructure / fuse / retire /\nprinciple / retire_principle"]
+        DELTA["delta = needs_curation OR open-observation OR backfilled\n(minus skills set aside)"]
+        JUDGE["LLM judge, batch by batch\n(a cut or unreadable answer splits the batch):\nevolve / restructure / fuse / retire /\nprinciple / retire_principle"]
         DRIFT["check_upstream_drift\n(re-fetch + re-scan)"]
     end
     SKILLS --> BACKFILL --> DELTA
@@ -381,7 +381,9 @@ and so does not itself flip `needs_curation`.
 - it was just backfilled in step 1;
 - it has at least one OPEN observation record.
 
-An empty delta returns immediately with `reviewed=0` and no LLM call.
+A skill whose own review keeps failing is set aside and left out (see "When
+the judge's answer cannot be used" below). An empty delta returns immediately
+with `reviewed=0` and no LLM call.
 
 **Step 3 — cap and defer.** `selected = delta[:budget]` (`budget` defaults to
 `skill_curation.DEFAULT_BUDGET`). Anything beyond the cap is **deferred**, not
@@ -396,16 +398,28 @@ says `allow` is handed to the judge as `upstream_json` context, to be
 incorporated via `evolve` if the judge chooses; a `confirm`/`block` outcome is
 left for human review and never auto-incorporated.
 
-**Step 5 — build the prompt and call the judge.** `_build_prompt` renders
-`templates/agent/skill_curation.md` with: the selected skills' full content,
+**Step 5 — build the prompts and call the judge, batch by batch.** The
+selected skills are packed, in order, into batches of at most
+`_BATCH_SKILLS` skills and `_BATCH_CHARS` characters of skill text (`SKILL.md`
+plus the bundled files shown); a larger skill is a batch alone. The sizes are
+set by the judge's answer, not its prompt: an `evolve` carries the text it
+replaces and its replacement, so a review that rewrites everything it was
+shown (English normalization does) answers about twice the skill text shown,
+and a batch is kept to an answer inside the default output limit of a model
+preset. Each batch is its own call, answer, apply and stamp.
+
+For each batch, `_build_prompt` renders
+`templates/agent/skill_curation.md` with: the batch's skills' full content,
 their bundled text files (`_bundle_views`: each file cut to a bounded head,
-within a per-skill total and one total for the whole review, skills with open
+within a per-skill total and one total for the batch, skills with open
 observations first, so a fix that belongs in a script is reviewable; a file
 past the budget shows only a "not shown this pass" marker), light
 usage context, the upstream drift bodies (if any), the OPEN observations
-scoped to the selected skills plus any `"all"` cross-cutting record, a compact
+scoped to the batch's skills plus any `"all"` cross-cutting record (these ride
+with the batches until one's answer is used), a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
-active principles, the **composition doctrine and workflow catalog** (the same
+active principles (read for each batch, so one an earlier batch's answer added
+or retired is in force for the next), the **composition doctrine and workflow catalog** (the same
 runtime-loaded `skill-creator` section the extract pass embeds). The judge is
 told the two doctrine violations it may repair, exactly like the
 English-normalization rule: a prose narration of a workflow-shaped procedure
@@ -427,15 +441,16 @@ overwrite a user's edit silently. A user can edit an `auto` skill directly (see
 keeps curating it going forward.
 
 **Step 6 — apply actions.** The judge's parsed JSON response lists actions,
-each validated to stay in scope (its named skill(s) must be in `selected`)
+each validated to stay in scope (its named skill(s) must be in the batch the
+judge was shown — so a `fuse` joins only skills reviewed in the same batch)
 before it is applied:
 
 | Action | Effect | Guard |
 |---|---|---|
-| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body, or on one bundled file named in `file`; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
-| `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
-| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
-| `retire` | `remove_skill` — delete outright (git-recoverable) and record it as retired, with the optional `replaced_by` | target must be in `selected`, and nothing may depend on it (below) |
+| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body, or on one bundled file named in `file`; scanned first, and a riskier result is filed for approval instead of written | target must be in the batch |
+| `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in the batch; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
+| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in the batch; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
+| `retire` | `remove_skill` — delete outright (git-recoverable) and record it as retired, with the optional `replaced_by` | target must be in the batch, and nothing may depend on it (below) |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
 
@@ -505,7 +520,8 @@ exist, so its record stands.
 **Step 7 — resolve observation dispositions.** The judge's response also
 carries a per-observation verdict (`applied` / `declined` / `keep`) for each
 OPEN record it was shown; dispositions for ids the judge was **not** shown are
-ignored, and `apply_dispositions` writes the batch in one commit.
+ignored, and `apply_dispositions` writes each answer's dispositions in one
+commit.
 
 An `applied` verdict is checked against what this pass actually did. It stands
 when a change landed on that record's skill:
@@ -534,10 +550,70 @@ A record never stays OPEN forever by itself:
   into every pass. It stays OPEN for a person to resolve by hand; a new report
   of the same issue clears the mark and curation tries again.
 
-**Step 8 — stamp.** Every skill still present in `selected` after the actions
-run gets `mark_curated`, which stamps `provenance.dream_processed_through`
-(the current body hash) and `curation_rules` (the current
-`CURATION_RULES_VERSION`) into its frontmatter.
+**Step 8 — stamp.** Every skill of a batch whose answer was used, still
+present after its actions run, gets `mark_curated`, which stamps
+`provenance.dream_processed_through` (the current body hash) and
+`curation_rules` (the current `CURATION_RULES_VERSION`) into its frontmatter.
+
+### When the judge's answer cannot be used
+
+The judge is handed the provider's whole response, not only its text, and
+only an answer the model finished (`finish_reason: "stop"`) is parsed. Any
+other finish reason refuses the batch's answer unparsed — cut at the output
+limit (`length`), stopped by a content filter or a refusal, or a provider
+error (`error`, the provider's own retries spent, the text its error
+message): a JSON repair of a partial answer yields a well-formed `evolve`
+whose replacement text stops short, and applying it would corrupt the skill.
+A finished answer is refused when it does not parse, or when its `actions` /
+`observations` are not lists of objects (a null list counts as empty). The
+whole answer goes to JSON repair, which finds the object behind a preamble,
+a reasoning block or a markdown fence by itself; nothing is cut out first,
+since an `evolve` quoting a skill's code block carries fences of its own and
+a cut aimed at a fence around the answer can end inside a quoted one. Every
+refusal emits `memory.dream.parse_failure` (see
+`03_telemetry_and_effectiveness.md`).
+
+A refused batch applies nothing and stamps nothing; nor does one whose
+answer raises while being applied (a malformed field the shape check does
+not cover). It is split in halves and retried within the same pass, down to
+single skills, so one skill whose review does not fit, does not parse, or
+makes the provider refuse the request never holds back the rest. A provider
+error is split like the rest: a request refused for its content (past the
+model's context, caught by an input filter) or answered too slowly for the
+request timeout fails for that batch and not for a smaller one.
+
+The pass ends early in two cases, and what it did not reach carries over,
+unstamped and charged to no skill:
+
+- **The model, not a skill, is failing.** Once `_FAILED_IN_A_ROW`
+  single-skill reviews in a row got no usable answer — an outage, a preset
+  whose answers never parse — splitting further would only multiply calls
+  that fail. The same stop the refine pass makes on consecutive judge
+  failures.
+- **Its time is up.** `memory.dream.max_seconds_per_run` caps the pass like
+  every other dream pass: past it, no new batch starts, and the pass emits
+  `memory.dream.max_seconds_reached` (`kind: "curation"` or `"suggestions"`,
+  with the `remaining` skills).
+
+Whatever got no usable answer stays unstamped and re-enters the next run; the
+run reports it as `failed`.
+
+A refusal the split recovers is routine and stays out of the Dream feed. The
+feed gets one `warning` line per pass that left something unrecovered —
+skills whose review failed even judged alone, skills set aside (below), or an
+early end with skills still to review (event `skill.curation_unrecovered`).
+
+A skill whose review fails even judged alone is recorded in
+`skills/.curation_failures.json`, keyed to its body hash and the curation
+rules version, and goes after the other delta skills in the next pass — so a
+pass that ends early on failing skills has reviewed the rest first. After
+`_STALL_REVIEWS` such passes in a row it is **set aside** (event
+`skill.curation_stalled`; the run counts it as `stalled`): left out of the
+delta, so it does not re-pay the failing calls every pass, until its body or
+the rules change — a different review — or `_STALL_DAYS` have passed since
+its last failure, so a failure the model caused rather than the skill heals
+by itself. A retry that fails sets it aside again at once; a review that
+succeeds clears its record.
 
 ### The rules-version recheck
 
@@ -614,6 +690,11 @@ manual mode means the skill is the user's to control. Instead:
    unified diff (`make_patch`) for `evolve`, and surfaced in the webui Dream
    Inbox for the user to accept or reject.
 
+The judge reviews the manual delta in the same batches as `curate_catalog`,
+with the same refusal of an unfinished or unreadable answer, split-and-retry,
+early end, time cap and set-aside (recorded under the `suggestions` stage);
+the cursor advances only for the skills of a batch whose answer was used.
+
 Accepting a suggestion replays the recorded action against the live skill
 (`skill_suggestions.apply_suggestion`) and removes it from the queue. An
 accepted `evolve` is a person's write: it lands on a `manual` skill (the
@@ -664,7 +745,9 @@ decisions about external content are never made silently.
 | `apply_dispositions` / `archive_resolved` | `durin/agent/skill_observations.py` | Bulk status transition from judge verdicts; move APPLIED records to the archive file at the next pass's start. |
 | `resolve_observation` | `durin/agent/skill_observations.py` | Single-record manual resolution (`applied`/`declined`/`upstream`) behind `POST /api/v1/skills/observations/{id}/resolve`; emits `skill.observation_resolved`. |
 | `add_principle` / `retire_principle` / `active_principles` | `durin/agent/skill_observations.py` | Cross-cutting principles store, capped at `PRINCIPLES_CAP`. |
-| `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, judge, apply, stamp. |
+| `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, then judge, apply and stamp batch by batch. |
+| `_ask` / `_review_in_batches` | `durin/agent/skill_curation.py` | One judge call that refuses an unfinished or unparseable answer; the batch driver that splits a refused batch and retries it within the pass, and ends the pass early when the model keeps failing or the time cap is reached. |
+| `_triage` / `_record_reviews` | `durin/agent/skill_curation.py` | The repeated-failure guard over `skills/.curation_failures.json`: orders skills whose review failed last, sets aside the ones that keep failing, and records each pass's outcome. |
 | `suggest_manual_skills` | `durin/agent/skill_curation.py` | Parallel curation pass over `manual` skills that enqueues suggestions instead of applying them. |
 | `backfill_surface_frontmatter` | `durin/agent/skills_store.py` | Deterministic pre-judge repair of a missing frontmatter `name`/`description`. |
 | `_derive_description` / `_ensure_surface_frontmatter` | `durin/agent/skills_store.py` | Body-derived description (whitespace-collapsed to avoid edit-uniqueness collisions) and the shared frontmatter fill, run by `_finalize_skill` for both authoring ramps. |
@@ -683,6 +766,10 @@ decisions about external content are never made silently.
 | `memory.dream.skill_signals_enabled` | `true` | Gates Stage 3 of the memory extract pass (`discover_skill_signals`) — hindsight correction/gap detection. |
 | `memory.dream.skill_suggestions_enabled` | `true` | Gates `suggest_manual_skills`; when off, manual skills are excluded from curation review entirely (they still receive no direct mutation regardless). |
 | `skill_curation.DEFAULT_BUDGET` | 50 | Per-day cap on how many delta-selected `auto` skills `curate_catalog` reviews; the rest defer to a later run. |
+| `skill_curation._BATCH_CHARS` / `_BATCH_SKILLS` | (module constants) | Size of one judge call's batch — skill text characters and skill count — chosen so the answer fits a preset's default output limit. |
+| `skill_curation._STALL_REVIEWS` / `_STALL_DAYS` | (module constants) | How many passes in a row a skill's own review may fail before it is set aside, and how long it stays aside unless its body or the curation rules change. |
+| `skill_curation._FAILED_IN_A_ROW` | (module constant) | How many single-skill reviews in a row may get no usable answer before the pass ends, the model rather than a skill failing. |
+| `memory.dream.max_seconds_per_run` | `3600` | Wall-clock cap per pass, the skill review included: past it the review starts no new batch; `0` = no cap. |
 | `skill_observations.PRINCIPLES_CAP` | 12 | Max active cross-cutting principles; adding past the cap requires retiring one first. |
 | `skill_suggestions.DEFAULT_TTL_DAYS` | 30 | Expiry window for a rejected manual-skill suggestion's tombstone. |
 | `skills_store.CURATION_RULES_VERSION` | (module constant, bumped per rules change) | Forces a one-time recheck of every `auto` skill through curation when incremented. |
@@ -732,6 +819,20 @@ cost scale with catalog size rather than with how much actually happened that
 day, and would burn LLM budget re-confirming skills nobody touched. The
 rules-version recheck is the deliberate exception: a new curation rule needs
 to see the whole catalog once, but only once, not forever.
+
+**Why the review is batched, and a cut answer never parsed.** The judge
+answers one object for everything it is shown, and that answer grows with
+every skill reviewed. Past the output limit it comes back cut, and an answer
+that cannot be used stamps nothing — so a single call over a large delta (a
+rules-version bump puts the whole catalog in it) would return the same
+selection every run and never make progress. Batches bound each answer;
+splitting a refused batch isolates the one skill whose review does not fit;
+putting that skill last keeps it from standing in front of the others; the
+set-aside keeps it from costing the same failing calls every pass; and the
+early end keeps a model that answers nothing usable from paying a split-down
+of every batch. A partial answer is refused on the provider's finish reason
+rather than on parse failure because JSON repair turns it into a
+well-formed object — one whose last edit carries a replacement cut mid-text.
 
 **Why manual skills get suggestions instead of direct action.** `manual` is
 the user's explicit signal that they own a skill's content. Curation still

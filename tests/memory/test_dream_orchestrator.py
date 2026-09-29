@@ -141,6 +141,61 @@ def test_full_dream_order_summary_and_progress(stubbed_passes, tmp_path):
     assert events[-1] == {"kind": "run_finished", "ok": True}
 
 
+def test_skill_judges_see_the_finish_reason(stubbed_passes, tmp_path, monkeypatch):
+    """Curation and suggestions are handed the provider's whole response, so
+    an answer cut at the output limit reads as cut, not as a complete one."""
+    import durin.agent.skill_curation as skill_curation
+    import durin.memory.llm_invoke as llm_invoke
+    from durin.memory.dream_orchestrator import run_full_dream
+
+    judges: dict = {}
+
+    def capture(name, ret):
+        def f(*args, **kwargs):
+            judges[name] = kwargs["judge"]
+            return dict(ret)
+        return f
+
+    monkeypatch.setattr(skill_curation, "curate_catalog", capture(
+        "curate", {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {}}))
+    monkeypatch.setattr(skill_curation, "suggest_manual_skills", capture(
+        "suggest", {"reviewed": 0, "suggested": 0, "suppressed": 0}))
+    monkeypatch.setattr(llm_invoke, "default_llm_invoke",
+                        lambda prompt, **kw: llm_invoke.LLMResponse(
+                            text='{"actions": [', finish_reason="length"))
+
+    run_full_dream(_cfg(), tmp_path)
+
+    assert judges["curate"]("p").finish_reason == "length"
+    assert judges["suggest"]("p").finish_reason == "length"
+
+
+def test_skill_reviews_get_the_passes_time_cap(stubbed_passes, tmp_path, monkeypatch):
+    """Curation and suggestions honor memory.dream.max_seconds_per_run like
+    every other dream pass."""
+    import durin.agent.skill_curation as skill_curation
+    from durin.memory.dream_orchestrator import run_full_dream
+
+    caps: dict = {}
+
+    def capture(name, ret):
+        def f(*args, **kwargs):
+            caps[name] = kwargs.get("max_seconds")
+            return dict(ret)
+        return f
+
+    monkeypatch.setattr(skill_curation, "curate_catalog", capture(
+        "curate", {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {}}))
+    monkeypatch.setattr(skill_curation, "suggest_manual_skills", capture(
+        "suggest", {"reviewed": 0, "suggested": 0, "suppressed": 0}))
+    cfg = _cfg()
+    cfg.memory.dream.max_seconds_per_run = 1234
+
+    run_full_dream(cfg, tmp_path)
+
+    assert caps == {"curate": 1234, "suggest": 1234}
+
+
 def test_full_dream_pass_failure_raises_after_finish_event(stubbed_passes, tmp_path, monkeypatch):
     import durin.memory.dream_passes as dream_passes
     from durin.memory.dream_orchestrator import run_full_dream

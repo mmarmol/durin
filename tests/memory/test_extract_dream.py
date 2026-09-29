@@ -346,6 +346,27 @@ def test_mine_learnings_emits_parse_failure(tmp_path, monkeypatch):
     assert failures and failures[0]["stage"] == "learnings"
 
 
+def test_a_parse_failure_carries_the_providers_finish_reason(tmp_path, monkeypatch):
+    """An answer cut at the output limit reads apart from a malformed one:
+    each pass hands the provider's finish reason to the event."""
+    import durin.agent.tools._telemetry as tel
+    from durin.memory.llm_invoke import LLMResponse
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+
+    def cut(prompt, **kw):
+        return LLMResponse(text="Here is what I found in the conver", finish_reason="length")
+
+    extract_entity(tmp_path, "person:ana", "USER: hola", llm_invoke=cut)
+    discover_entities(tmp_path, "USER: hola", llm_invoke=cut, source_ref="s1")
+    mine_learnings(tmp_path, "USER: hola", llm_invoke=cut, source_ref="s1")
+
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert [d["stage"] for d in failures] == ["extract", "discover", "learnings"]
+    assert all(d["finish_reason"] == "length" for d in failures)
+
+
 # ---------------------------------------------------------------------------
 # discovery query bounding (2026-07-18 incident)
 # ---------------------------------------------------------------------------

@@ -1535,9 +1535,10 @@ class MemoryDreamSkillSignalsEvent(TypedDict):
 class MemoryDreamMaxSecondsReachedEvent(TypedDict):
     """A pass hit ``memory.dream.max_seconds_per_run`` and yielded. The
     extract pass resumes by per-session cursor; the refine pass by its
-    verdict cache (``judged`` so far, ``remaining`` candidates)."""
+    verdict cache (``judged`` so far, ``remaining`` candidates); the skill
+    review passes leave the ``remaining`` skills unstamped for the next run."""
 
-    kind: str  # "extract" | "refine"
+    kind: str  # "extract" | "refine" | "curation" | "suggestions"
     max_seconds: int
     elapsed_ms: int
     sessions_done: NotRequired[int]
@@ -1685,6 +1686,10 @@ class MemoryDreamParseFailureEvent(TypedDict):
     stage: str  # "extract" | "discover" | "learnings" | "derived_from" | "curation" | "suggestions" | "absorb_judge" | "tier2_judge"
     source: NotRequired[str | None]  # entity ref, session stem, or a judged pair "a|b"
     raw_head: str  # first 200 chars of the raw response
+    raw_tail: NotRequired[str]  # last 200 chars: a cut answer stops mid-value
+    raw_len: NotRequired[int]  # length of the raw response in chars
+    finish_reason: NotRequired[str]  # the provider's, when the caller has it ("length" = cut at the output limit)
+    error: NotRequired[str]  # the parser's error, first 200 chars, when the caller has one
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -1792,6 +1797,32 @@ class SkillCurationRunEvent(TypedDict):
     applied: int
     deferred: int
     backfilled: NotRequired[int]
+    failed: NotRequired[int]  # selected skills no usable judge answer covered; left unstamped
+    stalled: NotRequired[int]  # delta skills set aside after repeated failed reviews
+
+
+class SkillCurationStalledEvent(TypedDict):
+    """A skill's own review failed ``_STALL_REVIEWS`` passes in a row (its
+    answer cut at the output limit, or unreadable, even judged alone), so the
+    pass sets it aside instead of re-paying the call: until its body or the
+    curation rules change, or the stall window passes."""
+
+    stage: str  # "curation" | "suggestions"
+    skill: str
+    failures: int  # consecutive failed reviews of this body under these rules
+
+
+class SkillCurationUnrecoveredEvent(TypedDict):
+    """What a skill-review pass could not recover, once per pass and only
+    when there is any: skills whose own review failed, skills set aside, or
+    the skills left when the pass ended early. A refused batch that its split
+    retries recovered is not counted. The Dream feed shows it as one line."""
+
+    stage: str  # "curation" | "suggestions"
+    failed: int  # skills whose review got no usable answer even judged alone
+    stalled: int  # delta skills set aside after repeated failed reviews
+    ended_early: NotRequired[str]  # "model_failing" | "time_cap", when skills were left
+    carried_over: NotRequired[int]  # skills the pass did not reach, when it ended early
 
 
 class SkillSuggestionResolvedEvent(TypedDict):
@@ -2109,6 +2140,8 @@ EVENTS: dict[str, type] = {
     "automations.delivered": AutomationsDeliveredEvent,
     "automations.event_matched": AutomationsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
+    "skill.curation_stalled": SkillCurationStalledEvent,
+    "skill.curation_unrecovered": SkillCurationUnrecoveredEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
     "skill.observation_stalled": SkillObservationStalledEvent,
@@ -2206,6 +2239,8 @@ __all__ = [
     "SkillObservationLoggedEvent",
     "SkillCurationActionEvent",
     "SkillCurationRunEvent",
+    "SkillCurationStalledEvent",
+    "SkillCurationUnrecoveredEvent",
     "SkillSuggestionResolvedEvent",
     "SkillObservationResolvedEvent",
     "SkillObservationStalledEvent",
