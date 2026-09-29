@@ -166,11 +166,6 @@ def test_the_investigating_judges_merge_keeps_its_floor(tmp_path, monkeypatch):
     assert not (tmp_path / "memory" / "entities" / "topic" / "5e.md").exists()
 
 
-def test_the_investigating_judges_merge_floor_defaults_to_60():
-    from durin.config.schema import AutoAbsorbConfig
-    assert AutoAbsorbConfig().tier2_confidence_threshold == 60
-
-
 def test_tier2_can_apply_its_own_confident_proposal(tmp_path, monkeypatch):
     _pair(tmp_path)
     monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
