@@ -2385,6 +2385,11 @@ class AgentLoop:
         pending_answers.set_consumer_active(True)
         await self._replay_inbound_journal()
         logger.info("Agent loop started")
+        # The watcher's vector backfill builds the embedding provider and
+        # reads the whole vector table, so it is requested only now that the
+        # loop is serving, never while the gateway is still starting up.
+        if self._memory_file_watcher is not None:
+            self._memory_file_watcher.request_backfill()
 
         while self._running:
             try:
