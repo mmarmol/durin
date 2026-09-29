@@ -5,6 +5,222 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.2 — 2026-09-29
+
+### Highlights
+
+- **The agent keeps its evidence on long investigations.**
+  - A large tool result is saved, redacted, and comes back as a pointer the
+    agent can page with `read_file` or `grep`. It is no longer cut with
+    nothing to read it back from.
+  - Old results leave the context only in rare batches, once the prompt
+    passes 80% of the input budget. What a batch removes stays removed, so
+    nothing flickers in and out and the provider's cache keeps working.
+  - The per-result cap follows the model's window.
+  - Workflow nodes and subagents get the same treatment. (#646, #647)
+- **Skills the dream got wrong stay fixed.**
+  - A skill someone removed is not re-created. The dream refuses the name,
+    and in a chat the agent needs your explicit word to bring it back.
+  - Curation marks a report as applied only when its fix really landed. It
+    can now fix a skill's bundled scripts, and it stops retrying what it
+    cannot fix.
+  - Running a skill's script counts as using the skill, and a script that
+    keeps failing reaches curation as feedback. (#648)
+- **Each model provider gets its reasoning the way it accepts it.**
+  - Earlier reasoning goes back to the providers that expect it and stays
+    off the ones that reject it.
+  - Current Claude models get the request shape they accept.
+  - A request a provider refuses is retried once in a shape it takes, and
+    that refusal is remembered for the model. (#648)
+- **No attachment goes unmentioned.** A file durin cannot read is named in
+  the conversation with where it was saved. Audio follows your transcription
+  setting on every path, including `off`, and a message too large to send
+  keeps its draft. (#650)
+- **Slack text arrives as typed.** Links, emails, dates and `&lt;`/`&gt;` are
+  decoded, so an id pasted in Slack reaches the agent intact. (#647)
+
+### Upgrade notes
+
+- **Curation reviews every auto skill once.** Its rules changed, so over the
+  next nights every auto skill goes through a curation review again,
+  including its bundled scripts. Expect more memory-model usage on those
+  nights.
+- **Skills removed before this version count as retired.** They are read
+  from the skills history the first time retirements are checked. To bring
+  one back:
+  - in a chat, ask for it explicitly;
+  - to import one, approve the request.
+- **Groq and Mistral no longer receive earlier reasoning.** Groq's
+  non-reasoning models and Mistral's message schema reject it.
+- **Claude with effort `none` now turns thinking off.** Claude models that
+  think by default used to keep thinking.
+- **The dashboard refuses legacy `.doc` and `.ppt` files.** durin cannot read
+  them. Save them as `.docx`, `.pptx` or PDF.
+- **Workflow scripts with `env: "inherit"` no longer see stored secrets.** A
+  script that read a provider key from the gateway's environment must declare
+  it in the node's `secrets`, with the secret granted the `exec` scope
+  (`durin secret grant NAME --to exec`).
+- **Renamed exception classes.** Code that imports durin's modules directly
+  may need updating: `AutomationBusy`, `AutomationNotFound`, `NeedsOcrJob`,
+  `OcrUnavailable`, `ScriptCancelled`, `WorkInterrupted` and
+  `WorkflowNotFound` now end in `Error`.
+
+### Context and tools
+
+- **Tool results arrive whole, or as a pointer that works.**
+  - Results are redacted, then saved when they exceed the cap, then cut.
+    Structured results are saved as pageable text.
+  - In a result that mixes an image with text, a long text block is saved on
+    its own, instead of being cut at 100,000 characters.
+  - The saved file, the exec footer and the pruning placeholder name the
+    exact `read_file` or `grep` call that reads the content back.
+  - A one-line JSON result is saved indented, and it is still valid JSON.
+    (#646, #647, #650)
+- **Paging.**
+  - `read_file` pages every read, including batches, PDF and office text,
+    under the cap, and pages a single long line with `char_offset`.
+  - `grep` fits its output to the cap, gives the next offset, and says so
+    when an offset is past the last match.
+  - An office document over its page is saved whole and continues with
+    `read_file`. (#646, #647)
+- **Pruning.**
+  - Old `read_file`, `exec`, `grep`, `web_*` and `list_dir` results are
+    replaced by their saved-file pointer in one batch, once the prompt passes
+    80% of the input budget. The newest results stay whole.
+  - Each batch emits one `tool_results.pruned` event.
+  - A run without a known window prunes nothing. (#646)
+- **The per-result cap follows the window.** `max_tool_result_chars` is unset
+  by default and resolves per run to 16,000, 32,000 or 64,000 characters by
+  window size. It never exceeds 30% of the input budget, and an explicit
+  value still wins. (#646, #647)
+- **"Unchanged since last read" only answers while that read is still in
+  view.** It no longer points at content that compaction or pruning took
+  away. (#647)
+- **`memory_drill` accepts the `#<chunk>` uris `memory_search` returns.**
+  (#646)
+- **Redaction covers nested values and dict keys.** (#646, #647)
+
+### Attachments and audio
+
+- **A file durin cannot read is named, not dropped.** A legacy `.doc`, a
+  video or an archive reaches the agent as a line naming the file, where it
+  was saved, and that durin cannot read it, so durin can tell you or convert
+  it. (#650)
+- **A message too large to send keeps its draft.** The dashboard checks a
+  message's attachments against the server's size cap before sending. Over
+  it, the composer says so and keeps your text and files, instead of the
+  connection dropping and the draft being lost. (#650)
+- **Audio with transcription `off`.**
+  - A recorded or attached clip reaches the chat model as audio when the
+    model accepts audio. Otherwise the model is told where it was saved, so
+    it can use `interpret_audio`.
+  - The dashboard sends the recording instead of marking it as failed, and
+    offers audio even without a local engine installed.
+  - A message queued during a turn gets the same handling, and the history
+    labels the clip as audio. (#650)
+- **Audio sent through the API is transcribed.** Audio attached to a message
+  becomes its text, like a voice note on any channel. (#650)
+- **Uploaded audio stays audio on every platform.** Each accepted audio type
+  is saved with a fixed extension (`.weba` for a browser recording), and
+  durin recognizes audio by its own list of extensions. On Linux a browser
+  recording used to read as an unknown file, and `.wav`, `.m4a` and `.flac`
+  were saved as `.bin`. (#650)
+
+### Skills and the dream
+
+- **Retired skills stay retired.** Removing a skill, a curation retire, or a
+  fuse records the name and what replaces it. No path brings it back without
+  you:
+  - the dream's authoring refuses it;
+  - the agent's `skill_write` and `skill_publish` need your explicit word;
+  - an import of it asks you, and says why it was retired.
+
+  A later report of the missing procedure becomes feedback on the
+  replacement. (#648)
+- **Curation acts on what really happened.**
+  - A report is applied only when a change landed, or when the judge quotes
+    the fix from the skill.
+  - An edit that went to you for approval is settled by your decision, and
+    is not proposed again while it waits.
+  - A report nothing can fix stops costing a review every night and waits
+    for you.
+  - The judge sees a skill's bundled scripts and can fix one. (#648)
+- **The skill extractor sees what worked.**
+  - It reads each recent session's end.
+  - It receives the corrections logged in a gap's own sessions.
+  - It sees the skills that already exist, so it improves one instead of
+    writing a duplicate. (#648)
+- **Bundled scripts must parse.** The dream's writes and a draft publish
+  refuse a script or config file that does not parse. (#648)
+- **A regression reopens its report.** An issue that returns after being
+  applied reopens its record with the new details. (#648)
+- **Concurrent writes.** Skill reports, principles and retirements are
+  written under the skills store's lock, so the gateway and the dream worker
+  no longer overwrite each other. (#648)
+
+### Providers
+
+- **Anthropic.**
+  - `redacted_thinking` blocks are sent back in order.
+  - Current Claude models get no `temperature` and use adaptive thinking with
+    an effort level.
+  - A forced tool is sent as requested and falls back to `auto` for a model
+    that refuses it.
+  - On Anthropic's own API, a trimmed earlier result drops later thinking
+    instead of failing the request. (#648)
+- **DeepSeek.** Every model on DeepSeek's API, `deepseek-flash` included,
+  gets the reasoning its tool history needs. (#648)
+- **OpenAI-compatible endpoints.**
+  - Tool results no longer carry a `name`, which strict endpoints reject;
+    one that needs it gets it back.
+  - An endpoint that rejects `reasoning_content` gets the history without
+    it, and that model is not sent it again. (#648)
+- **Model catalog.** The vendored model list and capabilities are refreshed.
+  (#649)
+
+### Fixes
+
+- **Install without extras.** A plain `uv tool install durin-agent` can now
+  start the gateway: its HTTP server (Starlette, uvicorn) is a base
+  dependency. The `api` extra remains so existing install commands keep
+  working. (#650)
+- **Workflow retention and loops.** `workflow.keep_runs` and the
+  `workflow.max_node_visits` ceiling now hold for every run: HTTP launches,
+  the editor, automations and nested sub-workflows. A nested workflow could
+  loop up to 1,000 visits before. (#650)
+- **`/v1` follows the model you pick.** `/v1/models` and the `model` check
+  follow the model the agent runs now, including a switch from the
+  dashboard. A streamed reply asks reverse proxies not to buffer it. (#650)
+- **Telegram and pairing.** `allow_from` accepts usernames with or without
+  their `@`, and `/pairing` recognizes an owner written either way. The
+  reply to an unknown sender tells them to send the code to you, instead of
+  asking them to approve it themselves. (#650)
+- **Workflow scripts never inherit stored secrets.** A script node with
+  `env: "inherit"` gets the gateway's environment minus any variable holding
+  a stored secret, such as a provider key durin loaded for its model. A
+  stored secret reaches a script only when the node declares it. (#650)
+- **Install hints.** A channel whose dependency is missing names a package
+  that exists: `durin-agent[discord|matrix|slack]`, `PyJWT[crypto]` for Teams,
+  `wecom-aibot-sdk` for WeCom. (#650)
+- **`/hotkeys`.** It lists the terminal UI's shortcuts, its input box's
+  included, and the legacy prompt's. (#650)
+- **MCP catalog.**
+  - The weekly build waits for the official registry's slow pages and
+    retries its errors.
+  - It restarts the GitHub registry walk when a page cursor is rejected.
+  - The runtime index keeps only a complete listing. (#648, #650)
+- **Embedding service.** The embedding service no longer loads a websocket
+  stack it does not use. (#648)
+- **Skills history.** The skills history no longer tracks its own lock file.
+  (#648)
+- **Settings help.** The descriptions of the exec allow/deny patterns,
+  automation run retention, OAuth providers, the workflow visit cap and the
+  unused channel-level transcription keys now match what they do. (#650)
+- **Docs.** The guides and internals were checked against the code: they
+  describe the split config layout (`config.json.d/`), the removed `local`
+  extra is gone, missing settings are documented, and the workflow guide
+  covers approval gates. (#650)
+
 ## 0.11.1 — 2026-09-27
 
 ### Highlights
