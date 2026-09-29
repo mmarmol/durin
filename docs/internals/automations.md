@@ -585,7 +585,7 @@ logger whenever a call runs outside a live agent turn (cron dispatch, webhook PO
 | Event | Payload | Emitted when |
 |---|---|---|
 | `automations.fired` | `automation`, `source`, `skipped` | `fire`/`try_fire` starts a run (`skipped=True` when `try_fire` found the automation disabled or busy) |
-| `automations.event_matched` | `automation`, `source_channel`, `action` | The matcher or hook dispatcher makes a decision — `action` one of `woke`/`fired`/`queued`/`passed_busy`/`drained` |
+| `automations.event_matched` | `automation`, `source_channel`, `action` | The matcher or hook dispatcher makes a decision — `action` one of `woke`/`fired`/`failed`/`queued`/`passed_busy`/`drained`. `fired` is recorded when the run starts (through `fire`'s `on_started` callback), not when it ends, so it is on record even if the run later raises; `failed` means the fire raised before the run started. Each match gets exactly one row: a fire refused as busy records `queued` or `passed_busy`, never `fired` too |
 | `automations.run_finished` | `automation`, `run_id`, `status`, `final_route_label` | A run reaches a terminal status (`_post_finish`) |
 | `automations.delivered` | `automation`, `run_id`, `channel`, `result` | An outcome is routed — `result` one of `delivered`/`failed`/`silenced` |
 | `automations.escalated` | `automation`, `run_id`, `consecutive_unachieved` | `life.on_stuck` fires (`notify` or `escalate_pause`) |

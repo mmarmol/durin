@@ -314,6 +314,18 @@ class TriggerMatcher:
                 "expires_at": now + self._queue_ttl_s, "source": source}
 
     async def _fire(self, name: str, channel: str, content: str, origin: dict) -> None:
+        # runtime.fire awaits the whole run, which can take many minutes, so
+        # "fired" is recorded from its start callback: stamped when the run
+        # begins, and already on record if the run later raises. A busy
+        # refusal or a failure before the run starts never calls it, so each
+        # match gets exactly one event_matched.
+        started = False
+
+        def on_started() -> None:
+            nonlocal started
+            started = True
+            self._emit(name, channel, "fired")
+
         try:
             # HookDispatcher (webhook trigger ingress) reuses this same method
             # with a synthetic channel="webhook" (see this module's own
@@ -324,8 +336,8 @@ class TriggerMatcher:
             # bucket, matching cause.kind's existing vocabulary — this is not
             # a per-channel breakdown.
             source = "webhook" if channel == "webhook" else "channel"
-            await self._runtime.fire(name, source=source, task=content, origin=origin)
-            self._emit(name, channel, "fired")
+            await self._runtime.fire(name, source=source, task=content, origin=origin,
+                                     on_started=on_started)
         except AutomationBusyError:
             # Belt and braces: the pending-fires guard should make this
             # unreachable for the sequential-message race it was built for,
@@ -342,6 +354,8 @@ class TriggerMatcher:
                 self._emit(name, channel, "passed_busy")
         except Exception:
             logger.exception("automations: fire('{}') failed", name)
+            if not started:
+                self._emit(name, channel, "failed")
         finally:
             self._pending_fires.discard(name)
 
