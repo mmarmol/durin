@@ -154,7 +154,7 @@ An orphaned marker is surfaced two ways: `durin doctor`'s `mcp oauth refresh mar
 
 **Spawn command screening.** Before opening a stdio transport, `_enforce_spawn_policy` calls `scan_spawn_command`. If the command is a shell interpreter (bash, powershell, etc.) and its inline arguments carry network-egress tools (curl, wget, nc, etc.), codes are returned. Under `spawn_egress_policy='refuse'`, the spawn is blocked with a `PermissionError`. Under the default `'warn'`, it logs and proceeds.
 
-**Malware check.** For stdio servers launched via `npx`, `uvx`, or similar package runners, `check_package_for_malware` queries the OSV API for `MAL-*` advisories against the package name and ecosystem. Any `MAL-*` hit blocks the spawn. The check fails open on network errors — only confirmed malware blocks.
+**Malware check.** For stdio servers launched via `npx`, `uvx`, or similar package runners, `check_package_for_malware` queries the OSV API for `MAL-*` advisories against the package name and ecosystem. Any `MAL-*` hit blocks the spawn. The check fails open on network errors — only confirmed malware blocks. The request is blocking, so `_open_stdio` runs the check in a worker thread: a slow OSV lookup delays only its own server's connect, not the servers connecting alongside it or the event loop.
 
 **SSRF guard.** HTTP transports are built through `ssrf_safe_async_client` unless `allow_private_url=True`. The client resolves and validates every request and redirect hop against blocked private, loopback, link-local, and metadata IP ranges, pinning the connection to the validated IP to prevent DNS rebinding. `tools.ssrf_whitelist` lists CIDR ranges globally exempt from the block (for use cases like Tailscale).
 

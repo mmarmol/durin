@@ -405,7 +405,12 @@ class MCPServerConnection:
         if getattr(cfg, "malware_check", True):
             from durin.agent.tools.mcp_security import check_package_for_malware
 
-            finding = check_package_for_malware(cfg.command, cfg.args)
+            # The OSV lookup is a blocking HTTP request (up to its socket
+            # timeout plus DNS); on the event loop it would stall every
+            # server connecting alongside this one and the agent loop.
+            finding = await asyncio.to_thread(
+                check_package_for_malware, cfg.command, cfg.args
+            )
             if finding:
                 raise PermissionError(
                     f"MCP server '{self.name}': {finding}"
