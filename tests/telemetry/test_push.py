@@ -9,6 +9,8 @@ opportunistically.
 
 from __future__ import annotations
 
+import sys
+import threading
 from typing import Any
 
 from durin.telemetry.push import (
@@ -101,6 +103,52 @@ def test_authentication_header_present() -> None:
     sink._post = fake_post  # type: ignore[assignment]
     sink.log("e1", {})
     assert captured_headers.get("Authorization") == "Bearer secret-token"
+
+
+def test_concurrent_emits_push_every_event_once_and_no_empty_batch() -> None:
+    """memory_search emits its rows from worker threads while the event loop
+    emits the rest of the turn's, all into one sink: every event is pushed
+    exactly once, and two emitters that both see a full buffer do not send an
+    extra, empty batch (a wasted POST on the emitting thread)."""
+    threads, per_thread = 8, 2000
+    sink = PushSink(url="https://example.com/api", token="t", batch_size=10)
+    posted: list[str] = []
+    empty_batches = [0]
+    posted_lock = threading.Lock()
+
+    def fake_post(url, json, headers):
+        with posted_lock:
+            if not json["events"]:
+                empty_batches[0] += 1
+            posted.extend(e["data"]["id"] for e in json["events"])
+        return _FakeResponse(204)
+
+    sink._post = fake_post  # type: ignore[assignment]
+    start = threading.Barrier(threads, timeout=10)
+
+    def emit(t: int) -> None:
+        start.wait()
+        for i in range(per_thread):
+            sink.log("memory.recall", {"id": f"{t}-{i}"})
+
+    # Switch threads as often as the interpreter allows, so emitters
+    # interleave inside `log` rather than each running a whole slice.
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        workers = [threading.Thread(target=emit, args=(t,)) for t in range(threads)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(30)
+    finally:
+        sys.setswitchinterval(old_interval)
+    sink.flush()
+
+    expected = [f"{t}-{i}" for t in range(threads) for i in range(per_thread)]
+    assert sorted(posted) == sorted(expected)
+    assert empty_batches[0] == 0
+    assert sink.pending_count() == 0
 
 
 class _FakeResponse:
