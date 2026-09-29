@@ -1507,3 +1507,45 @@ async def test_the_watchdog_logs_when_the_socket_comes_back() -> None:
         "Socket Mode disconnected; waiting for SDK auto-reconnect",
         "Socket Mode reconnected after 0s",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_wait_out_a_slow_socket_close(monkeypatch) -> None:
+    """Closing the Socket Mode client took about five seconds on every
+    gateway stop, all of it waiting on Slack to finish the WebSocket closing
+    handshake. stop() now returns at its bound, logs it, and the close still
+    completes in the background, so the SDK tears down its own tasks."""
+    import asyncio
+
+    monkeypatch.setattr(
+        "durin.channels.slack.SLACK_SOCKET_CLOSE_TIMEOUT_S", 0.05, raising=False,
+    )
+    slack_lets_go = asyncio.Event()
+
+    class _Socket:
+        closed = False
+
+        async def close(self) -> None:
+            await slack_lets_go.wait()
+            self.closed = True
+
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    socket = _Socket()
+    channel._socket_client = socket
+    channel._running = True
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(m.record["message"]), level="INFO")
+    try:
+        async with asyncio.timeout(2):
+            await channel.stop()
+    finally:
+        logger.remove(sink_id)
+
+    assert channel._socket_client is None
+    assert not socket.closed
+    assert any("socket close" in m and "background" in m for m in records)
+
+    slack_lets_go.set()
+    async with asyncio.timeout(2):
+        while not socket.closed:
+            await asyncio.sleep(0.01)

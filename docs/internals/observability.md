@@ -339,6 +339,28 @@ that the PID file alone cannot guarantee.
 `stop_daemon` sends SIGTERM, polls for exit within a grace window (default 5 s),
 escalates to SIGKILL if needed, then removes the PID file.
 
+**Startup timing.** `_run_gateway` (`durin/cli/commands.py`) logs one INFO
+line per startup phase, `Startup: <phase> took <s> (<s> since start)`, in
+boot order: config and providers, the agent loop with its memory services,
+automations, channels, the embed server and scheduled jobs, cron and
+housekeeping, and the API and dashboard app. The agent loop adds how long
+connecting MCP servers took, just before "Agent loop started". A slow boot is
+read from `gateway.log` by finding the phase with the large duration.
+
+**Graceful stop.** SIGTERM, SIGINT, SIGHUP and `/restart` share one path. It
+sets uvicorn's `should_exit` and lets uvicorn finish its own exit — close the
+websocket connections, give in-flight HTTP requests up to
+`_UVICORN_GRACEFUL_SHUTDOWN_S` (uvicorn's `timeout_graceful_shutdown`), run
+the ASGI lifespan shutdown — and only once `serve()` has returned, or after
+`_UVICORN_EXIT_TIMEOUT_S` at most (logged as a warning), cancels the
+remaining gateway tasks (agent loop, channel supervisors, health endpoint).
+Cancelling uvicorn in the middle of its exit prints a `CancelledError`
+traceback, and "Exception in ASGI application" per connected websocket
+client, into the journal on every stop. The shutdown then stops the janitor,
+MCP, cron, the dream and embed workers and the agent loop, journals queued
+inbound messages, stops the channels (concurrently, each bounded; see
+[channels.md](channels.md)) and flushes sessions.
+
 ---
 
 ## 5. Key types and entry points

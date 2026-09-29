@@ -113,3 +113,68 @@ async def test_dispatcher_delivers_a_frame_taken_before_the_cancel() -> None:
     await asyncio.sleep(0.05)
     await _stop_all_bounded(manager)
     assert [m.content for m in channel.sent] == ["hello"]
+
+
+class _StopProbeChannel(BaseChannel):
+    """A channel whose stop() returns only once *release* is set."""
+
+    def __init__(self, name: str, release: asyncio.Event) -> None:
+        super().__init__(config={}, bus=MessageBus())
+        self.name = name
+        self.release = release
+        self.stop_began = asyncio.Event()
+        self.stopped = False
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        self.stop_began.set()
+        await self.release.wait()
+        self.stopped = True
+
+    async def send(self, msg: OutboundMessage) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_stop_all_stops_channels_concurrently() -> None:
+    """Channels were stopped one after another, so the slowest one's stop
+    (Slack's socket close took about five seconds) was added to every
+    restart. Here the first channel's stop returns only once the second one
+    has begun stopping, which a one-by-one stop never reaches."""
+    manager = ChannelManager(Config(), MessageBus())
+    second = _StopProbeChannel("second", asyncio.Event())
+    second.release.set()
+    first = _StopProbeChannel("first", second.stop_began)
+    manager.channels = {"first": first, "second": second}
+
+    async with asyncio.timeout(3):
+        await manager.stop_all()
+
+    assert first.stopped and second.stopped
+
+
+@pytest.mark.asyncio
+async def test_a_channel_that_never_stops_does_not_hold_up_the_others(monkeypatch) -> None:
+    """Each channel's stop is bounded: one that hangs is logged by name and
+    left behind, the others still stop, and stop_all returns."""
+    from loguru import logger
+
+    monkeypatch.setattr("durin.channels.manager._CHANNEL_STOP_TIMEOUT_S", 0.1, raising=False)
+    manager = ChannelManager(Config(), MessageBus())
+    hung = _StopProbeChannel("hung", asyncio.Event())
+    quick = _StopProbeChannel("quick", asyncio.Event())
+    quick.release.set()
+    manager.channels = {"hung": hung, "quick": quick}
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(m.record["message"]), level="WARNING")
+    try:
+        async with asyncio.timeout(3):
+            await manager.stop_all()
+    finally:
+        logger.remove(sink_id)
+
+    assert quick.stopped
+    assert not hung.stopped
+    assert any("hung" in m and "did not stop" in m for m in records)

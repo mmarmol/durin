@@ -829,10 +829,11 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     def _start_memory_background_services(self) -> None:
-        """Start the optional memory file watcher and health-check
-        scheduler if the config enables them, and ensure the workspace
-        has a `VAULT_README.md` for human consumers (Obsidian users,
-        webui MemoryGraphView, anyone browsing files directly).
+        """Start the optional memory file watcher and build the health-check
+        scheduler (``run()`` starts it) if the config enables them, and
+        ensure the workspace has a `VAULT_README.md` for human consumers
+        (Obsidian users, webui MemoryGraphView, anyone browsing files
+        directly).
 
         Each service is constructed and started independently; a
         failure in one doesn't affect the other. Tests that build
@@ -903,18 +904,37 @@ class AgentLoop:
                         getattr(hc_cfg, "interval_seconds", 900),
                     ),
                 )
-                scheduler.start()
+                # Built here, started by run() once the loop is up — see
+                # _start_memory_health_checks.
                 self._memory_health_scheduler = scheduler
-                logger.info(
-                    "memory health check scheduler started "
-                    "(interval={}s)",
-                    getattr(hc_cfg, "interval_seconds", 900),
-                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "memory health check failed to start "
                     "(continuing without): {}", exc,
                 )
+
+    def _start_memory_health_checks(self) -> None:
+        """Start the health-check thread built with the loop.
+
+        Called by ``run()`` once the loop has started, not at construction:
+        the first tick scans the whole memory store at once, and in the
+        gateway that scan ran while the channels were being set up, taking
+        several times longer than a later tick and slowing their startup.
+        """
+        scheduler = self._memory_health_scheduler
+        if scheduler is None:
+            return
+        try:
+            scheduler.start()
+            logger.info(
+                "memory health check scheduler started (interval={}s)",
+                scheduler.interval_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory health check failed to start "
+                "(continuing without): {}", exc,
+            )
 
     def _stop_memory_background_services(self) -> None:
         """Stop the memory background services. Safe to call when
@@ -2378,13 +2398,20 @@ class AgentLoop:
         # Startup is not the only moment work strands, so the same pass runs
         # on a timer for the rest of this process's life.
         self._start_job_sweep()
+        mcp_started = time.monotonic()
         await self._connect_mcp()
+        if self._mcp_servers:
+            logger.info(
+                "Startup: connecting MCP servers took {:.2f}s",
+                time.monotonic() - mcp_started,
+            )
         self._schedule_background(self._warmup_memory_embedding())
         # Blocking ask_user may only wait while this consumer is alive to
         # resolve answers (pending_answers.can_block).
         pending_answers.set_consumer_active(True)
         await self._replay_inbound_journal()
         logger.info("Agent loop started")
+        self._start_memory_health_checks()
 
         while self._running:
             try:

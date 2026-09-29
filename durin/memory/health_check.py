@@ -596,6 +596,11 @@ class HealthCheckScheduler:
         """Total ticks the scheduler has driven (tests + dashboards)."""
         return self._tick_count
 
+    @property
+    def interval_seconds(self) -> int:
+        """Seconds between ticks."""
+        return self._interval
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return

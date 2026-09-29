@@ -159,12 +159,17 @@ sequenceDiagram
 ### The consumer: `run()`
 
 `AgentLoop.run()` is one `while`-loop that consumes `bus.inbound`. On startup it
-connects configured MCP servers (lazily, once), warms the memory embedding
-model in the background, and puts back on the bus the messages the previous
-gateway journaled at shutdown (`sessions/.inbound_journal.jsonl`, see
-`_dispatch` below); they re-enter the queue directly, not through
-`publish_inbound`, because they already passed the authorizer and the
-automation interceptors once. For each message it decides the routing in order:
+connects configured MCP servers (lazily, once; the time it took is logged as a
+`Startup:` line), warms the memory embedding model in the background, and puts
+back on the bus the messages the previous gateway journaled at shutdown
+(`sessions/.inbound_journal.jsonl`, see `_dispatch` below); they re-enter the
+queue directly, not through `publish_inbound`, because they already passed the
+authorizer and the automation interceptors once. Only after it logs "Agent loop
+started" does it start the memory health-check thread built with the loop: the
+first check scans the whole memory store at once, and running it while the
+gateway is still starting its channels would slow both down. A loop that never
+runs `run()` (a one-shot `process_direct` call) runs no health checks. For each
+message it decides the routing in order:
 
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched

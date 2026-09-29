@@ -18,13 +18,7 @@ from durin.config.schema import Config
 from durin.security.secrets import SecretNotFoundError
 
 
-def _manager_raising(exc: Exception, monkeypatch) -> ChannelManager:
-    from durin.channels import registry
-
-    monkeypatch.setattr(
-        registry, "discover_all",
-        lambda: {"websocket": type("C", (), {"display_name": "WS"})},
-    )
+def _manager_raising(exc: Exception) -> ChannelManager:
     m = ChannelManager.__new__(ChannelManager)
     m.config = Config()
     m.channels = {}
@@ -49,8 +43,8 @@ def _capture(caplog, fn) -> list[logging.LogRecord]:
     return list(caplog.records)
 
 
-def test_dangling_secret_logs_an_error_naming_the_fix(caplog, monkeypatch):
-    m = _manager_raising(SecretNotFoundError("GONE"), monkeypatch)
+def test_dangling_secret_logs_an_error_naming_the_fix(caplog):
+    m = _manager_raising(SecretNotFoundError("GONE"))
     records = _capture(caplog, m._init_channels)
 
     errors = [r for r in records if r.levelname == "ERROR"]
@@ -62,16 +56,16 @@ def test_dangling_secret_logs_an_error_naming_the_fix(caplog, monkeypatch):
     assert "other channels keep running" in msg  # scope of the damage
 
 
-def test_other_startup_failures_stay_warnings(caplog, monkeypatch):
+def test_other_startup_failures_stay_warnings(caplog):
     """Only the configuration error is escalated; transient causes are not."""
-    m = _manager_raising(RuntimeError("network down"), monkeypatch)
+    m = _manager_raising(RuntimeError("network down"))
     records = _capture(caplog, m._init_channels)
 
     assert [r.levelname for r in records] == ["WARNING"]
     assert "not available" in records[0].getMessage()
 
 
-def test_the_gateway_survives_the_failed_channel(monkeypatch):
-    m = _manager_raising(SecretNotFoundError("GONE"), monkeypatch)
+def test_the_gateway_survives_the_failed_channel():
+    m = _manager_raising(SecretNotFoundError("GONE"))
     m._init_channels()
     assert m.channels == {}   # the channel is skipped, nothing raises out

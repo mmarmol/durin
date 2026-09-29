@@ -1,8 +1,8 @@
 """Memory background services wiring.
 
-- `MemoryFileWatcher` and `HealthCheckScheduler` are started by
+- `MemoryFileWatcher` is started and `HealthCheckScheduler` is built by
   `AgentLoop.__init__` when the corresponding config flag is true
-  (both default ON).
+  (both default ON); `AgentLoop.run()` starts the scheduler.
 - `AgentLoop.stop()` drains them cleanly.
 - Failure-to-start is isolated — the agent loop keeps working
   without the optional background service.

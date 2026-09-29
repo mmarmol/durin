@@ -1197,6 +1197,14 @@ _AUTOMATIONS_SWEEP_PERIOD_S = 600.0
 # collectable, and a collected sweep silently stops reconciling.
 _automations_sweep_task: asyncio.Task | None = None
 
+# On a gateway stop, uvicorn's own graceful exit gives in-flight HTTP requests
+# this long to finish before it cancels them itself (uvicorn's
+# timeout_graceful_shutdown).
+_UVICORN_GRACEFUL_SHUTDOWN_S = 3
+# How long a gateway stop waits for uvicorn to finish that exit before it
+# cancels the rest of the gateway, uvicorn included, anyway.
+_UVICORN_EXIT_TIMEOUT_S = 5.0
+
 
 def _automation_help_body(name: str, kind: str, text: str, proposal: str | None) -> str:
     """What an automation's help destination is told when a run needs a
@@ -1220,6 +1228,21 @@ def _run_gateway(
     open_browser_url: str | None = None,
 ) -> None:
     """Shared gateway runtime; ``open_browser_url`` opens a tab once channels are up."""
+    import time
+
+    # Every startup phase logs its own duration, so a slow boot can be read
+    # from gateway.log instead of inferred from gaps between unrelated lines.
+    _boot_started = _phase_started = time.monotonic()
+
+    def _startup_phase(name: str) -> None:
+        nonlocal _phase_started
+        now = time.monotonic()
+        logger.info(
+            "Startup: {} took {:.2f}s ({:.2f}s since start)",
+            name, now - _phase_started, now - _boot_started,
+        )
+        _phase_started = now
+
     # Attach the JSONL rotating/compressing file sink to gateway.log for
     # EVERY gateway run — daemon and foreground alike — so the dashboard log
     # viewer has structured input regardless of how the process is
@@ -1322,6 +1345,7 @@ def _run_gateway(
         max_concurrent_jobs=config.cron.max_concurrent_jobs,
         missed_oneshot_grace_ms=config.cron.missed_oneshot_grace_s * 1000,
     )
+    _startup_phase("config, providers and sessions")
 
     # Create agent with cron service
     agent = AgentLoop.from_config(
@@ -1340,6 +1364,7 @@ def _run_gateway(
         ),
         provider_signature=provider_snapshot.signature,
     )
+    _startup_phase("agent loop and memory services setup")
 
     from durin.agent.loop import UNIFIED_SESSION_KEY
     from durin.bus.events import OutboundMessage
@@ -1550,8 +1575,6 @@ def _run_gateway(
     # channel path cron uses. A dedicated WorkflowsService instance
     # (workflows_service isn't built yet at this point — build_service_registry
     # constructs its own further down).
-    import time
-
     from durin.automations import channel_meta as _automations_channel_meta
     from durin.automations import queue as _automations_queue
     from durin.automations.hooks import HookDispatcher
@@ -1790,6 +1813,7 @@ def _run_gateway(
             return stripped or None
         return None
 
+    _startup_phase("automations setup")
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
     channels = ChannelManager(
@@ -1803,6 +1827,7 @@ def _run_gateway(
         webui_approval_deps=getattr(agent, "approval_exec_deps", None),
         webui_session_turn_key=getattr(agent, "bus_turn_key", None),
     )
+    _startup_phase("channels setup")
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
@@ -2036,6 +2061,7 @@ def _run_gateway(
             console.print(
                 "[green]✓[/green] Memory dream: session-close trigger armed"
             )
+    _startup_phase("embed server, dream and scheduled jobs setup")
 
     async def _open_browser_when_ready() -> None:
         """Wait for the gateway to bind, then point the user's browser at the webui."""
@@ -2123,9 +2149,37 @@ def _run_gateway(
         janitor = WorkspaceJanitor(lambda: config.workspace_path)
         api_server = None      # SP4: optional 2nd-port uvicorn front door
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
+        unified_serve: asyncio.Task | None = None  # unified_server.serve()
+        stopping: asyncio.Task | None = None  # _cancel_once_uvicorn_exits, once asked
+
+        async def _cancel_once_uvicorn_exits() -> None:
+            """Cancel the gateway's tasks once uvicorn has finished exiting.
+
+            With ``should_exit`` set, uvicorn exits by itself: it closes the
+            websocket connections, gives in-flight requests up to
+            ``_UVICORN_GRACEFUL_SHUTDOWN_S`` and runs the ASGI lifespan
+            shutdown. Cancelling its serve() in the middle of that printed a
+            CancelledError traceback, and "Exception in ASGI application" for
+            each connected websocket client, on every stop. So the rest of
+            the gateway is cancelled only once serve() has returned, or after
+            ``_UVICORN_EXIT_TIMEOUT_S`` at most.
+            """
+            if unified_serve is not None and not unified_serve.done():
+                # asyncio.wait neither cancels serve() on timeout nor raises
+                # its outcome here; the bound holds whatever uvicorn does.
+                _done, late = await asyncio.wait(
+                    {unified_serve}, timeout=_UVICORN_EXIT_TIMEOUT_S,
+                )
+                if late:
+                    logger.warning(
+                        "uvicorn did not finish exiting within {:g}s; cancelling it",
+                        _UVICORN_EXIT_TIMEOUT_S,
+                    )
+            if gathered is not None and not gathered.done():
+                gathered.cancel()
 
         def _request_shutdown(signame: str) -> None:
-            nonlocal _shutdown_requested, _restart_requested, _restart_timer
+            nonlocal _shutdown_requested, _restart_requested, _restart_timer, stopping
             _shutdown_requested = True
             if signame != "/restart" and _restart_requested:
                 # A real signal wins over a restart already under way: this
@@ -2141,8 +2195,8 @@ def _run_gateway(
                 unified_server.should_exit = True
             if api_server is not None:
                 api_server.should_exit = True
-            if gathered is not None and not gathered.done():
-                gathered.cancel()
+            if gathered is not None and not gathered.done() and stopping is None:
+                stopping = loop.create_task(_cancel_once_uvicorn_exits())
 
         for _sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
             if _sig is None:
@@ -2178,6 +2232,7 @@ def _run_gateway(
             global _automations_sweep_task
             _automations_sweep_task = asyncio.create_task(_automations_orphan_sweep())
             janitor.start()
+            _startup_phase("cron and housekeeping start")
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -2243,6 +2298,7 @@ def _run_gateway(
                     ws_max_size=_ws_channel.config.max_message_bytes,  # type: ignore[attr-defined]
                     ws_ping_interval=_ws_channel.config.ping_interval_s,  # type: ignore[attr-defined]
                     ws_ping_timeout=_ws_channel.config.ping_timeout_s,  # type: ignore[attr-defined]
+                    timeout_graceful_shutdown=_UVICORN_GRACEFUL_SHUTDOWN_S,
                 )
                 if _ws_ssl_cert and _ws_ssl_key:
                     _uvicorn_kwargs["ssl_certfile"] = _ws_ssl_cert
@@ -2258,6 +2314,7 @@ def _run_gateway(
                     f"{_scheme}://{_ws_host}:{_ws_port} "
                     f"(WS + /api/v1 + SPA)"
                 )
+                _startup_phase("API and dashboard app build")
 
             tasks = [
                 agent.run(),
@@ -2265,7 +2322,10 @@ def _run_gateway(
                 _health_server(config.gateway.host, port),
             ]
             if unified_server is not None:
-                tasks.append(unified_server.serve())
+                # A task of its own, so a stop can wait for uvicorn's exit
+                # before cancelling the rest (_cancel_once_uvicorn_exits).
+                unified_serve = asyncio.ensure_future(unified_server.serve())
+                tasks.append(unified_serve)
 
             if open_browser_url:
                 tasks.append(_open_browser_when_ready())
