@@ -147,6 +147,7 @@ class MemoryFileWatcher:
         # watcher isn't wired (CLI / tests that don't need it).
         from watchdog.events import (
             DirCreatedEvent,
+            DirDeletedEvent,
             DirMovedEvent,
             FileCreatedEvent,
             FileDeletedEvent,
@@ -170,10 +171,13 @@ class MemoryFileWatcher:
                     watcher._enqueue_path(str(event.src_path))
 
             def on_deleted(self, event):  # type: ignore[override]
-                # A file moved between two separately watched folders
-                # reaches the source folder's watch as a delete; re-indexing
-                # the vanished path drops its row, as the move would.
-                if not event.is_directory:
+                # A file or folder moved between two separately watched
+                # folders, or into archive/ or pending/, reaches the source
+                # folder's watch as a delete; re-indexing the vanished paths
+                # drops their rows, as the move would.
+                if event.is_directory:
+                    watcher._on_folder_gone(str(event.src_path))
+                else:
                     watcher._enqueue_path(str(event.src_path))
 
             def on_moved(self, event):  # type: ignore[override]
@@ -190,7 +194,7 @@ class MemoryFileWatcher:
         self._handler = _Handler()
         self._event_kinds = [
             FileCreatedEvent, FileModifiedEvent, FileMovedEvent, FileDeletedEvent,
-            DirCreatedEvent, DirMovedEvent,
+            DirCreatedEvent, DirMovedEvent, DirDeletedEvent,
         ]
         self._folder_watches = {}
         self._observer = Observer()
@@ -290,7 +294,11 @@ class MemoryFileWatcher:
         or renamed, even if a folder of the same name takes its place right
         after (a `reset --hard` that empties a class folder removes and
         recreates it). On macOS neither the stop nor the new folder is
-        reported, so this is where such a folder gets a live watch again."""
+        reported, so this is where such a folder gets a live watch again.
+
+        A folder that is gone may have left without its watch reporting it
+        (on macOS the watch can be dropped here before its report arrives),
+        so the rows of its files are queued for removal here as well."""
         observer = self._observer
         if observer is None:
             return
@@ -301,6 +309,7 @@ class MemoryFileWatcher:
         for path in list(self._folder_watches):
             if not Path(path).is_dir():
                 self._unwatch_folder(path)
+                self._on_folder_gone(path)
         try:
             children = sorted(self._memory_root.iterdir())
         except OSError:
@@ -342,6 +351,8 @@ class MemoryFileWatcher:
             # under its old name.
             self._unwatch_folder(moved_from)
         if folder.name in _UNWATCHED_FOLDERS:
+            if moved_from is not None:
+                self._on_folder_gone(moved_from)  # its files are no longer indexed
             return
         # A watch left over from an earlier folder of the same name stopped
         # when that folder was deleted, so it is replaced, not reused.
@@ -358,6 +369,21 @@ class MemoryFileWatcher:
             self._enqueue_path(str(file))
             if moved_from is not None:
                 self._enqueue_path(str(Path(moved_from) / file.relative_to(folder)))
+
+    def _on_folder_gone(self, path: str) -> None:
+        """A folder under memory/ was deleted or moved away: into another
+        top-level folder (a separate watch), into archive/ or pending/, or
+        out of memory/. Its files no longer exist at their old paths, so the
+        FTS index is what names them; re-indexing each vanished path drops
+        its rows. Where the folder landed in another watched folder, that
+        folder's watch reports the files at their new paths. Runs on the
+        observer's dispatch thread, or on the worker thread from the idle
+        reconcile."""
+        folder = Path(path)
+        if self._memory_root not in folder.parents:
+            return
+        for file in self._indexed_files_under(folder):
+            self._enqueue_path(str(file))
 
     # ------------------------------------------------------------------
     # work queue

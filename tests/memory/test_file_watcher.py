@@ -729,6 +729,130 @@ def test_a_folder_deleted_and_created_again_keeps_being_watched(
 
 
 # ---------------------------------------------------------------------------
+# A folder moved across watches, or out of the indexed tree
+# ---------------------------------------------------------------------------
+
+
+def _indexed(workspace: Path) -> set[Path]:
+    """The files the FTS index holds a row for."""
+    from durin.memory.search import IndexCoverage
+
+    return {workspace / rel for rel in IndexCoverage.load(workspace).mtimes}
+
+
+def test_a_folder_moved_between_two_watched_folders_is_reindexed_at_both_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder moved from one top-level folder into another crosses two
+    separate watches: the source watch sees only the folder go, the
+    destination watch only the folder arrive. Every file inside is
+    re-indexed at its new path, and at its old path so the old rows go."""
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    old = root / "references" / "team"
+    moved = [old / "roster.md", old / "notes" / "kickoff.md"]
+    for path in moved:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {path.stem}\n\nbody\n", encoding="utf-8")
+        reindex_one_file(watcher._workspace, path)
+    assert set(moved) <= _indexed(watcher._workspace)
+    (root / "corpus").mkdir()
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        # Let the OS deliver whatever it still holds from the setup above.
+        time.sleep(1.0)
+        reindexed.clear()
+
+        new = root / "corpus" / "team"
+        old.rename(new)
+
+        expected = set(moved) | {new / path.relative_to(old) for path in moved}
+        assert _wait_until(lambda: expected <= set(reindexed)), (
+            f"missing: {sorted(str(p) for p in expected - set(reindexed))}"
+        )
+    finally:
+        watcher.stop()
+
+
+@pytest.mark.parametrize(
+    ("folder", "destination"),
+    [
+        ("entities", "archive/entities"),
+        ("entities/person", "archive/entities/person"),
+        ("entities", "pending/entities"),
+        ("entities", "pending"),
+    ],
+    ids=[
+        "top-level-into-archive", "nested-into-archive",
+        "top-level-into-pending", "top-level-renamed-to-pending",
+    ],
+)
+def test_a_folder_moved_into_archive_or_pending_has_its_rows_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, folder: str, destination: str,
+) -> None:
+    """archive/ and pending/ are never indexed, so a folder moved into
+    either leaves the indexed tree: the old path of every file the index
+    holds under it is re-indexed, which drops its rows instead of leaving
+    them to the health check."""
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    pages = [
+        root / "entities" / "person" / "ada.md",
+        root / "entities" / "organization" / "acme.md",
+    ]
+    for page in pages:
+        EntityPage(type=page.parent.name, name=page.stem, body="indexed").save(page)
+        reindex_one_file(watcher._workspace, page)
+    assert set(pages) <= _indexed(watcher._workspace)
+    (root / destination).parent.mkdir(parents=True, exist_ok=True)
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        # Let the OS deliver whatever it still holds from the setup above.
+        time.sleep(1.0)
+        reindexed.clear()
+
+        (root / folder).rename(root / destination)
+
+        gone = {page for page in pages if root / folder in page.parents}
+        assert _wait_until(lambda: gone <= set(reindexed)), (
+            f"missing: {sorted(str(p) for p in gone - set(reindexed))}"
+        )
+    finally:
+        watcher.stop()
+
+
+def test_a_folder_gone_without_a_report_has_its_rows_removed_by_the_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On macOS the idle reconcile can drop a vanished folder's watch before
+    that watch reports the folder gone, and then nothing else reports it.
+    The reconcile queues the old paths itself, so the rows go either way:
+    here no OS event reaches the watcher at all."""
+    monkeypatch.setattr(FileSystemEventHandler, "dispatch", lambda self, event: None)
+    watcher = MemoryFileWatcher(tmp_path)
+    root = watcher._memory_root
+    page = root / "entities" / "person" / "ada.md"
+    EntityPage(type="person", name="ada", body="indexed").save(page)
+    reindex_one_file(watcher._workspace, page)
+    (root / "archive").mkdir()
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        (root / "entities").rename(root / "archive" / "entities")
+        assert _wait_until(lambda: page in reindexed), reindexed
+    finally:
+        watcher.stop()
+
+
+# ---------------------------------------------------------------------------
 # The backfill embeds through the embed server
 # ---------------------------------------------------------------------------
 
