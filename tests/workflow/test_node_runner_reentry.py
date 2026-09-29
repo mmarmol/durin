@@ -181,7 +181,7 @@ def test_synthesis_prompt_names_required_schema_fields(tmp_path):
         tmp_path,
         run_results=[_exhausted(), _completed("synthesized")],
         chat_responses=[SimpleNamespace(tool_calls=[SimpleNamespace(
-            arguments={"rootCause": "x", "findings": "y"})])],   # the deliver call
+            name="deliver", arguments={"rootCause": "x", "findings": "y"})])],   # the deliver call
     )
     nr(_req(_node(output_schema=SCHEMA)))
     synthesis_prompt = nr.runner.run.await_args_list[1].args[0].initial_messages[-1]["content"]
@@ -203,7 +203,7 @@ def test_deliver_instruction_enumerates_required_fields(tmp_path):
         tmp_path,
         run_results=[_completed("prose answer")],
         chat_responses=[SimpleNamespace(tool_calls=[SimpleNamespace(
-            arguments={"rootCause": "x", "findings": "y"})])],
+            name="deliver", arguments={"rootCause": "x", "findings": "y"})])],
     )
     resp = nr(_req(_node(output_schema=SCHEMA)))
     instruction = provider.chat_with_retry.await_args_list[0].kwargs["messages"][-1]["content"]

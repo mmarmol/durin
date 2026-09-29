@@ -80,6 +80,12 @@ class NodeRunRequest:
     # for every sequential node, so files accumulate and each stage sees the prior work.
     # None when the engine has no workspace or for a no-tools node (which does no file I/O).
     output_dir: str | None = None
+    # The node's declared output_file when the engine will write the validated payload
+    # there once the step ends (relative to the run's working folder). Only the main
+    # walk writes it — a parallel branch, fan-out worker or detached node leaves it
+    # unwritten — so only the main walk sets this, and the runner's delivery reply
+    # names the file only when it is set.
+    output_file: str | None = None
     # Index within a dynamic fan-out batch (0, 1, 2, …). When set, the session-persist
     # key includes this suffix so each worker gets a distinct session rather than
     # all workers overwriting the same key.
@@ -1023,6 +1029,9 @@ class WorkflowEngine:
                     iteration=iteration,
                     root_session_key=root_session_key,
                     output_dir=out_dir,
+                    # Same condition as the output_file write after the node returns.
+                    output_file=((node.output_file or None)
+                                 if isinstance(node, WorkNode) and work_dir is not None else None),
                     budget=budget,
                     fail_would_exhaust=fail_would_exhaust,
                     # A script node polls the plain check (its subprocess dies on

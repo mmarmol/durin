@@ -57,7 +57,7 @@ def _runner(tmp_path, deliver_responses=None, on_run=None):
     ar.run = AsyncMock(side_effect=_fake_run)
     if deliver_responses is not None:
         provider.chat_with_retry = AsyncMock(side_effect=[
-            SimpleNamespace(tool_calls=[SimpleNamespace(arguments=args)] if args is not None else [])
+            SimpleNamespace(tool_calls=[SimpleNamespace(name="deliver", arguments=args)] if args is not None else [])
             for args in deliver_responses
         ])
     return AgentNodeRunner(ar, SessionManager(workspace=tmp_path), default_model="test-model"), provider
