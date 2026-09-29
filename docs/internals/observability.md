@@ -59,7 +59,7 @@ flowchart TD
         LR["AgentLoop._run_agent_loop\nbind_telemetry via ContextVar"]
         TE["Tool.execute\nemit_tool_event(type, data)"]
         TL["TelemetryLogger.log\nJSON appended to JSONL"]
-        JL["<telemetry dir>/\nSESSION_KEY-YYYYMMDD.jsonl\n(max 10k events/file)"]
+        JL["<telemetry dir>/\nSANITIZED_KEY_YYYY-MM-DD.jsonl\n(local date of each event,\nmax 10k events/file)"]
         PS["PushSink\nbatched HTTPS POST\n(optional, additive)"]
         RET["run_retention\ncompress 30d / delete 90d\n(piggybacks health-check tick)"]
         LC --> LR
@@ -213,6 +213,20 @@ Tools call `emit_tool_event(event_type, data)` from
 the per-session JSONL file and then iterates `extra_sinks`. Each sink runs in
 its own try/except so a failing push never affects the JSONL write.
 
+A logger from `get_session_logger` names its file after the local calendar
+date of each event's own timestamp, worked out on every write. A logger that
+outlives midnight, such as the one the gateway's `gateway.memory` thread binds
+at startup and keeps for the life of the process, moves on to the new day's
+file, so a day's file holds exactly that day's events. The 10k-event cap counts per file, so each
+new day's file starts with a fresh budget. Readers do not depend on which file
+an event landed in: the log viewer and the dream digest walk files newest
+modified first and read each line's own `ts`, `durin memory stats` scans every
+file and filters by `ts`, retention ages a file by its modification time, and
+`workflow_runs(action="cost")` looks at the files dated a day either side of a
+run's start and end, which covers a node visit split across two days' files. A
+`TelemetryLogger` built directly on a path writes to that one file for its
+whole life.
+
 When `telemetry.push.enabled` is true, `wire_push_sink` (called from
 `AgentLoop` during initialization) constructs a `PushSink`, resolves the bearer
 token from the secret store by name (`token_secret_name`), and attaches it to
@@ -347,7 +361,7 @@ escalates to SIGKILL if needed, then removes the PID file.
 |---|---|---|
 | `TelemetryLogger` | `durin/telemetry/logger.py` | Append-only JSONL writer for one session. Owns `session_key` and per-turn `iteration` (updated via `set_iteration`). Holds `extra_sinks` list. `log(event_type, data)` is the canonical write path. |
 | `bind_telemetry` / `current_telemetry` / `reset_telemetry` | `durin/telemetry/logger.py` | ContextVar binding so tools resolve the active logger without constructor threading. Token from `bind_telemetry` MUST be reset in a `finally` block. |
-| `get_session_logger` | `durin/telemetry/logger.py` | Returns a `TelemetryLogger` at `<telemetry dir>/SANITIZED_KEY_YYYYMMDD.jsonl` (the instance directory from `get_telemetry_dir`). |
+| `get_session_logger` | `durin/telemetry/logger.py` | Returns a `TelemetryLogger` writing to `<telemetry dir>/SANITIZED_KEY_YYYY-MM-DD.jsonl` (the instance directory from `get_telemetry_dir`), dated by the local date of each event, so it rolls over to the next day's file at midnight. |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function tools call to emit events. Resolves ContextVar, truncates free-text fields (200 chars), auto-injects `session_key` / `iteration`, swallows all exceptions. |
 | `PushSink` | `durin/telemetry/push.py` | Optional HTTPS fan-out sink. Buffers events and POSTs in batches. Failed POSTs restore the batch for retry. Never breaks the local JSONL write. |
 | `wire_push_sink` | `durin/telemetry/wiring.py` | Constructs and attaches a `PushSink` from config + secret store at agent startup. Returns the sink so callers can `flush()` it on shutdown. |
