@@ -89,7 +89,7 @@ Answers `202` at once — the turn runs on the server, detached from the request
 | Field | Meaning |
 |---|---|
 | `content` | the message text (may be empty when `media` is attached) |
-| `media` | optional images, documents, audio or video: `[{"data_url": "data:image/png;base64,…", "name": "chart.png"}]`; a refused attachment answers `422` with the cause in `details.reason`. Attached audio is transcribed into the message text. With `transcription.mode: off` the clip stays attached for the model; a clip that is not transcribed otherwise (transcription disabled or failed) stays attached and is named in the text |
+| `media` | optional images, documents, audio or video: `[{"data_url": "data:image/png;base64,…", "name": "chart.png"}]`; a refused attachment answers `422` with the cause in `details.reason`. Each file is saved under a short unique prefix plus its `name`, so the agent can tell your files apart. Attached audio is transcribed into the message text. With `transcription.mode: off` the clip stays attached for the model; a clip that is not transcribed otherwise (transcription disabled or failed) stays attached and is named in the text |
 | `steer` | `true` to inject the message into the turn already running instead of queueing it |
 | `client_msg_id` | your id for the message (≤ 64 characters); minted and returned when you omit it |
 

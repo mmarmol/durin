@@ -5,6 +5,75 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.3 — 2026-09-29
+
+### Highlights
+
+- **A new session starts in seconds, not half a minute.** A session's first
+  prompt used to parse every memory page several times, and the whole
+  gateway stalled while it did. On a workspace with a couple of thousand
+  pages that took about 30 seconds per new session. Now a page is parsed
+  again only when it changes, with a faster YAML parser, and that step takes
+  well under a second. Scheduled runs rebuild the memory surface every time,
+  and they stop paying about 15 seconds per build. (#657)
+- **The dream's decisions wait in one place.** The Dream page shows what the
+  dream did. Memory pairs and skill suggestions it leaves for you are decided
+  on the Pending page. When some wait, a line on the Dream page counts them
+  and opens Pending at them. (#655)
+- **The duplicate judge stops throwing away good answers.** Judge models
+  repeat a marker with nothing after it, misspell one, or drop an `=`. Those
+  answers used to cost another full judge call, and sometimes sent the pair
+  to you. They are read now. (#656)
+
+### Upgrade notes
+
+- **The Dream page has no Inbox tab.** Flagged memory pairs and skill
+  suggestions are on the Pending page, alongside everything else waiting on
+  you. Quarantined skill imports were already there too. (#655)
+- **Attachments keep their names.** A file sent through the dashboard or the
+  chat API is saved under a short unique prefix plus its own name
+  (`3f9a1c2b7d4e_report.pdf`), not a random name, so the agent can tell your
+  files apart. (#656)
+
+### Memory and the dream
+
+- **Parsed once per change.** The pinned block and the hot layer read each
+  entity page's type, `always_on` flag and update time from a per-process
+  index keyed by the page's text. Only pages that changed are parsed again,
+  plus the dozen the hot layer shows in full. Frontmatter is parsed with
+  libyaml when PyYAML has it, and the result is the same. (#657)
+- **The judge reads the marker slips models make.**
+  - A marker repeated with nothing after it keeps the value its first copy
+    carried.
+  - A marker name one letter off (`RESONING`), cut short (`REASON`) or
+    fenced with one `=` too few still counts.
+  - The judge never guesses: a repeat that says something else still
+    decides, and a marker translated into another language gets the retry.
+  - Over the week of failed replies recorded on two installs, 28 of 34 now
+    parse. (#656)
+- **Investigating-judge failures leave a trace.** A reply the investigating
+  judge could not read is recorded as a `memory.dream.parse_failure` (stage
+  `tier2_judge`) with its first characters. Before, a pair it sent to you
+  kept no record of what the model wrote. (#656)
+
+### Fixes
+
+- **Speech extras need no restart.** The `stt` and `tts` engines load their
+  package on first use. The gateway no longer logs "restart the gateway to
+  activate it" after installing one, and the dashboard's install prompt no
+  longer offers a restart. (#656)
+- **The cron log says how a run started.** The "executing job" line ends
+  with `on schedule` or `run by hand`, so a run-now from the dashboard is no
+  longer mistaken for the scheduled run. (#656)
+- **Slack recovery is logged.** After Socket Mode drops, the log says when
+  the session came back and how long it was down. (#656)
+- **Bundled scripts stay executable.** A skill script that starts with `#!`
+  is saved executable when a skill is written, edited, imported, published
+  or rewritten by the dream. (#654)
+- **MCP catalog.** The vendored catalog floor is refreshed. (#653)
+- **Docs.** The configuration guide's dream settings point to the Pending
+  page, and the chat API guide says an attachment keeps its name.
+
 ## 0.11.2 — 2026-09-29
 
 ### Highlights
