@@ -229,7 +229,7 @@ class LocalSttProvider(TranscriptionProvider):
 
     Lazy: importing this module never imports sherpa_onnx. The model is
     downloaded on first use and the recognizer built once (singleton). The
-    synchronous decode runs in a worker thread.
+    synchronous audio decode and recognition run in worker threads.
     """
 
     def __init__(self, engine="parakeet", model_dir=None, num_threads=None,
@@ -331,7 +331,10 @@ class LocalSttProvider(TranscriptionProvider):
             # providers (and anything importing this module) load without [stt].
             from durin.providers.audio_decode import decode_to_mono_16k
 
-            samples, sr = decode_to_mono_16k(path)
+            # Container decode + resample is CPU work proportional to the
+            # clip (seconds for a two-minute Opus note on a small host), so it
+            # runs on a worker thread like recognition, not on the event loop.
+            samples, sr = await asyncio.to_thread(decode_to_mono_16k, path)
             if samples.size == 0:
                 return ""
             self._emit(cb, "transcribing")

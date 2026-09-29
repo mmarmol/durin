@@ -91,6 +91,12 @@ the engine lazily; a channel-manager sweep unloads it again after
 voice latency matters more than memory). Deleting the marker or the model
 cache is harmless: the next first-use downloads lazily.
 
+A local transcription does all of its heavy work on worker threads: the
+engine build, the audio decode (PyAV demuxes and resamples the container to
+16 kHz mono — seconds of CPU for a long voice note on a small host), and the
+recognition itself. Only the hand-offs run on the event loop, so a long clip
+never stalls the other sessions the gateway is serving.
+
 ### Spoken rendition
 
 `speakable_transform` (in `durin/voice/rendition.py`) is a pure, always-on pass that replaces non-speakable markdown with short descriptions: fenced code → "the code is on screen", tables → "a table", images/links → their alt text or "a link", and it strips headings, horizontal rules, emphasis markers, and list bullets. The descriptive phrases live in a `SpeakableLabels` dataclass so they can be localized.
