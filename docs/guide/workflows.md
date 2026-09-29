@@ -361,7 +361,9 @@ rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
 their intake step. `resume_run_id` also retries a run that ended `aborted` at
 a named node: the failed node re-runs with its exact input, in the same
-folder.
+folder. A resume that can't get going — a script the workflow names has gone
+missing, say — leaves the run paused as it was, so you can answer it again
+once that's fixed.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -786,6 +787,9 @@ class WorkflowsService:
         from durin.workflow.subworkflow import SubworkflowRunner
 
         resume = None
+        # The needs_input record this call resumes, as read under the per-run
+        # lock: the claim below re-checks the run against it.
+        paused_record: dict | None = None
         if resume_run_id:
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             # A resume that names no root_session_key of its own (the common case
@@ -819,7 +823,9 @@ class WorkflowsService:
                 # racing cancel/resume/reject gets here first wins outright — the
                 # loser's own locked re-read sees the winner's already-written status
                 # and refuses, instead of a resume executing real nodes on a run
-                # cancel_run just finalized (or the reverse).
+                # cancel_run just finalized (or the reverse). A resume wins by its
+                # claim, taken under the same lock once the engine is built (below),
+                # after re-checking that nothing touched the run since this read.
                 with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
                     manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
                     if manifest is None or manifest.get("status") != "needs_input":
@@ -870,13 +876,7 @@ class WorkflowsService:
                     else:
                         resume = build_resume_state(manifest, task)
                     task = manifest.get("task") or task
-                    # Claim: move the manifest off needs_input now, before releasing
-                    # the lock, so a cancel_run (or reject) racing in right behind
-                    # this sees it lost and refuses instead of finalizing a run that
-                    # is, by then, genuinely resuming. WorkflowEngine.run's own
-                    # _start_manifest fully rewrites this again within milliseconds —
-                    # this claim only needs to survive that brief window.
-                    run_log.claim_for_resume(self._workspace, name, resume_run_id)
+                    paused_record = manifest
             else:
                 resume = build_resume_state(manifest, task)
                 task = manifest.get("task") or task
@@ -965,18 +965,69 @@ class WorkflowsService:
             # tasks(action='stop')) needs: this makes "the manifest is terminal"
             # imply "the flag is already cleared", rather than merely usually true.
             on_run_end=_clear_cancel)
+
+        # Claim a paused run once nothing is left to build: move it off
+        # needs_input under the per-run lock, so a cancel_run, reject or second
+        # resume racing in behind this sees it lost and refuses. The claim
+        # stands until the engine writes the run's own manifest. When that never
+        # happens — the resume is cancelled while it waits for a workflow-run
+        # thread, or the engine returns or raises before its walk (a rejected
+        # input or script, a busy work_key) — the claim is released and the
+        # pause put back as it was: nothing else would ever end a running
+        # manifest owned by this live process. Whichever of the run's thread and
+        # a cancelled caller takes `handoff` first decides which one releases.
+        claimed: dict | None = None
+        if paused_record is not None:
+            with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
+                if run_log.read_manifest(self._workspace, name, resume_run_id) != paused_record:
+                    raise ValidationFailedError(
+                        f"run {resume_run_id!r} of workflow {name!r} cannot be "
+                        "resumed — it was cancelled, or already resumed, before "
+                        "this reached it."
+                    )
+                claimed = run_log.claim_for_resume(self._workspace, name, resume_run_id)
+        handoff = threading.Lock()
+        walk_state = {"started": False, "dropped": False}
+
+        def _release_claim() -> None:
+            try:
+                with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
+                    run_log.release_resume_claim(
+                        self._workspace, name, resume_run_id, prior=paused_record, claimed=claimed)
+            except Exception:  # noqa: BLE001 - never masks the run's own outcome
+                logger.exception("releasing the resume claim on run {} of workflow {!r} failed",
+                                 resume_run_id, name)
+
+        def _walk(*args: Any, **kwargs: Any) -> WorkflowResult | None:
+            with handoff:
+                if walk_state["dropped"]:
+                    return None   # the caller is gone and released the claim
+                walk_state["started"] = True
+            try:
+                return engine.run(*args, **kwargs)
+            finally:
+                if claimed is not None:
+                    _release_claim()
+
         try:
             # A run can last an hour: a thread from the bounded workflow-run
             # pool, not one of the event loop's few shared default-executor
             # threads.
             result = await run_on_workflow_thread(
-                rid, engine.run, workflow, task,
+                rid, _walk, workflow, task,
                 root_session_key=root_session_key,
                 input_files=input_files,
                 output_format=output_format,
                 resume=resume,
                 work_key=work_key,
             )
+        except BaseException:
+            if claimed is not None:
+                with handoff:
+                    walk_state["dropped"] = not walk_state["started"]
+                if walk_state["dropped"]:
+                    _release_claim()
+            raise
         finally:
             # Idempotent backstop (clear() is a no-op if already absent): covers
             # a run that never reached _finalize_manifest at all (no workspace,

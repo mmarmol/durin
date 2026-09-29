@@ -405,7 +405,8 @@ def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
     can take a while when every run thread is busy, and a paused run is usually
     answered after a restart, so its recorded owner is often a dead process: the
     claim re-stamps the owner, or the crash sweep would flip the waiting resume to
-    ``crashed``."""
+    ``crashed``. A resume whose engine never makes that write undoes the claim
+    with ``release_resume_claim``. Returns the claimed record."""
     from durin.utils.process_tree import process_identity
 
     prior = read_manifest(workspace, name, run_id) or {}
@@ -415,6 +416,23 @@ def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
     path = _record_path(workspace, name, run_id)
     path.write_text(json.dumps(record), encoding="utf-8")
     return record
+
+
+def release_resume_claim(
+    workspace: str | Path, name: str, run_id: str, *, prior: dict, claimed: dict,
+) -> bool:
+    """Undo ``claim_for_resume`` for a resume whose engine never wrote the run's
+    own manifest: put back ``prior``, the paused record exactly as it was before
+    the claim (``needs_input``, its original owner), so the run can be answered
+    or cancelled again. A claimed manifest owned by this live process is one
+    that neither the crash sweep nor the ``tasks`` self-heal ever ends, and one
+    ``cancel_run`` and a new resume both refuse. Does nothing — returns False —
+    once the manifest differs from ``claimed``: the engine took the run over.
+    Called under ``run_lock_target``'s lock, like the claim."""
+    if read_manifest(workspace, name, run_id) != claimed:
+        return False
+    _record_path(workspace, name, run_id).write_text(json.dumps(prior), encoding="utf-8")
+    return True
 
 
 def write_run(workspace: str | Path, name: str, result, *, ts: float | None = None) -> Path:

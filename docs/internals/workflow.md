@@ -567,10 +567,16 @@ by a crashed co-owner clears without waiting for a gateway restart; the `tasks` 
 additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
 A paused run is usually answered after a restart, so its manifest names a process that
 is gone; the workflows service's resume claim (`claim_for_resume`, which moves the
-manifest off `needs_input` before the engine starts) therefore re-stamps the owner to
-the resuming process, so a resume waiting for a free workflow-run thread is not swept
-as crashed. Manifests written before the owner field existed fall back to a generous
-`started_at` age threshold.
+manifest off `needs_input` under the per-run lock once the resume's engine is built,
+after re-checking that nothing touched the run since the resume first read it)
+therefore re-stamps the owner to the resuming process, so a resume waiting for a free
+workflow-run thread is not swept as crashed. A claimed manifest owned by the live
+gateway is one no sweep or self-heal ever ends, so a resume whose engine never writes
+the run's own manifest releases the claim (`release_resume_claim`): cancelled while it
+waits for a thread, or the engine returning or raising before its walk (a preflight
+rejection such as a missing script file, a busy `work_key`). The paused record comes
+back exactly as it was, still answerable and cancellable. Manifests written before the
+owner field existed fall back to a generous `started_at` age threshold.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the

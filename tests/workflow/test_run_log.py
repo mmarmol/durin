@@ -265,6 +265,29 @@ def test_a_claimed_resume_survives_the_crash_sweep_while_it_waits_to_start(tmp_p
     assert rec["owner"]["pid"] == _os.getpid()
 
 
+def test_releasing_a_claim_puts_the_pause_back_until_the_engine_writes(tmp_path):
+    """A claim the engine never took over is undone to the exact paused
+    record; once the engine has written the run's own manifest, releasing
+    changes nothing."""
+    import json as _json
+
+    run_log.start_run(tmp_path, "wf", "paused", root_session_key="s", started_at=1.0)
+    f = tmp_path / "workflows-runs" / "wf" / "paused.json"
+    rec = _json.loads(f.read_text(encoding="utf-8"))
+    rec.update(status="needs_input", needs_input_node="ask", owner=_DEAD_OWNER)
+    f.write_text(_json.dumps(rec), encoding="utf-8")
+    prior = run_log.read_manifest(tmp_path, "wf", "paused")
+
+    claimed = run_log.claim_for_resume(tmp_path, "wf", "paused")
+    assert run_log.release_resume_claim(tmp_path, "wf", "paused", prior=prior, claimed=claimed)
+    assert run_log.read_manifest(tmp_path, "wf", "paused") == prior
+
+    claimed = run_log.claim_for_resume(tmp_path, "wf", "paused")
+    run_log.start_run(tmp_path, "wf", "paused", root_session_key="s", started_at=2.0)
+    assert not run_log.release_resume_claim(tmp_path, "wf", "paused", prior=prior, claimed=claimed)
+    assert run_log.read_manifest(tmp_path, "wf", "paused")["started_at"] == 2.0
+
+
 
 def test_task_persists_through_start_update_finalize(tmp_path):
     """The task written by start_run survives update_run and finalize_run."""
