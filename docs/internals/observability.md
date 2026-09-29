@@ -246,7 +246,11 @@ When `telemetry.push.enabled` is true, `wire_push_sink` (called from
 token from the secret store by name (`token_secret_name`), and attaches it to
 the session logger. `PushSink` buffers events and POSTs batches to the
 configured URL when the buffer hits `batch_size` (default 10). Failed POSTs
-restore the batch into the buffer for the next drain.
+restore the batch into the buffer for the next drain. A run's events reach the
+sink from the event loop and from worker threads at once (`memory_search`
+emits its rows from the thread that ran the search), so a lock guards the
+buffer: each event goes out in exactly one batch, and the POST itself runs on
+the emitting thread outside the lock.
 
 At the end of each turn the dispatch loop emits a `turn.latency` breakdown:
 `total_ms` split into `llm_ms` (provider round-trips, accumulated in the runner

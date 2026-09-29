@@ -66,8 +66,10 @@ websocket dream feed consumes — and the gateway re-broadcasts them; telemetry
 JSONL and the durable run record are written by the worker itself. The worker
 holds `<workspace>/.dream.lock` for the whole run (non-blocking; exit code 3 =
 another dream is running), so gateway dreams and manual CLI dreams exclude each
-other. After the worker exits the gateway invalidates its in-process alias
-cache, since the child's writes bypassed in-process invalidation. Killing the
+other. After the worker exits the gateway rebuilds its in-process alias index
+from disk on a background thread, since the child's writes bypassed the
+in-process updates; searches keep the previous index until the rebuilt one
+swaps in (see [03_search_pipeline.md](03_search_pipeline.md), Step 4). Killing the
 worker at any point is safe: memory writes are short flock+CAS critical
 sections and the cursor resumes the remainder on the next trigger.
 

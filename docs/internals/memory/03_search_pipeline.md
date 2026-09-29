@@ -139,6 +139,8 @@ The combined RRF of the vector list and this entity-match list produces `RankedC
 
 When no entities are resolved (query mentions no known alias), this step is a no-op.
 
+**The shared alias index.** Every consumer in a process — this step, the tool's `ranking` label, absorption, renames, pair resolution, deletion — reads one `AliasIndex` per workspace, handed out by `get_shared_alias_index` (`durin/memory/aliases_cache.py`). Writes made in the process (entity writes, absorption, deletion) update it in place. A dream worker writes pages from its own process, so when the worker exits the gateway rebuilds the index from disk with `refresh_alias_index_in_background`, and it builds it the same way once at startup. The rebuild walks every entity page and entry — seconds on a workspace with thousands of pages — on a daemon thread into a fresh map, then swaps it in atomically: searches keep getting the previous map without waiting, and see the dream's changes after the swap. Writes made in the process during the walk are journaled and replayed onto the fresh map before the swap, so none is lost; a rebuild requested while one is running adds one more pass after it, so writes that landed mid-walk are read too — including a rebuild requested while a search is still making the process's first build, which waits for that build and then reads the disk again. Only a search that finds no index at all — before the startup build finishes — waits, and only for that one build. The index lives in process memory only; each process builds its own from the markdown.
+
 ### Step 5 — Cross-encoder rerank (opt-in, off by default)
 
 When `memory.search.cross_encoder.enabled = true`, `CrossEncoderReranker.score` takes the top-50 fused hits and scores each `(query, doc_text)` pair through a `sentence_transformers.CrossEncoder` model. `doc_text` is `<headline>. <valid_from>. <summary>` — enriched to prevent the reranker from being blind to dates and summaries.
@@ -161,6 +163,10 @@ A second, response-wide budget (`memory.search.warm_max_chars`) governs which bl
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 
+### Where it runs
+
+`memory_search` runs the pipeline and its own work after it — converting hits into the response shape (reading entity pages and reference chunks from disk), the per-source cap, the in-context dedup, rendering, and the alias lookups behind the `ranking` label — in one worker thread (`asyncio.to_thread`), so a recall never blocks the event loop. That work touches no per-call state on the shared tool instance; the turn's eager surface, prefetch refs and telemetry binding reach the thread through the context copy `asyncio.to_thread` makes. The `memory.recall` row times it in three fields: `duration_ms` is the pipeline alone, `postprocess_duration_ms` the tool's work after it, and `total_duration_ms` the call's wall time up to the row, including the wait for a worker thread (see [07_telemetry_and_observability.md](07_telemetry_and_observability.md)).
+
 ---
 
 ## 5. Key types and entry points
@@ -177,6 +183,8 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `apply_type_priors` | `durin/memory/rrf_fusion.py` | Multiplies fused scores by per-type priors. Session turns: ×0.85. Re-sorts in place. |
 | `FusedHit` | `durin/memory/rrf_fusion.py` | Frozen dataclass: `uri`, `score`, `sources: tuple[str, ...]`, `ranks: dict[str, int]`. |
 | `extract_query_entities` | `durin/memory/entity_ranker.py` | N-gram alias lookup against `AliasIndex`. Returns deduplicated list of entity refs mentioned in the query. |
+| `get_shared_alias_index` | `durin/memory/aliases_cache.py` | The process-wide `AliasIndex` for a workspace. Returns the cached index at once, stale or not; builds it (or waits for the build in flight) only when none exists. |
+| `refresh_alias_index_in_background` | `durin/memory/aliases_cache.py` | Rebuilds a workspace's shared index from disk on a daemon thread and swaps the new map in atomically. Called by the gateway at startup and after each dream worker exits. |
 | `rank_with_entities` | `durin/memory/entity_ranker.py` | RRF over vector ranking + entity-match sub-list. Returns `list[RankedCandidate]`. |
 | `RankedCandidate` | `durin/memory/entity_ranker.py` | Dataclass: `record`, `base_score`, `adjusted_score`, `signals`. |
 | `CrossEncoderReranker` | `durin/memory/cross_encoder.py` | Wraps `sentence_transformers.CrossEncoder` with lazy load, batching, retry-after-failure, and graceful degradation. `score(query, docs) -> list[float] | None`. |

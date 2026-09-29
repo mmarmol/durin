@@ -763,8 +763,18 @@ class MemoryRecallEvent(TypedDict):
     level: str
     result_count: int
     strategy: str
+    # The search pipeline alone (retrieval, fusion, reranks, sectioning),
+    # timed on the worker thread; for scope='archive', the walk and match
+    # over the archived files.
     duration_ms: float
     total_candidates: int
+    # The tool's work after the pipeline returns: hit conversion (entity
+    # pages read from disk), per-source cap, in-context dedup, rendering and
+    # the alias lookups for the ranking labels.
+    postprocess_duration_ms: NotRequired[float]
+    # Wall time from the call's start to this row, including the wait for a
+    # worker thread; at least `duration_ms + postprocess_duration_ms`.
+    total_duration_ms: NotRequired[float]
     skill_result_count: NotRequired[int]
     keywords: NotRequired[str | None]
     # Hits collapsed to pointer lines because their rendered content was
