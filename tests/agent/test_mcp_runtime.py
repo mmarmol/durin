@@ -2,6 +2,7 @@
 connect/disconnect, and the McpRuntime accessor."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -87,6 +88,97 @@ async def test_connect_mcp_logs_the_mcp_schema_status_once(tmp_path, monkeypatch
     # The loop's own mcp_manage / mcp_search built-ins are not MCP server tools.
     assert loop.tools.has("mcp_manage") and loop.tools.has("mcp_search")
     assert "2 definitions" in lines[0]
+
+
+class _FakeConnection:
+    """Unregisters its server's tool on close, as MCPServerConnection.aclose does."""
+
+    def __init__(self, registry, tool_name: str) -> None:
+        self._registry = registry
+        self._tool_name = tool_name
+
+    async def aclose(self) -> None:
+        self._registry.unregister(self._tool_name)
+
+
+async def _fake_connect_one_tool_each(mcp_servers, registry, defer_cb=None, **kwargs):
+    conns = {}
+    for name in mcp_servers:
+        registry.register(_ServerTool(f"mcp_{name}_t"))
+        defer_cb()
+        conns[name] = _FakeConnection(registry, f"mcp_{name}_t")
+    return conns
+
+
+def _deferral_config(threshold_tokens: int) -> SimpleNamespace:
+    return SimpleNamespace(tools=SimpleNamespace(
+        mcp_deferral=SimpleNamespace(enabled=True, threshold_tokens=threshold_tokens),
+    ))
+
+
+async def _schema_status_lines(action) -> list[str]:
+    logged: list[str] = []
+    sink = logger.add(
+        lambda message: logged.append(message.record["message"]),
+        level="INFO", format="{message}",
+    )
+    try:
+        await action
+    finally:
+        logger.remove(sink)
+    return [line for line in logged if line.startswith("MCP tool schemas")]
+
+
+async def test_runtime_connect_logs_the_mcp_schema_status_of_every_server(
+    tmp_path, monkeypatch,
+):
+    """Connecting one server at runtime logs one status line with the total of
+    every connected server, after the connect's own deferral check."""
+    monkeypatch.setattr(
+        "durin.agent.tools.mcp.connect_mcp_servers", _fake_connect_one_tool_each,
+    )
+    loop = _loop(
+        tmp_path,
+        {
+            "a": MCPServerConfig(url="https://a/mcp"),
+            "b": MCPServerConfig(url="https://b/mcp", enabled=False),
+        },
+    )
+    loop.app_config = _deferral_config(threshold_tokens=10_000_000)
+    [boot] = await _schema_status_lines(loop._connect_mcp())
+    assert "1 definitions" in boot
+    # Server a alone sits exactly at the threshold, so deferral stays off
+    # until b's tool pushes the total above it.
+    loop.app_config = _deferral_config(
+        threshold_tokens=int(re.search(r"~(\d+) tokens", boot).group(1)),
+    )
+
+    lines = await _schema_status_lines(loop.connect_mcp_server("b"))
+
+    assert len(lines) == 1
+    assert "2 definitions" in lines[0]
+    assert "deferral active" in lines[0]
+
+
+async def test_runtime_disconnect_logs_the_mcp_schema_status_of_the_remaining_servers(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        "durin.agent.tools.mcp.connect_mcp_servers", _fake_connect_one_tool_each,
+    )
+    loop = _loop(
+        tmp_path,
+        {"a": MCPServerConfig(url="https://a/mcp"), "b": MCPServerConfig(url="https://b/mcp")},
+    )
+    loop.app_config = _deferral_config(threshold_tokens=10_000_000)
+    [boot] = await _schema_status_lines(loop._connect_mcp())
+    assert "2 definitions" in boot
+
+    lines = await _schema_status_lines(loop.disconnect_mcp_server("b"))
+
+    assert len(lines) == 1
+    assert "1 definitions" in lines[0]
+    assert "deferral inactive" in lines[0]
 
 
 async def test_connect_mcp_skips_disabled_servers(tmp_path, monkeypatch):
