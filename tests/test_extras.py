@@ -24,6 +24,40 @@ def test_phase1_features_present():
     assert REGISTRY["cross_encoder"].needs_restart is True
 
 
+def test_a_speech_engine_installed_while_running_works_without_a_restart(monkeypatch, tmp_path):
+    """Both speech engines import their package on first use, not at gateway
+    start, and retry until it is there: an [stt] or [tts] extra installed
+    while the gateway runs works on the next use. So neither asks for a
+    restart — the flag drives the boot log line and the settings dialog's
+    restart-after-install box."""
+    import asyncio
+    import sys
+
+    import pytest
+
+    from durin.providers.speech import LocalSupertonicProvider
+    from durin.providers.transcription import LocalSttProvider
+
+    stt = LocalSttProvider(engine="sensevoice", model_dir=str(tmp_path))
+    tts = LocalSupertonicProvider()
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+    monkeypatch.setitem(sys.modules, "supertonic", None)
+    with pytest.raises(RuntimeError):
+        stt._load(None)
+    with pytest.raises(RuntimeError):
+        asyncio.run(tts._ensure())
+
+    recognizer, engine = object(), object()
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", types.SimpleNamespace(
+        OfflineRecognizer=types.SimpleNamespace(from_sense_voice=lambda **kw: recognizer)))
+    monkeypatch.setitem(sys.modules, "supertonic", types.SimpleNamespace(
+        TTS=lambda auto_download: engine))
+    assert stt._load(None) is recognizer
+    assert asyncio.run(tts._ensure()) is engine
+    assert REGISTRY["stt"].needs_restart is False
+    assert REGISTRY["tts"].needs_restart is False
+
+
 class _Cfg:
     def __init__(self, auto=True):
         self.install = types.SimpleNamespace(auto_install_extras=auto)
