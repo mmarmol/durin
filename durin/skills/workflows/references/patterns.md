@@ -69,6 +69,28 @@ over an agent gate whenever the criterion is a real command (tests, linters, val
 }
 ```
 
+## Presence check — a normal branch is `cases`, not a gate
+
+A check whose "no" is an expected path ("does `note.md` exist yet? no → go draft it") is a
+**multi-way script node**: it prints a label and exits 0. Written as a pass/fail gate, its
+first-run "no" is recorded as a failed gate and self-improvement treats it as trouble.
+
+```json
+{
+  "name": "draft-once",
+  "start": "has-note",
+  "nodes": [
+    { "id": "has-note", "kind": "script",
+      "command": "test -f note.md && echo REUSE || echo DRAFT",
+      "cases": { "REUSE": "send", "DRAFT": "draft" } },
+    { "id": "draft", "kind": "work", "mode": "build", "tools": "default",
+      "prompt": "Draft note.md in the working folder.", "next": "send" },
+    { "id": "send", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Summarize note.md for the requester.", "next": null }
+  ]
+}
+```
+
 ## Script steps — deterministic transforms and fan-out lists
 
 A linear script node transforms the edge (stdin → stdout); a non-zero exit aborts the run

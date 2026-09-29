@@ -285,7 +285,8 @@ def test_agent_routing_node_fail_threads_feedback():
     ]})
     WorkflowEngine(runner).run(wf, "t")
     # second run of 'prod' must have received reviewer feedback in its upstream_output
-    assert any(inp and "need more detail" in inp for inp in seen_inputs)
+    assert any(inp and "Reviewer feedback (address this):\nFAIL\nneed more detail" in inp
+               for inp in seen_inputs)
 
 
 
@@ -821,6 +822,51 @@ def test_gate_learns_when_a_fail_would_exhaust_the_producer():
     # 2nd gate visit: producer consumed 2 of 2 → a FAIL would exhaust (True).
     assert gate_calls[0].fail_would_exhaust is False
     assert gate_calls[1].fail_would_exhaust is True
+
+
+def test_first_visit_fail_route_threads_neutral_context_not_reviewer_feedback():
+    """A FAIL whose target has not run yet this walk is a forward route ("no note yet
+    → go draft it"), not a revision request: the target gets the gate's output as
+    neutral context. A later FAIL back into that same (now visited) target is a real
+    loop-back and carries the reviewer framing."""
+    seen: list = []
+    judged = []
+
+    def runner(req):
+        if req.node.id == "draft":
+            seen.append(req.upstream_output or "")
+            return NodeRunResponse(output="note v1")
+        if req.node.id == "has-note":
+            return NodeRunResponse(output="FAIL\nnote.json not present")
+        judged.append(1)
+        return NodeRunResponse(output="FAIL\ncite the log line" if len(judged) == 1 else "PASS")
+
+    wf = parse_workflow({"name": "w", "start": "has-note", "max_visits": 3, "nodes": [
+        {"id": "has-note", "kind": "work", "prompt": "note there?",
+         "on_pass": "judge", "on_fail": "draft"},
+        {"id": "draft", "kind": "work", "next": "judge"},
+        {"id": "judge", "kind": "work", "prompt": "good?", "on_pass": None, "on_fail": "draft"},
+    ]})
+    res = WorkflowEngine(runner).run(wf, "t")
+    assert res.status == "completed"
+    first, second = seen
+    assert "Context from 'has-note':\nFAIL\nnote.json not present" in first
+    assert "Reviewer feedback" not in first
+    assert "Reviewer feedback (address this):\nFAIL\ncite the log line" in second
+
+
+def test_gate_learns_whether_its_fail_route_loops_back():
+    wf = parse_workflow({"name": "w", "start": "has-note", "max_visits": 3, "nodes": [
+        {"id": "has-note", "kind": "work", "prompt": "note there?",
+         "on_pass": "judge", "on_fail": "draft"},
+        {"id": "draft", "kind": "work", "next": "judge"},
+        {"id": "judge", "kind": "work", "prompt": "good?", "on_pass": None, "on_fail": "draft"},
+    ]})
+    eng, calls = _engine({"has-note": "FAIL none", "draft": "note", "judge": "PASS"})
+    eng.run(wf, "t")
+    by_id = {c.node.id: c for c in calls}
+    assert by_id["has-note"].fail_loops_back is False   # draft has not run yet
+    assert by_id["judge"].fail_loops_back is True       # draft already ran
 
 
 def test_sequential_nodes_share_one_working_dir(tmp_path):
