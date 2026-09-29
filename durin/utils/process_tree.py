@@ -24,8 +24,9 @@ __all__ = [
 def memory_snapshot() -> dict:
     """One cheap footprint snapshot of THIS process for telemetry/diagnostics:
     resident set, direct+transitive children total, thread count, gc gen
-    sizes, the glibc allocator's live-vs-retained split, and the host's
-    total/available memory for context."""
+    sizes, the glibc allocator's live-vs-retained split, the resident memory
+    outside that allocator, and the host's total/available memory for
+    context."""
     import gc
     import threading
 
@@ -37,6 +38,14 @@ def memory_snapshot() -> dict:
     # from genuine object growth without attaching a debugger.
     malloc = malloc_stats_mb() or {
         "system_mb": 0.0, "in_use_mb": 0.0, "free_mb": 0.0}
+    # Resident memory glibc malloc does not account for: CPython's object
+    # arenas (mapped directly, not malloc'd), native libraries that map their
+    # own memory, thread stacks, mapped code. A floor, not an exact figure:
+    # a malloc_trim returns pages to the OS while the arenas keep counting
+    # them, so right after one rss can sit below malloc_system_mb.
+    non_malloc = (
+        round(max(0.0, rss - malloc["system_mb"]), 1)
+        if malloc["system_mb"] > 0.0 else 0.0)
     return {
         "rss_mb": rss,
         "children_mb": children,
@@ -45,6 +54,7 @@ def memory_snapshot() -> dict:
         "malloc_system_mb": malloc["system_mb"],
         "malloc_in_use_mb": malloc["in_use_mb"],
         "malloc_free_mb": malloc["free_mb"],
+        "non_malloc_mb": non_malloc,
         "total_mb": total_memory_mb(),
         "available_mb": available_memory_mb(),
     }

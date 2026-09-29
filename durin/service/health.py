@@ -78,6 +78,10 @@ class MemoryDiagnosticsResult(Result):
     malloc_system_mb: float = 0.0
     malloc_in_use_mb: float = 0.0
     malloc_free_mb: float = 0.0
+    # Resident memory outside glibc malloc (CPython object arenas, native
+    # libraries' own mappings, thread stacks, code): growth here is out of
+    # the janitor's reach. A floor (rss minus the arenas); 0.0 = unknown.
+    non_malloc_mb: float = 0.0
     # Host context so a reader can judge headroom without a second call.
     total_mb: float
     available_mb: float

@@ -89,7 +89,11 @@ the engine lazily; a channel-manager sweep unloads it again after
 ``tts.idle_unload_s`` / ``transcription.idle_unload_s`` seconds without use
 (default 900; ``0`` keeps it resident — the right setting for a box where
 voice latency matters more than memory). Deleting the marker or the model
-cache is harmless: the next first-use downloads lazily.
+cache is harmless: the next first-use downloads lazily. An unloaded engine's
+memory goes back to glibc's arenas, which keep it resident until trimmed, so
+after any unload the sweep wakes the malloc janitor for an immediate trim
+(see [observability.md](observability.md)) instead of leaving the engine's
+footprint in RSS until the janitor's next periodic pass.
 
 A local transcription does all of its heavy work on worker threads: the
 engine build, the audio decode (PyAV demuxes and resamples the container to

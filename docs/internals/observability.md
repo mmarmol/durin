@@ -189,12 +189,32 @@ On glibc the snapshot includes the allocator's live-vs-retained split
 `mallinfo2`; 0.0 elsewhere), which separates "objects are growing" from
 "the allocator retains freed pages" without attaching a debugger — the
 distinction that resolved a box diagnosis of a 3.8GB-resident gateway holding
-only ~190MB live. The same tick acts as a malloc janitor: when `malloc_free_mb`
-exceeds a threshold it calls `malloc_trim(0)` (releases pages of
-already-freed arena chunks only — live allocations are untouchable by
-design) and emits `gateway.memory.trimmed` with the observed RSS
-before/after. Both helpers live in `durin/utils/glibc_malloc.py` and no-op
-off glibc.
+only ~190MB live. `non_malloc_mb` is the resident memory the allocator does
+not account for — RSS minus `malloc_system_mb`, floored at 0.0: CPython's
+object arenas (mapped directly, not malloc'd), native libraries that map
+their own memory, thread stacks, mapped code. Growth there is invisible in
+the malloc split and out of reach of any trim. It is a lower bound: a trim
+returns pages to the OS while the arenas keep counting them, so right after
+one RSS can sit below `malloc_system_mb`.
+
+The same tick acts as a malloc janitor (`_MallocJanitor` in
+`durin/service/wiring.py`): it calls `malloc_trim(0)`, which releases pages
+of already-freed arena chunks only — live allocations are untouchable by
+design. The trigger is relative and counts only memory freed since the last
+trim: it trims once that growth reaches half of `malloc_in_use_mb`, and
+never for less than 64 MB. Relative, because what counts as waste scales
+with the live heap. Since the last trim, because `mallinfo2` keeps counting
+trimmed pages as free, so `malloc_free_mb` stays high after a trim and an
+absolute bar would re-trim every pass for a few MB; the janitor tracks the
+lowest `malloc_free_mb` seen since its last trim and measures growth above
+it. `request_malloc_trim()` wakes the janitor for an immediate forced pass —
+the voice idle sweep calls it after unloading an engine, whose memory glibc
+would otherwise keep resident until the next tick. Each trim emits
+`gateway.memory.trimmed` (observed RSS before/after, the freed total and
+the part freed since the last trim, whether it was forced); the log line is
+INFO only when the trim gave back at least 64 MB of RSS, DEBUG otherwise.
+The ctypes helpers live in `durin/utils/glibc_malloc.py` and no-op off
+glibc.
 
 Tools call `emit_tool_event(event_type, data)` from
 `durin/agent/tools/_telemetry.py`. This free function:

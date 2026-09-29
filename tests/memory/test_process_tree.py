@@ -62,3 +62,27 @@ def test_memory_snapshot_has_malloc_fields() -> None:
         assert snap["malloc_system_mb"] == 0.0
         assert snap["malloc_in_use_mb"] == 0.0
         assert snap["malloc_free_mb"] == 0.0
+
+
+def _malloc(system_mb: float) -> dict:
+    return {"system_mb": system_mb, "in_use_mb": 170.0, "free_mb": system_mb - 170.0}
+
+
+def test_memory_snapshot_reports_resident_memory_outside_malloc(monkeypatch) -> None:
+    """Growth that never touches glibc malloc (CPython's own object arenas,
+    native libraries that map memory themselves) must be visible on its own,
+    not hidden inside rss_mb."""
+    from durin.utils.process_tree import memory_snapshot
+
+    monkeypatch.setattr("durin.utils.process_tree.tree_rss_mb", lambda: (900.0, 0.0))
+    monkeypatch.setattr("durin.utils.glibc_malloc.malloc_stats_mb", lambda: _malloc(420.0))
+    assert memory_snapshot()["non_malloc_mb"] == 480.0
+
+    # After a trim the arenas still count the released pages, so the
+    # difference can dip below zero: it is a floor, never negative.
+    monkeypatch.setattr("durin.utils.process_tree.tree_rss_mb", lambda: (300.0, 0.0))
+    assert memory_snapshot()["non_malloc_mb"] == 0.0
+
+    # No allocator signal (not glibc): unknown, not "all of rss".
+    monkeypatch.setattr("durin.utils.glibc_malloc.malloc_stats_mb", lambda: None)
+    assert memory_snapshot()["non_malloc_mb"] == 0.0

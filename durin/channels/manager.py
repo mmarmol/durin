@@ -510,6 +510,7 @@ class ChannelManager:
 
         while True:
             await _asyncio.sleep(60.0)
+            unloaded = False
             for svc, cfg, label in (
                 (getattr(self, "transcription", None),
                  getattr(self.config, "transcription", None), "Transcription"),
@@ -522,8 +523,16 @@ class ChannelManager:
                     idle_s = float(getattr(cfg, "idle_unload_s", 900) or 0)
                     if svc.unload_if_idle(idle_s):
                         logger.info("{} engine unloaded after idle", label)
+                        unloaded = True
                 except Exception:  # noqa: BLE001 - sweep must never die
                     logger.exception("{} idle unload failed", label)
+            if unloaded:
+                # The engine's memory goes back to glibc's arenas, which keep
+                # it resident until trimmed: trim now, not at the malloc
+                # janitor's next periodic pass.
+                from durin.service.wiring import request_malloc_trim
+
+                request_malloc_trim()
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""

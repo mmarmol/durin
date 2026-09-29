@@ -249,6 +249,21 @@ async def test_memory_diagnostics_reports_live_footprint(svc, local):
     assert out.children_mb >= 0
 
 
+@pytest.mark.asyncio
+async def test_memory_diagnostics_serves_the_memory_outside_malloc(svc, local, monkeypatch):
+    """The on-demand route answers the same question as the periodic
+    telemetry, including how much resident memory lives outside malloc."""
+    from durin.service.health import MemoryDiagnosticsQuery
+
+    monkeypatch.setattr("durin.utils.process_tree.memory_snapshot", lambda: {
+        "rss_mb": 900.0, "children_mb": 0.0, "threads": 12, "gc_counts": [0, 0, 0],
+        "malloc_system_mb": 420.0, "malloc_in_use_mb": 170.0, "malloc_free_mb": 250.0,
+        "non_malloc_mb": 480.0, "total_mb": 2000.0, "available_mb": 900.0,
+    })
+    out = await svc.memory_diagnostics(MemoryDiagnosticsQuery(), local)
+    assert out.non_malloc_mb == 480.0
+
+
 async def test_logs_list_telemetry_reads_the_instance_directory(svc, local, monkeypatch, tmp_path):
     """The telemetry source resolves the same directory the session logger writes."""
     from durin.config.paths import get_telemetry_dir

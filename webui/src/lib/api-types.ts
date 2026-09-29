@@ -4451,6 +4451,11 @@ export interface components {
              * @default 0
              */
             malloc_system_mb: number;
+            /**
+             * Non Malloc Mb
+             * @default 0
+             */
+            non_malloc_mb: number;
             /** Rss Mb */
             rss_mb: number;
             /** Threads */

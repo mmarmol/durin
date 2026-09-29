@@ -3801,6 +3801,11 @@
             "title": "Malloc System Mb",
             "type": "number"
           },
+          "non_malloc_mb": {
+            "default": 0.0,
+            "title": "Non Malloc Mb",
+            "type": "number"
+          },
           "rss_mb": {
             "title": "Rss Mb",
             "type": "number"

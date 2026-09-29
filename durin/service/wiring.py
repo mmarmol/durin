@@ -264,31 +264,107 @@ def start_periodic_run_reconciler(
 _MEMORY_TELEMETRY_PERIOD_S = 900.0
 _memory_telemetry_started = threading.Event()
 
-# Freed-but-unreturned glibc memory (malloc_free_mb) above which the tick
-# calls malloc_trim(0). Trim only releases pages of already-freed chunks,
-# so the threshold trades a few ms of arena-lock walk against gigabytes:
-# the 2026-07-24 box gateway held 3.8GB RSS with ~190MB live.
-_MALLOC_TRIM_THRESHOLD_MB = 512.0
+# Set to have the janitor run a pass, with a trim, now rather than at its
+# next periodic tick.
+_malloc_trim_requested = threading.Event()
+
+# The janitor calls malloc_trim(0) once the freed memory the arenas have
+# piled up since the last trim reaches this share of the live heap, and never
+# for less than the floor. Relative, because what counts as waste scales with
+# the heap: a gateway holding ~240MB freed against ~170MB live wastes more
+# than half its heap yet never reaches a fixed half-gigabyte bar. Since the
+# last trim, because mallinfo2 keeps counting trimmed pages as free
+# (malloc_trim madvises them away but leaves the chunks in the arena's
+# books), so after one large trim the free figure stays high and an absolute
+# bar re-trims on every pass for a few MB. The floor is also what makes a
+# release worth an INFO line.
+_MALLOC_TRIM_HELD_RATIO = 0.5
+_MALLOC_TRIM_MIN_MB = 64.0
 
 
-def _maybe_trim_malloc(snapshot: dict) -> dict | None:
-    """Trim glibc arenas when they retain more than the threshold of freed
-    memory. Returns the ``gateway.memory.trimmed`` payload, or None when no
-    trim ran (below threshold, or no glibc signal)."""
-    from durin.utils import glibc_malloc, process_tree
+class _MallocJanitor:
+    """When to trim glibc arenas, from one ``memory_snapshot`` per pass."""
 
-    retained = snapshot.get("malloc_free_mb", 0.0)
-    if snapshot.get("malloc_system_mb", 0.0) <= 0.0:
-        return None
-    if retained < _MALLOC_TRIM_THRESHOLD_MB:
-        return None
-    released = glibc_malloc.malloc_trim()
-    return {
-        "rss_before_mb": snapshot.get("rss_mb", 0.0),
-        "rss_after_mb": process_tree.process_rss_mb(),
-        "retained_mb": round(retained, 1),
-        "released": released,
-    }
+    def __init__(self) -> None:
+        # The lowest malloc_free_mb seen since the last trim: free memory
+        # above it has been freed since, and is resident until trimmed. Zero
+        # before the first trim, so all of the process' freed memory counts.
+        self._free_floor_mb = 0.0
+
+    def maybe_trim(self, snapshot: dict, *, force: bool = False) -> dict | None:
+        """Trim when enough freed memory has piled up since the last trim
+        (always, with ``force``). Returns the ``gateway.memory.trimmed``
+        payload, or None when no trim ran (below the bar, or no glibc)."""
+        from durin.utils import glibc_malloc, process_tree
+
+        if snapshot.get("malloc_system_mb", 0.0) <= 0.0:
+            return None
+        free_mb = snapshot.get("malloc_free_mb", 0.0)
+        self._free_floor_mb = min(self._free_floor_mb, free_mb)
+        grown_mb = free_mb - self._free_floor_mb
+        bar_mb = max(
+            _MALLOC_TRIM_MIN_MB,
+            _MALLOC_TRIM_HELD_RATIO * snapshot.get("malloc_in_use_mb", 0.0))
+        if not force and grown_mb < bar_mb:
+            return None
+        released = glibc_malloc.malloc_trim()
+        after = glibc_malloc.malloc_stats_mb()
+        self._free_floor_mb = after["free_mb"] if after else free_mb
+        return {
+            "rss_before_mb": snapshot.get("rss_mb", 0.0),
+            "rss_after_mb": process_tree.process_rss_mb(),
+            "retained_mb": round(free_mb, 1),
+            "grown_mb": round(grown_mb, 1),
+            "forced": force,
+            "released": released,
+        }
+
+
+def _janitor_pass(janitor: _MallocJanitor, *, force: bool) -> None:
+    """Emit one ``gateway.memory`` snapshot and trim if the janitor says so."""
+    from durin.agent.tools._telemetry import emit_tool_event
+    from durin.utils.process_tree import memory_snapshot
+
+    snapshot = memory_snapshot()
+    emit_tool_event("gateway.memory", snapshot)
+    trimmed = janitor.maybe_trim(snapshot, force=force)
+    if trimmed is None:
+        return
+    emit_tool_event("gateway.memory.trimmed", trimmed)
+    # A release worth reading about goes to INFO; a trim that gave back a
+    # few MB stays at DEBUG so the gateway log is not a trim diary.
+    freed_mb = trimmed["rss_before_mb"] - trimmed["rss_after_mb"]
+    log = logger.info if freed_mb >= _MALLOC_TRIM_MIN_MB else logger.debug
+    log(
+        "malloc janitor: trimmed glibc arenas "
+        f"(rss {trimmed['rss_before_mb']:.0f}MB -> "
+        f"{trimmed['rss_after_mb']:.0f}MB, "
+        f"retained {trimmed['retained_mb']:.0f}MB)")
+
+
+def _janitor_loop(period_s: float) -> None:
+    from durin.telemetry.logger import bind_telemetry, get_session_logger
+
+    # A fresh thread has no bound telemetry logger and emit_tool_event
+    # drops events without one — bind the gateway's own stream.
+    bind_telemetry(get_session_logger("gateway"), purpose="gateway")
+    janitor = _MallocJanitor()
+    force = False
+    while True:
+        try:
+            _janitor_pass(janitor, force=force)
+        except Exception:  # noqa: BLE001 - telemetry must never die
+            logger.exception("gateway memory telemetry failed")
+        force = _malloc_trim_requested.wait(period_s)
+        _malloc_trim_requested.clear()
+
+
+def request_malloc_trim() -> None:
+    """Have the malloc janitor run a pass and trim now, without waiting for
+    its next tick. For callers that just released a large block of memory
+    (a voice engine unload): glibc keeps it resident until trimmed. Never
+    blocks; does nothing until the janitor runs."""
+    _malloc_trim_requested.set()
 
 
 def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> bool:
@@ -302,38 +378,8 @@ def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> b
     if _memory_telemetry_started.is_set():
         return False
     _memory_telemetry_started.set()
-
-    def _emit_once() -> None:
-        from durin.agent.tools._telemetry import emit_tool_event
-        from durin.utils.process_tree import memory_snapshot
-
-        snapshot = memory_snapshot()
-        emit_tool_event("gateway.memory", snapshot)
-        trimmed = _maybe_trim_malloc(snapshot)
-        if trimmed is not None:
-            emit_tool_event("gateway.memory.trimmed", trimmed)
-            logger.info(
-                "malloc janitor: trimmed glibc arenas "
-                f"(rss {trimmed['rss_before_mb']:.0f}MB -> "
-                f"{trimmed['rss_after_mb']:.0f}MB, "
-                f"retained {trimmed['retained_mb']:.0f}MB)")
-
-    def _emit_forever() -> None:
-        import time
-
-        from durin.telemetry.logger import bind_telemetry, get_session_logger
-
-        # A fresh thread has no bound telemetry logger and emit_tool_event
-        # drops events without one — bind the gateway's own stream.
-        bind_telemetry(get_session_logger("gateway"), purpose="gateway")
-        while True:
-            try:
-                _emit_once()
-            except Exception:  # noqa: BLE001 - telemetry must never die
-                logger.exception("gateway memory telemetry failed")
-            time.sleep(period_s)
-
     threading.Thread(
-        target=_emit_forever, daemon=True, name="gateway-memory-telemetry",
+        target=_janitor_loop, args=(period_s,), daemon=True,
+        name="gateway-memory-telemetry",
     ).start()
     return True
