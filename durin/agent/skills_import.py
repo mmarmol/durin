@@ -412,6 +412,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     the gate needed no decision. They land in provenance, in the audit log and
     as commit trailers."""
     from durin.agent.skills_store import (
+        _mark_scripts_executable,
         _skill_md,
         _store_init,
         _sync_index,
@@ -444,6 +445,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     store = _store_init(workspace)
     shutil.copytree(quarantine_dir, dest,
                     ignore=shutil.ignore_patterns(".scan.json", ".git"))
+    _mark_scripts_executable(dest)
     chash = _content_hash(dest)
 
     def _stamp(data: dict) -> None:
