@@ -179,6 +179,31 @@ def test_a_request_during_a_rebuild_runs_one_more_pass(tmp_path, monkeypatch):
     assert idx.lookup("dave") == ["person:dave"]
 
 
+def test_a_request_during_a_searchs_first_build_runs_one_more_pass(tmp_path, monkeypatch):
+    root = tmp_path / "memory"
+    _save(root, "alice", "Alice")
+    gate = _Gate(monkeypatch)
+    got: list = []
+    search = threading.Thread(target=lambda: got.append(get_shared_alias_index(root)))
+    search.start()
+    assert gate.entered.wait(5)
+
+    # A dream finishes while a search's first build is still walking: that
+    # walk already listed the pages, so it cannot read frank.
+    _save(root, "frank", "Frank")
+    thread = refresh_alias_index_in_background(root)
+    assert thread is not None
+    thread.join(0.2)
+    assert thread.is_alive()  # the request waits for the build in flight
+
+    gate.open.set()
+    search.join(5)
+    thread.join(5)
+    assert not thread.is_alive()
+    assert got[0] is get_shared_alias_index(root)
+    assert got[0].lookup("frank") == ["person:frank"]
+
+
 def test_a_failed_rebuild_keeps_serving_and_does_not_block_the_next(tmp_path, monkeypatch):
     root = tmp_path / "memory"
     _save(root, "alice", "Alice")

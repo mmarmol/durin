@@ -134,7 +134,8 @@ def refresh_alias_index_in_background(memory_root: Path) -> threading.Thread | N
     rebuilt map swaps in. With none cached, this is the first build: callers
     arriving meanwhile wait for it instead of starting their own. A request
     while a rebuild is running folds into one more pass after it, so writes
-    landing mid-walk are read too.
+    landing mid-walk are read too; a request while a caller's first build is
+    running waits for that build, then runs one more pass.
 
     Returns the started thread, or ``None`` when the running rebuild took
     the request.
@@ -162,9 +163,18 @@ def _refresh_until_settled(memory_root: Path) -> None:
     while True:
         t0 = time.perf_counter()
         try:
+            # `_building` before `_cache`: a first build is published to the
+            # cache before it leaves `_building`, so it is seen in one of them.
+            in_flight = _building.get(memory_root)
             cached = _cache.get(memory_root)
             if cached is None:
+                # Builds the index, or waits for the first build in flight.
                 idx = get_shared_alias_index(memory_root)
+                if idx is in_flight:
+                    # That build started before this request, so its walk
+                    # may have listed the pages before the writes the
+                    # request is for: one more pass reads them.
+                    idx.build()
             else:
                 cached.build()
                 idx = cached

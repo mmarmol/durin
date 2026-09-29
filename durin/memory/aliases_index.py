@@ -19,11 +19,13 @@ Shape::
 Keys are lowercase-folded so lookup is case-insensitive. Values are full entity refs (``<type>:<slug>``), where
 *slug* is the filename — the authoritative identifier.
 
-**No disk persistence**: for typical durin
-corpus, `build()` is sub-second. Persisting a
-JSON sidecar to disk introduces drift risk if a `.md` is edited
-outside the tool (vim, git merge), so callers always rebuild on boot.
-Mutations during runtime (via :meth:`add`, :meth:`remove`,
+**No disk persistence**: each process builds its own map from the
+markdown — on first use, and in the gateway on a background thread at
+startup and after each dream worker exits (``aliases_cache``). A build
+walks every entity page and entry: seconds on a workspace with thousands
+of pages. Persisting a JSON sidecar to disk would save that walk but
+introduces drift risk if a `.md` is edited outside the tool (vim, git
+merge). Mutations during runtime (via :meth:`add`, :meth:`remove`,
 :meth:`refresh_for`) update the in-memory map only.
 
 Archive subfolders (``<slug>/archive/``) are skipped — those entries
@@ -51,8 +53,10 @@ class AliasIndex:
     """In-memory alias map.
 
     Lifecycle:
-    - ``build()`` — walk ``memory/entities/``, parse every page, populate.
-      Always called at boot to rebuild from disk (no persistent sidecar).
+    - ``build()`` — walk ``memory/entities/`` and the entry classes, parse
+      every page, swap the fresh map in. Runs on first use in a process and
+      again whenever the map must be re-read from disk (no persistent
+      sidecar).
     - ``add(page, slug)`` / ``remove(entity_ref)`` — incremental updates
       in memory (callers do not persist).
     - ``lookup(query)`` — return ordered list of candidate entity refs.
