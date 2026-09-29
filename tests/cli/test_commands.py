@@ -3110,6 +3110,47 @@ def test_a_gateway_stop_stops_intake_and_ends_sse_streams_before_uvicorn_exits(
     assert calls.index("ws.end_sse_streams") < calls.index("uvicorn.should_exit")
 
 
+def test_a_gateway_boot_logs_how_long_each_startup_phase_took(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A slow boot is diagnosed from gateway.log: one line per startup phase,
+    in boot order, with that phase's own duration and the time since start."""
+    import re
+
+    from loguru import logger
+
+    lines: list[str] = []
+    sink_id = logger.add(
+        lambda m: lines.append(m.record["message"]),
+        level="INFO",
+        filter=lambda r: r["message"].startswith("Startup:"),
+    )
+    try:
+        result, _calls, _kwargs = _run_gateway_with_fake_uvicorn(
+            monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result.exit_code == 0, result.output
+    line = re.compile(r"Startup: (.+) took (\d+\.\d\d)s \((\d+\.\d\d)s since start\)")
+    parsed = [line.fullmatch(text) for text in lines]
+    assert all(parsed), lines
+    assert [m.group(1) for m in parsed] == [
+        "config, providers and sessions",
+        "agent loop and memory services setup",
+        "automations setup",
+        "channels setup",
+        "embed server, dream and scheduled jobs setup",
+        "cron and housekeeping start",
+        "API and dashboard app build",
+    ]
+    # Each line's duration is its own phase, not the running total.
+    since = [0.0] + [float(m.group(3)) for m in parsed]
+    for i, m in enumerate(parsed):
+        assert abs(float(m.group(2)) - (since[i + 1] - since[i])) <= 0.02, lines
+
+
 def test_a_uvicorn_that_does_not_exit_is_cancelled_after_the_bound(
     monkeypatch, tmp_path: Path
 ) -> None:
