@@ -104,6 +104,7 @@ class TelemetryLogger:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._count = 0
+        self._lock = threading.Lock()
         # With a day stem the file is ``<day_stem>_<local date>.jsonl`` in
         # path's directory, and the date comes from each event's own
         # timestamp. A logger that outlives midnight (the gateway's memory
@@ -149,27 +150,35 @@ class TelemetryLogger:
         self._extra_sinks.append(sink)
 
     def log(self, event_type: str, data: dict[str, Any] | None = None) -> None:
-        ts = time.time()
-        if self._day_stem is not None:
-            path = self._path.with_name(f"{self._day_stem}_{_local_date(ts)}.jsonl")
-            if path != self._path:
-                # The event cap is per file, so a new day's file starts
-                # with a fresh count.
-                self._path = path
-                self._count = 0
-        if self._count >= _MAX_EVENTS_PER_FILE:
-            return
-        entry = {
-            "ts": ts,
-            "type": event_type,
-        }
-        if data:
-            entry["data"] = data
-        _append_line(
-            self._path,
-            json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n",
-        )
-        self._count += 1
+        # One logger can be used from several threads at once: asyncio.to_thread
+        # hands the bound logger to its worker thread through the copied
+        # context. Stamping, choosing the day's file, and writing happen
+        # under one lock, so events are written in the order they were
+        # stamped: a thread stamped before midnight can neither write into
+        # the new day's file nor move the logger back to the old one, count
+        # reset, after another thread moved it on.
+        with self._lock:
+            ts = time.time()
+            if self._day_stem is not None:
+                path = self._path.with_name(f"{self._day_stem}_{_local_date(ts)}.jsonl")
+                if path != self._path:
+                    # The count is this logger's writes to its current file,
+                    # so moving to a new day's file starts it again.
+                    self._path = path
+                    self._count = 0
+            if self._count >= _MAX_EVENTS_PER_FILE:
+                return
+            entry = {
+                "ts": ts,
+                "type": event_type,
+            }
+            if data:
+                entry["data"] = data
+            _append_line(
+                self._path,
+                json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n",
+            )
+            self._count += 1
         # Fan out to extra sinks (e.g. PushSink). Isolation: each sink
         # runs in its own try/except so a failure in one (network down,
         # endpoint 5xx, etc.) never affects the JSONL write or the

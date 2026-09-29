@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -128,6 +129,51 @@ class TestDayRollover:
 
         assert _types(tmp_path / "cron_dream_2026-09-27.jsonl") == ["a", "b"]
         assert _types(tmp_path / "cron_dream_2026-09-28.jsonl") == ["next_day"]
+
+    def test_a_thread_stamped_before_midnight_cannot_undo_another_threads_rollover(
+        self, tmp_path: Path, clock, monkeypatch,
+    ):
+        """The gateway's logger is shared by threads. One thread stamps its
+        event before midnight and is held up; another logs after midnight
+        meanwhile. The held one must not move the logger back to the day
+        before with a fresh count: that day's file is already at the cap."""
+        from durin.telemetry import logger as tlog
+
+        monkeypatch.setattr(tlog, "_MAX_EVENTS_PER_FILE", 2)
+        tl = get_session_logger("gateway", base_dir=tmp_path)
+        tl.log("a")
+        tl.log("b")
+        before_midnight = clock[0]
+        after_midnight = datetime(2026, 9, 28, 0, 0, 10).timestamp()
+        held_stamping = threading.Event()
+        other_logged = threading.Event()
+
+        def stamp() -> float:
+            if threading.current_thread().name != "held":
+                return after_midnight
+            held_stamping.set()
+            # Long enough for the other thread to log, unless the logger
+            # makes it wait for this event to be written first.
+            other_logged.wait(0.5)
+            return before_midnight
+
+        monkeypatch.setattr(tlog, "time", SimpleNamespace(time=stamp))
+
+        def log_after_midnight() -> None:
+            tl.log("after_midnight")
+            other_logged.set()
+
+        held = threading.Thread(target=tl.log, args=("held",), name="held")
+        other = threading.Thread(target=log_after_midnight)
+        held.start()
+        assert held_stamping.wait(5)
+        other.start()
+        held.join(5)
+        other.join(5)
+
+        assert _types(tmp_path / "gateway_2026-09-27.jsonl") == ["a", "b"]
+        assert _types(tmp_path / "gateway_2026-09-28.jsonl") == ["after_midnight"]
+        assert tl.path == tmp_path / "gateway_2026-09-28.jsonl"
 
     def test_logger_with_a_fixed_path_never_moves(self, tmp_path: Path, clock):
         path = tmp_path / "fixed.jsonl"

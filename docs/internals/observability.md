@@ -59,7 +59,7 @@ flowchart TD
         LR["AgentLoop._run_agent_loop\nbind_telemetry via ContextVar"]
         TE["Tool.execute\nemit_tool_event(type, data)"]
         TL["TelemetryLogger.log\nJSON appended to JSONL"]
-        JL["<telemetry dir>/\nSANITIZED_KEY_YYYY-MM-DD.jsonl\n(local date of each event,\nmax 10k events/file)"]
+        JL["<telemetry dir>/\nSANITIZED_KEY_YYYY-MM-DD.jsonl\n(local date of each event,\nmax 10k events per logger per file)"]
         PS["PushSink\nbatched HTTPS POST\n(optional, additive)"]
         RET["run_retention\ncompress 30d / delete 90d\n(piggybacks health-check tick)"]
         LC --> LR
@@ -217,15 +217,29 @@ A logger from `get_session_logger` names its file after the local calendar
 date of each event's own timestamp, worked out on every write. A logger that
 outlives midnight, such as the one the gateway's `gateway.memory` thread binds
 at startup and keeps for the life of the process, moves on to the new day's
-file, so a day's file holds exactly that day's events. The 10k-event cap counts per file, so each
-new day's file starts with a fresh budget. Readers do not depend on which file
-an event landed in: the log viewer and the dream digest walk files newest
-modified first and read each line's own `ts`, `durin memory stats` scans every
-file and filters by `ts`, retention ages a file by its modification time, and
-`workflow_runs(action="cost")` looks at the files dated a day either side of a
-run's start and end, which covers a node visit split across two days' files. A
-`TelemetryLogger` built directly on a path writes to that one file for its
-whole life.
+file, so a day's file holds exactly that day's events. One logger can be used
+from several threads at once (`asyncio.to_thread` hands the bound logger to
+its worker thread through the copied context): `log()` stamps the event, picks
+the day's file and writes the line under one per-logger lock, so a logger
+writes its events in the order it stamped them, and a thread stamped before
+midnight can neither write into the new day's file nor move the logger back to
+the old one after another thread moved it on.
+
+The 10k-event cap is a count each logger keeps of its own writes to its
+current file, not of the file's lines: it starts at zero when the logger is
+created and again when the logger moves to a new day's file, and it does not
+see lines the file already held or lines another logger writes to it.
+`get_session_logger` builds a new logger on every call, so one day's file,
+such as the gateway's, can be written by several loggers, each with its own
+count.
+
+Readers do not depend on which file an event landed in: the log viewer and the
+dream digest walk files newest modified first and read each line's own `ts`,
+`durin memory stats` scans every file and filters by `ts`, retention ages a
+file by its modification time, and `workflow_runs(action="cost")` looks at the
+files dated a day either side of a run's start and end, which covers a node
+visit split across two days' files. A `TelemetryLogger` built directly on a
+path writes to that one file for its whole life.
 
 When `telemetry.push.enabled` is true, `wire_push_sink` (called from
 `AgentLoop` during initialization) constructs a `PushSink`, resolves the bearer
