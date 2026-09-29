@@ -163,6 +163,10 @@ A second, response-wide budget (`memory.search.warm_max_chars`) governs which bl
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 
+### Where it runs
+
+`memory_search` runs the pipeline and its own work after it — converting hits into the response shape (reading entity pages and reference chunks from disk), the per-source cap, the in-context dedup, rendering, and the alias lookups behind the `ranking` label — in one worker thread (`asyncio.to_thread`), so a recall never blocks the event loop. That work touches no per-call state on the shared tool instance; the turn's eager surface, prefetch refs and telemetry binding reach the thread through the context copy `asyncio.to_thread` makes. The `memory.recall` row times it in three fields: `duration_ms` is the pipeline alone, `postprocess_duration_ms` the tool's work after it, and `total_duration_ms` the call's wall time up to the row, including the wait for a worker thread (see [07_telemetry_and_observability.md](07_telemetry_and_observability.md)).
+
 ---
 
 ## 5. Key types and entry points

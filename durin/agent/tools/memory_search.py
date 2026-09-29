@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from durin.memory.eager_surface import EagerSnapshot
     from durin.memory.entity_page import EntityPage
+    from durin.memory.scope import ScopePredicate
+    from durin.memory.search_pipeline import SearchPipelineResult
 
 
 def _skill_uri_to_path(uri: str) -> str:
@@ -641,6 +643,8 @@ class MemorySearchTool(Tool):
         return idx if idx.size() > 0 else None
 
     async def execute(self, **kwargs: Any) -> Any:
+        # Wall clock for the whole call, reported as `total_duration_ms`.
+        t_start = time.monotonic()
         query = str(kwargs.get("query") or "").strip()
         scope = str(kwargs.get("scope") or "all")
         level = str(kwargs.get("level") or "warm")
@@ -775,24 +779,61 @@ class MemorySearchTool(Tool):
             except AttributeError:
                 max_per_source = None
 
-        t0 = time.monotonic()
         # Off the event loop: the pipeline runs CPU/GIL-bound work (ONNX query
-        # embedding + Lance vector search) with no await, which would freeze the
-        # gateway loop on every recall — the highest-frequency tool path.
+        # embedding + Lance vector search) with no await, and the work after it
+        # reads entity pages and reference chunks from disk and renders the
+        # response. On the loop, either would freeze the gateway on every
+        # recall — the highest-frequency tool path — so one worker thread runs
+        # both.
         import asyncio
-        pipeline_result = await asyncio.to_thread(
-            run_search_pipeline,
-            self._workspace,
-            query,
-            keywords=keywords,
-            vector_index=vi,
-            limit=limit,
-            cross_encoder=cross_encoder,
-            cross_encoder_top_n=ce_top_n,
-            max_per_source=max_per_source,
-            scope=scope_predicate,
-        )
-        duration_ms = (time.monotonic() - t0) * 1000.0
+
+        def _search() -> dict[str, Any]:
+            t0 = time.monotonic()
+            pipeline_result = run_search_pipeline(
+                self._workspace,
+                query,
+                keywords=keywords,
+                vector_index=vi,
+                limit=limit,
+                cross_encoder=cross_encoder,
+                cross_encoder_top_n=ce_top_n,
+                max_per_source=max_per_source,
+                scope=scope_predicate,
+            )
+            duration_ms = (time.monotonic() - t0) * 1000.0
+            return self._finish_search(
+                pipeline_result,
+                query=query, scope=scope, level=level, kinds=kinds,
+                keywords=keywords, vi=vi, scope_predicate=scope_predicate,
+                page_cache=page_cache,
+                warm_excerpt_chars=warm_excerpt_chars,
+                warm_max_chars=warm_max_chars,
+                duration_ms=duration_ms, t_start=t_start,
+            )
+
+        return await asyncio.to_thread(_search)
+
+    def _finish_search(
+        self, pipeline_result: "SearchPipelineResult", *,
+        query: str, scope: str, level: str, kinds: str,
+        keywords: str | None, vi: Optional[VectorIndex],
+        scope_predicate: "ScopePredicate",
+        page_cache: dict[str, "EntityPage | None"],
+        warm_excerpt_chars: int, warm_max_chars: int,
+        duration_ms: float, t_start: float,
+    ) -> dict[str, Any]:
+        """Turn the pipeline's hits into the tool response and emit the
+        recall telemetry.
+
+        Runs on the search's worker thread, never on the event loop. It
+        touches no per-call state on ``self`` — this instance serves
+        concurrent calls — only the caller's own ``page_cache``, files on
+        disk, and the process-wide alias index, which locks internally. The
+        ContextVars it reads (the turn's eager surface and prefetch refs, the
+        bound telemetry logger) arrive through ``asyncio.to_thread``'s copy
+        of the caller's context.
+        """
+        t_post = time.monotonic()
 
         # Preserve `memory.recall.vector` telemetry (consumed by
         # `durin memory stats`'s vector_total counter). Emitted
@@ -985,6 +1026,7 @@ class MemorySearchTool(Tool):
         total_candidates = (
             pipeline_result.vector_count + pipeline_result.lexical_count
         )
+        now = time.monotonic()
         recall_payload: dict[str, Any] = {
             "query": query,
             "scope": scope,
@@ -992,6 +1034,8 @@ class MemorySearchTool(Tool):
             "result_count": len(results),
             "strategy": strategy,
             "duration_ms": duration_ms,
+            "postprocess_duration_ms": (now - t_post) * 1000.0,
+            "total_duration_ms": (now - t_start) * 1000.0,
             "total_candidates": total_candidates,
             "skill_result_count": sum(1 for r in results if r.kind == "skill"),
             "keywords": keywords,
