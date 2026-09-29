@@ -37,7 +37,7 @@ built from those files, never the reverse. A corrupted index is a recoverable
 condition — rebuild from the files.
 
 **One loop, many surfaces.** All chat channels (Telegram, Discord, Slack,
-Email, WebSocket, DingTalk, Feishu, Matrix, WeCom, and others), plus the CLI/TUI
+WhatsApp, Email and the dashboard's WebSocket), plus the CLI/TUI
 and the HTTP API, converge on the same `AgentLoop`. Each surface posts an
 `InboundMessage` to the `MessageBus`; the loop processes it identically regardless
 of origin and replies via the outbound side of the same bus.

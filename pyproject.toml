@@ -50,7 +50,6 @@ dependencies = [
     "openpyxl>=3.1.0,<4.0.0",
     "python-pptx>=1.0.0,<2.0.0",
     "websockets>=13.0,<18.0",
-    "lark-oapi>=1.4.0,<2.0.0",
     "textual>=8.2.0,<9.0.0",
     # `questionary` powers `durin onboard`'s interactive wizard. It used
     # to be an indirect dep that sometimes didn't get pulled in; making
@@ -119,19 +118,6 @@ slack = [
 ]
 discord = [
     "discord.py>=2.5.2,<3.0.0",
-]
-matrix = [
-    # Base matrix-nio covers the channel's full nio import set, including
-    # nio.crypto.attachments (AES media decryption via pycryptodome) and the
-    # sync-token store. The [e2e] extra (olm-encrypted rooms) is deliberately
-    # NOT included: python-olm has no wheels for modern macOS and its bundled
-    # libolm no longer builds under CMake >= 4 (verified 2026-07-10).
-    # E2EE-room support is a documented limitation, not a dependency.
-    "matrix-nio>=0.25,<0.27",
-    # Markdown -> HTML for org.matrix.custom.html formatted bodies.
-    "mistune>=3.0,<4.0",
-    # HTML sanitizer for outbound formatted bodies.
-    "nh3>=0.2,<1.0",
 ]
 stt = [
     # Fast on-CPU ASR runtime (Parakeet TDT v3 / SenseVoice) — prebuilt wheels.
@@ -271,12 +257,6 @@ ignore = ["E501"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = [
-    # Third-party: the lark_oapi (Feishu) SDK still uses the deprecated
-    # pkg_resources namespace API on import. Not our code; nothing to fix
-    # until the SDK migrates. Scoped to the exact messages so our own
-    # deprecations still surface.
-    "ignore:Deprecated call to `pkg_resources.declare_namespace:DeprecationWarning",
-    "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
     # Third-party: Starlette 1.3's TestClient prefers the new `httpx2` package
     # and warns when it falls back to `httpx` (which we pin <1.0 for the app's
     # own use). Test-only, and the httpx fallback stays through Starlette 1.x

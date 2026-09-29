@@ -199,10 +199,9 @@ class MessageTool(Tool, ContextAware):
             )
         chat_id = chat_id or default_chat_id
         # Only inherit default message_id when targeting the same channel+chat.
-        # Cross-chat sends must not carry the original message_id, because
-        # some channels (e.g. Feishu) use it to determine the target
-        # conversation via their Reply API, which would route the message
-        # to the wrong chat entirely.
+        # Cross-chat sends must not carry the original message_id: a channel
+        # that answers "in reply to" a message routes by that id, which would
+        # send the message to the wrong chat entirely.
         same_target = channel == default_channel and chat_id == default_chat_id
         if same_target:
             message_id = message_id or self._default_message_id.get()

@@ -22,11 +22,11 @@ def test_set_and_consume_restart_notice_env_roundtrip(monkeypatch):
     monkeypatch.delenv("DURIN_RESTART_NOTIFY_METADATA", raising=False)
     monkeypatch.delenv("DURIN_RESTART_STARTED_AT", raising=False)
 
-    set_restart_notice_to_env(channel="feishu", chat_id="oc_123")
+    set_restart_notice_to_env(channel="acme", chat_id="oc_123")
 
     notice = consume_restart_notice_from_env()
     assert notice is not None
-    assert notice.channel == "feishu"
+    assert notice.channel == "acme"
     assert notice.chat_id == "oc_123"
     assert notice.started_at_raw
     assert notice.metadata == {}
@@ -181,6 +181,6 @@ def test_should_show_cli_restart_notice():
     assert should_show_cli_restart_notice(notice, "cli:other") is False
     assert should_show_cli_restart_notice(notice, "direct") is True
 
-    non_cli = RestartNotice(channel="feishu", chat_id="oc_1", started_at_raw="100")
+    non_cli = RestartNotice(channel="acme", chat_id="oc_1", started_at_raw="100")
     assert should_show_cli_restart_notice(non_cli, "cli:direct") is False
 

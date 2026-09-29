@@ -116,12 +116,11 @@ def test_a_chat_this_process_does_not_serve_gets_no_note() -> None:
     ("slack:C123", ("slack", "C123")),
     ("slack:C123:1712345678.000100", ("slack", "C123")),
     ("email:ana@example.com:9f8e7d", ("email", "ana@example.com")),
-    ("feishu:oc_1:om_2", ("feishu", "oc_1")),
     ("discord:111:thread:222", ("discord", "222")),
     ("discord:333", ("discord", "333")),
     ("telegram:-100:topic:7", ("telegram", "-100")),
     ("telegram:42", ("telegram", "42")),
-    ("matrix:!room:example.org", ("matrix", "!room:example.org")),
+    ("acme:!room:example.org", ("acme", "!room:example.org")),
     ("unified:default", None),
     ("nocolon", None),
 ])

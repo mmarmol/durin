@@ -114,8 +114,7 @@ class ChannelManager:
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
         # Fire-and-forget tasks (e.g. the restart-completion notice) are
         # parked here so the event loop keeps a strong reference and does
-        # not garbage-collect them mid-flight. Same pattern the channels
-        # use (see dingtalk._background_tasks).
+        # not garbage-collect them mid-flight.
         self._background_tasks: set[asyncio.Task] = set()
 
         # Shared transcription service — built once from the global
@@ -224,7 +223,20 @@ class ChannelManager:
         self._ensure_channel_extras()
         from durin.channels.registry import discover_all
 
-        for name, cls in discover_all().items():
+        discovered = discover_all()
+        # A section enabled for a channel durin does not have — a retired
+        # built-in, or a plugin that is not installed — would otherwise be
+        # skipped without a word, and the channel would just go quiet.
+        extra_sections = getattr(self.config.channels, "model_extra", None) or {}
+        for name, section in extra_sections.items():
+            if name not in discovered and isinstance(section, dict) and section.get("enabled"):
+                logger.warning(
+                    "channels.{} is enabled, but durin has no channel named '{}' "
+                    "(a retired built-in, or a plugin that is not installed); "
+                    "it is not started", name, name,
+                )
+
+        for name, cls in discovered.items():
             section = getattr(self.config.channels, name, None)
             if section is None:
                 continue

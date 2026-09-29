@@ -1,8 +1,7 @@
 """Cross-process advisory file lock (reentrant, multi-platform).
 
-Extracted from durin/channels/msteams.py:_refs_file_lock and generalized so
-every whole-file read-modify-write can serialize across the gateway, the TUI's
-own AgentLoop, and cron processes that share one DURIN_HOME.
+Every whole-file read-modify-write serializes through it across the gateway,
+the TUI's own AgentLoop, and cron processes that share one DURIN_HOME.
 
 Lock-ordering invariants: always acquire config lock before session lock;
 never hold a file lock while making an LLM call.

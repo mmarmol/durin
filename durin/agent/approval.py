@@ -65,8 +65,7 @@ AUTONOMOUS_SESSION_PREFIXES: tuple[str, ...] = (
 # listed is treated as autonomous — an unrecognised context is not a person.
 INTERACTIVE_SESSION_PREFIXES: tuple[str, ...] = (
     "websocket:", "cli:", "slack:", "discord:", "telegram:", "whatsapp:",
-    "matrix:", "email:", "msteams:", "unified:", "feishu:", "dingtalk:",
-    "wecom:", "weixin:", "qq:",
+    "email:", "unified:",
 )
 
 

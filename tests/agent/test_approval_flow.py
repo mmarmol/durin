@@ -227,8 +227,9 @@ async def test_legacy_record_cannot_be_approved(tmp_path):
     assert out.status == "refused" and "legacy" in out.message
 
 
-def test_unified_and_extra_chat_channels_are_interactive():
-    for key in ("unified:default", "feishu:x", "dingtalk:x", "wecom:x", "weixin:x", "qq:x"):
+def test_unified_and_every_chat_channel_are_interactive():
+    for key in ("unified:default", "websocket:x", "slack:x", "discord:x",
+                "telegram:x", "whatsapp:x", "email:x"):
         assert approval.is_interactive(key)
     assert not approval.is_interactive("tui:x")
     assert not approval.is_interactive("cron:x")

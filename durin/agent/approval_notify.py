@@ -47,12 +47,12 @@ def chat_route(session_key: str | None) -> tuple[str, str] | None:
 
     A session key is ``<channel>:<chat_id>`` unless the channel scopes it to a
     thread, and then the thread part must not reach the channel as its chat
-    id. Slack, email and Feishu append the thread after the chat id (the agent
-    loop re-derives a Slack or email thread from the key when it answers);
-    Discord names the thread's own channel after ``:thread:``, which is the
-    chat to send to; a Telegram topic follows the chat id after ``:topic:``.
-    Any other channel keeps the whole rest as the chat id, since its ids may
-    contain colons (a Matrix room id does). ``unified:`` names no chat.
+    id. Slack and email append the thread after the chat id (the agent loop
+    re-derives the thread from the key when it answers); Discord names the
+    thread's own channel after ``:thread:``, which is the chat to send to; a
+    Telegram topic follows the chat id after ``:topic:``. Any other channel
+    keeps the whole rest as the chat id, since its ids may contain colons.
+    ``unified:`` names no chat.
     """
     channel, sep, rest = (session_key or "").partition(":")
     if not sep or not channel or not rest or channel == "unified":
@@ -61,7 +61,7 @@ def chat_route(session_key: str | None) -> tuple[str, str] | None:
         return channel, rest.rsplit(":thread:", 1)[1]
     if channel == "telegram" and ":topic:" in rest:
         return channel, rest.split(":topic:", 1)[0]
-    if channel in ("slack", "email", "feishu"):
+    if channel in ("slack", "email"):
         return channel, rest.split(":", 1)[0]
     return channel, rest
 

@@ -15,7 +15,7 @@ only marks that layout, so edits made there are not read.
 > **Quick start.** Run `durin onboard channels` to get an interactive wizard
 > that toggles channels on and off and asks for a channel's token when its
 > config has one (e.g. Telegram's `token`, Slack's `bot_token`). Set every other
-> credential (email, Matrix, DingTalk, WeCom…) in the dashboard or with
+> credential (email's server and password, …) in the dashboard or with
 > `durin config set`.
 
 ---
@@ -76,10 +76,9 @@ override > persona picked in the conversation > per-chat mapping > channel
 default > global default.
 
 When a sender is not on `allow_from`, a direct message from them on Telegram,
-Slack, Discord, WhatsApp or Feishu gets a **pairing code** (valid for 10
-minutes); what they post in a group is ignored. Email, Matrix, DingTalk,
-Microsoft Teams, QQ, WeCom and Weixin have no pairing — list senders (or
-`["*"]`) in `allow_from`. You approve or deny a code with `/pairing` from the
+Slack, Discord or WhatsApp gets a **pairing code** (valid for 10
+minutes); what they post in a group is ignored. Email has no pairing — list
+senders (or `["*"]`) in `allow_from`. You approve or deny a code with `/pairing` from the
 dashboard chat, the TUI, or an account listed in `allow_from`:
 
 ```
@@ -603,42 +602,6 @@ would.
 Replies are sent as styled HTML with a plain-text fallback: durin renders the
 response markdown to HTML for clients that display it, and includes the raw
 markdown as a plain-text alternative for clients that don't.
-
----
-
-## Remaining channels
-
-The following built-in channel adapters are included in durin. Each one reads
-its own config keys from its `__init__`. Consult the source module in
-`durin/channels/<name>.py` or run `durin onboard channels` to configure them
-interactively.
-
-| Channel | Module | Notes |
-|---|---|---|
-| Matrix | `matrix.py` | Requires the `matrix` pip extra (auto-installed) |
-| Microsoft Teams | `msteams.py` | Needs `PyJWT` with `cryptography` (both arrive with the `mcp` extra; otherwise `pip install 'PyJWT[crypto]'`) |
-| Feishu | `feishu.py` | |
-| DingTalk | `dingtalk.py` | Needs `dingtalk-stream` |
-| WeCom | `wecom.py` | Needs `wecom-aibot-sdk` |
-| Weixin | `weixin.py` | |
-| QQ | `qq.py` | Needs `qq-botpy` |
-
-The packages named for Microsoft Teams, DingTalk, WeCom and QQ are not
-installed automatically: add them to the environment durin runs in.
-
-All of them follow the same pattern: set `enabled` to `true` under
-`channels.<name>`, supply the credentials as `${secret:…}` references, and
-list the senders allowed to reach durin in `allow_from`; channels without
-pairing ignore everyone while it is empty. See the module's config class for
-the exact key names.
-
-Matrix rooms with end-to-end encryption enabled are not supported: the
-`matrix` extra ships without `olm` (the `[e2e]` extra of the underlying SDK),
-because `python-olm` no longer builds on modern platforms. Use unencrypted
-rooms, or a space configured without encryption. The `e2ee_enabled` config
-knob defaults to `true`, but the channel automatically downgrades it to
-`false` at startup when the `olm` bindings aren't installed, logging a
-warning instead of crashing.
 
 ---
 

@@ -325,7 +325,7 @@ same sinks (the stderr sink and, in daemon mode, the `gateway.log` JSONL sink).
 Without the bridge their INFO would be dropped by stdlib's default level and
 their WARNING/ERROR would fall through to stdout/stderr — i.e. `gateway.boot.log`,
 which the Logs panel excludes. Third-party libraries are bridged selectively
-instead, via `redirect_lib_logging` (e.g. `nio`, `botpy`, `Lark`, `websockets`),
+instead, via `redirect_lib_logging` (e.g. `websockets`),
 to keep their noise out of `gateway.log`.
 
 `daemon_status()` returns a `DaemonStatus` with `state ∈ {running, not_running,

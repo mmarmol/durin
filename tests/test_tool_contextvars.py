@@ -24,7 +24,7 @@ async def test_message_tool_keeps_task_local_context() -> None:
     tool = MessageTool(send_callback=send_callback)
 
     async def task_one() -> str:
-        tool.set_context(RequestContext(channel="feishu", chat_id="chat-a"))
+        tool.set_context(RequestContext(channel="acme", chat_id="chat-a"))
         entered.set()
         await release.wait()
         return await tool.execute(content="one")
@@ -37,9 +37,9 @@ async def test_message_tool_keeps_task_local_context() -> None:
 
     result_one, result_two = await asyncio.gather(task_one(), task_two())
 
-    assert result_one == "Message sent to feishu:chat-a"
+    assert result_one == "Message sent to acme:chat-a"
     assert result_two == "Message sent to email:chat-b"
-    assert ("feishu", "chat-a", "one") in seen
+    assert ("acme", "chat-a", "one") in seen
     assert ("email", "chat-b", "two") in seen
 
 
@@ -97,7 +97,7 @@ async def test_cron_tool_keeps_task_local_context(tmp_path) -> None:
     release = asyncio.Event()
 
     async def task_one() -> str:
-        tool.set_context(RequestContext(channel="feishu", chat_id="chat-a"))
+        tool.set_context(RequestContext(channel="acme", chat_id="chat-a"))
         entered.set()
         await release.wait()
         return await tool.execute(action="add", message="first", every_seconds=60)
@@ -114,7 +114,7 @@ async def test_cron_tool_keeps_task_local_context(tmp_path) -> None:
     assert result_two.startswith("Created job")
 
     jobs = tool._cron.list_jobs()
-    assert {job.payload.channel for job in jobs} == {"feishu", "email"}
+    assert {job.payload.channel for job in jobs} == {"acme", "email"}
     assert {job.payload.to for job in jobs} == {"chat-a", "chat-b"}
 
 
@@ -181,11 +181,11 @@ async def test_spawn_tool_basic_set_context_and_execute() -> None:
             return f"ok: {task}"
 
     tool = SpawnTool(_Manager())
-    tool.set_context(RequestContext(channel="feishu", chat_id="chat-abc"))
+    tool.set_context(RequestContext(channel="acme", chat_id="chat-abc"))
 
     result = await tool.execute(task="do something")
     assert result == "ok: do something"
-    assert seen == [("feishu", "chat-abc", "feishu:chat-abc")]
+    assert seen == [("acme", "chat-abc", "acme:chat-abc")]
 
 
 @pytest.mark.asyncio
@@ -222,14 +222,14 @@ async def test_spawn_tool_default_values_without_set_context() -> None:
 async def test_cron_tool_basic_set_context_and_execute(tmp_path) -> None:
     """Single task: set_context then add job should use correct target."""
     tool = CronTool(CronService(tmp_path / "jobs.json"))
-    tool.set_context(RequestContext(channel="wechat", chat_id="user-789"))
+    tool.set_context(RequestContext(channel="acme", chat_id="user-789"))
 
     result = await tool.execute(action="add", message="standup", every_seconds=300)
     assert result.startswith("Created job")
 
     jobs = tool._cron.list_jobs()
     assert len(jobs) == 1
-    assert jobs[0].payload.channel == "wechat"
+    assert jobs[0].payload.channel == "acme"
     assert jobs[0].payload.to == "user-789"
 
 

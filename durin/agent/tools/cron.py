@@ -26,7 +26,7 @@ _CRON_PARAMETERS = tool_parameters_schema(
     ),
     message=StringSchema(
         "REQUIRED when action='add'. Instruction for the agent to execute when the job triggers "
-        "(e.g., 'Send a reminder to WeChat: xxx' or 'Check system status and report'). "
+        "(e.g., 'Send a reminder to Telegram: xxx' or 'Check system status and report'). "
         "Also accepted by action='update' to replace the message (omit to keep the current one). "
         "Not used for action='list' or action='remove'."
     ),

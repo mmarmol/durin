@@ -195,6 +195,44 @@ async def test_manager_loads_plugin_from_dict_config():
 
 
 @pytest.mark.asyncio
+async def test_an_enabled_section_with_no_channel_is_reported():
+    """A channel enabled in config that durin does not have — a retired
+    built-in such as feishu, or a plugin that is not installed — was skipped
+    without a word, so the channel just went quiet after an upgrade."""
+    from loguru import logger
+
+    from durin.channels.manager import ChannelManager
+
+    fake_config = SimpleNamespace(
+        channels=ChannelsConfig.model_validate({
+            "fakeplugin": {"enabled": True, "allowFrom": ["*"]},
+            "feishu": {"enabled": True, "appId": "x"},
+            "oldthing": {"enabled": False},
+        }),
+        providers=SimpleNamespace(groq=SimpleNamespace(api_key="", api_base="")),
+    )
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(m.record["message"]), level="WARNING")
+    try:
+        with patch(
+            "durin.channels.registry.discover_all",
+            return_value={"fakeplugin": _FakePlugin},
+        ):
+            mgr = ChannelManager.__new__(ChannelManager)
+            mgr.config = fake_config
+            mgr.bus = MessageBus()
+            mgr.channels = {}
+            mgr._dispatch_task = None
+            mgr._init_channels()
+    finally:
+        logger.remove(sink_id)
+
+    assert "fakeplugin" in mgr.channels
+    unknown = [m for m in records if "no channel named" in m]
+    assert len(unknown) == 1 and "'feishu'" in unknown[0]
+
+
+@pytest.mark.asyncio
 async def test_manager_propagates_groq_transcription_api_base_to_channels():
     from durin.channels.manager import ChannelManager
 
@@ -806,25 +844,25 @@ def test_outbound_duplicate_suppression_is_scoped_to_origin_message() -> None:
     mgr._origin_reply_fingerprints = {}
 
     first = OutboundMessage(
-        channel="feishu",
+        channel="acme",
         chat_id="chat123",
         content="Done",
         metadata={"message_id": "msg-1"},
     )
     duplicate = OutboundMessage(
-        channel="feishu",
+        channel="acme",
         chat_id="chat123",
         content="  Done  ",
         metadata={"origin_message_id": "msg-1"},
     )
     separate_turn = OutboundMessage(
-        channel="feishu",
+        channel="acme",
         chat_id="chat123",
         content="Done",
         metadata={"message_id": "msg-2"},
     )
     new_origin_content = OutboundMessage(
-        channel="feishu",
+        channel="acme",
         chat_id="chat123",
         content="Done with extra details",
         metadata={"origin_message_id": "msg-1"},
@@ -1280,12 +1318,12 @@ async def test_notify_restart_done_enqueues_outbound_message():
     mgr = ChannelManager.__new__(ChannelManager)
     mgr.config = fake_config
     mgr.bus = MessageBus()
-    mgr.channels = {"feishu": _StartableChannel(fake_config, mgr.bus)}
+    mgr.channels = {"acme": _StartableChannel(fake_config, mgr.bus)}
     mgr._dispatch_task = None
     mgr._background_tasks = set()
     mgr._send_with_retry = AsyncMock()
 
-    notice = RestartNotice(channel="feishu", chat_id="oc_123", started_at_raw="100.0")
+    notice = RestartNotice(channel="acme", chat_id="oc_123", started_at_raw="100.0")
     with patch("durin.channels.manager.consume_restart_notice_from_env", return_value=notice):
         mgr._notify_restart_done_if_needed()
 
@@ -1297,8 +1335,8 @@ async def test_notify_restart_done_enqueues_outbound_message():
     await task
     mgr._send_with_retry.assert_awaited_once()
     sent_channel, sent_msg = mgr._send_with_retry.await_args.args
-    assert sent_channel is mgr.channels["feishu"]
-    assert sent_msg.channel == "feishu"
+    assert sent_channel is mgr.channels["acme"]
+    assert sent_msg.channel == "acme"
     assert sent_msg.chat_id == "oc_123"
     assert sent_msg.content.startswith("Restart completed")
 
