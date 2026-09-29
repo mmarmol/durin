@@ -48,12 +48,19 @@ _CATALOG_LINE_DESC_CHARS = 100
 
 
 def _deferrable_mcp_tools(registry: ToolRegistry) -> list[Tool]:
+    """Tools served by MCP servers, in registration order.
+
+    Built-ins that share the ``mcp_`` prefix (``mcp_manage``, ``mcp_search``)
+    are registered by the ToolLoader, which only picks up plugin-discoverable
+    classes; MCP server wrappers opt out of discovery. Checking that flag keeps
+    those built-ins out of both the size estimate and the deferral.
+    """
     tools = []
     for name in registry.tool_names:
         if not name.startswith("mcp_") or name in _BRIDGE_NAMES:
             continue
         tool = registry.get(name)
-        if tool is not None:
+        if tool is not None and not getattr(tool, "_plugin_discoverable", True):
             tools.append(tool)
     return tools
 

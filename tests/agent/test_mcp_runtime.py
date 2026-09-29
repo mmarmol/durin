@@ -84,6 +84,9 @@ async def test_connect_mcp_logs_the_mcp_schema_status_once(tmp_path, monkeypatch
     lines = [line for line in logged if line.startswith("MCP tool schemas")]
     assert len(lines) == 1
     assert "deferral inactive" in lines[0]
+    # The loop's own mcp_manage / mcp_search built-ins are not MCP server tools.
+    assert loop.tools.has("mcp_manage") and loop.tools.has("mcp_search")
+    assert "2 definitions" in lines[0]
 
 
 async def test_connect_mcp_skips_disabled_servers(tmp_path, monkeypatch):

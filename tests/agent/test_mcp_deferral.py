@@ -62,6 +62,25 @@ class _BuiltinTool(Tool):
         return "ok"
 
 
+@tool_parameters(tool_parameters_schema(required=[]))
+class _LoaderToolNamedMcp(Tool):
+    """A ToolLoader built-in whose name starts with ``mcp_`` (like mcp_manage)."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "built-in that manages MCP servers"
+
+    async def execute(self, **kwargs: Any) -> Any:
+        return "ok"
+
+
 def _registry(mcp_count: int = 3) -> tuple[ToolRegistry, list[_StubMcpTool]]:
     registry = ToolRegistry()
     registry.register(_BuiltinTool())
@@ -112,6 +131,20 @@ def test_above_threshold_defers_mcp_but_never_builtins():
     assert "mcp_srv_tool0" not in names          # deferred hidden
     # ...but still registered and executable.
     assert registry.has("mcp_srv_tool0")
+
+
+def test_builtins_named_mcp_are_neither_counted_nor_deferred():
+    registry, stubs = _registry()
+    registry.register(_LoaderToolNamedMcp("mcp_manage"))
+
+    [line] = _status_lines(registry, _cfg(threshold_tokens=10_000_000))
+    assert f"{len(stubs)} definitions" in line
+
+    assert maybe_defer_mcp_tools(registry, _cfg(threshold_tokens=1)) == len(stubs)
+    assert "mcp_manage" in _definition_names(registry)
+    assert "mcp_manage" not in registry.get("mcp_find_tools").description
+    invoke = registry.get("mcp_invoke")
+    assert "error" in asyncio.run(invoke.execute(name="mcp_manage"))
 
 
 def test_find_tools_lists_catalog_and_returns_schemas():
