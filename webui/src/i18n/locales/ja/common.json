@@ -2458,6 +2458,8 @@
     "loading": "読み込み中…",
     "empty": "dream の活動はまだありません。",
     "view": "表示",
+    "pendingDecisions_one": "Dream の判断が 1 件、保留中で待っています",
+    "pendingDecisions_other": "Dream の判断が {{count}} 件、保留中で待っています",
     "kind": {
       "merged": "マージ済み",
       "created": "作成済み",
@@ -2479,21 +2481,11 @@
       "aliases": "エイリアス",
       "identifiers": "識別子"
     },
-    "tabs": {
-      "resumen": "概要",
-      "bandeja": "受信箱"
-    },
     "bandeja": {
-      "flaggedTitle": "レビュー対象としてフラグされたメモリ",
-      "quarantineTitle": "隔離中のスキル",
       "merge": "マージ",
       "keepSeparate": "別々のままにする",
       "reviewInSkills": "Skills でレビュー",
-      "emptyFlagged": "レビュー対象のメモリペアはありません。",
-      "emptyQuarantine": "隔離中のスキルはありません。",
       "resolveError": "ペアを解決できませんでした — 既に処理済みの可能性があります。更新して現在の状態を確認してください。",
-      "suggestionsTitle": "スキルの提案",
-      "emptySuggestions": "現在、スキルの提案はありません。",
       "accept": "承諾",
       "reject": "却下",
       "rejectHint": "却下すると約30日間表示されなくなります",

@@ -91,7 +91,7 @@ flowchart TD
     DELTA --> JUDGE
     DRIFT -.->|safe upstream body, as evidence| JUDGE
     JUDGE -->|auto skills| SKILLS
-    JUDGE -->|manual skills, gated by\nskill_suggestions_enabled| BANDEJA[".suggestions.json\n+ expiring tombstones"]
+    JUDGE -->|manual skills, gated by\nskill_suggestions_enabled| SUGG[".suggestions.json\n+ expiring tombstones"]
     JUDGE -->|per-observation disposition| OBSQ
     JUDGE -->|principle| PRIN[".principles.jsonl (cap 12)"]
 ```
@@ -696,10 +696,9 @@ decisions about external content are never made silently.
 - **In-session tool** — `skill_observe` (`scope="core"`) is the only
   in-loop entry point that writes to the observation queue directly; it logs
   only and never mutates a skill (see `00_overview.md`'s tool table).
-- **WebUI** — the Dream section's Inbox tab surfaces manual-skill
-  suggestions (accept/reject) alongside flagged memory pairs and quarantined
-  skills; see `../memory/05_dream_cold_path.md` §6 for the shared Inbox
-  layout. The Skills panel (`SkillsView`) shows each skill's open-observation
+- **WebUI** — manual-skill suggestions (accept/reject) wait on the Pending
+  page with the dream's flagged memory pairs, and the Dream section counts
+  both and links there; see `../memory/05_dream_cold_path.md` §6. The Skills panel (`SkillsView`) shows each skill's open-observation
   count as a badge and 30-day usage summary (see
   `03_telemetry_and_effectiveness.md` for what feeds those numbers).
 - **CLI** — `durin memory dream` runs the core consolidation passes but **not**

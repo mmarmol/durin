@@ -18,6 +18,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     runWorkflow: vi.fn(),
     listWorkflowRuns: vi.fn(),
     listAllWorkflowRuns: vi.fn(),
+    listSeedSuggestions: vi.fn(),
+    listModes: vi.fn(),
+    listWorkflowScripts: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
   };
 });
@@ -38,6 +41,9 @@ beforeEach(() => {
   vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   vi.mocked(api.listWorkflows).mockResolvedValue(["demo"]);
   vi.mocked(api.listPersonas).mockResolvedValue({ personas: [], default: null });
+  vi.mocked(api.listSeedSuggestions).mockResolvedValue([]);
+  vi.mocked(api.listModes).mockResolvedValue([]);
+  vi.mocked(api.listWorkflowScripts).mockResolvedValue([]);
   vi.mocked(api.getWorkflow).mockResolvedValue({
     name: "demo",
     start: "start",

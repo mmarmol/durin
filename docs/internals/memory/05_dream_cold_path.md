@@ -832,7 +832,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `related` / `unclear` + confidence and an optional proposed resolution. |
 | `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with read-only tools (entity page, lineage, source conversations, source documents, search) to investigate a borderline pair, then forces one tool-free final-answer call when the investigation ends without the envelope; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
 | `default_llm_invoke` / `LLMResponse` | `durin/memory/llm_invoke.py` | The one-prompt invoke every pass uses (resolves `agents.aux_models.memory`, runs the provider's retry policy). Its reply carries the answer as `text` — and as `content`, the name the provider layer's own response uses — plus token counts and `finish_reason`; `"error"` means the text is the provider's error message, not an answer. A pass that takes its own `llm_invoke` must accept this shape. |
-| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs awaiting a human decision, with the judge's `proposal` and `source`. `remove_flagged` is called after the pair is resolved so it no longer appears in the Inbox. |
+| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs awaiting a human decision, with the judge's `proposal` and `source`. `remove_flagged` is called after the pair is resolved so it no longer appears on the Pending page. |
 | `rekey_ref_in_stores` / `read_tombstones` | `durin/memory/refine_dream.py` | Move tombstones and flagged pairs to a new key after a rename or merge (dropping verdict-cache entries for the old key); list the user's kept-separate pairs. |
 | `Resolution` / `validate_resolution` / `apply_resolution` / `resolution_from_judge` | `durin/memory/pair_resolution.py` | What to do with a colliding pair (merge into a survivor, disambiguate aliases, relate, keep, clearer keys); the validation gate; the writer; the mapping from a judge answer. |
 | `rename_entity` / `collect_ref_rewrites` / `check_new_key` | `durin/memory/entity_rename.py` | Key change with every reference redirected in one commit; the reference rewrite shared with the merge; the key-availability check. |
@@ -871,7 +871,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `70` | Confidence floor (0–100) from which the Tier 1 judge's borderline verdicts (`unclear`, or `same` below the merge floor) escalate to a bounded sub-agent for deeper investigation. `0` disables Tier 2 entirely. |
 | `memory.dream.auto_absorb.tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged for review. |
-| `memory.dream.auto_absorb.auto_resolve` | `true` | The dream applies confident non-merge resolutions itself; off, every proposal goes to the Inbox. |
+| `memory.dream.auto_absorb.auto_resolve` | `true` | The dream applies confident non-merge resolutions itself; off, every proposal waits on the Pending page. |
 | `memory.dream.auto_absorb.resolve_threshold` | `85` | Judge confidence floor (0–100) for applying a non-merge resolution automatically. |
 | `memory.dream.auto_absorb.auto_rename` | `true` | Allow automatic resolutions and merges to change a key; off, the rest is applied and keys stay. |
 
@@ -907,9 +907,10 @@ on the default provider (see `docs/internals/providers.md`).
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
   `durin memory revert`, `durin memory history`.
 - **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
-  `DreamDrawer` in `webui/src/components/`) has two tabs.
+  `DreamDrawer` in `webui/src/components/`) shows what the dream did; what it
+  leaves for a person to decide is decided on the Pending page.
 
-  **Summary tab** — headed by a **Last run** card showing the most
+  **Summary** — headed by a **Last run** card showing the most
   recent run's counts (sessions, entity updates, merges, new skills, improved
   skills — always shown, even all-zero, so an idle run is never blank; "new"
   comes from the skill-extract pass, "improved" from the curation pass), with a
@@ -934,8 +935,13 @@ on the default provider (see `docs/internals/providers.md`).
   durable run store, so a busy refine pass that floods the telemetry read window
   cannot make the "Last run" card vanish.
 
-  **Inbox tab** (the `BandejaTab` component) — surfaces two categories of items
-  that need human attention, with a badge on the tab when items are present.
+  **The dream's decisions** — when memory pairs or skill suggestions wait, a
+  line above the summary counts them ("3 dream decisions are waiting in
+  Pending") and opens the Pending page scrolled to the memory pairs, or to the
+  skill suggestions when no pair waits. The count is read from
+  `GET /api/v1/memory/flagged-pairs` and `GET /api/v1/skills/suggestions` when
+  the page opens and again when a run finishes. Pending lists both kinds from
+  `GET /api/v1/pending`, each with its own card:
 
   - *Flagged memory pairs* — pairs the dream could not settle on its own
     (stored in `memory/.flagged_pairs.json`). Each card (`FlaggedPairCard`)
@@ -952,14 +958,9 @@ on the default provider (see `docs/internals/providers.md`).
     `relation`) or `accept` (the stored proposal); everything but a merge
     tombstones the pair. A stale pair (a page gone) answers 409, an invalid
     edit (a taken key, a bad slug) 422 with the reason, which the card shows.
-    The list is fetched on tab load via `GET /api/v1/memory/flagged-pairs`
-    (`MemoryService.flagged_pairs`), which also returns both pages' names and
+    Each pair comes from the flag store through `flagged_pair_list`
+    (`durin/service/memory.py`), which also returns both pages' names and
     aliases so the editor needs no extra round-trip.
-
-  - *Quarantined skills* — the existing quarantine list surfaced as a secondary
-    section. Each card shows the skill name and routes the user to the Skills
-    section for the full triage workflow; the Inbox does not duplicate the
-    triage UI.
 
   - *Skill suggestions* — proposed curation actions (improve / retire)
     for `mode=manual` skills, generated by the post-dream curation step when

@@ -312,7 +312,7 @@ them — there is no separate skills-specific telemetry sink.
   and `memory.dream.skill_signals` becomes an `"improved"` item, each
   deep-linking to the named skill when a specific one is identified. This is
   the same digest DreamView renders for entity merges and discoveries — see
-  `../memory/05_dream_cold_path.md` §6 for the full Summary/Inbox layout.
+  `../memory/05_dream_cold_path.md` §6 for the full Dream section layout.
 - The **Skills panel** (`SkillsView.tsx`) reads `use_count`, `last_used_ms`,
   and `open_observations` per skill from `GET /api/v1/skills`, enriched
   server-side by `_enrich_usage`

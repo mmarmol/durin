@@ -11,7 +11,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     listAllAutomationRuns: vi.fn().mockResolvedValue([]),
+    listAllWorkflowRuns: vi.fn().mockResolvedValue([]),
     listPending: vi.fn().mockResolvedValue({ items: [], count: 0, errors: [] }),
+    getConfig: vi.fn().mockResolvedValue({ config: {} }),
+    getExtraStatus: vi.fn().mockResolvedValue({ present: false }),
   };
 });
 

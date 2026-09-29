@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
-import { DreamView } from "@/components/DreamView";
+import { DreamView, type DreamPendingSource } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
 import { AutomationsView } from "@/components/AutomationsView";
@@ -348,6 +348,9 @@ function Shell({
   // A deep link into Skills' triage pane for one quarantined import, set by
   // the Pending page's "Review in Skills". Cleared by the plain Skills nav.
   const [openSkillTriage, setOpenSkillTriage] = useState<string | null>(null);
+  // The Pending section to scroll to, set by the Dream page's "decisions
+  // waiting in Pending" line. Cleared by the plain Pending nav.
+  const [pendingFocus, setPendingFocus] = useState<DreamPendingSource | null>(null);
   // A deep link into the Automations section's detail view, set by the cron
   // settings screen's "Abrir automatización →" (onOpenAutomationDetail
   // below). Cleared by the plain Automations nav (onOpenAutomations) so a
@@ -516,6 +519,13 @@ function Shell({
   }, []);
 
   const onOpenPending = useCallback(() => {
+    setPendingFocus(null);
+    setView("pending");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenPendingAt = useCallback((source: DreamPendingSource) => {
+    setPendingFocus(source);
     setView("pending");
     setMobileSidebarOpen(false);
   }, []);
@@ -849,6 +859,7 @@ function Shell({
         {view === "pending" && (
           <div className="absolute inset-0 flex flex-col">
             <PendingView
+              focusSource={pendingFocus ?? undefined}
               onCountChange={setPendingCount}
               onOpenSkill={onOpenSkillTriage}
               onOpenWorkflowRun={onOpenWorkflowRun}
@@ -887,7 +898,7 @@ function Shell({
         )}
         {view === "dream" && (
           <div className="absolute inset-0 flex flex-col">
-            <DreamView onOpenSkills={onOpenSkills} />
+            <DreamView onOpenPending={onOpenPendingAt} />
           </div>
         )}
       </main>

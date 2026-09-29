@@ -4,25 +4,14 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
-import { FlaggedPairCard, flaggedResolveErrorMessage } from "@/components/FlaggedPairCard";
-import { QuarantineCard } from "@/components/QuarantineCard";
-import { SkillSuggestionCard, suggestionErrorMessage } from "@/components/SkillSuggestionCard";
 import {
   fetchDreamDigest,
   fetchFlaggedPairs,
   fetchSkillSuggestions,
-  acceptSkillSuggestion,
-  rejectSkillSuggestion,
-  listQuarantine,
-  resolveFlaggedPair,
   runCronJob,
   type DreamDigest,
   type DreamEvent,
   type DreamLastRun,
-  type FlaggedPair,
-  type QuarantineRow,
-  type ResolveFlaggedBody,
-  type SkillSuggestion,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 
@@ -162,233 +151,15 @@ function LastRunCard({ lastRun, running }: LastRunCardProps) {
   );
 }
 
-export function SkillSuggestionsSection({
-  token,
-  onCountChange,
-}: {
-  token: string;
-  onCountChange: (n: number) => void;
-}) {
-  const { t } = useTranslation();
-  const [items, setItems] = useState<SkillSuggestion[]>([]);
-  const [busy, setBusy] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchSkillSuggestions(token).then((s) => {
-      if (!cancelled) {
-        setItems(s);
-        onCountChange(s.length);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  const resolve = useCallback(
-    async (id: string, action: "accept" | "reject") => {
-      setBusy((p) => new Set(p).add(id));
-      setError(null);
-      try {
-        if (action === "accept") await acceptSkillSuggestion(token, id);
-        else await rejectSkillSuggestion(token, id);
-        setItems((prev) => {
-          const next = prev.filter((s) => s.id !== id);
-          onCountChange(next.length);
-          return next;
-        });
-      } catch (e) {
-        setError(suggestionErrorMessage(e, t));
-      } finally {
-        setBusy((p) => {
-          const n = new Set(p);
-          n.delete(id);
-          return n;
-        });
-      }
-    },
-    [token, onCountChange, t],
-  );
-
-  return (
-    <section>
-      <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t("dream.bandeja.suggestionsTitle")}
-      </h2>
-      {error && (
-        <p className="mb-2 text-sm text-destructive">{error}</p>
-      )}
-      {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t("dream.bandeja.emptySuggestions")}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {items.map((s) => (
-            <SkillSuggestionCard
-              key={s.id}
-              suggestion={s}
-              busy={busy.has(s.id)}
-              onResolve={(action) => void resolve(s.id, action)}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-interface BandejaTabProps {
-  onOpen: (target: DrawerTarget) => void;
-  onOpenSkills?: () => void;
-  onCountChange: (count: number) => void;
-}
-
-function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
-  const { token } = useClient();
-  const { t } = useTranslation();
-
-  const [pairs, setPairs] = useState<FlaggedPair[]>([]);
-  const [quarantine, setQuarantine] = useState<QuarantineRow[]>([]);
-  const [suggestionsCount, setSuggestionsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(new Set());
-  const [resolveError, setResolveError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([fetchFlaggedPairs(token), listQuarantine(token)])
-      .then(([p, q]) => {
-        if (!cancelled) {
-          setPairs(p);
-          setQuarantine(q);
-          onCountChange(p.length + q.length + suggestionsCount);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  // onCountChange is stable (useCallback in parent) so it's safe to include
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  const handleResolve = useCallback(
-    async (pair: FlaggedPair, body: ResolveFlaggedBody) => {
-      const key = `${pair.ref_a}:${pair.ref_b}`;
-      setResolvingKeys((prev) => new Set(prev).add(key));
-      setResolveError(null);
-      try {
-        const res = await resolveFlaggedPair(token, body);
-        // A merge or a rename changes keys, and the server moves other flagged
-        // pairs to the new keys — the cards on screen would act on refs that
-        // no longer exist, so reload the list instead of dropping one card.
-        const keysChanged = Object.entries(res?.refs ?? {}).some(([from, to]) => from !== to);
-        if (keysChanged) {
-          const fresh = await fetchFlaggedPairs(token);
-          setPairs(fresh);
-          onCountChange(fresh.length + quarantine.length + suggestionsCount);
-        } else {
-          setPairs((prev) => {
-            const next = prev.filter((p) => !(p.ref_a === pair.ref_a && p.ref_b === pair.ref_b));
-            onCountChange(next.length + quarantine.length + suggestionsCount);
-            return next;
-          });
-        }
-      } catch (err) {
-        setResolveError(flaggedResolveErrorMessage(err, t));
-      } finally {
-        setResolvingKeys((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
-      }
-    },
-    [token, quarantine.length, suggestionsCount, onCountChange, t],
-  );
-
-  const handleSuggestionsCount = useCallback(
-    (n: number) => {
-      setSuggestionsCount(n);
-      onCountChange(pairs.length + quarantine.length + n);
-    },
-    [pairs.length, quarantine.length, onCountChange],
-  );
-
-  if (loading) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        {t("dream.loading")}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-6">
-      {resolveError && (
-        <p className="text-sm text-destructive">{resolveError}</p>
-      )}
-      <section>
-        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("dream.bandeja.flaggedTitle")}
-        </h2>
-        {pairs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("dream.bandeja.emptyFlagged")}</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {pairs.map((pair) => {
-              const key = `${pair.ref_a}:${pair.ref_b}`;
-              return (
-                <FlaggedPairCard
-                  key={key}
-                  pair={pair}
-                  onOpen={onOpen}
-                  onResolve={handleResolve}
-                  resolving={resolvingKeys.has(key)}
-                />
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <section>
-        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("dream.bandeja.quarantineTitle")}
-        </h2>
-        {quarantine.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("dream.bandeja.emptyQuarantine")}</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {quarantine.map((skill) => (
-              <QuarantineCard
-                key={skill.name}
-                skill={skill}
-                onOpen={onOpen}
-                onOpenSkills={onOpenSkills}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <SkillSuggestionsSection token={token} onCountChange={handleSuggestionsCount} />
-    </div>
-  );
-}
+/** The Pending sections that hold the dream's own decisions. */
+export type DreamPendingSource = "flagged_pair" | "skill_suggestion";
 
 interface DreamViewProps {
-  onOpenSkills?: () => void;
+  /** Opens Pending at the section of the dream's decisions. */
+  onOpenPending?: (source: DreamPendingSource) => void;
 }
 
-export function DreamView({ onOpenSkills }: DreamViewProps) {
+export function DreamView({ onOpenPending }: DreamViewProps) {
   const { token, client } = useClient();
   const { t } = useTranslation();
   const [digest, setDigest] = useState<DreamDigest | null>(null);
@@ -398,8 +169,9 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"resumen" | "bandeja">("resumen");
-  const [bandejaCount, setBandejaCount] = useState(0);
+  // The dream's decisions waiting in Pending: memory pairs it flagged and
+  // skill changes it suggested. They are decided there, not here.
+  const [decisions, setDecisions] = useState({ pairs: 0, suggestions: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -420,21 +192,19 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
     };
   }, [token]);
 
-  // Fetch the Bandeja count on load so the tab badge surfaces pending items
-  // without the user having to open the tab first (the count lived inside
-  // BandejaTab, which only mounts when that tab is active). BandejaTab still
-  // refetches and keeps the count live while it is open.
-  useEffect(() => {
+  const refreshDecisions = useCallback(() => {
     let cancelled = false;
-    Promise.all([fetchFlaggedPairs(token), listQuarantine(token), fetchSkillSuggestions(token)])
-      .then(([p, q, s]) => {
-        if (!cancelled) setBandejaCount(p.length + q.length + s.length);
+    Promise.all([fetchFlaggedPairs(token), fetchSkillSuggestions(token)])
+      .then(([pairs, suggestions]) => {
+        if (!cancelled) setDecisions({ pairs: pairs.length, suggestions: suggestions.length });
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => refreshDecisions(), [refreshDecisions]);
 
   // Live dream progress: drive the "running" indicator and prepend activity
   // items to the feed as the dream produces them. On run_finished, refetch the
@@ -451,6 +221,8 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
         setLiveEvents((prev) => [item, ...prev]);
       } else if (ev.kind === "run_finished") {
         if (ev.ok === false) setRunError(t("dream.runFailed"));
+        // A run can flag new pairs and suggest new skill changes.
+        refreshDecisions();
         fetchDreamDigest(token)
           .then((d) => {
             setDigest(d);
@@ -461,7 +233,7 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
       }
     });
     return unsub;
-  }, [client, token, t]);
+  }, [client, token, t, refreshDecisions]);
 
   // Fallback: a run_finished frame can be missed if the socket drops mid-run.
   // Don't leave the indicator stuck — clear it after a generous ceiling.
@@ -488,12 +260,9 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
     }
   }, [token, t]);
 
-  const handleBandejaCount = useCallback((count: number) => {
-    setBandejaCount(count);
-  }, []);
-
   // Live items (this run) on top of the persisted digest, newest-first.
   const events = [...liveEvents, ...(digest?.events ?? [])];
+  const waiting = decisions.pairs + decisions.suggestions;
 
   return (
     // position:relative so the drawer's absolute positioning is scoped here.
@@ -522,76 +291,48 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
         ) : null}
       </header>
 
-      <div className="flex shrink-0 border-b border-border/40 px-3">
+      {waiting > 0 && onOpenPending ? (
         <button
           type="button"
-          className={`px-3 py-2 text-sm font-medium transition-colors ${
-            activeTab === "resumen"
-              ? "border-b-2 border-primary text-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("resumen")}
+          className="shrink-0 border-b border-border/40 px-4 py-2 text-left text-[13px] font-medium text-primary transition-colors hover:bg-accent/40"
+          onClick={() => onOpenPending(decisions.pairs > 0 ? "flagged_pair" : "skill_suggestion")}
         >
-          {t("dream.tabs.resumen")}
+          {t("dream.pendingDecisions", { count: waiting })}
         </button>
-        <button
-          type="button"
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-            activeTab === "bandeja"
-              ? "border-b-2 border-primary text-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("bandeja")}
-        >
-          {t("dream.tabs.bandeja")}
-          {bandejaCount > 0 && (
-            <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-semibold text-primary leading-none">
-              {bandejaCount}
-            </span>
-          )}
-        </button>
-      </div>
+      ) : null}
 
-      {activeTab === "resumen" ? (
-        loading ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {t("dream.loading")}
-          </div>
-        ) : error ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-destructive">
-            {error}
-          </div>
-        ) : !digest?.last_run && events.length === 0 && !running ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {t("dream.empty")}
-          </div>
-        ) : (
-          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-            <LastRunCard lastRun={digest?.last_run ?? null} running={running} />
-            {events.length > 0 ? (
-              <div>
-                <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {t("dream.historyTitle")}
-                </h2>
-                <div className="flex flex-col gap-2">
-                  {events.map((ev, i) => (
-                    <EventCard
-                      key={`${ev.at_ms}-${i}`}
-                      event={ev}
-                      onOpen={setDrawerTarget}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        )
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          {t("dream.loading")}
+        </div>
+      ) : error ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-destructive">
+          {error}
+        </div>
+      ) : !digest?.last_run && events.length === 0 && !running ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          {t("dream.empty")}
+        </div>
       ) : (
-        <BandejaTab
-          onOpen={setDrawerTarget}
-          onOpenSkills={onOpenSkills}
-          onCountChange={handleBandejaCount}
-        />
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+          <LastRunCard lastRun={digest?.last_run ?? null} running={running} />
+          {events.length > 0 ? (
+            <div>
+              <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {t("dream.historyTitle")}
+              </h2>
+              <div className="flex flex-col gap-2">
+                {events.map((ev, i) => (
+                  <EventCard
+                    key={`${ev.at_ms}-${i}`}
+                    event={ev}
+                    onOpen={setDrawerTarget}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       )}
 
       <DreamDrawer target={drawerTarget} onClose={handleClose} />
