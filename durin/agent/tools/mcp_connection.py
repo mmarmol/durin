@@ -460,26 +460,64 @@ class MCPServerConnection:
         self._transport_cm = sse_client(cfg.url, httpx_client_factory=self._sse_client_factory())
         return await self._transport_cm.__aenter__()
 
-    async def _close_transport_streams(self) -> None:
-        import contextlib
+    async def _close_transport_streams(
+        self, cancelled: asyncio.CancelledError | None = None
+    ) -> None:
+        """Exit the transport context, then close its HTTP client.
+
+        ``cancelled`` is the CancelledError ending the session, if any, and is
+        handed to the transport's exit. When a task inside the SDK transport
+        fails (a stdio server that exits at spawn breaks the pipe), the
+        transport's anyio task group cancels this task. Only an exit that
+        receives that CancelledError lets anyio withdraw its own cancellation
+        and raise the failed task's error instead, which run() then retries and
+        reports like any connect failure. Exiting without it lets the stray
+        CancelledError reach run() as if the connection had been cancelled.
+        A cancellation still requested of this task after the exit is a real
+        one (anyio withdraws its own), so a teardown error never replaces it.
+        """
         cm = getattr(self, "_transport_cm", None)
-        if cm is not None:
-            with contextlib.suppress(Exception):
-                await cm.__aexit__(None, None, None)
-            self._transport_cm = None
-        client = getattr(self, "_http_client", None)
-        if client is not None:
-            with contextlib.suppress(Exception):
-                await client.__aexit__(None, None, None)
-            self._http_client = None
+        self._transport_cm = None
+        try:
+            if cm is not None and cancelled is not None:
+                try:
+                    await cm.__aexit__(type(cancelled), cancelled, cancelled.__traceback__)
+                except Exception:
+                    task = asyncio.current_task()
+                    if task is None or not task.cancelling():
+                        raise
+            elif cm is not None:
+                with contextlib.suppress(Exception):
+                    await cm.__aexit__(None, None, None)
+        finally:
+            client = getattr(self, "_http_client", None)
+            if client is not None:
+                self._http_client = None
+                with contextlib.suppress(Exception):
+                    await client.__aexit__(None, None, None)
 
     # ----- lifecycle -----
 
     async def start(self) -> bool:
         self._task = asyncio.ensure_future(self.run())
+        ready = asyncio.ensure_future(self._ready.wait())
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=_CONNECT_TIMEOUT)
-        except asyncio.TimeoutError:
+            await asyncio.wait(
+                {ready, self._task},
+                timeout=_CONNECT_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            ready.cancel()
+        if not self._ready.is_set() and self._task.done():
+            # run() ended without reaching a terminal state (a cancellation not
+            # aimed at it escaped the transport), so _ready can never be set.
+            # Report the failure now instead of waiting out the timeout.
+            if self._error is None:
+                cause = None if self._task.cancelled() else self._task.exception()
+                self._error = cause or ConnectionError("connect ended before the session opened")
+            return False
+        if not self._ready.is_set():
             # The serve loop never reached a terminal state (success or
             # failure) within the budget — it is stuck inside the transport
             # connect (see _CONNECT_TIMEOUT). Cancel the hung task and report a
@@ -585,6 +623,10 @@ class MCPServerConnection:
                 self._reset_breaker()
                 self._ready.set()
                 await self._wait_for_lifecycle_event()
+        except asyncio.CancelledError as exc:
+            self.session = None
+            await self._close_transport_streams(exc)
+            raise
         finally:
             self.session = None
             await self._close_transport_streams()

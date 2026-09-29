@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from contextlib import asynccontextmanager
 
 import pytest
@@ -934,3 +935,108 @@ async def test_stdio_errlog_header_dates_the_session(monkeypatch, tmp_path) -> N
     assert stamp.tzinfo is not None
     assert abs(datetime.now(stamp.tzinfo) - stamp) < timedelta(minutes=1)
     assert int(match.group(2)) == os.getpid()
+
+
+@pytest.mark.skipif(not os.path.exists("/usr/bin/env"), reason="needs /usr/bin/env")
+async def test_servers_that_die_at_spawn_fail_fast_when_connected_together(
+    monkeypatch, tmp_path
+) -> None:
+    """A stdio server whose interpreter is missing fails with its real error, fast.
+
+    ``/usr/bin/env <missing>`` spawns and exits at once, so a task in the SDK's
+    stdio task group fails and cancels the connecting task. With the real SDK
+    and real child processes connecting at the same time, each server must go
+    through its retries and report that transport error well within the
+    connect timeout, never as a connect timeout.
+    """
+    import time
+
+    import durin.agent.tools.mcp_connection as mc
+    from durin.agent.tools.mcp import connect_mcp_servers
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 10.0)
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01)
+    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
+
+    names = ("broken1", "broken2", "broken3")
+    servers = {
+        name: MCPServerConfig(command="/usr/bin/env", args=[f"durin-test-missing-{name}"])
+        for name in names
+    }
+    errors: dict[str, str] = {}
+    started = time.monotonic()
+    conns = await connect_mcp_servers(servers, ToolRegistry(), errors=errors)
+    elapsed = time.monotonic() - started
+
+    assert conns == {}
+    assert list(errors) == list(names)
+    assert not any("timed out" in message for message in errors.values()), errors
+    assert elapsed < 5.0
+
+
+async def test_start_returns_when_run_ends_without_connecting(monkeypatch) -> None:
+    """A run() that ends before connecting releases start() at once.
+
+    A CancelledError that was not aimed at the connection (a transport task
+    group's own cancellation leaking out) ends run() without setting _ready.
+    start() must report that right away, not wait out its connect timeout.
+    """
+    import time
+
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 5.0)
+    conn = mc.MCPServerConnection("stray", MCPServerConfig(command="unused"), ToolRegistry())
+
+    async def _open(_self):
+        raise asyncio.CancelledError("Cancelled via cancel scope")
+
+    conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+    started = time.monotonic()
+    ok = await conn.start()
+    elapsed = time.monotonic() - started
+    await conn.aclose()
+
+    assert ok is False
+    assert elapsed < 1.0
+    assert conn._error is not None
+    assert "timed out" not in str(conn._error)
+
+
+async def test_cancelling_a_connect_ends_it_even_when_teardown_fails(monkeypatch) -> None:
+    """A real cancellation of the connect task is never turned into a retry.
+
+    When start() gives up on a hung connect it cancels the task. If exiting
+    the transport raises its own error during that cancellation, the task
+    must still end instead of retrying the connect: a retry that hangs again
+    would leave start() waiting on the task without any bound. Here only the
+    first attempt hangs, so a wrongly retried connect shows up as extra
+    attempts instead of hanging the test.
+    """
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 0.2)
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01)
+    conn = mc.MCPServerConnection("hung", MCPServerConfig(command="unused"), ToolRegistry())
+    attempts = 0
+
+    class _FailingTeardown:
+        async def __aexit__(self, *exc_info):
+            raise RuntimeError("transport teardown failed")
+
+    async def _open(self):
+        nonlocal attempts
+        attempts += 1
+        self._transport_cm = _FailingTeardown()
+        if attempts == 1:
+            await asyncio.sleep(3600)
+        raise ConnectionError("unreachable")
+
+    conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+    ok = await conn.start()
+    await conn.aclose()
+
+    assert ok is False
+    assert "timed out" in str(conn._error)
+    assert attempts == 1
