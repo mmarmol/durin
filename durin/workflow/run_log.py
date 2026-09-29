@@ -158,10 +158,15 @@ def start_run(
     ``durin/workflow/provenance.py``); both ``None`` when the caller does not supply
     them (e.g. a caller with no workflow object). ``resumed`` marks a walk that
     re-enters an existing run (a failure-resume or a paused run's reply): its
-    ``runs`` start empty here, so they never hold the earlier attempts' rows."""
+    ``runs`` start empty here, so they never hold the earlier attempts' rows; the
+    node ids those attempts walked are kept in ``earlier_nodes`` instead."""
+    prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
-        prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
+    earlier_nodes = sorted(
+        set(prior.get("earlier_nodes") or [])
+        | {r["node_id"] for r in prior.get("runs") or [] if r.get("node_id")}
+    ) if resumed else []
     from durin.utils.process_tree import process_identity
 
     record = {
@@ -194,6 +199,10 @@ def start_run(
         # Sticky once set: every later rewrite carries it, and every resume of the
         # run sets it again, so a reader knows ``runs`` covers only the last walk.
         "resumed": resumed,
+        # Every node the earlier attempts of a resumed run walked, gathered across
+        # all its resumes and carried forward on every rewrite, so the run's route
+        # is on record even though ``runs`` holds only the last walk.
+        "earlier_nodes": earlier_nodes,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -226,6 +235,7 @@ def update_run(
         "spec_hash": base.get("spec_hash"),
         "durin_version": base.get("durin_version"),
         "resumed": base.get("resumed", False),
+        "earlier_nodes": base.get("earlier_nodes") or [],
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -299,6 +309,7 @@ def finalize_run(
         "spec_hash": prior.get("spec_hash"),
         "durin_version": prior.get("durin_version"),
         "resumed": prior.get("resumed", False),
+        "earlier_nodes": prior.get("earlier_nodes") or [],
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -607,9 +618,11 @@ def typical_total_duration(
     single typical total and the result is None. The estimate is made before the
     new run has taken any route, so it cannot pick the matching one instead.
 
-    A resumed run is left out: a resume rewrites its manifest with only the
-    resumed walk's rows, so neither the nodes it walked nor the seconds it took
-    are on record, and its partial rows would read as a route of their own.
+    A resumed run's seconds are left out: a resume starts its rows over, so they
+    hold only the last walk's. Its route still counts, taken from those rows plus
+    the nodes its earlier attempts walked (``earlier_nodes``). Leaving the run out
+    altogether would hide a route that only resumed runs take, such as a branch
+    through an approval, and show runs on it another route's median.
     """
     from statistics import median
 
@@ -619,9 +632,12 @@ def typical_total_duration(
         if rec.get("status") != "completed":
             continue
         manifest = read_manifest(workspace, name, rec["run_id"]) or {}
-        if manifest.get("resumed"):
-            continue
         rows = manifest.get("runs") or []
+        route = frozenset(r["node_id"] for r in rows if r.get("node_id")) | frozenset(
+            manifest.get("earlier_nodes") or [])
+        if manifest.get("resumed"):
+            routes.add(route)
+            continue
         # Same exclusion as typical_node_durations: a reused row's duration is not
         # what a fresh dispatch would have cost, so it must not count toward the
         # run's total either.
@@ -629,7 +645,7 @@ def typical_total_duration(
                      if r.get("duration_s") is not None and r.get("status") != "reused"]
         if durations:
             totals.append(sum(durations))
-            routes.add(frozenset(r["node_id"] for r in rows if r.get("node_id")))
+            routes.add(route)
     if not totals or len(routes) > 1:
         return None
     return float(median(totals))
