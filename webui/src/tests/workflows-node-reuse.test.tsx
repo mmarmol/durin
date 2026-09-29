@@ -24,6 +24,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getWorkflowRecommendations: vi.fn(),
     listWorkflowRuns: vi.fn(),
     listAllWorkflowRuns: vi.fn(),
+    listSeedSuggestions: vi.fn(),
+    listModes: vi.fn(),
+    listWorkflowScripts: vi.fn(),
   };
 });
 
@@ -35,6 +38,9 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver;
   vi.mocked(api.listWorkflows).mockResolvedValue(["demo"]);
   vi.mocked(api.listPersonas).mockResolvedValue({ personas: [], default: null });
+  vi.mocked(api.listSeedSuggestions).mockResolvedValue([]);
+  vi.mocked(api.listModes).mockResolvedValue([]);
+  vi.mocked(api.listWorkflowScripts).mockResolvedValue([]);
   vi.mocked(api.getWorkflowRecommendations).mockResolvedValue([]);
   vi.mocked(api.listWorkflowRuns).mockResolvedValue([]);
   vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([]);
