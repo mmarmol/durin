@@ -136,6 +136,28 @@ def test_script_gate_failing_into_a_fixer_that_leads_back_is_a_failed_gate(tmp_p
     assert "2 tests failing" in only and "[script gate failed: exit code 1]" in only
 
 
+def test_script_check_whose_fail_route_returns_only_through_its_pass_step_is_neutral(tmp_path):
+    """send retries from the top when delivery fails, so draft can reach has-note
+    again, but only by way of send, has-note's own pass step. The first "no" is
+    still the check's normal route: a plain exit note and neutral framing."""
+    check = 'test -f note.md || { echo "note.md not present"; exit 1; }'
+    wf = parse_workflow({"name": "t", "start": "has-note", "nodes": [
+        {"id": "has-note", "kind": "script", "command": check,
+         "on_pass": "send", "on_fail": "draft"},
+        {"id": "draft", "prompt": "draft the note", "next": "send"},
+        {"id": "send", "prompt": "delivered?", "on_pass": None, "on_fail": "has-note"},
+    ]})
+    eng = engine_for(tmp_path, ["drafted", "PASS"])
+    result = eng.run(wf, "task")
+    assert result.status == "completed"
+    draft_req = eng._node_runner.calls[0]
+    assert draft_req.node.id == "draft"
+    upstream = draft_req.upstream_output or ""
+    assert "Context from 'has-note':" in upstream
+    assert upstream.endswith("[exit code 1]")
+    assert "Reviewer feedback" not in upstream and "gate failed" not in upstream
+
+
 def test_script_cases_routing_and_needs_input(tmp_path):
     wf = parse_workflow({"name": "t", "start": "c", "nodes": [
         {"id": "c", "kind": "script",

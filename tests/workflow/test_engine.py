@@ -929,6 +929,67 @@ def test_a_parallel_list_source_is_not_a_path_back_to_the_gate():
     assert by_id["check"].fail_loops_back is False
 
 
+def test_a_fail_route_that_returns_only_through_the_pass_step_is_a_forward_route():
+    """draft goes on to send, has-note's own pass step, and only send's retry edge
+    leads back to has-note. That cycle is send's, not has-note's FAIL: on the first
+    run nothing was drafted before, so draft gets the "no" as neutral context."""
+    seen: list = []
+    calls = []
+
+    def runner(req):
+        calls.append(req)
+        if req.node.id == "has-note":
+            return NodeRunResponse(output="FAIL\nnote.json not present")
+        if req.node.id == "draft":
+            seen.append(req.upstream_output or "")
+            return NodeRunResponse(output="note")
+        return NodeRunResponse(output="PASS")
+
+    wf = parse_workflow({"name": "w", "start": "has-note", "max_visits": 3, "nodes": [
+        {"id": "has-note", "kind": "work", "prompt": "note there?",
+         "on_pass": "send", "on_fail": "draft"},
+        {"id": "draft", "kind": "work", "next": "send"},
+        {"id": "send", "kind": "work", "prompt": "delivered?",
+         "on_pass": None, "on_fail": "has-note"},
+    ]})
+    res = WorkflowEngine(runner).run(wf, "t")
+    assert res.status == "completed"
+    assert calls[0].node.id == "has-note" and calls[0].fail_loops_back is False
+    (only,) = seen
+    assert "Context from 'has-note':\nFAIL\nnote.json not present" in only
+    assert "Reviewer feedback" not in only
+
+
+def test_fail_loops_back_inside_an_outer_loop_over_items():
+    # The loop over items brings every node round again. judge's FAIL returns to
+    # judge on a path of its own (produce -> judge); has-note's FAIL reaches
+    # has-note again only by way of send, its pass step, so it is a forward route.
+    picks = iter(["MORE", "DONE"])
+    calls = []
+
+    def runner(req):
+        calls.append(req)
+        if req.node.id == "pick":
+            return NodeRunResponse(output=next(picks))
+        return NodeRunResponse(output="PASS" if req.node.id in ("judge", "has-note") else "ok")
+
+    wf = parse_workflow({"name": "w", "start": "pick", "max_visits": 3, "nodes": [
+        {"id": "pick", "kind": "work", "prompt": "more items?",
+         "cases": {"MORE": "produce", "DONE": None}},
+        {"id": "produce", "kind": "work", "next": "judge"},
+        {"id": "judge", "kind": "work", "prompt": "good?",
+         "on_pass": "has-note", "on_fail": "produce"},
+        {"id": "has-note", "kind": "work", "prompt": "note there?",
+         "on_pass": "send", "on_fail": "draft"},
+        {"id": "draft", "kind": "work", "next": "send"},
+        {"id": "send", "kind": "work", "next": "pick"},
+    ]})
+    assert WorkflowEngine(runner).run(wf, "t").status == "completed"
+    by_id = {c.node.id: c for c in calls}
+    assert by_id["judge"].fail_loops_back is True
+    assert by_id["has-note"].fail_loops_back is False
+
+
 def test_sequential_nodes_share_one_working_dir(tmp_path):
     # Every sequential node — looping or hand-off — reads and writes ONE shared per-run
     # folder, so files accumulate in one place and each stage sees the prior work. (Before,
