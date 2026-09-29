@@ -35,18 +35,19 @@ def fake_worker(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def no_invalidate(monkeypatch):
-    """Record alias-cache invalidations instead of touching the real cache."""
+def no_alias_refresh(monkeypatch):
+    """Record alias-index rebuild requests instead of starting real rebuilds."""
     calls: list = []
     import durin.memory.aliases_cache as aliases_cache
 
     monkeypatch.setattr(
-        aliases_cache, "invalidate_alias_index", lambda root: calls.append(root)
+        aliases_cache, "refresh_alias_index_in_background",
+        lambda root: calls.append(root),
     )
     return calls
 
 
-def test_progress_forwarded_in_order_and_code_returned(fake_worker, no_invalidate, tmp_path):
+def test_progress_forwarded_in_order_and_code_returned(fake_worker, no_alias_refresh, tmp_path):
     from durin.memory.dream_supervisor import run_dream_worker
 
     fake_worker(
@@ -65,7 +66,7 @@ def test_progress_forwarded_in_order_and_code_returned(fake_worker, no_invalidat
     assert [e["kind"] for e in events] == ["run_started", "activity", "run_finished"]
 
 
-def test_synthesized_run_finished_on_silent_failure(fake_worker, no_invalidate, tmp_path):
+def test_synthesized_run_finished_on_silent_failure(fake_worker, no_alias_refresh, tmp_path):
     from durin.memory.dream_supervisor import run_dream_worker
 
     fake_worker(
@@ -84,7 +85,7 @@ def test_synthesized_run_finished_on_silent_failure(fake_worker, no_invalidate, 
     assert events[-1] == {"kind": "run_finished", "ok": False}
 
 
-def test_non_protocol_stdout_lines_skipped(fake_worker, no_invalidate, tmp_path):
+def test_non_protocol_stdout_lines_skipped(fake_worker, no_alias_refresh, tmp_path):
     from durin.memory.dream_supervisor import run_dream_worker
 
     fake_worker(
@@ -102,7 +103,13 @@ def test_non_protocol_stdout_lines_skipped(fake_worker, no_invalidate, tmp_path)
     assert [e["kind"] for e in events] == ["run_finished"]
 
 
-def test_alias_cache_invalidated_after_run(fake_worker, no_invalidate, tmp_path):
+def test_alias_index_kept_and_rebuilt_in_background_after_run(
+    fake_worker, no_alias_refresh, tmp_path
+):
+    """The worker's page writes bypass this process, so the shared alias index
+    is rebuilt after it exits — in the background, with searches keeping the
+    previous index meanwhile instead of waiting on a cold rebuild."""
+    from durin.memory.aliases_cache import _clear_all, get_shared_alias_index
     from durin.memory.dream_supervisor import run_dream_worker
 
     fake_worker(
@@ -111,10 +118,16 @@ def test_alias_cache_invalidated_after_run(fake_worker, no_invalidate, tmp_path)
         print(json.dumps({"kind": "run_finished", "ok": True}), flush=True)
         """
     )
-    run_dream_worker(
-        workspace=tmp_path, mode="full", trigger="cron", on_progress=lambda p: None
-    )
-    assert no_invalidate == [tmp_path / "memory"]
+    _clear_all()
+    try:
+        idx = get_shared_alias_index(tmp_path / "memory")
+        run_dream_worker(
+            workspace=tmp_path, mode="full", trigger="cron", on_progress=lambda p: None
+        )
+        assert no_alias_refresh == [tmp_path / "memory"]
+        assert get_shared_alias_index(tmp_path / "memory") is idx
+    finally:
+        _clear_all()
 
 
 def test_worker_argv_carries_workspace():
@@ -128,7 +141,7 @@ def test_worker_argv_carries_workspace():
     assert argv[argv.index("--mode") + 1] == "full"
 
 
-def test_stop_terminates_running_worker(fake_worker, no_invalidate, tmp_path):
+def test_stop_terminates_running_worker(fake_worker, no_alias_refresh, tmp_path):
     from durin.memory.dream_supervisor import run_dream_worker, stop_dream_workers
 
     fake_worker(
@@ -161,7 +174,7 @@ def test_stop_terminates_running_worker(fake_worker, no_invalidate, tmp_path):
     assert result["code"] != 0
 
 
-def test_rss_watchdog_kills_runaway_worker(fake_worker, no_invalidate, tmp_path, monkeypatch):
+def test_rss_watchdog_kills_runaway_worker(fake_worker, no_alias_refresh, tmp_path, monkeypatch):
     """A worker tree that crosses the RSS cap is terminated by the supervisor
     (the 2026-07-18 worker grew to 3.4GB and took the whole box down before
     the kernel finally killed it)."""
@@ -189,7 +202,7 @@ def test_rss_watchdog_kills_runaway_worker(fake_worker, no_invalidate, tmp_path,
     assert events[-1] == {"kind": "run_finished", "ok": False}
 
 
-def test_rss_watchdog_leaves_small_worker_alone(fake_worker, no_invalidate, tmp_path, monkeypatch):
+def test_rss_watchdog_leaves_small_worker_alone(fake_worker, no_alias_refresh, tmp_path, monkeypatch):
     import durin.memory.dream_supervisor as sup
     from durin.memory.dream_supervisor import run_dream_worker
 
