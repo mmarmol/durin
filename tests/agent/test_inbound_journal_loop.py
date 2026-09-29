@@ -151,6 +151,51 @@ async def test_run_replays_the_journal_before_consuming(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_stopped_intake_starts_no_turn_and_leaves_new_messages_for_the_journal(
+    tmp_path: Path,
+) -> None:
+    """A gateway stop lets uvicorn finish its exit before it cancels the loop,
+    and the consumer used to keep starting turns in that window. Once intake
+    stops the consumer ends at once, and a message arriving after that stays
+    on the bus, where the shutdown drain journals it for the next start."""
+    loop, bus = _make_loop(tmp_path)
+    seen: list[str] = []
+
+    async def fake_dispatch(msg, pending=None):
+        seen.append(msg.content)
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    loop._connect_mcp = _noop  # type: ignore[method-assign]
+    loop._warmup_memory_embedding = _noop  # type: ignore[method-assign]
+    runner = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(_msg("before the stop"))
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            if seen:
+                break
+        assert seen == ["before the stop"]
+
+        loop.stop_intake()
+        await bus.publish_inbound(_msg("during the stop"))
+        # Ends by itself, well inside the consumer's one-second poll.
+        await asyncio.wait_for(runner, 0.5)
+        assert bus.inbound_size == 1
+        await asyncio.sleep(0.01)  # a turn started by mistake would run now
+        assert seen == ["before the stop"]
+    finally:
+        if not runner.done():
+            runner.cancel()
+        loop.stop()
+
+    assert await loop.drain_inbound_for_shutdown() == 1
+    assert [m.content for m in loop._inbound_journal.drain()] == ["during the stop"]
+
+
+@pytest.mark.asyncio
 async def test_a_tui_written_entry_survives_a_gateway_replay_and_is_replayed_by_the_tui(
     tmp_path: Path,
 ) -> None:

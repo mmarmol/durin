@@ -348,18 +348,26 @@ connecting MCP servers took, just before "Agent loop started". A slow boot is
 read from `gateway.log` by finding the phase with the large duration.
 
 **Graceful stop.** SIGTERM, SIGINT, SIGHUP and `/restart` share one path. It
-sets uvicorn's `should_exit` and lets uvicorn finish its own exit — close the
-websocket connections, give in-flight HTTP requests up to
+first stops intake: the agent loop starts no more turns
+(`AgentLoop.stop_intake`), so a message arriving during the stop waits on the
+bus and is journaled for the next start; the turns already running carry on
+until the shutdown drain cancels them. It ends every SSE stream
+(`WebSocketChannel.end_sse_streams`), since an open one never ends by itself.
+Then it sets uvicorn's `should_exit` and lets uvicorn finish its own exit —
+close the websocket connections, give in-flight HTTP requests up to
 `_UVICORN_GRACEFUL_SHUTDOWN_S` (uvicorn's `timeout_graceful_shutdown`), run
 the ASGI lifespan shutdown — and only once `serve()` has returned, or after
 `_UVICORN_EXIT_TIMEOUT_S` at most (logged as a warning), cancels the
 remaining gateway tasks (agent loop, channel supervisors, health endpoint).
 Cancelling uvicorn in the middle of its exit prints a `CancelledError`
 traceback, and "Exception in ASGI application" per connected websocket
-client, into the journal on every stop. The shutdown then stops the janitor,
-MCP, cron, the dream and embed workers and the agent loop, journals queued
-inbound messages, stops the channels (concurrently, each bounded; see
-[channels.md](channels.md)) and flushes sessions.
+client, into the journal on every stop. A request uvicorn is still serving
+when its graceful timeout runs out is cancelled by uvicorn itself, which logs
+it as an error: an OpenAI-compatible `/v1/chat/completions` request waiting
+on its turn is one, since that turn runs until the drain. The shutdown then
+stops the janitor, MCP, cron, the dream and embed workers and the agent loop,
+journals queued inbound messages, stops the channels (concurrently, each
+bounded; see [channels.md](channels.md)) and flushes sessions.
 
 ---
 

@@ -24,6 +24,7 @@ def _voice_channel():
     ch._subs = {}
     ch._conn_chats = {}
     ch._conn_default = {}
+    ch._sse_streams_ended = False
     ch._voice_cleanup = {}
     ch._voice_grace_s = 0.05
     ch._answer_fallback = {}

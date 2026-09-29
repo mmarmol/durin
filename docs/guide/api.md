@@ -110,8 +110,10 @@ curl -N http://127.0.0.1:8765/api/v1/sessions/websocket:report-42/events \
 ```
 
 A server-sent event stream of everything that happens in the conversation,
-from whoever drives it. It lives as long as you hold it; while nothing
-happens, a `: keepalive` comment arrives every 15 seconds.
+from whoever drives it. It lives as long as you hold it, or until the gateway
+stops or restarts, which ends it; reattach then (see
+[Client patterns](#client-patterns)). While nothing happens, a `: keepalive`
+comment arrives every 15 seconds.
 
 ### Stop a turn
 
@@ -131,7 +133,10 @@ For a script that wants the answer to one message, add
 `Accept: text/event-stream` to the send request (the token needs both
 `chat:write` and `sessions:read`). The response is the event stream, and it
 ends by itself after the `turn_end` of the turn that answers your message. If
-the connection drops, the turn still finishes; catch up from the history.
+the connection drops, the turn still finishes; catch up from the history. A
+gateway stop or restart ends the stream early, without that `turn_end`; the
+gateway answers the message once it is running again, so reattach and catch
+up from the history.
 Commands (`/status`, `/stop`, …) are refused in this form (`422`) — they answer
 without a turn; send them with the plain form.
 

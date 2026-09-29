@@ -2450,6 +2450,9 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
 
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
         def stop(self) -> None:
             calls.append("agent.stop")
 
@@ -2536,6 +2539,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
 
     assert result.exit_code == 0, result.output
     assert calls == [
+        "agent.stop_intake",
         "agent.close_mcp",
         "cron.stop",
         "stop_dream_workers",
@@ -2619,6 +2623,9 @@ def test_a_signal_during_a_restart_shutdown_wins_and_does_not_reexec(
 
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
+
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
 
         def stop(self) -> None:
             calls.append("agent.stop")
@@ -2782,6 +2789,9 @@ def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
 
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
         def stop(self) -> None:
             calls.append("agent.stop")
 
@@ -2935,6 +2945,9 @@ def _run_gateway_with_fake_uvicorn(
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
 
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
         def stop(self) -> None:
             calls.append("agent.stop")
 
@@ -2947,6 +2960,7 @@ def _run_gateway_with_fake_uvicorn(
             max_message_bytes=1024, ping_interval_s=20.0, ping_timeout_s=20.0,
         ),
         _static_dist_path=None,
+        end_sse_streams=lambda: calls.append("ws.end_sse_streams"),
     )
 
     class _FakeChannelManager:
@@ -3008,7 +3022,17 @@ def _run_gateway_with_fake_uvicorn(
         bound test, never finishes it."""
 
         def __init__(self, _config) -> None:
-            self.should_exit = False
+            self._should_exit = False
+
+        @property
+        def should_exit(self) -> bool:
+            return self._should_exit
+
+        @should_exit.setter
+        def should_exit(self, value: bool) -> None:
+            if value and not self._should_exit:
+                calls.append("uvicorn.should_exit")
+            self._should_exit = value
 
         async def serve(self) -> None:
             try:
@@ -3065,6 +3089,25 @@ def test_a_gateway_stop_lets_uvicorn_finish_its_own_exit_first(monkeypatch, tmp_
     # uvicorn's own graceful exit is bounded too: in-flight requests do not
     # hold the stop open indefinitely.
     assert uvicorn_kwargs.get("timeout_graceful_shutdown", 0) > 0
+
+
+def test_a_gateway_stop_stops_intake_and_ends_sse_streams_before_uvicorn_exits(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """uvicorn's exit waits for every open response, and the loop is
+    cancelled only after it. An SSE watcher never ends by itself, so each
+    stop with one open ran into uvicorn's graceful timeout and an error; and
+    the loop kept starting turns during that wait. Both end before uvicorn
+    is asked to exit."""
+    result, calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "agent.stop_intake" in calls
+    assert "ws.end_sse_streams" in calls
+    assert calls.index("agent.stop_intake") < calls.index("uvicorn.should_exit")
+    assert calls.index("ws.end_sse_streams") < calls.index("uvicorn.should_exit")
 
 
 def test_a_uvicorn_that_does_not_exit_is_cancelled_after_the_bound(

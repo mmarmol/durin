@@ -195,6 +195,14 @@ The effective session key (`_effective_session_key`) collapses to a single
 unified key when `unified_session` is enabled and the message carries no
 override.
 
+**Stopping intake.** `stop_intake()` ends the consumer: it stops taking
+messages at once (its current wait is ended rather than left to run out its
+one-second poll) and `run()` returns. The gateway calls it as soon as it is
+asked to stop, because it cancels the loop only after uvicorn has finished
+its own exit. A message arriving from then on stays on the bus for the
+shutdown drain (see `_dispatch` below), and the turns already running carry
+on until that drain cancels them.
+
 ### Waiting on the user
 
 A tool can hold its turn open until the person answers: `ask_user_question`

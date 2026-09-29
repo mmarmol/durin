@@ -90,12 +90,20 @@ class SseSubscriber:
             self._bytes += len(chunk)
         self._wakeup.set()
 
+    def end_stream(self) -> None:
+        """End the stream once the frames already buffered are sent; later
+        frames are ignored. The gateway calls this on every watcher when it
+        stops, so the response finishes instead of holding the server's exit."""
+        self._ended = True
+        self._wakeup.set()
+
     async def frames(
         self, stop_after: Callable[[str, dict[str, Any]], bool] | None = None,
     ) -> AsyncIterator[bytes]:
-        """Yield SSE chunks until ``lagged``, or until ``stop_after(name, frame)``
-        is true (after yielding that frame). An idle stream yields a comment
-        line so proxies and read timeouts don't take it for dead."""
+        """Yield SSE chunks until ``lagged``, until ``stop_after(name, frame)``
+        is true (after yielding that frame), or until ``end_stream()``. An idle
+        stream yields a comment line so proxies and read timeouts don't take it
+        for dead."""
         while True:
             self._wakeup.clear()
             while self._frames:
@@ -105,6 +113,8 @@ class SseSubscriber:
                 yield chunk
                 if name == "lagged" or (stop_after is not None and stop_after(name, frame)):
                     return
+            if self._ended:
+                return
             try:
                 async with asyncio.timeout(SSE_KEEPALIVE_S):
                     await self._wakeup.wait()

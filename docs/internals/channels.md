@@ -984,8 +984,11 @@ entry point only when that section is enabled.
   `publish_chat_message`, the path the WebSocket `message` frame uses, so both
   accept exactly the same messages. An SSE watcher (`SseSubscriber`) joins the
   per-chat fan-out (`_attach` / `_cleanup_connection`) alongside WebSocket
-  connections; its `send_text` never blocks the channel. A message may carry
-  `origin: "api"`, which is recorded on the transcript's `user` row.
+  connections; its `send_text` never blocks the channel. When the gateway
+  stops, `end_sse_streams()` ends every SSE watcher's stream, and any that
+  attaches afterwards, so uvicorn's exit does not wait on them (WebSocket
+  connections uvicorn closes itself). A message may carry `origin: "api"`,
+  which is recorded on the transcript's `user` row.
 - **Live user messages** — each user message that carries a `client_msg_id` is
   echoed to the conversation's watchers as a `user` frame (text, id, `origin`,
   signed `media_urls`), so a conversation driven from the API or from another

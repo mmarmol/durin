@@ -621,6 +621,9 @@ class AgentLoop:
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 480
         self._running = False
+        # The consumer's current wait for an inbound message, while it waits;
+        # stop_intake() ends it early.
+        self._inbound_wait: asyncio.Timeout | None = None
         self._mcp_servers = mcp_servers or {}
         self._mcp_connections: dict[str, Any] = {}
         self._mcp_connect_errors: dict[str, str] = {}  # name -> last connect failure message
@@ -2420,7 +2423,7 @@ class AgentLoop:
                 # that arrives in the same loop iterations, which would keep
                 # this consumer alive past shutdown (the outbound dispatcher
                 # hung the gateway that way).
-                async with asyncio.timeout(1.0):
+                async with asyncio.timeout(1.0) as self._inbound_wait:
                     msg = await self.bus.consume_inbound()
             except asyncio.TimeoutError:
                 continue
@@ -2433,6 +2436,8 @@ class AgentLoop:
             except Exception as e:
                 logger.warning("Error consuming inbound message: {}, continuing...", e)
                 continue
+            finally:
+                self._inbound_wait = None
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
@@ -2782,6 +2787,23 @@ class AgentLoop:
             self._reindex_inflight.discard(key)
             if key in self._reindex_dirty:
                 self._schedule_session_reindex(key)
+
+    def stop_intake(self) -> None:
+        """Start no more turns: ``run()`` stops taking inbound messages and
+        returns. A message that arrives from now on stays on the bus, where
+        the shutdown drain journals it for the next start; the turns already
+        running carry on until that drain cancels them.
+
+        The gateway calls this as soon as it is asked to stop, because the
+        loop is cancelled only once uvicorn has finished its own exit.
+        """
+        self._running = False
+        wait = self._inbound_wait
+        # An expired wait is already ending; one still running is ended now
+        # instead of at the consumer's next poll. The cancelled get takes
+        # nothing off the queue.
+        if wait is not None and not wait.expired():
+            wait.reschedule(asyncio.get_running_loop().time())
 
     def stop(self) -> None:
         """Stop the agent loop."""

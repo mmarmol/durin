@@ -2191,6 +2191,16 @@ def _run_gateway(
                     _restart_timer.cancel()
                     _restart_timer = None
             logger.info("Gateway received {}; shutting down gracefully.", signame)
+            # The loop is cancelled only once uvicorn has exited; until then
+            # it would keep starting turns. What arrives from now on is
+            # journaled for the next start instead.
+            agent.stop_intake()
+            # uvicorn's exit waits for every open response, and an SSE stream
+            # never ends by itself: ended here, it finishes instead of running
+            # into uvicorn's graceful timeout.
+            _sse_channel = channels.get_channel("websocket")
+            if _sse_channel is not None:
+                _sse_channel.end_sse_streams()
             if unified_server is not None:
                 unified_server.should_exit = True
             if api_server is not None:

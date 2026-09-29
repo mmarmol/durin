@@ -254,7 +254,11 @@ the channel: frames wait in a per-subscriber buffer bounded by bytes
 (`SSE_BUFFER_LIMIT_BYTES`); when it is full, text previews (`delta`,
 `reasoning_delta`) are dropped first, and a state frame that still does not fit
 ends the stream with `lagged`. While idle the stream sends a `: keepalive`
-comment every `SSE_KEEPALIVE_S`.
+comment every `SSE_KEEPALIVE_S`. When the gateway stops, it ends every SSE
+stream before it asks uvicorn to exit (`WebSocketChannel.end_sse_streams`,
+which calls each subscriber's `end_stream`): each sends the frames it holds
+and its response finishes, instead of running into uvicorn's graceful
+timeout. A watcher that attaches during the stop gets an ended stream too.
 
 **The streaming send** (`Accept: text/event-stream`) attaches the subscriber and
 delivers the message before returning the response, so a client that leaves at
