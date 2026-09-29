@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from loguru import logger
 
+import durin.agent.loop as loop_module
 import durin.memory.health_check as health_check
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
@@ -32,9 +33,12 @@ def _app_config() -> Config:
 async def test_the_first_health_check_waits_for_the_loop_to_start(tmp_path, monkeypatch) -> None:
     events: list[str] = []
 
+    built: dict = {}
+
     class _Scheduler:
-        def __init__(self, _checker, *, interval_seconds: int) -> None:
+        def __init__(self, _checker, *, interval_seconds: int, first_tick_delay_s: float = 0.0) -> None:
             self.interval_seconds = interval_seconds
+            built["first_tick_delay_s"] = first_tick_delay_s
 
         def start(self) -> None:
             events.append("health check started")
@@ -78,3 +82,6 @@ async def test_the_first_health_check_waits_for_the_loop_to_start(tmp_path, monk
         loop.stop()
 
     assert events == ["Agent loop started", "health check started"]
+    # Started with the loop, the first check still waits: the channels,
+    # uvicorn and the embedding warm-up start alongside it.
+    assert built["first_tick_delay_s"] == loop_module._HEALTH_CHECK_FIRST_TICK_DELAY_S > 0

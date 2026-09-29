@@ -462,7 +462,7 @@ How to see it: `/status` names the turn a frozen block was actually taken on —
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Run periodic health probe; disable for one less background thread |
-| `interval_seconds` | `900` | Probe interval in seconds (min 60, max 86400) |
+| `interval_seconds` | `900` | Probe interval in seconds (min 60, max 86400); the first probe runs a minute after the agent loop starts |
 
 **`memory.artifact_recall`** — memory notes on file reads and reference drills:
 a `read_file` text result opens with the memory entries that mention the file

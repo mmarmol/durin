@@ -209,7 +209,7 @@ The following events exist in the catalog without dedicated sections above — c
 | `MemoryRecallEvent` | `durin/telemetry/schema.py` | TypedDict for `memory.recall`. Representative of the pattern all memory TypedDicts follow. |
 | `MemoryPrefetchEvent` | `durin/telemetry/schema.py` | TypedDict for `memory.prefetch`: the per-turn automatic search's hits (post-cut, when truncated), block size, duration, `truncated`, and `skipped` reason. |
 | `MemoryEagerSurfaceEvent` | `durin/telemetry/schema.py` | TypedDict for `memory.eager_surface`: `reason` the freeze happened, `turn`, `pinned_chars`, `hot_chars`. |
-| `HealthCheckScheduler` | `durin/memory/health_check.py` | Daemon thread that drives `HealthChecker.run_tick()` on the configured interval, the first tick as soon as it starts. Built by `AgentLoop.__init__` when `memory.health_check.enabled` is true and started by `AgentLoop.run()` right after "Agent loop started", so the first full scan never runs during gateway boot; a loop that never runs `run()` runs no health checks. |
+| `HealthCheckScheduler` | `durin/memory/health_check.py` | Daemon thread that drives `HealthChecker.run_tick()` on the configured interval, the first tick `first_tick_delay_s` after it starts (immediately by default). Built by `AgentLoop.__init__` when `memory.health_check.enabled` is true, with a first-tick delay of `_HEALTH_CHECK_FIRST_TICK_DELAY_S`, and started by `AgentLoop.run()` right after "Agent loop started", so the first full scan runs after the gateway's channels, uvicorn and the embedding warm-up have had that long to start; a loop that never runs `run()` runs no health checks. |
 
 ## 6. Configuration and surfaces
 

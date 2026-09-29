@@ -243,6 +243,15 @@ _SUBAGENT_WAIT_TIMEOUT = 300
 # how many turns are stuck.
 _DRAIN_CANCEL_WAIT_S = 10.0
 
+# How long after run() starts the memory health check runs its first tick
+# (seconds). That tick scans the whole memory store, and in the gateway run()
+# starts alongside the channels, uvicorn and the embedding warm-up; the scan
+# slowed them all down. A minute is past the longest a channel takes to
+# connect (Slack's Socket Mode connect gives up after 45 s) and no longer
+# than the shortest interval the config allows, so the first check still
+# lands within the first interval.
+_HEALTH_CHECK_FIRST_TICK_DELAY_S = 60.0
+
 _STEER_FRAMING = (
     "[Steer — the user sent this while you were working. Treat it as "
     "guidance for the work in progress: adjust course if it changes the "
@@ -906,6 +915,7 @@ class AgentLoop:
                     interval_seconds=int(
                         getattr(hc_cfg, "interval_seconds", 900),
                     ),
+                    first_tick_delay_s=_HEALTH_CHECK_FIRST_TICK_DELAY_S,
                 )
                 # Built here, started by run() once the loop is up — see
                 # _start_memory_health_checks.
@@ -919,10 +929,11 @@ class AgentLoop:
     def _start_memory_health_checks(self) -> None:
         """Start the health-check thread built with the loop.
 
-        Called by ``run()`` once the loop has started, not at construction:
-        the first tick scans the whole memory store at once, and in the
-        gateway that scan ran while the channels were being set up, taking
-        several times longer than a later tick and slowing their startup.
+        Called by ``run()`` once the loop has started, not at construction,
+        and its first tick waits ``_HEALTH_CHECK_FIRST_TICK_DELAY_S``: that
+        tick scans the whole memory store at once, and in the gateway the
+        scan ran while the channels were being set up, taking several times
+        longer than a later tick and slowing their startup.
         """
         scheduler = self._memory_health_scheduler
         if scheduler is None:
@@ -930,7 +941,9 @@ class AgentLoop:
         try:
             scheduler.start()
             logger.info(
-                "memory health check scheduler started (interval={}s)",
+                "memory health check scheduler started "
+                "(first check in {:g}s, then every {}s)",
+                _HEALTH_CHECK_FIRST_TICK_DELAY_S,
                 scheduler.interval_seconds,
             )
         except Exception as exc:  # noqa: BLE001
