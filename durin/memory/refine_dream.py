@@ -536,11 +536,13 @@ def run_refine(
     contested alias, a clearer key, and — verdict ``related`` — the typed edge
     between them. A merge goes into the proposed survivor. A non-merge
     proposal that changes something is applied by the dream itself when
-    ``auto_resolve`` is on and the deciding judge's confidence reaches
-    ``resolve_threshold`` (a less confident one is escalated like a borderline
-    merge, and flagged with the proposal when still short); ``auto_rename``
-    off keeps every key as it is. A confident ``different`` / ``related`` that
-    changes nothing is settled and not flagged, whichever tier answered.
+    ``auto_resolve`` is on and the cheap judge's confidence reaches
+    ``resolve_threshold``; a less confident one is escalated like a borderline
+    merge, and the investigating judge's own non-merge proposal is applied
+    whatever its confidence (it removes nothing and can be reverted).
+    ``auto_rename`` off keeps every key as it is. A ``different`` /
+    ``related`` that changes nothing is settled and not flagged, whichever
+    tier answered; an ``unclear`` goes to a person.
     """
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
@@ -771,9 +773,16 @@ def run_refine(
             _emit("memory.absorb.auto_merged", canonical=final, absorbed=other,
                   confidence=decision.confidence, entity_type=page_a.type)
             return
-        if _actionable(res) and decision.confidence >= resolve_threshold:
+        # The investigating judge read both pages and their lineage before it
+        # answered, so a change it proposes short of a merge — a typed edge,
+        # who keeps an alias, a clearer key — is applied as it proposes it:
+        # such a change removes nothing and `durin memory revert` undoes it.
+        # Its merges keep their floor above, and an "unclear" still goes to a
+        # person (_auto_applicable never applies one).
+        resolve_floor = 0 if escalated else resolve_threshold
+        if _actionable(res) and decision.confidence >= resolve_floor:
             if auto_resolve and _auto_applicable(res, decision.verdict, decision.confidence,
-                                                 resolve_threshold, auto_rename):
+                                                 resolve_floor, auto_rename):
                 # Applied, or flagged with the error: either way this pair is done.
                 _resolve(ref_a, ref_b, res, decision)
                 return
@@ -788,13 +797,11 @@ def run_refine(
                               confidence=decision.confidence,
                               until=_now() + float(recheck_cooldown_s))
                 return
-        # A confident "different" (or a "related" whose edge already exists)
-        # that proposes no change is settled, whichever tier answered: the
-        # investigating judge confirming two pages are distinct is not a
-        # question for the user, so it is not flagged.
-        settled = (decision.verdict in ("different", "related")
-                   and not _actionable(res)
-                   and (not escalated or decision.confidence >= resolve_threshold))
+        # A "different" (or a "related" whose edge already exists) that
+        # proposes no change is settled, whichever tier answered: two pages a
+        # judge found distinct, with nothing to change, are not a question for
+        # the user, so they are not flagged.
+        settled = decision.verdict in ("different", "related") and not _actionable(res)
         if escalated and not settled:
             add_flagged(workspace, ref_a, ref_b,
                         verdict=decision.verdict,

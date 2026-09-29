@@ -285,6 +285,31 @@ class ResolveResult(Result):
     refs: dict[str, str] = {}
 
 
+def _record_person_decision(rec: dict | None, ref_a: str, ref_b: str, action: str) -> None:
+    """Record what a person decided on a flagged pair next to what the judge
+    proposed and how sure it was: the evidence the dream's confidence floors
+    are tuned with. ``followed``: the person applied the proposal, or made
+    the same kind of change. Best-effort — a record never fails a decision.
+
+    Decisions come through the API, where no turn's telemetry is bound, so
+    they go to the gateway's own stream unless a caller bound one."""
+    try:
+        from durin.telemetry.logger import current_telemetry, get_session_logger
+
+        rec = rec or {}
+        proposal = rec.get("proposal")
+        kind = proposal.get("kind") if isinstance(proposal, dict) else None
+        sink = current_telemetry() or get_session_logger("gateway")
+        sink.log("memory.absorb.person_resolved", {
+            "ref_a": ref_a, "ref_b": ref_b, "action": action,
+            "verdict": rec.get("verdict"), "confidence": rec.get("confidence"),
+            "source": rec.get("source"), "proposal": kind,
+            "followed": action == "accept" or (kind is not None and action == kind),
+        })
+    except Exception:  # noqa: BLE001 — telemetry must never break a resolution
+        pass
+
+
 def flagged_pair_list(workspace: Path) -> list[FlaggedPair]:
     """Every pair the dream flagged for review, with each page's current name
     and aliases. The listing behind ``GET /api/v1/memory/flagged-pairs`` and
@@ -753,18 +778,19 @@ class MemoryService:
 
         ws = self._workspace_resolver()
         details = {"ref_a": cmd.ref_a, "ref_b": cmd.ref_b}
+        key = sorted([cmd.ref_a, cmd.ref_b])
+        rec = next((r for r in read_flagged(ws) if sorted(r.get("pair") or []) == key), None)
 
         # "Keep separate" with nothing to change stays a pure tombstone, so it
         # works even when one of the pages has since disappeared.
         if cmd.action == "separate" and not (cmd.renames or cmd.alias_moves):
             add_tombstone(ws, cmd.ref_a, cmd.ref_b)
             remove_flagged(ws, cmd.ref_a, cmd.ref_b)
+            _record_person_decision(rec, cmd.ref_a, cmd.ref_b, cmd.action)
             return ResolveResult(ok=True, action=cmd.action,
                                  refs={cmd.ref_a: cmd.ref_a, cmd.ref_b: cmd.ref_b})
 
         if cmd.action == "accept":
-            key = sorted([cmd.ref_a, cmd.ref_b])
-            rec = next((r for r in read_flagged(ws) if sorted(r.get("pair") or []) == key), None)
             if not rec or not isinstance(rec.get("proposal"), dict):
                 raise ValidationFailedError("this pair has no proposal to accept",
                                             details=details)
@@ -806,6 +832,7 @@ class MemoryService:
             # nothing was written; retrying later is safe.
             raise ConflictError(f"memory changed while resolving: {exc}",
                                 details=details) from exc
+        _record_person_decision(rec, cmd.ref_a, cmd.ref_b, cmd.action)
         return ResolveResult(ok=True, action=cmd.action, refs=out.refs)
 
     # -- writes --------------------------------------------------------------

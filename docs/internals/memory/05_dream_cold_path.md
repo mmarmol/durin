@@ -502,15 +502,19 @@ threaded through; it is `None` when the vector index is unavailable.
    its "same" earns a lower bar. The merge goes into the survivor the judge
    proposed (the clearer key), optionally under a clearer key still; a proposal
    that does not fit the pair falls back to merging into the first ref. When
-   the deciding judge proposed a non-merge resolution that changes something
-   and its confidence reaches `auto_absorb.resolve_threshold` (85), the dream
-   applies it itself (`auto_resolve`, on by default) — no tombstone, the
-   verdict remembered against the pages as they are after the change — and
-   emits `memory.absorb.auto_resolved`. Every other outcome keeps the pair as is.
+   the deciding judge proposed a non-merge resolution that changes something,
+   the dream applies it itself (`auto_resolve`, on by default) — no tombstone,
+   the verdict remembered against the pages as they are after the change — and
+   emits `memory.absorb.auto_resolved`: a Tier 1 proposal when its confidence
+   reaches `auto_absorb.resolve_threshold` (85), and the investigating
+   sub-agent's whatever its confidence, since an edge, an alias's owner or a
+   clearer key removes nothing and `durin memory revert` undoes it. Every
+   other outcome keeps the pair as is.
 7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and neither
    merged it, applied a resolution nor confidently settled it as distinct
-   (`different` / `related` with nothing to change at ≥ `resolve_threshold` is
-   settled and cached like a Tier 1 `different`, not flagged), a borderline
+   (`different` / `related` with nothing to change is settled and cached like
+   a Tier 1 `different`, not flagged; an `unclear` or a `same` below the merge
+   floor is not settled), a borderline
    pair hit the per-run escalation cap before it could be investigated, the
    sub-agent failed outright (no verdict came back), or a confident resolution
    could not be applied (e.g. its new key is taken), the pair is recorded in
@@ -518,8 +522,11 @@ threaded through; it is `None` when the vector index is unavailable.
    when Tier 2 produced none — plus the judge's `proposal` and the `source`
    (`tier1` / `tier2` / `rereview`). With `auto_resolve` off, confident
    proposals are flagged instead of applied.
-   `durin memory absorb-suggest` and the webui Inbox surface these so the
-   operator can accept the proposal, edit it, merge or keep the pair. A Tier 2 failure
+   `durin memory absorb-suggest` and the dashboard's Pending page surface these
+   so the operator can accept the proposal, edit it, merge or keep the pair.
+   Each decision a person makes is recorded as
+   `memory.absorb.person_resolved`, next to the judge's verdict, confidence
+   and proposal — the evidence the confidence floors are moved with. A Tier 2 failure
    also emits `memory.absorb.escalation_failed` and is remembered by the
    verdict cache for the recheck cooldown like any other unsettled pair, so a
    pair the investigating judge cannot settle is not re-judged and re-escalated
@@ -879,9 +886,9 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `70` | Confidence floor (0–100) from which the Tier 1 judge's borderline verdicts (`unclear`, or `same` below the merge floor) escalate to a bounded sub-agent for deeper investigation. `0` disables Tier 2 entirely. |
-| `memory.dream.auto_absorb.tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged for review. |
+| `memory.dream.auto_absorb.tier2_confidence_threshold` | `60` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged for review. Its other proposals are applied whatever its confidence. |
 | `memory.dream.auto_absorb.auto_resolve` | `true` | The dream applies confident non-merge resolutions itself; off, every proposal waits on the Pending page. |
-| `memory.dream.auto_absorb.resolve_threshold` | `85` | Judge confidence floor (0–100) for applying a non-merge resolution automatically. |
+| `memory.dream.auto_absorb.resolve_threshold` | `85` | Confidence floor (0–100) for applying a non-merge resolution the Tier 1 judge proposed; the investigating sub-agent's are applied whatever its confidence. |
 | `memory.dream.auto_absorb.auto_rename` | `true` | Allow automatic resolutions and merges to change a key; off, the rest is applied and keys stay. |
 
 The (provider, model) preset every pass uses is resolved by
