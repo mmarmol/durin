@@ -196,6 +196,13 @@ draft stays where it is. An import is not linted: it is third-party content a
 person chose, and it passes the security scan. Scripts are still never run
 before they ship.
 
+A bundled file that starts with a shebang (`#!`) is made executable on every
+path that writes one — a save, an edit, the dream's create, restructure and
+fuse, a draft publish, an import, and a builtin fork
+(`_mark_scripts_executable` in `durin/agent/skills_store.py`). A shebang says
+the file is run directly, and skill docs do so (`scripts/probe.sh <domain>`),
+which fails with "Permission denied" on a file written with the default mode.
+
 ---
 
 ## 7. Curated rationale

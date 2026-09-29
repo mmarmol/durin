@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import tomllib
@@ -320,6 +321,30 @@ def _lint_script(relpath: str, content: str) -> dict | None:
     return None
 
 
+def _mark_scripts_executable(root: Path) -> None:
+    """Make every file under ``root`` (or ``root`` itself) that starts with a
+    shebang executable.
+
+    A shebang says a file is meant to be run directly, and skill docs do run
+    bundled scripts that way (``scripts/probe.sh <domain>``); written with the
+    default mode, such a script fails with "Permission denied". Every path
+    that writes a skill file runs this: a save, an edit, the dream's create,
+    restructure and fuse, a draft publish, an import and a builtin fork."""
+    paths = [root] if root.is_file() else root.rglob("*")
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            with path.open("rb") as handle:
+                if handle.read(2) != b"#!":
+                    continue
+            mode = path.stat().st_mode
+            if not mode & stat.S_IXUSR:
+                path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError:
+            logger.warning("could not mark %s executable", path)
+
+
 def _lint_bundle(files: dict[str, str]) -> dict | None:
     """The first file in ``files`` that does not parse, as a refusal, or None.
 
@@ -405,6 +430,7 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
         return {"error": "file escapes skill directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    _mark_scripts_executable(target)
     if scan.new_findings:
         _void_verdict_cleared(dest / "SKILL.md")
     sha = store.auto_commit(f"skill({name}): {rationale}",
@@ -625,6 +651,7 @@ def fork_on_write(workspace: Path, name: str, loader: SkillsLoader | None = None
     if not (src / "SKILL.md").exists():
         raise FileNotFoundError(f"skill not found: {name}")
     shutil.copytree(src, dest)
+    _mark_scripts_executable(dest)
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
@@ -885,6 +912,7 @@ def write_skill_edit(
     target = (dest / file).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(edit["after"], encoding="utf-8")
+    _mark_scripts_executable(target)
     if scan.new_findings:
         _void_verdict_cleared(dest / "SKILL.md")
     sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
@@ -1160,6 +1188,7 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target = md.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
+    _mark_scripts_executable(md.parent)
     composition = "overridden" if composition_override else "compliant"
     return _finalize_skill(workspace, name, md.parent, source="dream",
                            attribution=attribution, ramp="write", composition=composition,
@@ -1260,6 +1289,7 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
             return {"error": "file escapes skill directory"}
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
+    _mark_scripts_executable(dest)
     _ensure_surface_frontmatter(md, name)
 
     def _stamp(data: dict) -> None:
@@ -1353,6 +1383,7 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
             return {"error": "file escapes skill directory"}
         t.parent.mkdir(parents=True, exist_ok=True)
         t.write_text(str(body), encoding="utf-8")
+    _mark_scripts_executable(md.parent)
     _ensure_surface_frontmatter(md, target)
 
     from durin.security.skill_scan import scan_skill
@@ -1436,6 +1467,7 @@ def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution
     _store_init(workspace)  # ensure repo exists before moving files under it
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(draft), str(dest))
+    _mark_scripts_executable(dest)
     composition = "overridden" if composition_override else "compliant"
     return _finalize_skill(workspace, name, dest, source="dream",
                            attribution=attribution, ramp="publish", composition=composition,
