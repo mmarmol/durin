@@ -455,7 +455,7 @@ How to see it: `/status` names the turn a frozen block was actually taken on —
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Watch `memory/*.md` for changes and re-index on write; disable for one less background thread |
+| `enabled` | `true` | Watch `memory/*.md` for changes and re-index on write (`memory/.git` is never watched); disable to drop its background threads |
 
 **`memory.health_check`** — periodic memory subsystem health probe:
 

@@ -164,7 +164,11 @@ model in the background, and puts back on the bus the messages the previous
 gateway journaled at shutdown (`sessions/.inbound_journal.jsonl`, see
 `_dispatch` below); they re-enter the queue directly, not through
 `publish_inbound`, because they already passed the authorizer and the
-automation interceptors once. For each message it decides the routing in order:
+automation interceptors once. Only after those steps does it ask the memory
+file watcher for its vector backfill, which builds the embedding provider and
+reads the whole vector table, so that work never competes with gateway startup
+(see [memory/02_indexing.md](memory/02_indexing.md)). For each message it
+decides the routing in order:
 
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched
