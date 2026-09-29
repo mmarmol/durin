@@ -327,17 +327,22 @@ to discard the follow-ups queued behind it. The gateway's shutdown now calls
 first, across every session key, before awaiting any of them — awaiting one
 would let the others run, and a turn whose own wait (an ask_user answer, an
 approval) gets cancelled by that window ends before the drain reaches it,
-losing its message instead of journaling it. It then waits once, for a
-bounded time, for all the cancelled turns to unwind together (so their
-`finally` hands their queues to the bus); a turn stuck past that bound is
-logged and left behind rather than charging the drain its own timeout again
-for every such turn. It collects what is on the bus plus any queue no task
-handed back, drops trigger-only messages (published for automation triggers,
-never a conversation), and writes the rest to
-`sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The message each
-cancelled turn was answering goes first (the loop keeps it per task from
-`_start_turn_task` until the task finishes), ahead of the follow-ups queued
-behind it. The next start replays the journal into the bus, in order, once —
+losing its message instead of journaling it. With each session's turns it
+takes that session's pending queues, before the turns are cancelled, so a
+turn's `finally` has nothing left to put back on the bus. It then waits once,
+for a bounded time, for all the cancelled turns to unwind together; a turn
+stuck past that bound is logged and left behind rather than charging the
+drain its own timeout again for every such turn. It collects what is on the
+bus plus any queue whose turn is no longer running, drops trigger-only
+messages (published for automation triggers, never a conversation), and
+writes the rest to `sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`).
+Per session the journal holds the message each cancelled turn was answering
+(the loop keeps it per task from `_start_turn_task` until the task finishes),
+then the follow-ups queued behind it, then what was still on the bus. A
+follow-up the turn's `finally` re-published would land behind a message sent
+after intake stopped, which waits on the bus, and the next start would answer
+the two out of order. The next start replays the journal into the bus, in
+order, once —
 a message older than a day at replay time is dropped with a log line rather
 than answered out of the blue. The interrupted turn therefore runs again
 after the restart. Its first attempt stays visible in the session: the user

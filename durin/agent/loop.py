@@ -2842,15 +2842,18 @@ class AgentLoop:
         """Journal every inbound message the gateway still owes a turn to, so
         the next start replays it instead of dropping it.
 
-        The turns in flight are cancelled and awaited first: a turn's own
-        ``finally`` is what hands its pending queues back to the bus, and the
-        bus is where they are collected from. Every turn is recorded and
-        cancelled before any is awaited, so a turn blocked on ask_user (whose
-        wait ``stop()`` cancels) is journaled like any other. Queues no task
-        handed back (their turn died before its ``finally``) are collected
-        directly. The message each cancelled turn was answering goes first,
-        ahead of the follow-ups queued behind it, so the next start answers it
-        in order
+        The journal holds, per session, the message each turn in flight was
+        answering, then the follow-ups queued behind that turn, then what is
+        still on the bus, so the next start answers them in the order they
+        were sent. A turn's queues are taken before it is cancelled, leaving
+        its ``finally`` nothing to put back on the bus: once intake has
+        stopped, a newer message for the session waits on the bus, and a
+        follow-up re-published behind it would be answered after it. Every
+        turn is recorded and cancelled before any is awaited, so a turn
+        blocked on ask_user (whose wait ``stop()`` cancels) is journaled like
+        any other. Queues whose turn is no longer running are collected last.
+        The message a cancelled turn was answering is journaled so the next
+        start answers it
         instead of leaving it closed as "interrupted" with no reply ever
         given. Trigger-only messages are not journaled: they were published
         for automation triggers to see, never to become a conversation, and a
@@ -2866,6 +2869,17 @@ class AgentLoop:
             return 0
         owed: list[InboundMessage] = []
         cancelled: list[tuple[str, asyncio.Task]] = []
+
+        def _take_queued(queues: PendingQueues) -> None:
+            # System results first, as a turn's own ``finally`` hands them
+            # back: they complete work the deferred user messages may ask about.
+            for queue in (queues.inject, queues.deferred):
+                while True:
+                    try:
+                        owed.append(queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
         # Record and cancel every turn before awaiting any of them. Awaiting
         # one turn lets the others run, and a turn that ends in that window
         # (a turn whose ask_user wait ``stop()`` just cancelled ends at its
@@ -2879,6 +2893,9 @@ class AgentLoop:
                         owed.append(message)
                     task.cancel()
                 cancelled.append((key, task))
+            queues = self._pending_queues.pop(key, None)
+            if queues is not None:
+                _take_queued(queues)
         if cancelled:
             # One wait for the whole batch, not one per task (see the
             # docstring): a stuck turn's wait_for used to cost the drain its
@@ -2904,12 +2921,7 @@ class AgentLoop:
             except asyncio.QueueEmpty:
                 break
         for queues in list(self._pending_queues.values()):
-            for queue in (queues.inject, queues.deferred):
-                while True:
-                    try:
-                        owed.append(queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+            _take_queued(queues)
         self._pending_queues.clear()
         owed = [m for m in owed if not m.trigger_only]
         count = self._inbound_journal.append(owed, kind=self._process_kind)
