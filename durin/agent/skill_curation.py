@@ -8,8 +8,15 @@ curated (via
 the pass never scales with catalog size. `budget` caps the per-day delta; the
 rest carries over (un-cursored → a later day), logged.
 
+The selected skills are judged in batches whose answer fits the model's output
+limit, each parsed, applied and stamped on its own. A batch whose answer is cut
+or unreadable is split and retried within the pass, down to single skills; a
+skill whose own review keeps failing is set aside instead of re-paid every pass.
+
 Judges by CONTENT (Hermes rule: not usage counts). Judge is injected so the core
-is unit-testable without a provider. The day's usage is light context only.
+is unit-testable without a provider; it returns the provider's response (whose
+finish reason tells a cut answer) or a bare string. The day's usage is light
+context only.
 
 Observations (task-observer pattern): OPEN records in the observation queue are
 the judge's evidence channel — they pull their skill into the delta even when
@@ -24,13 +31,33 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
 from durin.agent import skill_observations as so
 from durin.agent import skills_store as ss
+from durin.utils.atomic_write import atomic_write_text
 
 DEFAULT_BUDGET = 50
+# How much one judge call reviews. The answer, not the prompt, is what
+# overflows: an `evolve` carries the text it replaces and its replacement, so
+# a review that rewrites everything it is shown (English normalization does)
+# answers about twice the skill text shown. 12,000 chars of skill text —
+# SKILL.md plus the bundled files shown — answer at most ~24,000 chars, some
+# 7,000 tokens: inside the 8,192-token output default of a model preset. The
+# count cap bounds the per-skill overhead (action keys, rationale,
+# dispositions) of many small skills. A batch whose answer is cut anyway (a
+# smaller limit, reasoning tokens) is split and retried.
+_BATCH_CHARS = 12_000
+_BATCH_SKILLS = 8
+# A skill whose review failed on its own this many passes in a row is set
+# aside instead of re-paying the failing calls every pass: until its body or
+# the curation rules change, or until _STALL_DAYS have passed — a failure the
+# model caused rather than the skill heals by itself.
+_STALL_REVIEWS = 3
+_STALL_DAYS = 7
+_FAILURES = ".curation_failures.json"
 logger = logging.getLogger(__name__)
 
 _NO_OBS = {"applied": 0, "declined": 0, "kept": 0}
@@ -45,25 +72,30 @@ def _emit(event: str, **data) -> None:
         pass
 
 
-def _parse_judge_output(raw: object) -> dict | None:
-    """Parse the judge's JSON object. Returns ``None`` when the output cannot
-    be parsed at all (unloadable JSON or wrong top-level type) — distinct from
-    a valid object with empty actions, which is a completed review. Same
-    None-vs-empty contract (and fence-strip + repair tolerance) as the
-    dream-pass parsers."""
-    import re as _re
+def _parse_judge_output(raw: object) -> tuple[dict | None, str | None]:
+    """Parse the judge's JSON object: ``(object, None)``, or ``(None, error)``
+    when the output cannot be parsed at all (unloadable JSON or wrong
+    top-level type) — distinct from a valid object with empty actions, which
+    is a completed review. Same None-vs-empty contract (and fence-strip +
+    repair tolerance) as the dream-pass parsers.
 
+    Only an answer that does not open as the object itself is unwrapped from a
+    fence, and up to its LAST fence: skills carry code fences, and an `evolve`
+    quoting one would otherwise lose the whole answer to the quoted snippet."""
     from json_repair import repair_json
 
     s = str(raw or "").strip()
-    m = _re.search(r"```(?:json)?\s*(.*?)```", s, _re.DOTALL)
-    if m:
-        s = m.group(1).strip()
+    if not s.startswith("{"):
+        m = re.search(r"```(?:json)?\s*(.*)```", s, re.DOTALL)
+        if m:
+            s = m.group(1).strip()
     try:
         obj = json.loads(repair_json(s))
-    except (ValueError, TypeError):
-        return None
-    return obj if isinstance(obj, dict) else None
+    except (ValueError, TypeError) as exc:
+        return None, str(exc)
+    if not isinstance(obj, dict):
+        return None, f"expected a JSON object, got {type(obj).__name__}"
+    return obj, None
 
 
 _MIN_EVIDENCE_CHARS = 12
@@ -178,23 +210,155 @@ def _normalize_files(raw: object) -> dict[str, str]:
     return out
 
 
-def _emit_curation_parse_failure(stage: str, raw: object) -> None:
+def _emit_curation_parse_failure(stage: str, raw: object, *, finish_reason: str | None = None,
+                                 error: str | None = None) -> None:
     """Surface an unparseable judge response the same way dream-pass parse
     failures surface (telemetry + Dream-feed warning). Best-effort."""
     try:
         from durin.memory.llm_invoke import emit_parse_failure
-        emit_parse_failure(stage, raw=str(raw or ""))
+        emit_parse_failure(stage, raw=str(raw or ""), finish_reason=finish_reason, error=error)
     except Exception:  # noqa: BLE001 — telemetry must never break curation
         pass
 
 
-def curate_catalog(workspace, *, judge: Callable[[str], str],
+def _text(reply: object) -> str:
+    """The judge's answer text: from the provider's response, or a bare string."""
+    return str(getattr(reply, "content", reply) or "")
+
+
+def _ask(judge: Callable, prompt: str, stage: str) -> tuple[dict | None, str | None]:
+    """One judge call: ``(answer, None)``, or ``(None, why)`` when the answer
+    cannot be used — ``"length"``: cut at the output limit, and never parsed,
+    because a repaired fragment reads as a complete edit whose replacement
+    stops mid-text; ``"error"``: the provider gave up and the text is its
+    error message; ``"unparseable"``. Every unusable answer is reported."""
+    reply = judge(prompt)
+    raw = _text(reply)
+    finish = getattr(reply, "finish_reason", None)
+    cut_or_error = finish in ("length", "error")
+    parsed, error = (None, None) if cut_or_error else _parse_judge_output(raw)
+    if parsed is not None:
+        return parsed, None
+    _emit_curation_parse_failure(stage, raw, finish_reason=finish, error=error)
+    return None, finish if cut_or_error else "unparseable"
+
+
+def _batches(sizes: list[tuple[str, int]]) -> list[list[str]]:
+    """Pack skills, in order, into batches of at most ``_BATCH_SKILLS`` skills
+    and ``_BATCH_CHARS`` chars of skill text; a larger skill is a batch alone."""
+    out: list[list[str]] = []
+    chars = 0
+    for name, size in sizes:
+        if not out or len(out[-1]) >= _BATCH_SKILLS or chars + size > _BATCH_CHARS:
+            out.append([])
+            chars = 0
+        out[-1].append(name)
+        chars += size
+    return out
+
+
+def _review_in_batches(batches: list[list[str]],
+                       review: Callable[[list[str]], str | None]) -> tuple[list[str], list[str]]:
+    """Run ``review`` (a batch → ``None`` once its answer was used, else why
+    not) over ``batches``. A batch whose answer could not be used is split in
+    halves and retried in this same pass, down to single skills, so one
+    skill's oversized or unreadable review never holds back the others. A
+    provider error ends the pass: splitting cannot help, and more calls would
+    only multiply the outage. Returns the skills reviewed and the skills whose
+    review failed alone."""
+    done: list[str] = []
+    failed: list[str] = []
+    queue = list(batches)
+    while queue:
+        batch = queue.pop(0)
+        why = review(batch)
+        if why is None:
+            done += batch
+        elif why == "error":
+            break
+        elif len(batch) > 1:
+            half = (len(batch) + 1) // 2
+            queue[:0] = [batch[:half], batch[half:]]
+        else:
+            failed += batch
+    return done, failed
+
+
+def _today() -> date:
+    return date.today()
+
+
+def _review_key(workspace: Path, name: str) -> str | None:
+    """What a failed review was of: the skill's body under the current rules.
+    A change to either is a different review."""
+    text = ss.read_skill_content(workspace, name)
+    return None if text is None else f"{ss._body_hash(text)}:{ss.CURATION_RULES_VERSION}"
+
+
+def _read_failures(workspace: Path) -> dict:
+    try:
+        data = json.loads((ss._skills_dir(workspace) / _FAILURES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _set_aside(workspace: Path, stage: str, names: list[str]) -> set[str]:
+    """The skills in ``names`` whose review failed alone ``_STALL_REVIEWS``
+    passes in a row on their current body and rules, the last one less than
+    ``_STALL_DAYS`` days ago."""
+    records = _read_failures(workspace).get(stage)
+    if not isinstance(records, dict):
+        return set()
+    out: set[str] = set()
+    for name in names:
+        rec = records.get(name)
+        if not isinstance(rec, dict) or int(rec.get("failures", 0)) < _STALL_REVIEWS:
+            continue
+        try:
+            last = date.fromisoformat(str(rec.get("at")))
+        except ValueError:
+            continue
+        if (_today() - last).days < _STALL_DAYS and rec.get("key") == _review_key(workspace, name):
+            out.add(name)
+    return out
+
+
+def _record_reviews(workspace: Path, stage: str, *, done: list[str], failed: list[str]) -> None:
+    """Forget the failures of the skills reviewed, and count one more for each
+    skill whose review failed alone (a first one when its body or the rules
+    changed since). Held under the skills store's write lock, like every
+    other read-modify-write of a file in the store."""
+    with ss._store(workspace).write_lock():
+        data = _read_failures(workspace)
+        records = data.get(stage) if isinstance(data.get(stage), dict) else {}
+        before = dict(records)
+        for name in done:
+            records.pop(name, None)
+        for name in failed:
+            key = _review_key(workspace, name)
+            rec = records.get(name) if isinstance(records.get(name), dict) else {}
+            count = int(rec.get("failures", 0)) + 1 if rec.get("key") == key else 1
+            records[name] = {"key": key, "failures": count, "at": _today().isoformat()}
+            if count >= _STALL_REVIEWS:
+                logger.warning("%s: review of %s failed %d passes in a row; set aside",
+                               stage, name, count)
+                _emit("skill.curation_stalled", stage=stage, skill=name, failures=count)
+        if records == before:
+            return
+        data[stage] = records
+        atomic_write_text(ss._skills_dir(workspace) / _FAILURES, json.dumps(data, indent=2))
+
+
+def curate_catalog(workspace, *, judge: Callable,
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET,
                    drift_check: Callable | None = None,
                    allowlist=None) -> dict:
     """One delta-curation pass.
 
-    Returns {'reviewed', 'applied', 'deferred', 'observations'}.
+    Returns {'reviewed', 'applied', 'deferred', 'observations'}, plus
+    'failed' (selected skills no usable answer covered — left unstamped for
+    the next run) and 'stalled' (delta skills set aside) when not zero.
     """
     workspace = Path(workspace)
     # Records APPLIED during the previous pass got their cycle of visibility —
@@ -233,12 +397,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 if int(r.get("id", 0)) not in waiting and not r.get("stalled_at")]
     delta += sorted(n for n in {r.get("skill") for r in open_obs}
                     if n in auto and n not in delta)
+    set_aside = _set_aside(workspace, "curation", delta)
+    delta = [n for n in delta if n not in set_aside]
+    stalled = {"stalled": len(set_aside)} if set_aside else {}
     if not delta:
         _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
-             backfilled=backfilled)
+             backfilled=backfilled, failed=0, stalled=len(set_aside))
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
                 "observations": {**_NO_OBS, "open": len(so.open_observations(workspace))},
-                "principles": len(so.active_principles(workspace))}
+                "principles": len(so.active_principles(workspace)), **stalled}
 
     selected = delta[:budget]
     deferred = len(delta) - len(selected)
@@ -249,7 +416,6 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
     # Skills with open observations first: their fix may be in a script.
     with_obs = {r.get("skill") for r in open_obs}
-    bundles = _bundle_views(workspace, sorted(selected, key=lambda n: n not in with_obs))
 
     import shutil as _shutil
     upstream: dict[str, str] = {}
@@ -270,16 +436,13 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             # always consume the fetched upstream copy
             _shutil.rmtree(rep.qdir, ignore_errors=True)
 
-    # The judge sees OPEN observations for the skills under review (plus
-    # cross-skill "all" records), and the compact history of records already
-    # taken off the queue by hand — rejected, or routed to durin itself — so it
-    # doesn't re-propose them.
-    in_scope = set(selected) | {"all"}
-    obs_shown = [r for r in open_obs if r.get("skill") in in_scope]
-    declined_shown = [
+    # Each batch's judge sees the OPEN observations for its skills, and the
+    # compact history of records already taken off the queue by hand —
+    # rejected, or routed to durin itself — so it doesn't re-propose them.
+    # Cross-skill ("all") records ride with the batches until one answers them.
+    declined = [
         {"id": r.get("id"), "skill": r.get("skill"), "issue": r.get("issue")}
         for r in so.suppressed_observations(workspace)
-        if r.get("skill") in in_scope
     ]
 
     principles = so.active_principles(workspace)
@@ -291,30 +454,85 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if (ev := ss.user_edits_since_curation(workspace, n))
     }
 
-    prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
-                           declined_shown, principles, user_edits,
-                           workspace=workspace, bundles=bundles)
-    raw = judge(prompt)
-    parsed = _parse_judge_output(raw)
-    if parsed is None:
-        # Unparseable judge output (degraded provider, prose instead of JSON).
-        # Do NOT stamp the reviewed set — leaving it unstamped means the same
-        # skills re-enter the next run's delta instead of the review being
-        # silently consumed as a no-op. Observations stay OPEN for the same
-        # reason. Backfills already applied above are deterministic and kept.
-        _emit_curation_parse_failure("curation", raw)
-        logger.warning(
-            "curation: judge output unparseable; skipping stamps so the "
-            "%d selected skill(s) re-enter the next run", len(selected))
-        _emit("skill.curation_run", reviewed=len(selected), applied=0,
-             deferred=deferred, backfilled=backfilled)
-        return {"reviewed": len(selected), "applied": 0, "deferred": deferred,
-                "backfilled": backfilled, "judge_parse_failed": True,
-                "observations": {**dict(_NO_OBS),
-                                 "open": len(so.open_observations(workspace))},
-                "principles": len(so.active_principles(workspace))}
-    actions = parsed.get("actions", [])
+    applied = 0
+    obs_counts = dict(_NO_OBS)
+    cross_skill_open = True
 
+    def review(batch: list[str]) -> str | None:
+        nonlocal applied, cross_skill_open
+        in_scope = set(batch) | ({"all"} if cross_skill_open else set())
+        obs_shown = [r for r in open_obs if r.get("skill") in in_scope]
+        prompt = _build_prompt(
+            {n: catalog[n] for n in batch}, usage or {},
+            {n: upstream[n] for n in batch if n in upstream}, obs_shown,
+            [d for d in declined if d["skill"] in set(batch) | {"all"}],
+            principles, {n: user_edits[n] for n in batch if n in user_edits},
+            workspace=workspace,
+            bundles=_bundle_views(workspace, sorted(batch, key=lambda n: n not in with_obs)))
+        parsed, why = _ask(judge, prompt, "curation")
+        if parsed is None:
+            # Nothing of an unusable answer is applied, and its skills stay
+            # unstamped: they are retried split, or re-enter the next run,
+            # instead of the review being silently consumed as a no-op.
+            return why
+        cross_skill_open = False
+        n_applied, landed, attempts, approvals = _apply_actions(
+            workspace, parsed.get("actions", []), batch, judge)
+        applied += n_applied
+
+        # Per-observation dispositions — only for records the judge actually saw.
+        # An `applied` stands only on a change that landed on that skill this pass,
+        # or on quoted evidence found in the skill's files that it already holds
+        # the fix; otherwise the record stays OPEN with a note of what was tried.
+        shown = {r.get("id"): r for r in obs_shown}
+        dispositions = []
+        for d in parsed.get("observations", []):
+            rec = shown.get(d.get("id"))
+            if rec is None:
+                continue
+            skill = str(rec.get("skill") or "")
+            if d.get("disposition") == "applied" and not _applied_holds(workspace, rec, d, landed):
+                note = "; ".join(attempts.get(skill, [])) or (
+                    "marked applied, but no change landed on the skill and no evidence "
+                    "was quoted from it")
+                d = {"id": d.get("id"), "disposition": "keep", "note": note}
+            elif d.get("disposition") == "keep" and attempts.get(skill):
+                d = {**d, "note": "; ".join(attempts[skill])}
+            if d.get("disposition") == "keep" and skill in approvals:
+                d = {**d, "approval": approvals[skill]}
+            dispositions.append(d)
+        if dispositions:
+            obs_res = so.apply_dispositions(workspace, dispositions)
+            for k in obs_counts:
+                obs_counts[k] += obs_res.get(k, 0)
+
+        for n in batch:
+            if ss.read_skill_content(workspace, n) is not None:
+                ss.mark_curated(workspace, n)
+        return None
+
+    sizes = [(n, len(catalog[n]) + sum(len(t) for t in _bundle_view(workspace, n).values()))
+             for n in selected]
+    done, failed = _review_in_batches(_batches(sizes), review)
+    _record_reviews(workspace, "curation", done=done, failed=failed)
+    unreviewed = len(selected) - len(done)
+    if unreviewed:
+        logger.warning(
+            "curation: no usable judge answer for %d of %d selected skill(s); "
+            "left unstamped so they re-enter the next run", unreviewed, len(selected))
+    _emit("skill.curation_run", reviewed=len(selected), applied=applied,
+         deferred=deferred, backfilled=backfilled, failed=unreviewed, stalled=len(set_aside))
+    return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
+            "backfilled": backfilled,
+            **({"failed": unreviewed, "judge_parse_failed": True} if unreviewed else {}),
+            "observations": {**obs_counts, "open": len(so.open_observations(workspace))},
+            "principles": len(so.active_principles(workspace)), **stalled}
+
+
+def _apply_actions(workspace: Path, actions: list, scope: list[str],
+                   judge: Callable) -> tuple[int, set[str], dict[str, list[str]], dict[str, str]]:
+    """Apply the judge's actions on the skills in ``scope`` — the ones it was
+    shown. Returns how many landed, plus the three records below."""
     applied = 0
     # Which skills a change actually landed on this pass, and what happened to
     # the attempts that did not: an observation is settled by a landed change,
@@ -335,7 +553,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     for a in actions:
         t = a.get("type")
         if t == "fuse":
-            if not set(a.get("sources", [])) <= set(selected):
+            if not set(a.get("sources", [])) <= set(scope):
                 logger.warning("curation: skipping fuse with out-of-scope sources %s", a.get("sources"))
                 _emit("skill.curation_action", action="fuse", skill=a.get("target"), applied=False)
                 continue
@@ -348,7 +566,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"),
                                      files=_normalize_files(a.get("files")) or None,
-                                     composition_judge=judge,
+                                     composition_judge=lambda p: _text(judge(p)),
                                      attribution=ss.Attribution(actor="curation"))
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0
@@ -366,7 +584,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             # and only a validated, complete skill is applied to live — else it is
             # discarded, live untouched. The judge never emits whole artifacts
             # inline (that shape corrupted a skill when a completion truncated).
-            if a.get("name") not in selected:
+            if a.get("name") not in scope:
                 logger.warning("curation: skipping restructure of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
                 continue
@@ -387,7 +605,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                             a["name"], r.get("error"))
             _emit("skill.curation_action", action="restructure", skill=a["name"], applied=ok)
         elif t == "evolve":
-            if a.get("name") not in selected:
+            if a.get("name") not in scope:
                 logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="evolve", skill=a.get("name"), applied=False)
                 continue
@@ -417,7 +635,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             # Remove a fully-obsolete skill outright (git-recoverable via
             # remove_skill, which refuses builtins). The body-change/empty-body
             # path can only `evolve` toward an empty SKILL.md, leaving clutter.
-            if a.get("name") not in selected:
+            if a.get("name") not in scope:
                 logger.warning("curation: skipping retire of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="retire", skill=a.get("name"), applied=False)
                 continue
@@ -469,50 +687,18 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 logger.warning("curation: retire_principle rejected: %s", r.get("error"))
             _emit("skill.curation_action", action="retire_principle", applied=ok)
 
-    # Per-observation dispositions — only for records the judge actually saw.
-    # An `applied` stands only on a change that landed on that skill this pass,
-    # or on quoted evidence found in the skill's files that it already holds
-    # the fix; otherwise the record stays OPEN with a note of what was tried.
-    shown = {r.get("id"): r for r in obs_shown}
-    dispositions = []
-    for d in parsed.get("observations", []):
-        rec = shown.get(d.get("id"))
-        if rec is None:
-            continue
-        skill = str(rec.get("skill") or "")
-        if d.get("disposition") == "applied" and not _applied_holds(workspace, rec, d, landed):
-            note = "; ".join(attempts.get(skill, [])) or (
-                "marked applied, but no change landed on the skill and no evidence "
-                "was quoted from it")
-            d = {"id": d.get("id"), "disposition": "keep", "note": note}
-        elif d.get("disposition") == "keep" and attempts.get(skill):
-            d = {**d, "note": "; ".join(attempts[skill])}
-        if d.get("disposition") == "keep" and skill in approvals:
-            d = {**d, "approval": approvals[skill]}
-        dispositions.append(d)
-    obs_res = (so.apply_dispositions(workspace, dispositions)
-               if dispositions else dict(_NO_OBS))
-
-    for n in selected:
-        if ss.read_skill_content(workspace, n) is not None:
-            ss.mark_curated(workspace, n)
-    _emit("skill.curation_run", reviewed=len(selected), applied=applied,
-         deferred=deferred, backfilled=backfilled)
-    return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
-            "backfilled": backfilled,
-            "observations": {**{k: obs_res.get(k, 0) for k in _NO_OBS},
-                             "open": len(so.open_observations(workspace))},
-            "principles": len(so.active_principles(workspace))}
+    return applied, landed, attempts, approvals
 
 
-def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
+def suggest_manual_skills(workspace, *, judge: Callable,
                           usage: dict | None = None,
                           budget: int = DEFAULT_BUDGET) -> dict:
     """Curation for MANUAL skills: run the same judge, but ENQUEUE its actions as
     suggestions for user review instead of applying them. The auto path
     (curate_catalog) is untouched. Conclusions covered by a live rejection
     tombstone are suppressed. Evaluation state is tracked in a sidecar cursor so
-    manual skill files are never written."""
+    manual skill files are never written. Reviewed in batches like
+    curate_catalog, with the same split-and-retry and set-aside."""
     from durin.agent import skill_suggestions as sg
 
     workspace = Path(workspace)
@@ -521,48 +707,54 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
         if s["mode"] == "manual" and s["source"] == "workspace"
     ]
     delta = [n for n in manual if sg.needs_suggestion(workspace, n)]
+    set_aside = _set_aside(workspace, "suggestions", delta)
+    delta = [n for n in delta if n not in set_aside]
+    stalled = {"stalled": len(set_aside)} if set_aside else {}
     if not delta:
-        return {"reviewed": 0, "suggested": 0, "suppressed": 0}
+        return {"reviewed": 0, "suggested": 0, "suppressed": 0, **stalled}
 
     selected = delta[:budget]
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
-    prompt = _build_suggestion_prompt(catalog)
-    raw = judge(prompt)
-    parsed = _parse_judge_output(raw)
-    if parsed is None:
-        # Same guard as curate_catalog: an unparseable judge must not advance
-        # the evaluation cursor, or the skill is never re-evaluated.
-        _emit_curation_parse_failure("suggestions", raw)
-        logger.warning("skill suggestions: judge output unparseable; cursor "
-                       "not advanced for %d skill(s)", len(selected))
-        return {"reviewed": len(selected), "suggested": 0, "suppressed": 0,
-                "judge_parse_failed": True}
-    actions = parsed.get("actions", [])
-
     suggested = 0
     suppressed = 0
-    for a in actions:
-        t = a.get("type")
-        if t not in ("evolve", "retire"):
-            # The suggestion pass only proposes evolve/retire for manual skills
-            # (fuse refuses manual sources; principles are cross-cutting). Log so
-            # an unexpected judge action type isn't dropped without a trace.
-            logger.debug("skill suggestions: dropping unsupported action type %r", t)
-            continue
-        if a.get("name") not in selected:
-            continue
-        fp = sg.fingerprint(a)
-        if sg.is_tombstoned(workspace, fp):
-            suppressed += 1
-            continue
-        sg.add_suggestion(workspace, a)
-        suggested += 1
 
-    for n in selected:
-        sg.mark_suggested(workspace, n)
+    def review(batch: list[str]) -> str | None:
+        nonlocal suggested, suppressed
+        parsed, why = _ask(judge, _build_suggestion_prompt({n: catalog[n] for n in batch}),
+                           "suggestions")
+        if parsed is None:
+            # Same guard as curate_catalog: an unusable answer must not advance
+            # the evaluation cursor, or the skill is never re-evaluated.
+            return why
+        for a in parsed.get("actions", []):
+            t = a.get("type")
+            if t not in ("evolve", "retire"):
+                # The suggestion pass only proposes evolve/retire for manual skills
+                # (fuse refuses manual sources; principles are cross-cutting). Log so
+                # an unexpected judge action type isn't dropped without a trace.
+                logger.debug("skill suggestions: dropping unsupported action type %r", t)
+                continue
+            if a.get("name") not in batch:
+                continue
+            fp = sg.fingerprint(a)
+            if sg.is_tombstoned(workspace, fp):
+                suppressed += 1
+                continue
+            sg.add_suggestion(workspace, a)
+            suggested += 1
+        for n in batch:
+            sg.mark_suggested(workspace, n)
+        return None
 
-    return {"reviewed": len(selected), "suggested": suggested,
-            "suppressed": suppressed}
+    done, failed = _review_in_batches(_batches([(n, len(catalog[n])) for n in selected]), review)
+    _record_reviews(workspace, "suggestions", done=done, failed=failed)
+    unreviewed = len(selected) - len(done)
+    if unreviewed:
+        logger.warning("skill suggestions: no usable judge answer for %d of %d skill(s); "
+                       "cursor not advanced for them", unreviewed, len(selected))
+    return {"reviewed": len(selected), "suggested": suggested, "suppressed": suppressed,
+            **({"failed": unreviewed, "judge_parse_failed": True} if unreviewed else {}),
+            **stalled}
 
 
 def _build_suggestion_prompt(catalog: dict) -> str:

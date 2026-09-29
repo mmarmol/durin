@@ -32,19 +32,32 @@ class DreamError(Exception):
     """Raised when an LLM invocation can't proceed (missing key, bad output, IO)."""
 
 
-def emit_parse_failure(stage: str, *, source: str | None = None, raw: str = "") -> None:
+def emit_parse_failure(stage: str, *, source: str | None = None, raw: str = "",
+                       finish_reason: str | None = None, error: str | None = None) -> None:
     """Telemetry for an unparseable dream-pass LLM response.
+
+    Carries the answer's length and both of its ends — a head alone cannot
+    tell an answer cut at the output limit (its tail stops mid-value) from a
+    malformed one — plus the provider's finish reason and the parser's error
+    when the caller has them.
 
     Best-effort: telemetry must never break a dream pass. Callers keep
     their empty-result behavior; this only makes the failure visible.
     """
     try:
         from durin.agent.tools._telemetry import emit_tool_event
-        emit_tool_event("memory.dream.parse_failure", {
+        data = {
             "stage": stage,
             "source": source,
+            "raw_len": len(raw),
             "raw_head": raw[:200],
-        })
+            "raw_tail": raw[-200:],
+        }
+        if finish_reason is not None:
+            data["finish_reason"] = finish_reason
+        if error:
+            data["error"] = str(error)[:200]
+        emit_tool_event("memory.dream.parse_failure", data)
     except Exception:  # pragma: no cover — never break the dream
         pass
 

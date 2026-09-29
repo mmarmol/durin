@@ -338,6 +338,30 @@ def test_curation_fenced_judge_output_is_recovered(tmp_path):
     assert not ss.needs_curation(tmp_path, name)  # stamped
 
 
+def test_an_answer_quoting_fenced_code_is_not_mistaken_for_a_fenced_answer(tmp_path):
+    """Skills carry code fences, and an `evolve` quotes them in `old`/`new`.
+    Unwrapping the first fence found anywhere pulled that quoted snippet out
+    of a well-formed answer and threw the whole review away as unparseable."""
+    import json
+    ws = tmp_path / "ws"
+    _mk(ws, "shell", "Run:\n\n```bash\nls -la\n```")
+    answer = json.dumps({"actions": [{
+        "type": "evolve", "name": "shell", "old": "```bash\nls -la\n```",
+        "new": "```bash\nls -lah\n```", "rationale": "human-readable sizes"}],
+        "observations": []})
+
+    res = curate_catalog(ws, judge=lambda p: answer)
+    assert "judge_parse_failed" not in res and res["applied"] == 1
+    assert "ls -lah" in (ss.read_skill_content(ws, "shell") or "")
+
+    # The same answer wrapped in a fence of its own is unwrapped whole.
+    _mk(ws, "shell2", "Run:\n\n```bash\nls -la\n```")
+    fenced = "```json\n" + answer.replace('"shell"', '"shell2"') + "\n```"
+    res = curate_catalog(ws, judge=lambda p: fenced)
+    assert "judge_parse_failed" not in res and res["applied"] == 1
+    assert "ls -lah" in (ss.read_skill_content(ws, "shell2") or "")
+
+
 def test_curate_survives_evolve_action_missing_its_text(tmp_path, monkeypatch):
     """A judge action missing `old`/`new` must cost one action, not the pass.
 

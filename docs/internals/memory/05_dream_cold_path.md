@@ -792,7 +792,10 @@ emits a warning telemetry event on a crossing, but this is **alert-only** — no
 write is blocked and no relation is dropped.
 
 An LLM response that cannot be parsed at all (unloadable JSON, wrong top-level
-type) emits `memory.dream.parse_failure` with the stage and source, and that
+type) emits `memory.dream.parse_failure` with the stage and source, the
+response's length and both of its ends — plus the provider's finish reason
+and the parser's error where the caller has them, so an answer cut at the
+output limit reads apart from a malformed one — and that
 call yields an empty result — distinguishing "model returned garbage" from
 "nothing to extract". The cursor still advances, so a persistent parse failure
 surfaces in telemetry rather than blocking the pass. Each parse failure also
