@@ -598,6 +598,11 @@ unstamped and charged to no skill:
 Whatever got no usable answer stays unstamped and re-enters the next run; the
 run reports it as `failed`.
 
+A refusal the split recovers is routine and stays out of the Dream feed. The
+feed gets one `warning` line per pass that left something unrecovered —
+skills whose review failed even judged alone, skills set aside (below), or an
+early end with skills still to review (event `skill.curation_unrecovered`).
+
 A skill whose review fails even judged alone is recorded in
 `skills/.curation_failures.json`, keyed to its body hash and the curation
 rules version, and goes after the other delta skills in the next pass — so a

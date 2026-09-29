@@ -174,6 +174,8 @@ def test_a_skill_that_fails_alone_pass_after_pass_is_set_aside(tmp_path, monkeyp
     assert not any(seen)
     assert res["reviewed"] == 0 and res["stalled"] == 1
     assert ss.needs_curation(ws, "charlie")
+    assert [d for n, d in events if n == "skill.curation_unrecovered"][-1] == {
+        "stage": "curation", "failed": 0, "stalled": 1}
 
     # Once the window has passed it is tried again — and a failure sets it
     # aside again at once.
@@ -275,11 +277,12 @@ def test_a_batch_whose_request_times_out_is_split_until_the_answers_come_in_time
     LLMResponse(text='{"actions": [{"type": "evolve", "name": "x", "old": "a", "new": "b',
                 finish_reason="length"),
 ])
-def test_a_model_that_answers_nothing_usable_ends_the_pass_early(tmp_path, reply):
+def test_a_model_that_answers_nothing_usable_ends_the_pass_early(tmp_path, monkeypatch, reply):
     """An outage, or a preset whose answers never parse, fails every call:
     splitting down to single skills only multiplies calls that fail. The pass
     ends after a few single-skill reviews in a row got nothing usable, and the
-    rest carries over."""
+    rest carries over, charged to no skill."""
+    events = _events(monkeypatch)
     ws = tmp_path / "ws"
     names = [f"a-{i:02d}" for i in range(50)]
     for n in names:
@@ -298,6 +301,11 @@ def test_a_model_that_answers_nothing_usable_ends_the_pass_early(tmp_path, reply
     assert len(shown) == 7
     assert res["failed"] == 50
     assert all(ss.needs_curation(ws, n) for n in names)
+    records = json.loads((ws / "skills" / sc._FAILURES).read_text(encoding="utf-8"))
+    assert len(records["curation"]) == sc._FAILED_IN_A_ROW
+    assert [d for n, d in events if n == "skill.curation_unrecovered"] == [{
+        "stage": "curation", "failed": sc._FAILED_IN_A_ROW, "stalled": 0,
+        "ended_early": "model_failing", "carried_over": 50 - sc._FAILED_IN_A_ROW}]
 
     res = sc.curate_catalog(ws, judge=lambda p: _EMPTY)
     assert res["reviewed"] == 50 and "failed" not in res
@@ -328,6 +336,98 @@ def test_skills_whose_review_failed_go_after_the_others(tmp_path, monkeypatch):
 
     assert res["reviewed"] == 11
     assert not any(ss.needs_curation(ws, n) for n in fresh)
+
+
+def test_skills_that_fail_apart_do_not_end_the_pass(tmp_path, monkeypatch):
+    """The early end counts single-skill failures in a row: an answer used in
+    between shows the model working, so skills that fail here and there never
+    stop the review of the rest."""
+    ws = tmp_path / "ws"
+    names = [f"a-{i:02d}" for i in range(40)]
+    for n in names:
+        _mk(ws, n)
+    listed = ss.list_skills_info
+    monkeypatch.setattr(ss, "list_skills_info",
+                        lambda w: sorted(listed(w), key=lambda s: s["name"]))
+    bad = ["a-00", "a-08", "a-16"]  # the first skill of three batches of eight
+
+    def judge(prompt):
+        return "I cannot review this." if any(f'"{n}"' in prompt for n in bad) else _EMPTY
+
+    res = sc.curate_catalog(ws, judge=judge)
+
+    assert res["failed"] == len(bad)
+    assert [n for n in names if ss.needs_curation(ws, n)] == bad
+
+
+def test_a_cross_skill_record_is_answered_by_one_batch(tmp_path):
+    """A cross-skill ("all") record rides with the batches until one batch's
+    answer is used — a refused answer passes it on — and is disposed by that
+    answer alone: shown to every batch, one pass would note an attempt per
+    batch and stall the record in a night."""
+    ws = tmp_path / "ws"
+    names = [f"a-{i:02d}" for i in range(20)]
+    for n in names:
+        _mk(ws, n)
+    issue = "every script skips a dry run"
+    oid = so.log_observation(ws, skill="all", kind="improvement", issue=issue,
+                             improvement="offer a dry run")["id"]
+    shown: list[bool] = []
+
+    def judge(prompt):
+        shown.append(issue in prompt)
+        if len(shown) == 1:
+            return LLMResponse(text='{"actions": [', finish_reason="length")
+        # Marked applied with nothing landed: kept, with the attempt noted.
+        return LLMResponse(text=json.dumps({"actions": [], "observations": (
+            [{"id": oid, "disposition": "applied"}] if shown[-1] else [])}))
+
+    sc.curate_catalog(ws, judge=judge)
+
+    assert shown[:2] == [True, True] and not any(shown[2:])
+    [rec] = so.open_observations(ws, skill="all")
+    assert len(rec["attempts"]) == 1 and not rec.get("stalled_at")
+
+
+def _feed(events: list) -> list[dict]:
+    """The Dream feed items these telemetry events make."""
+    from durin.memory.dream_digest import DREAM_ACTIVITY_TYPES, map_dream_event
+    return [item for name, data in events if name in DREAM_ACTIVITY_TYPES
+            for item in map_dream_event(name, data, 0)]
+
+
+def test_the_dream_feed_shows_no_refusal_the_split_recovered(tmp_path, monkeypatch):
+    """A batch cut at the output limit and reviewed in full once split is
+    routine: its refusals stay telemetry rows, and the feed warns of nothing."""
+    events = _events(monkeypatch)
+    ws = tmp_path / "ws"
+    names = [f"skill-{i:02d}" for i in range(4)]
+    for i, n in enumerate(names):
+        _mk(ws, n, _spanish(i))
+
+    sc.curate_catalog(ws, judge=_Model(names, limit=4_000))
+
+    assert [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert not [i for i in _feed(events) if i["kind"] == "warning"]
+
+
+def test_the_dream_feed_shows_what_a_pass_could_not_recover_in_one_line(tmp_path, monkeypatch):
+    """However many calls were refused on the way down to them, two skills
+    whose own review fails are one line for the pass."""
+    events = _events(monkeypatch)
+    ws = tmp_path / "ws"
+    names = [f"a-{i:02d}" for i in range(20)]
+    for n in names:
+        _mk(ws, n)
+
+    def judge(prompt):
+        return "I cannot review this." if '"a-03"' in prompt or '"a-12"' in prompt else _EMPTY
+
+    sc.curate_catalog(ws, judge=judge)
+
+    assert len([d for n, d in events if n == "memory.dream.parse_failure"]) > 2
+    assert [i["summary"] for i in _feed(events) if i["kind"] == "warning"] == [
+        "Skill curation: 2 skill(s) got no usable answer"]
 
 
 @pytest.mark.parametrize("finish", ["length", "content_filter", "refusal",
@@ -434,6 +534,9 @@ def test_the_pass_stops_starting_batches_once_its_time_is_up(tmp_path, monkeypat
     assert not (ws / "skills" / sc._FAILURES).exists()
     [cap] = [d for n, d in events if n == "memory.dream.max_seconds_reached"]
     assert cap["kind"] == "curation" and cap["remaining"] == len(owed)
+    assert [d for n, d in events if n == "skill.curation_unrecovered"] == [{
+        "stage": "curation", "failed": 0, "stalled": 0,
+        "ended_early": "time_cap", "carried_over": len(owed)}]
 
 
 @pytest.mark.parametrize("gate, lands", [
@@ -472,7 +575,8 @@ def _manual(ws, name, body="body"):
         encoding="utf-8")
 
 
-def test_suggestions_split_a_cut_batch_and_skip_a_failing_skill(tmp_path):
+def test_suggestions_split_a_cut_batch_and_skip_a_failing_skill(tmp_path, monkeypatch):
+    events = _events(monkeypatch)
     ws = tmp_path
     names = ["m-a", "m-b", "m-bad", "m-c"]
     for n in names:
@@ -494,6 +598,8 @@ def test_suggestions_split_a_cut_batch_and_skip_a_failing_skill(tmp_path):
     assert sg.read_suggestions(ws) == []  # the cut answer's edit was never queued
     assert sg.needs_suggestion(ws, "m-bad")
     assert not any(sg.needs_suggestion(ws, n) for n in ("m-a", "m-b", "m-c"))
+    assert [d for n, d in events if n == "skill.curation_unrecovered"] == [
+        {"stage": "suggestions", "failed": 1, "stalled": 0}]
 
 
 def test_suggestions_set_aside_a_skill_that_keeps_failing(tmp_path):
@@ -511,3 +617,31 @@ def test_suggestions_set_aside_a_skill_that_keeps_failing(tmp_path):
     out = sc.suggest_manual_skills(ws, judge=judge)
     assert calls == []
     assert out["reviewed"] == 0 and out["stalled"] == 1
+
+
+def test_suggestions_stop_starting_batches_once_their_time_is_up(tmp_path, monkeypatch):
+    """The manual-skill pass honors the time cap too, and a cap reached
+    exactly is reached: no batch starts past it."""
+    events = _events(monkeypatch)
+    ws = tmp_path
+    names = [f"m-{i:02d}" for i in range(20)]
+    for n in names:
+        _manual(ws, n)
+    now = [1000.0]
+    monkeypatch.setattr(sc, "_clock", lambda: now[0])
+    calls: list[str] = []
+
+    def judge(prompt):
+        calls.append(prompt)
+        now[0] += 100
+        return _EMPTY
+
+    out = sc.suggest_manual_skills(ws, judge=judge, max_seconds=100)
+
+    assert len(calls) == 1
+    left = len(names) - sc._BATCH_SKILLS
+    assert out["failed"] == left
+    assert sum(sg.needs_suggestion(ws, n) for n in names) == left
+    assert [d for n, d in events if n == "skill.curation_unrecovered"] == [{
+        "stage": "suggestions", "failed": 0, "stalled": 0,
+        "ended_early": "time_cap", "carried_over": left}]

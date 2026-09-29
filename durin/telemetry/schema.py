@@ -1812,6 +1812,19 @@ class SkillCurationStalledEvent(TypedDict):
     failures: int  # consecutive failed reviews of this body under these rules
 
 
+class SkillCurationUnrecoveredEvent(TypedDict):
+    """What a skill-review pass could not recover, once per pass and only
+    when there is any: skills whose own review failed, skills set aside, or
+    the skills left when the pass ended early. A refused batch that its split
+    retries recovered is not counted. The Dream feed shows it as one line."""
+
+    stage: str  # "curation" | "suggestions"
+    failed: int  # skills whose review got no usable answer even judged alone
+    stalled: int  # delta skills set aside after repeated failed reviews
+    ended_early: NotRequired[str]  # "model_failing" | "time_cap", when skills were left
+    carried_over: NotRequired[int]  # skills the pass did not reach, when it ended early
+
+
 class SkillSuggestionResolvedEvent(TypedDict):
     """A manual-skill curation suggestion was accepted or rejected by the user."""
 
@@ -2128,6 +2141,7 @@ EVENTS: dict[str, type] = {
     "automations.event_matched": AutomationsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.curation_stalled": SkillCurationStalledEvent,
+    "skill.curation_unrecovered": SkillCurationUnrecoveredEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
     "skill.observation_stalled": SkillObservationStalledEvent,
@@ -2226,6 +2240,7 @@ __all__ = [
     "SkillCurationActionEvent",
     "SkillCurationRunEvent",
     "SkillCurationStalledEvent",
+    "SkillCurationUnrecoveredEvent",
     "SkillSuggestionResolvedEvent",
     "SkillObservationResolvedEvent",
     "SkillObservationStalledEvent",

@@ -279,7 +279,7 @@ def _clock() -> float:
 
 
 def _review_in_batches(batches: list[list[str]], review: Callable[[list[str]], str | None],
-                       *, stage: str, max_seconds: float = 0) -> tuple[list[str], list[str]]:
+                       *, stage: str, max_seconds: float = 0) -> tuple[list[str], list[str], str]:
     """Run ``review`` (a batch → ``None`` once its answer was used, else why
     not) over ``batches``. A batch whose answer could not be used, or whose
     answer raised while being applied, is split in halves and retried in this
@@ -293,7 +293,9 @@ def _review_in_batches(batches: list[list[str]], review: Callable[[list[str]], s
     got nothing usable — the model, not a skill, is failing: an outage, a
     preset whose answers never parse — or once ``max_seconds`` (0: no cap)
     have passed; the skills not reached carry over. Returns the skills
-    reviewed and the skills whose review failed alone."""
+    reviewed, the skills whose review failed alone, and why the pass ended
+    with skills not reached (``"model_failing"`` or ``"time_cap"``; empty
+    when it reached them all)."""
     started = _clock()
     done: list[str] = []
     failed: list[str] = []
@@ -306,7 +308,7 @@ def _review_in_batches(batches: list[list[str]], review: Callable[[list[str]], s
                            stage, max_seconds, remaining)
             _emit("memory.dream.max_seconds_reached", kind=stage, max_seconds=max_seconds,
                   elapsed_ms=int((_clock() - started) * 1000), remaining=remaining)
-            break
+            return done, failed, "time_cap"
         batch = queue.pop(0)
         try:
             why = review(batch)
@@ -322,13 +324,25 @@ def _review_in_batches(batches: list[list[str]], review: Callable[[list[str]], s
         else:
             failed += batch
             in_a_row += 1
-            if in_a_row >= _FAILED_IN_A_ROW:
+            if in_a_row >= _FAILED_IN_A_ROW and queue:
                 logger.warning(
                     "%s: %d single-skill reviews in a row got no usable answer; the model "
                     "is failing, not a skill — %d skill(s) carry over", stage, in_a_row,
                     sum(len(b) for b in queue))
-                break
-    return done, failed
+                return done, failed, "model_failing"
+    return done, failed, ""
+
+
+def _report_unrecovered(stage: str, *, failed: int, stalled: int, ended: str = "",
+                        carried_over: int = 0) -> None:
+    """One event for what a pass could not recover, when there is any — the
+    Dream feed shows it as one line: skills whose review failed even judged
+    alone, skills set aside, and the skills left when the pass ended early. A
+    refused batch its split recovered is in none of these; its refusal stays
+    a parse-failure row."""
+    if failed or stalled or ended:
+        _emit("skill.curation_unrecovered", stage=stage, failed=failed, stalled=stalled,
+              **({"ended_early": ended, "carried_over": carried_over} if ended else {}))
 
 
 def _today() -> date:
@@ -452,6 +466,7 @@ def curate_catalog(workspace, *, judge: Callable,
     if not delta:
         _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
              backfilled=backfilled, failed=0, stalled=set_aside)
+        _report_unrecovered("curation", failed=0, stalled=set_aside)
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
                 "observations": {**_NO_OBS, "open": len(so.open_observations(workspace))},
                 "principles": len(so.active_principles(workspace)), **stalled}
@@ -563,10 +578,12 @@ def curate_catalog(workspace, *, judge: Callable,
 
     sizes = [(n, len(catalog[n]) + sum(len(t) for t in _bundle_view(workspace, n).values()))
              for n in selected]
-    done, failed = _review_in_batches(_batches(sizes), review, stage="curation",
-                                      max_seconds=max_seconds)
+    done, failed, ended = _review_in_batches(_batches(sizes), review, stage="curation",
+                                             max_seconds=max_seconds)
     _record_reviews(workspace, "curation", done=done, failed=failed)
     unreviewed = len(selected) - len(done)
+    _report_unrecovered("curation", failed=len(failed), stalled=set_aside, ended=ended,
+                        carried_over=unreviewed - len(failed))
     if unreviewed:
         logger.warning(
             "curation: no usable judge answer for %d of %d selected skill(s); "
@@ -762,6 +779,7 @@ def suggest_manual_skills(workspace, *, judge: Callable,
     delta, set_aside = _triage(workspace, "suggestions", delta)
     stalled = {"stalled": set_aside} if set_aside else {}
     if not delta:
+        _report_unrecovered("suggestions", failed=0, stalled=set_aside)
         return {"reviewed": 0, "suggested": 0, "suppressed": 0, **stalled}
 
     selected = delta[:budget]
@@ -797,10 +815,13 @@ def suggest_manual_skills(workspace, *, judge: Callable,
             sg.mark_suggested(workspace, n)
         return None
 
-    done, failed = _review_in_batches(_batches([(n, len(catalog[n])) for n in selected]), review,
-                                      stage="suggestions", max_seconds=max_seconds)
+    done, failed, ended = _review_in_batches(
+        _batches([(n, len(catalog[n])) for n in selected]), review,
+        stage="suggestions", max_seconds=max_seconds)
     _record_reviews(workspace, "suggestions", done=done, failed=failed)
     unreviewed = len(selected) - len(done)
+    _report_unrecovered("suggestions", failed=len(failed), stalled=set_aside, ended=ended,
+                        carried_over=unreviewed - len(failed))
     if unreviewed:
         logger.warning("skill suggestions: no usable judge answer for %d of %d skill(s); "
                        "cursor not advanced for them", unreviewed, len(selected))

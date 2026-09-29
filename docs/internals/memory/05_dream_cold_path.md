@@ -802,7 +802,10 @@ surfaces in telemetry rather than blocking the pass. Each parse failure also
 appears in the webui Dream feed as a `warning` item (one per unparseable
 response, deep-linked to the entity when the source is an entity ref) — a run
 full of them makes a misbehaving dream model loudly visible, which is the
-intent.
+intent. The skill review is the exception: it splits a refused batch and
+retries it within the pass, so its refusals stay telemetry rows and the feed
+shows, once per pass, only what it could not recover
+(`skill.curation_unrecovered`).
 
 A run that starts with vector memory enabled but no vector backend available
 (lancedb not importable) emits `memory.dream.vector_unavailable` once from
