@@ -16,7 +16,8 @@ What the OS is asked to report is kept to what the watcher acts on:
   The root itself is watched non-recursively, so a folder created later
   gets its watch when it appears. watchdog's FSEvents backend (macOS)
   never reports a subfolder's creation to a non-recursive watch, so the
-  worker also reconciles the folder watches whenever it is idle.
+  worker also reconciles the folder watches whenever it is idle, which
+  also replaces the watch of a folder that was deleted and created again.
 - Every watch subscribes only to create / modify / move / delete. Without
   that filter the OS reports every file open and every read-only close,
   so any read of `memory/` — a `git rev-list`, a dream pass, a health
@@ -269,8 +270,22 @@ class MemoryFileWatcher:
             pass  # its emitter never started, so there is nothing to remove
 
     def _reconcile_folders(self) -> None:
-        """Drop the watches of top-level folders that are gone and watch the
-        ones that have none yet. Runs on the worker thread when idle."""
+        """Drop the watches of top-level folders that are gone, watch the
+        ones that have none yet, and replace the ones that stopped. Runs on
+        the worker thread when idle.
+
+        watchdog stops a folder's watch for good when the folder is deleted
+        or renamed, even if a folder of the same name takes its place right
+        after (a `reset --hard` that empties a class folder removes and
+        recreates it). On macOS neither the stop nor the new folder is
+        reported, so this is where such a folder gets a live watch again."""
+        observer = self._observer
+        if observer is None:
+            return
+        stopped = {
+            emitter.watch for emitter in list(observer.emitters)
+            if not emitter.should_keep_running()
+        }
         for path in list(self._folder_watches):
             if not Path(path).is_dir():
                 self._unwatch_folder(path)
@@ -279,8 +294,28 @@ class MemoryFileWatcher:
         except OSError:
             return
         for child in children:
-            if str(child) not in self._folder_watches and _is_watchable(child):
-                self._on_folder_appeared(str(child))
+            path = str(child)
+            if not _is_watchable(child):
+                continue
+            if path not in self._folder_watches:
+                self._on_folder_appeared(path)
+            elif self._folder_watches.get(path) in stopped:
+                # Files that left the folder while it was unwatched reported
+                # nothing; re-indexing their vanished paths drops their rows.
+                for file in self._indexed_files_under(child):
+                    self._enqueue_path(str(file))
+                self._on_folder_appeared(path)
+
+    def _indexed_files_under(self, folder: Path) -> list[Path]:
+        """The files under `folder` the FTS index holds a row for."""
+        from durin.memory.search import IndexCoverage
+
+        prefix = folder.relative_to(self._workspace).as_posix() + "/"
+        return [
+            self._workspace / rel
+            for rel in IndexCoverage.load(self._workspace).mtimes
+            if rel.startswith(prefix)
+        ]
 
     def _on_folder_appeared(self, path: str, *, moved_from: str | None = None) -> None:
         """A folder was created or moved in; only top-level folders matter

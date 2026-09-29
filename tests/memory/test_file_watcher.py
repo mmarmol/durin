@@ -13,6 +13,7 @@ to flush events, and stop. Production wiring lives in
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -637,3 +638,82 @@ def test_the_rescan_reindexes_only_files_the_index_is_behind_on(
     watcher._run_rescan()
 
     assert sorted(p.name for p in seen) == ["changed.md", "unindexed.md"]
+
+
+# ---------------------------------------------------------------------------
+# A folder whose watch stopped is watched again
+# ---------------------------------------------------------------------------
+
+
+def _folder_emitter(watcher: MemoryFileWatcher, name: str):
+    """The observer's emitter for the top-level folder `name`, or None."""
+    for emitter in list(watcher._observer.emitters):
+        if Path(emitter.watch.path).name == name:
+            return emitter
+    return None
+
+
+def test_a_folder_whose_watch_stopped_is_watched_again_and_caught_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watchdog stops a folder's watch for good when the folder is deleted,
+    even if a folder of the same name is created right after, and on macOS
+    nothing reports either. The idle reconcile replaces the stopped watch
+    and re-indexes what changed in the folder while it was unwatched: the
+    files it holds now and the indexed files that left it. Later writes
+    are caught again."""
+    watcher = MemoryFileWatcher(tmp_path)
+    people = watcher._memory_root / "entities" / "person"
+    gone = people / "gone.md"
+    EntityPage(type="person", name="gone", body="indexed").save(gone)
+    reindex_one_file(watcher._workspace, gone)
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        stopped = _folder_emitter(watcher, "entities")
+        assert stopped is not None
+        # What watchdog does on its own when the watched folder is deleted.
+        stopped.stop()
+        gone.unlink()
+        arrived = people / "arrived.md"
+        EntityPage(type="person", name="arrived", body="new").save(arrived)
+
+        assert _wait_until(lambda: {gone, arrived} <= set(reindexed)), reindexed
+        replacement = _folder_emitter(watcher, "entities")
+        assert replacement is not None and replacement is not stopped
+        assert replacement.should_keep_running()
+
+        later = people / "later.md"
+        EntityPage(type="person", name="later", body="later").save(later)
+        assert _wait_until(lambda: later in reindexed), reindexed
+    finally:
+        watcher.stop()
+
+
+def test_a_folder_deleted_and_created_again_keeps_being_watched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same on the real filesystem, as a `reset --hard` that empties a
+    class folder does: the folder is deleted and created again at once, and
+    a file written into it afterwards is still re-indexed."""
+    watcher = MemoryFileWatcher(tmp_path)
+    folder = watcher._memory_root / "episodic"
+    folder.mkdir(parents=True)
+    (folder / "first.md").write_text(_entry("first"), encoding="utf-8")
+    reindexed: list[Path] = []
+    monkeypatch.setattr(watcher, "_reindex_path", reindexed.append)
+
+    watcher.start()
+    try:
+        time.sleep(0.5)
+        shutil.rmtree(folder)
+        folder.mkdir()
+        # Long enough for the OS to report it and for an idle reconcile.
+        time.sleep(1.5)
+        after = folder / "after.md"
+        after.write_text(_entry("after"), encoding="utf-8")
+        assert _wait_until(lambda: after in reindexed), reindexed
+    finally:
+        watcher.stop()
