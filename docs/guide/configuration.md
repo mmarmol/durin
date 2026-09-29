@@ -389,12 +389,12 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
 | `semantic_distance_threshold` | `0.30` | L2² distance below which an embedding-near entity becomes a dedup candidate (refine + discovery); the judge decides the merge, so a looser value trades judge calls for better duplicate recall |
 | `escalate_floor` | `70` | Borderline pairs (Tier 1 verdict `unclear`, or `same` with confidence in `[escalate_floor, confidence_threshold)`) escalate to a bounded sub-agent that investigates with read-only tools: the entity pages, their history, the conversations and the reference documents they came from. `0` disables Tier 2 entirely. |
-| `tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged in the Inbox instead. The cheap judge's own verdicts keep using `confidence_threshold` |
+| `tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair waits for you on the dashboard's Pending page instead. The cheap judge's own verdicts keep using `confidence_threshold` |
 | `judge_concurrency` | `3` | Judge calls in flight at once during the refine pass (1–8); merges stay one at a time, in candidate order |
 | `recheck_days` | `7` | Days before a pair without a settled verdict (an unparseable reply, an `unclear`, a `same` below the merge threshold) is judged again; `0` re-judges it every run. Provider failures are never remembered |
 | `semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize` judges pairs whose names share a token or contain each other first, then the rest by distance; `require` judges only those; `off` orders by distance alone. Alias pairs are always judged |
 | `auto_resolve` | `true` | Let the dream apply the judges' non-merge resolutions on its own — who owns a contested alias, the typed edge between related entities, a clearer key — when confident; `false` leaves every proposal for you on the dashboard's Pending page |
-| `resolve_threshold` | `85` | Judge confidence floor (0-100) for applying a non-merge resolution automatically; below it the proposal is escalated / goes to the Inbox |
+| `resolve_threshold` | `85` | Judge confidence floor (0-100) for applying a non-merge resolution automatically; below it the proposal is escalated, or waits for you on the dashboard's Pending page |
 | `auto_rename` | `true` | Allow automatic resolutions and merges to give an entity a clearer key (every reference is redirected); `false` applies the rest and leaves keys unchanged |
 
 **`memory.search`** — search pipeline configuration:
