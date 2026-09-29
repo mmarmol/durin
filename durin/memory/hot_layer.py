@@ -10,10 +10,12 @@ mid-session (a fresh ``updated_at`` re-orders the canonical block); between
 those writes it is byte-identical turn to turn, which keeps the upstream
 provider's prompt cache warm.
 
-The renderer reads from disk on every prompt build (cheap walk + YAML
-parse, <5ms typical). Sections that fail to assemble degrade silently
-and emit ``memory.hot_layer.failure`` telemetry — the agent
-still works, just without the broken section.
+The renderer reads from disk on every prompt build. The canonical walk
+reads every entity page but parses only the pages that changed since the
+last walk (``durin.memory.entity_facts``) and the few it renders, so its
+cost follows how much memory changed, not how much there is. Sections that
+fail to assemble degrade silently and emit ``memory.hot_layer.failure``
+telemetry — the agent still works, just without the broken section.
 
 Canonical pages and recent fragments are wrapped in
 ``=== CANONICAL: <uri> (consolidated <ts>) ===`` and
@@ -185,9 +187,34 @@ def _read_canonical_blocks(
     Per-page parse failures degrade silently with a telemetry event;
     the rest of the walk continues so one bad page can't break the
     whole layer.
+
+    The walk orders pages by the facts the per-process index keeps, so it
+    parses only pages that changed since the last walk, plus the pages it
+    renders.
     """
-    pages: list[tuple[str, str, EntityPage]] = []  # (sort_key, ref, page)
+    from durin.memory.entity_facts import page_facts
+
+    pages: list[tuple[str, str, Path]] = []  # (sort_key, ref, path)
     for page_path in walk_class(workspace, "entities"):
+        try:
+            facts = page_facts(page_path)
+        except Exception as exc:
+            _emit_failure(f"canonical_blocks:{page_path.name}", exc)
+            continue
+        if facts is None:
+            continue
+        ref = f"{facts.type}:{page_path.stem}"
+        if ref in exclude:
+            continue
+        # Sort key: prefer updated_at, fall back to mtime so freshly
+        # written pages surface even pre-frontmatter updated_at adoption.
+        updated = facts.updated_at or _mtime_key(page_path)
+        pages.append((updated, ref, page_path))
+
+    pages.sort(key=lambda t: t[0], reverse=True)
+    blocks: list[str] = []
+    total_chars = 0
+    for sort_key, ref, page_path in pages[:_MAX_CANONICAL]:
         try:
             page = EntityPage.from_file(page_path)
         except Exception as exc:
@@ -195,19 +222,6 @@ def _read_canonical_blocks(
             continue
         if page is None:
             continue
-        slug = page_path.stem
-        ref = f"{page.type}:{slug}"
-        if ref in exclude:
-            continue
-        # Sort key: prefer updated_at, fall back to mtime so freshly
-        # written pages surface even pre-frontmatter updated_at adoption.
-        updated = _resolve_updated_at(page, page_path)
-        pages.append((updated, ref, page))
-
-    pages.sort(key=lambda t: t[0], reverse=True)
-    blocks: list[str] = []
-    total_chars = 0
-    for sort_key, ref, page in pages[:_MAX_CANONICAL]:
         block = _render_canonical_block(ref, page, consolidated_ts=sort_key)
         if total_chars + len(block) > _CANONICAL_BUDGET_CHARS:
             break
@@ -216,17 +230,10 @@ def _read_canonical_blocks(
     return blocks
 
 
-def _resolve_updated_at(page: EntityPage, page_path: Path) -> str:
-    """Best-effort consolidation timestamp for the canonical marker.
-
-    Order of preference: ``updated_at`` (v2/v1 frontmatter) → file
-    mtime → sentinel. Returned as an ISO-8601 string for stable sort.
-    """
-    if page.updated_at is not None:
-        return page.updated_at.isoformat()
-    raw = page.extra.get("updated_at", "") if page.extra else ""
-    if isinstance(raw, str) and raw:
-        return raw
+def _mtime_key(page_path: Path) -> str:
+    """The consolidation timestamp of a page whose frontmatter carries no
+    ``updated_at``: its file mtime, else a sentinel. ISO-8601, for a stable
+    sort next to ``updated_at`` values."""
     try:
         return datetime.fromtimestamp(page_path.stat().st_mtime).isoformat()
     except OSError:

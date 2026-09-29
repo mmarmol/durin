@@ -28,6 +28,11 @@ __all__ = [
 
 _DELIMITER = "---"
 
+# libyaml's safe loader when PyYAML was built with it (its PyPI wheels are):
+# the same frontmatter as the pure-Python loader, several times faster, and
+# the hot layer parses entries on every prompt build.
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 
 class FrontmatterError(ValueError):
     """Raised when a memory entry file's frontmatter cannot be parsed."""
@@ -50,7 +55,7 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     body = text[end + len(f"\n{_DELIMITER}\n") :].lstrip("\n").rstrip("\n")
 
     try:
-        fm = yaml.safe_load(fm_text) or {}
+        fm = yaml.load(fm_text, Loader=_YAML_LOADER) or {}
     except yaml.YAMLError as exc:
         raise FrontmatterError(f"malformed YAML in frontmatter: {exc}") from exc
 

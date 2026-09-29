@@ -39,6 +39,11 @@ __all__ = [
 
 _TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
+# libyaml's safe loader when PyYAML was built with it (its PyPI wheels are):
+# the same pages as the pure-Python loader, several times faster, and the
+# memory walks parse every page's frontmatter.
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 # Known top-level fields the parser explicitly understands. Anything
 # outside this set lands in ``extra`` and is preserved on write.
 # attributes / relations / provenance are first-class so callers don't
@@ -127,7 +132,7 @@ class EntityPage:
         if frontmatter is None:
             return None
         try:
-            data = yaml.safe_load(frontmatter)
+            data = yaml.load(frontmatter, Loader=_YAML_LOADER)
         except yaml.YAMLError:
             return None
         if not isinstance(data, dict):

@@ -99,14 +99,19 @@ def mark_always_on(workspace: Path, ref: str, on: bool = True) -> None:
 
 
 def list_always_on(workspace: Path) -> list[str]:
-    """Entity refs whose always_on attribute is truthy."""
+    """Entity refs whose always_on attribute is truthy.
+
+    Reads each page's facts from the per-process index, so a walk parses
+    only the pages that changed since the last one."""
+    from durin.memory.entity_facts import page_facts
+
     root = Path(workspace) / "memory" / "entities"
     out: list[str] = []
     if not root.exists():
         return out
     for md in sorted(root.rglob("*.md")):
-        page = EntityPage.from_file(md)
-        if page and page.attributes.get("always_on"):
+        facts = page_facts(md)
+        if facts and facts.always_on:
             out.append(f"{md.parent.name}:{md.stem}")
     return out
 
