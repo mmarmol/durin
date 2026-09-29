@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from durin.workflow import run_log
 
 
@@ -63,9 +65,35 @@ def test_typical_total_does_not_sum_branches_no_single_run_takes(tmp_path):
     _finish(tmp_path, "router", "r1", [("route", 5.0), ("branch-a", 500.0)])
     _finish(tmp_path, "router", "r2", [("route", 5.0), ("branch-b", 520.0)])
 
-    assert run_log.typical_total_duration(tmp_path, "router") == 515.0
-    # What summing the per-node medians would have produced instead.
+    # What summing the per-node medians would produce: a run through both branches.
     assert sum(run_log.typical_node_durations(tmp_path, "router").values()) == 1025.0
+    assert run_log.typical_total_duration(tmp_path, "router") is None
+
+
+def test_typical_total_is_absent_when_prior_runs_took_different_routes(tmp_path):
+    """A router whose runs skip, answer a question, or investigate in full has no
+    single typical total: the median of a 0 s skip, a 6-minute answer and a
+    30-minute investigation describes none of them."""
+    _finish(tmp_path, "router", "r1", [("route", 0.2)])
+    _finish(tmp_path, "router", "r2", [("route", 0.2), ("answer", 360.0)])
+    _finish(tmp_path, "router", "r3", [("route", 0.2), ("investigate", 1800.0),
+                                       ("answer", 300.0)])
+
+    assert run_log.typical_total_duration(tmp_path, "router") is None
+    # Each node's own median still compares like with like.
+    assert run_log.typical_node_durations(tmp_path, "router") == {
+        "route": 0.2, "answer": 330.0, "investigate": 1800.0}
+
+
+def test_typical_total_treats_extra_loop_passes_as_the_same_route(tmp_path):
+    """A revision loop walks the same nodes, just more often: its runs still
+    estimate one another."""
+    _finish(tmp_path, "loop", "r1", [("draft", 10.0), ("judge", 5.0)])
+    _finish(tmp_path, "loop", "r2", [("draft", 10.0), ("judge", 5.0),
+                                     ("draft", 10.0), ("judge", 5.0)])
+    _finish(tmp_path, "loop", "r3", [("draft", 12.0), ("judge", 5.0)])
+
+    assert run_log.typical_total_duration(tmp_path, "loop") == 17.0
 
 
 def test_typical_total_counts_every_pass_of_a_looping_node(tmp_path):
@@ -115,3 +143,153 @@ def test_the_engine_records_the_typical_total_on_the_start_manifest(tmp_path):
     eng.run(wf, "go")
 
     assert run_log.read_manifest(tmp_path, "wf", "r-new")["typical_total_s"] == 20.0
+
+
+def test_typical_total_leaves_out_a_run_resumed_after_a_failure(tmp_path):
+    """A resume rewrites the run's manifest with the resumed walk's rows only, so
+    a run that failed at b and resumed there keeps rows for b and c alone. Read as
+    its route, they split it from the fresh runs of the same graph and erased their
+    estimate: its route takes in the failed attempt's nodes too, and its partial
+    total is left out."""
+    from durin.workflow.engine import (
+        NodeExecutionError,
+        NodeRunResponse,
+        WorkflowEngine,
+        build_resume_state,
+    )
+    from durin.workflow.spec import parse_workflow
+
+    wf = parse_workflow({"name": "wf", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "b"},
+        {"id": "b", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "next": None},
+    ]})
+    fail_b = [False]
+
+    def node_runner(req):
+        if req.node.id == "b" and fail_b[0]:
+            fail_b[0] = False
+            raise NodeExecutionError("b", req.iteration, None, RuntimeError("transient"))
+        return NodeRunResponse(output=f"{req.node.id}-out")
+
+    ids = iter(["fresh", "resumed"])
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: next(ids),
+                         workspace=str(tmp_path))
+    assert eng.run(wf, "t").status == "completed"
+    fail_b[0] = True
+    assert eng.run(wf, "t").status == "aborted"
+    resume = build_resume_state(run_log.read_manifest(tmp_path, "wf", "resumed"), "")
+    assert eng.run(wf, "t", resume=resume).status == "completed"
+
+    resumed_rows = run_log.read_manifest(tmp_path, "wf", "resumed")["runs"]
+    assert [r["node_id"] for r in resumed_rows] == ["b", "c"]   # a is gone
+    fresh_rows = run_log.read_manifest(tmp_path, "wf", "fresh")["runs"]
+    assert run_log.typical_total_duration(tmp_path, "wf") == sum(
+        r["duration_s"] for r in fresh_rows)
+
+
+def test_typical_total_leaves_out_a_run_resumed_past_an_approval(tmp_path):
+    """An approved pause resumes at the node after the approval, so the rows kept
+    for that run time only what came after it: a partial total must not estimate
+    the others."""
+    from durin.workflow.approval import build_approval_resume
+    from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+    from durin.workflow.spec import parse_workflow
+
+    wf = parse_workflow({"name": "wf", "start": "draft", "nodes": [
+        {"id": "draft", "kind": "work", "approval": True, "next": "send"},
+        {"id": "send", "kind": "work", "next": None},
+    ]})
+    eng = WorkflowEngine(node_runner=lambda req: NodeRunResponse(output=req.node.id),
+                         run_id_factory=lambda: "approved", workspace=str(tmp_path))
+    assert eng.run(wf, "t").status == "needs_input"
+    manifest = run_log.read_manifest(tmp_path, "wf", "approved")
+    resume = build_approval_resume(wf, manifest, "approve", "")
+    assert eng.run(wf, "t", resume=resume).status == "completed"
+
+    approved_rows = run_log.read_manifest(tmp_path, "wf", "approved")["runs"]
+    assert [r["node_id"] for r in approved_rows] == ["send"]   # draft is gone
+    assert run_log.typical_total_duration(tmp_path, "wf") is None
+
+
+@pytest.mark.parametrize("quick_next", [None, "send"], ids=["apart", "rejoined"])
+def test_typical_total_is_absent_when_the_branch_through_an_approval_is_another_route(
+    tmp_path, quick_next,
+):
+    """A router whose slow branch passes an approval: the approved run resumes past
+    it and its last walk holds only the nodes after the approval, but it still took
+    a route of its own. Leaving it out made the quick branch the only route, and
+    every new run, slow ones included, was shown the quick branch's time. Its route
+    covers the nodes walked before the pause too: when the branches rejoin, the
+    nodes after the approval are on the quick route as well."""
+    from durin.workflow.approval import build_approval_resume
+    from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+    from durin.workflow.spec import parse_workflow
+
+    wf = parse_workflow({"name": "wf", "start": "triage", "nodes": [
+        {"id": "triage", "kind": "work", "cases": {"QUICK": "quick", "DRAFT": "draft"}},
+        {"id": "quick", "kind": "work", "next": quick_next},
+        {"id": "draft", "kind": "work", "approval": True, "next": "send"},
+        {"id": "send", "kind": "work", "next": None},
+    ]})
+    label = ["QUICK"]
+
+    def node_runner(req):
+        if req.node.id == "triage":
+            return NodeRunResponse(output=f"routing\n{label[0]}")
+        return NodeRunResponse(output=req.node.id)
+
+    ids = iter(["quick-run", "draft-run"])
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: next(ids),
+                         workspace=str(tmp_path))
+    assert eng.run(wf, "t").status == "completed"
+    label[0] = "DRAFT"
+    assert eng.run(wf, "t").status == "needs_input"
+    manifest = run_log.read_manifest(tmp_path, "wf", "draft-run")
+    resume = build_approval_resume(wf, manifest, "approve", "")
+    assert eng.run(wf, "t", resume=resume).status == "completed"
+
+    assert run_log.typical_total_duration(tmp_path, "wf") is None
+
+
+def test_a_run_resumed_twice_keeps_the_nodes_of_every_attempt(tmp_path):
+    """Every resume starts the rows over, so the route gathers the nodes of all the
+    earlier attempts, not only the last one: a run that failed at b, resumed, failed
+    at c and resumed again walked a, b and c, the route of the fresh run."""
+    from durin.workflow.engine import (
+        NodeExecutionError,
+        NodeRunResponse,
+        WorkflowEngine,
+        build_resume_state,
+    )
+    from durin.workflow.spec import parse_workflow
+
+    wf = parse_workflow({"name": "wf", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "b"},
+        {"id": "b", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "next": None},
+    ]})
+    fail = {"b": False, "c": False}
+
+    def node_runner(req):
+        if fail.get(req.node.id):
+            fail[req.node.id] = False
+            raise NodeExecutionError(req.node.id, req.iteration, None, RuntimeError("transient"))
+        return NodeRunResponse(output=f"{req.node.id}-out")
+
+    ids = iter(["fresh", "twice"])
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: next(ids),
+                         workspace=str(tmp_path))
+    assert eng.run(wf, "t").status == "completed"
+    fail.update(b=True, c=True)
+    assert eng.run(wf, "t").status == "aborted"
+    resume = build_resume_state(run_log.read_manifest(tmp_path, "wf", "twice"), "")
+    assert eng.run(wf, "t", resume=resume).status == "aborted"
+    resume = build_resume_state(run_log.read_manifest(tmp_path, "wf", "twice"), "")
+    assert eng.run(wf, "t", resume=resume).status == "completed"
+
+    last_rows = run_log.read_manifest(tmp_path, "wf", "twice")["runs"]
+    assert [r["node_id"] for r in last_rows] == ["c"]
+    fresh_rows = run_log.read_manifest(tmp_path, "wf", "fresh")["runs"]
+    assert run_log.typical_total_duration(tmp_path, "wf") == sum(
+        r["duration_s"] for r in fresh_rows)

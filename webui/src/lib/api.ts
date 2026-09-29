@@ -469,7 +469,8 @@ export type WorkflowRunResult = {
   typical_s?: Record<string, number>;
   // Median seconds a whole prior run took — measured per run, not summed from
   // typical_s (which spans every branch prior runs took, while one run takes
-  // one). Absent/null when the workflow has no completed-run history yet.
+  // one). Absent/null when the workflow has no completed-run history yet, or when
+  // those prior runs walked different sets of nodes (no single typical total).
   typical_total_s?: number | null;
   // The manifest's root session key — an `automation:<name>` origin vs. an
   // interactive session, same source as WorkflowGlobalRun's `origin` below.
