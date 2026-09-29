@@ -65,6 +65,42 @@ async def test_merged_batch_shares_the_page_budget_like_a_paths_batch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_merged_read_pages_path_at_its_own_offset_and_limit(tmp_path):
+    """`offset`/`limit` sent with `path` and `paths` page `path` as they would
+    alone. A page the model has not seen must come back as that page, never as
+    the "unchanged since last read" stub of the page it read before. The
+    files in `paths` are read from their start."""
+    (tmp_path / "big.txt").write_text(
+        "\n".join(f"line {i}" for i in range(1, 3001)), encoding="utf-8",
+    )
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+    tool = ReadFileTool(workspace=tmp_path)
+    assert "Use offset=2001 to continue" in await tool.execute(path="big.txt")
+
+    out = await tool.execute(path="big.txt", offset=2500, limit=10, paths=["b.txt"])
+
+    big, b = out["results"]
+    assert big["content"].startswith("2500| line 2500\n")
+    assert "2509| line 2509" in big["content"] and "2510|" not in big["content"]
+    assert b["content"].startswith("1| beta")
+
+
+@pytest.mark.asyncio
+async def test_merged_read_reads_the_pages_asked_for_path(tmp_path):
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    _write_text_pdf(tmp_path / "doc.pdf", [f"Page {i + 1} content" for i in range(5)])
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+    tool = ReadFileTool(workspace=tmp_path)
+
+    out = await tool.execute(path="doc.pdf", pages="2-3", paths=["b.txt"])
+
+    pdf = out["results"][0]["content"]
+    assert "Page 2 content" in pdf and "Page 3 content" in pdf
+    assert "Page 1 content" not in pdf
+
+
+@pytest.mark.asyncio
 async def test_merged_path_and_paths_obey_the_paths_cap(tmp_path):
     tool = ReadFileTool(workspace=tmp_path)
     out = await tool.execute(path="extra.txt", paths=[f"f{i}.txt" for i in range(MAX_READ_PATHS)])

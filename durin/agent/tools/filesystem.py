@@ -287,7 +287,7 @@ MAX_READ_PATHS: int = 15
     tool_parameters_schema(
         path=StringSchema(
             "The file path to read. Given together with `paths`, it is read "
-            "first in the same batch."
+            "first in the same batch, at its own `offset`/`limit`/`pages`."
         ),
         paths=ArraySchema(
             items=StringSchema("A file path to read"),
@@ -296,8 +296,8 @@ MAX_READ_PATHS: int = 15
                 "Results come back in the same order, each as a `{path, content}` "
                 "record with an `error` field on entries that failed. Prefer this "
                 "form whenever 2+ independent files need reading. `offset`/`limit`/"
-                "`pages` are not supported with `paths` — use single `path` for "
-                "paginated reads."
+                "`pages` page only `path`: the files in `paths` are read from "
+                "their start."
             ),
         ),
         offset=IntegerSchema(
@@ -419,8 +419,13 @@ class ReadFileTool(_FsTool):
         char_offset: int | None = None,
         **kwargs: Any,
     ) -> Any:
+        lead: dict[str, Any] = {}
         if path and paths:
             # Both given: one batch under the same cap and shared budget.
+            # `path` leads it and keeps the page it asked for: dropping its
+            # offset/limit/pages would answer an unseen page with the
+            # "unchanged since last read" stub of the page read before.
+            lead = {"offset": offset, "limit": limit, "pages": pages}
             paths, path = self._batch_paths(path, paths), None
         if paths is not None and path is None:
             if not isinstance(paths, list) or len(paths) == 0:
@@ -437,7 +442,8 @@ class ReadFileTool(_FsTool):
             # key, so awaiting them together is safe; this collapses N reads
             # into one tool call (one round-trip, guaranteed grouping).
             results = await asyncio.gather(*[
-                self._read_one_safe(str(p), per_file) for p in paths
+                self._read_one_safe(str(p), per_file, **(lead if i == 0 else {}))
+                for i, p in enumerate(paths)
             ])
             return {"results": results}
 
@@ -445,13 +451,17 @@ class ReadFileTool(_FsTool):
             path, offset, limit, pages, verbatim=verbatim, char_offset=char_offset,
         )
 
-    async def _read_one_safe(self, path: str, budget: int | None = None) -> dict[str, Any]:
+    async def _read_one_safe(
+        self, path: str, budget: int | None = None, **paging: Any,
+    ) -> dict[str, Any]:
         """Batch helper — never raises, always returns a record carrying the
-        path so the caller can match it back to its request."""
+        path so the caller can match it back to its request. ``paging``
+        (offset/limit/pages) pages this file; without it the file is read
+        from its start."""
         if not path:
             return {"path": path, "error": "empty path"}
         try:
-            content = await self._read_one(path, budget=budget)
+            content = await self._read_one(path, budget=budget, **paging)
         except Exception as exc:  # defensive: one read must not abort the batch
             return {"path": path, "error": f"read failed: {exc}"}
         return {"path": path, "content": content}
