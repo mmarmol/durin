@@ -976,9 +976,9 @@ async def test_servers_that_die_at_spawn_fail_fast_when_connected_together(
 
     ``/usr/bin/env <missing>`` spawns and exits at once, so a task in the SDK's
     stdio task group fails and cancels the connecting task. With the real SDK
-    and real child processes connecting at the same time, each server must go
-    through its retries and report that transport error well within the
-    connect timeout, never as a connect timeout.
+    and real child processes connecting at the same time, each server must
+    report that transport error well within the connect timeout, never as a
+    connect timeout nor as a connect that ended before the session opened.
     """
     import time
 
@@ -1003,7 +1003,60 @@ async def test_servers_that_die_at_spawn_fail_fast_when_connected_together(
     assert conns == {}
     assert list(errors) == list(names)
     assert not any("timed out" in message for message in errors.values()), errors
+    assert not any(
+        "connect ended before the session opened" in message for message in errors.values()
+    ), errors
     assert elapsed < 5.0
+
+
+async def test_a_transport_task_failure_is_retried_and_reported(monkeypatch) -> None:
+    """A task of the transport that fails mid-connect is retried like any failure.
+
+    The SDK's stdio transport runs its pipe reader and writer in an anyio task
+    group entered in the connecting task. When one of them fails (the child
+    exited, so writing the initialize request broke the pipe), the group
+    cancels the connecting task while it waits for the initialize reply. That
+    cancellation is the group's own, not a cancellation of the connection:
+    every attempt must be made and the connection must end with the failed
+    task's error.
+    """
+    import anyio
+
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01)
+    monkeypatch.setattr(mc, "_MAX_BACKOFF", 0.02)
+    conn = mc.MCPServerConnection("pipe", MCPServerConfig(command="unused"), ToolRegistry())
+    attempts = 0
+
+    @asynccontextmanager
+    async def _transport():
+        to_client, read = anyio.create_memory_object_stream(1)
+        write, from_client = anyio.create_memory_object_stream(1)
+
+        async def _stdin_writer():
+            await from_client.receive()
+            raise anyio.BrokenResourceError("child exited")
+
+        async with to_client, read, write, from_client, anyio.create_task_group() as tg:
+            tg.start_soon(_stdin_writer)
+            yield read, write
+
+    async def _open(self):
+        nonlocal attempts
+        attempts += 1
+        self._transport_cm = _transport()
+        return await self._transport_cm.__aenter__()
+
+    conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+    ok = await conn.start()
+    await conn.aclose()
+
+    assert ok is False
+    assert attempts == 1 + mc._MAX_INITIAL_CONNECT_RETRIES
+    error = conn._error
+    leaves = error.exceptions if isinstance(error, BaseExceptionGroup) else (error,)
+    assert [type(leaf) for leaf in leaves] == [anyio.BrokenResourceError], repr(error)
 
 
 async def test_start_returns_when_run_ends_without_connecting(monkeypatch) -> None:
