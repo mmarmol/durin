@@ -207,8 +207,9 @@ def build_openai_routes(
     request_timeout: float,
     turn_timeout: float = 3600.0,
     resolve_principal: Callable[[Any], Principal | None],
-) -> list[Route]:
-    """Build the ``/v1`` route list for the gateway app.
+) -> tuple[list[Route], Callable[[], None]]:
+    """Build the ``/v1`` route list for the gateway app, and the function the
+    gateway calls when it stops.
 
     ``resolve_principal`` is injected (headers → Principal | None) so this
     module needs no import from ``asgi`` and stays independently testable.
@@ -218,10 +219,19 @@ def build_openai_routes(
     no answer, but the turn finishes and is saved to its session, where the
     next request on that ``session_id`` finds it. ``turn_timeout`` bounds every
     turn; ``request_timeout`` is only how long a non-streaming request waits.
+
+    The stop function cancels every turn these routes started, running or
+    queued, and each one a request starts after it. A request waiting on its
+    turn then answers ``409 turn_stopped`` (a stream ends with that error
+    frame), as when the turn is stopped from outside. Otherwise the request
+    would hold uvicorn's exit open, since the turn ends only at the shutdown
+    drain, after uvicorn has exited, until uvicorn's graceful timeout cuts it
+    off with a 500 and logs the cancellation as an error.
     """
     session_locks: dict[str, asyncio.Lock] = {}
     # Strong references: a detached turn must not be garbage-collected.
     running: set[asyncio.Task] = set()
+    stopped = False  # set by stop_turns() when the gateway stops
 
     def _live_model() -> str:
         """The model the agent runs now. The dashboard's model picker switches
@@ -269,6 +279,8 @@ def build_openai_routes(
         task = asyncio.create_task(_turn())
         running.add(task)
         task.add_done_callback(running.discard)
+        if stopped:
+            task.cancel()
 
         def _read_outcome(t: asyncio.Task) -> None:
             # Always retrieve the result, so a turn nobody awaits any more never
@@ -539,7 +551,14 @@ def build_openai_routes(
             return _stream_response(text, media_paths, session_key, lock)
         return await _plain_response(text, media_paths, session_key, lock)
 
-    return [
+    def stop_turns() -> None:
+        nonlocal stopped
+        stopped = True
+        for task in list(running):
+            task.cancel()
+
+    routes = [
         Route("/v1/chat/completions", chat_completions, methods=["POST"]),
         Route("/v1/models", models, methods=["GET"]),
     ]
+    return routes, stop_turns

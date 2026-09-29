@@ -353,9 +353,15 @@ first stops intake: the agent loop starts no more turns
 bus and is journaled for the next start; the turns already running carry on
 until the shutdown drain cancels them. It ends every SSE stream
 (`WebSocketChannel.end_sse_streams`), since an open one never ends by itself.
-Then it sets uvicorn's `should_exit` and lets uvicorn finish its own exit —
-close the websocket connections, give in-flight HTTP requests up to
-`_UVICORN_GRACEFUL_SHUTDOWN_S` (uvicorn's `timeout_graceful_shutdown`), run
+It stops the OpenAI-compatible API's turns, running or queued (the gateway
+app's `state.stop_openai_turns`, from `build_openai_routes`): a
+`/v1/chat/completions` request waits on its turn, which otherwise runs until
+the drain, after uvicorn's exit, and uvicorn's graceful timeout would cut the
+request off with a 500 and log an error. Each such request, and one arriving
+during the stop, answers `409 turn_stopped` instead, or its stream ends with
+that error frame. Then it sets uvicorn's `should_exit` and lets uvicorn finish
+its own exit — close the websocket connections, give in-flight HTTP requests
+up to `_UVICORN_GRACEFUL_SHUTDOWN_S` (uvicorn's `timeout_graceful_shutdown`), run
 the ASGI lifespan shutdown — and only once `serve()` has returned, or after
 `_UVICORN_EXIT_TIMEOUT_S` at most (logged as a warning), cancels the
 remaining gateway tasks (agent loop, channel supervisors, health endpoint).
@@ -363,11 +369,10 @@ Cancelling uvicorn in the middle of its exit prints a `CancelledError`
 traceback, and "Exception in ASGI application" per connected websocket
 client, into the journal on every stop. A request uvicorn is still serving
 when its graceful timeout runs out is cancelled by uvicorn itself, which logs
-it as an error: an OpenAI-compatible `/v1/chat/completions` request waiting
-on its turn is one, since that turn runs until the drain. The shutdown then
-stops the janitor, MCP, cron, the dream and embed workers and the agent loop,
-journals queued inbound messages, stops the channels (concurrently, each
-bounded; see [channels.md](channels.md)) and flushes sessions.
+it as an error. The shutdown then stops the janitor, MCP, cron, the dream and
+embed workers and the agent loop, journals queued inbound messages, stops the
+channels (concurrently, each bounded; see [channels.md](channels.md)) and
+flushes sessions.
 
 ---
 

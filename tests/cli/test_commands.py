@@ -3063,7 +3063,10 @@ def _run_gateway_with_fake_uvicorn(
     )
     monkeypatch.setattr("durin.agent.mcp_runtime.McpRuntime", lambda _agent: object())
     monkeypatch.setattr("durin.service.wiring.build_service_registry", lambda **_kw: {})
-    monkeypatch.setattr("durin.api.asgi.build_gateway_http_app", lambda *_a, **_kw: object())
+    gateway_app = SimpleNamespace(state=SimpleNamespace(
+        stop_openai_turns=lambda: calls.append("api.stop_openai_turns"),
+    ))
+    monkeypatch.setattr("durin.api.asgi.build_gateway_http_app", lambda *_a, **_kw: gateway_app)
     monkeypatch.setattr("uvicorn.Config", _FakeUvicornConfig)
     monkeypatch.setattr("uvicorn.Server", _FakeUvicornServer)
 
@@ -3108,6 +3111,23 @@ def test_a_gateway_stop_stops_intake_and_ends_sse_streams_before_uvicorn_exits(
     assert "ws.end_sse_streams" in calls
     assert calls.index("agent.stop_intake") < calls.index("uvicorn.should_exit")
     assert calls.index("ws.end_sse_streams") < calls.index("uvicorn.should_exit")
+
+
+def test_a_gateway_stop_stops_the_openai_api_turns_before_uvicorn_exits(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An OpenAI-compatible request waits on its turn, and the turn ends only
+    at the shutdown drain, after uvicorn has exited: each stop with one open
+    ran into uvicorn's graceful timeout, which answered it with a 500 and
+    logged an error. The API's turns are stopped before uvicorn is asked to
+    exit, so each request answers 409 turn_stopped instead."""
+    result, calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "api.stop_openai_turns" in calls
+    assert calls.index("api.stop_openai_turns") < calls.index("uvicorn.should_exit")
 
 
 def test_a_gateway_boot_logs_how_long_each_startup_phase_took(

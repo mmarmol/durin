@@ -2151,6 +2151,8 @@ def _run_gateway(
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
         unified_serve: asyncio.Task | None = None  # unified_server.serve()
         stopping: asyncio.Task | None = None  # _cancel_once_uvicorn_exits, once asked
+        # The OpenAI-compatible API's stop function, once the unified app is built.
+        stop_openai_turns: Callable[[], None] | None = None
 
         async def _cancel_once_uvicorn_exits() -> None:
             """Cancel the gateway's tasks once uvicorn has finished exiting.
@@ -2201,6 +2203,11 @@ def _run_gateway(
             _sse_channel = channels.get_channel("websocket")
             if _sse_channel is not None:
                 _sse_channel.end_sse_streams()
+            # An OpenAI-compatible request waits on its turn, which would run
+            # until the drain, after uvicorn's exit; stopped here, each request
+            # answers 409 turn_stopped instead of being cut off with a 500.
+            if stop_openai_turns is not None:
+                stop_openai_turns()
             if unified_server is not None:
                 unified_server.should_exit = True
             if api_server is not None:
@@ -2297,6 +2304,7 @@ def _run_gateway(
                     api_request_timeout=config.gateway.api_request_timeout,
                     api_turn_timeout=config.gateway.api_turn_timeout,
                 )
+                stop_openai_turns = _unified_app.state.stop_openai_turns
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
                 _ws_ssl_cert = getattr(_ws_channel.config, "ssl_certfile", "") or ""

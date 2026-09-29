@@ -587,6 +587,10 @@ def build_gateway_http_app(
                           routes).
         agent_loop:       The live ``AgentLoop`` backing ``/v1/chat/completions``.
                           ``None`` leaves the whole ``/v1`` surface unmounted.
+                          The app's ``state.stop_openai_turns`` is then the
+                          surface's stop function (``build_openai_routes``),
+                          which the gateway calls when it stops; ``None``
+                          without an agent loop.
         model_name:       Model id reported by ``/v1/models`` and echoed in
                           chat responses.
         api_request_timeout: How long (seconds) a non-streaming ``/v1`` request
@@ -922,20 +926,20 @@ def build_gateway_http_app(
 
     # OpenAI-compatible /v1 surface — mounted only when the caller wires the
     # live agent in (the gateway does; bare test apps may not).
+    stop_openai_turns = None
     if agent_loop is not None:
         from durin.api.openai_routes import build_openai_routes
 
-        routes.extend(
-            build_openai_routes(
-                agent_loop,
-                model_name=model_name,
-                request_timeout=api_request_timeout,
-                turn_timeout=api_turn_timeout,
-                resolve_principal=lambda headers: resolve_principal_from_headers(
-                    headers, auth=auth, static_token=static_token
-                ),
-            )
+        openai_routes, stop_openai_turns = build_openai_routes(
+            agent_loop,
+            model_name=model_name,
+            request_timeout=api_request_timeout,
+            turn_timeout=api_turn_timeout,
+            resolve_principal=lambda headers: resolve_principal_from_headers(
+                headers, auth=auth, static_token=static_token
+            ),
         )
+        routes.extend(openai_routes)
 
     # SPA static files (optional).
     if resolved_static is not None and resolved_static.is_dir():
@@ -943,10 +947,12 @@ def build_gateway_http_app(
             Mount("/", app=_SpaStaticFiles(directory=str(resolved_static), html=True))
         )
 
-    return Starlette(
+    app = Starlette(
         routes=routes,
         middleware=[Middleware(RequestIdMiddleware)],
     )
+    app.state.stop_openai_turns = stop_openai_turns
+    return app
 
 
 class _SpaStaticFiles(StaticFiles):
