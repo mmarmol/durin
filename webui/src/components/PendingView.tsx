@@ -75,12 +75,16 @@ export function PendingView({
   onCountChange,
   onOpenSkill,
   onOpenWorkflowRun,
+  focusSource,
 }: {
   onCountChange?: (count: number) => void;
   // Opens a quarantined import's triage in Skills (the install gate lives there).
   onOpenSkill?: (name: string) => void;
   // Opens a workflow run's full detail in Workflows.
   onOpenWorkflowRun?: (workflow: string, runId: string) => void;
+  // The source whose section to bring into view once the list loads (the
+  // Dream page opens Pending at its memory pairs or skill suggestions).
+  focusSource?: string;
 }) {
   const { token } = useClient();
   const { t } = useTranslation();
@@ -188,6 +192,18 @@ export function PendingView({
       })).filter((group) => group.items.length > 0),
     [list],
   );
+
+  // Bring the section this page was opened for into view once, when it first
+  // renders; later refreshes leave the scroll where the user put it.
+  const sections = useRef(new Map<string, HTMLElement>());
+  const focusedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusSource || focusedFor.current === focusSource) return;
+    const section = sections.current.get(focusSource);
+    if (!section) return;
+    focusedFor.current = focusSource;
+    section.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusSource, groups]);
 
   function renderItem(item: PendingItem, key: string) {
     switch (item.source) {
@@ -370,7 +386,15 @@ export function PendingView({
             groups.map(({ source, items }) => {
               const label = t(`pending.source.${source}`);
               return (
-                <section key={source} aria-label={label} className="flex flex-col gap-2">
+                <section
+                  key={source}
+                  aria-label={label}
+                  className="flex scroll-mt-4 flex-col gap-2"
+                  ref={(el) => {
+                    if (el) sections.current.set(source, el);
+                    else sections.current.delete(source);
+                  }}
+                >
                   <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {label} · {items.length}
                   </h2>

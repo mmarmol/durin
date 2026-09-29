@@ -2195,6 +2195,8 @@
     "loading": "Cargando…",
     "empty": "Aún no hay actividad de dream.",
     "view": "Ver",
+    "pendingDecisions_one": "1 decisión del dream te espera en Pendientes",
+    "pendingDecisions_other": "{{count}} decisiones del dream te esperan en Pendientes",
     "kind": {
       "merged": "fusionado",
       "created": "creado",
@@ -2216,21 +2218,11 @@
       "aliases": "Alias",
       "identifiers": "Identificadores"
     },
-    "tabs": {
-      "resumen": "Resumen",
-      "bandeja": "Bandeja"
-    },
     "bandeja": {
-      "flaggedTitle": "Memorias marcadas para revisar",
-      "quarantineTitle": "Skills en cuarentena",
       "merge": "Fusionar",
       "keepSeparate": "Mantener separadas",
       "reviewInSkills": "Revisar en Skills",
-      "emptyFlagged": "No hay pares de memoria marcados para revisión.",
-      "emptyQuarantine": "No hay skills en cuarentena.",
       "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual.",
-      "suggestionsTitle": "Sugerencias de skills",
-      "emptySuggestions": "No hay sugerencias de skills por ahora.",
       "accept": "Aceptar",
       "reject": "Rechazar",
       "rejectHint": "rechazar la silencia ~30 días",

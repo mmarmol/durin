@@ -2458,6 +2458,8 @@
     "loading": "Memuat…",
     "empty": "Belum ada aktivitas Dream.",
     "view": "Lihat",
+    "pendingDecisions_one": "1 keputusan dream menunggu di Tertunda",
+    "pendingDecisions_other": "{{count}} keputusan dream menunggu di Tertunda",
     "kind": {
       "merged": "digabung",
       "created": "dibuat",
@@ -2479,21 +2481,11 @@
       "aliases": "Alias",
       "identifiers": "Identifier"
     },
-    "tabs": {
-      "resumen": "Ringkasan",
-      "bandeja": "Kotak Masuk"
-    },
     "bandeja": {
-      "flaggedTitle": "Memori ditandai untuk ditinjau",
-      "quarantineTitle": "Skill dalam karantina",
       "merge": "Gabungkan",
       "keepSeparate": "Pisahkan",
       "reviewInSkills": "Tinjau di Skills",
-      "emptyFlagged": "Tidak ada pasangan memori yang ditandai untuk ditinjau.",
-      "emptyQuarantine": "Tidak ada skill dalam karantina.",
       "resolveError": "Tidak dapat menyelesaikan pasangan — mungkin sudah diproses. Segarkan untuk melihat state saat ini.",
-      "suggestionsTitle": "Saran skill",
-      "emptySuggestions": "Tidak ada saran skill saat ini.",
       "accept": "Terima",
       "reject": "Tolak",
       "rejectHint": "menolak akan membisukannya selama ~30 hari",

@@ -381,8 +381,8 @@ a concrete, stated reason, but must not revert or undo a user edit silently.
 When `memory.dream.skill_suggestions_enabled` is on (the default), the daily
 curation pass also evaluates `mode=manual` workspace skills and, where it
 would propose `evolve` or `retire`, enqueues the proposal as a
-**suggestion** in the dream Inbox rather than applying it directly. The user
-can accept or reject each suggestion from the webui; nothing is applied
+**suggestion** on the Pending page rather than applying it directly. The
+user can accept or reject each suggestion there; nothing is applied
 without explicit acceptance. Fuse suggestions (merging two manual skills into
 one) are out of scope for the suggestion path for now; they remain an action
 type available only in the auto-curation pass.
@@ -569,7 +569,7 @@ there is no session left to credit.
 | `memory.dream.cron` | `"0 3 * * *"` | Schedule for the daily dream cron (all consolidation passes + skill curation). |
 | `memory.dream.max_seconds_per_run` | 600 | Hard wall-clock cap per extract pass (yields after current session; cursor resumes on next trigger). |
 | `memory.dream.skill_signals_enabled` | `true` | Run `discover_skill_signals` over post-cursor session turns during the extract pass. |
-| `memory.dream.skill_suggestions_enabled` | `true` | When on, curation proposes actions for `mode=manual` skills as Inbox suggestions (accept/reject) rather than applying them directly. Disable to exclude manual skills from curation entirely. |
+| `memory.dream.skill_suggestions_enabled` | `true` | When on, curation proposes actions for `mode=manual` skills as suggestions on the Pending page (accept/reject) rather than applying them directly. Disable to exclude manual skills from curation entirely. |
 
 ### CLI surfaces
 

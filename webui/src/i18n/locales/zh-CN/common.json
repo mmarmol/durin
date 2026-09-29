@@ -2458,6 +2458,8 @@
     "loading": "加载中…",
     "empty": "还没有 Dream 活动。",
     "view": "查看",
+    "pendingDecisions_one": "1 个 Dream 决定正在待处理中等你",
+    "pendingDecisions_other": "{{count}} 个 Dream 决定正在待处理中等你",
     "kind": {
       "merged": "已合并",
       "created": "已创建",
@@ -2479,21 +2481,11 @@
       "aliases": "别名",
       "identifiers": "标识符"
     },
-    "tabs": {
-      "resumen": "摘要",
-      "bandeja": "收件箱"
-    },
     "bandeja": {
-      "flaggedTitle": "被标记待审核的记忆",
-      "quarantineTitle": "隔离中的技能",
       "merge": "合并",
       "keepSeparate": "保持独立",
       "reviewInSkills": "在 Skills 中查看",
-      "emptyFlagged": "没有被标记待审核的记忆对。",
-      "emptyQuarantine": "没有处于隔离状态的技能。",
       "resolveError": "无法处理该配对——它可能已经被处理过了。请刷新以查看当前状态。",
-      "suggestionsTitle": "技能建议",
-      "emptySuggestions": "目前没有技能建议。",
       "accept": "接受",
       "reject": "拒绝",
       "rejectHint": "拒绝后将在约 30 天内不再提示",

@@ -2458,6 +2458,8 @@
     "loading": "Đang tải…",
     "empty": "Chưa có hoạt động dream nào.",
     "view": "Xem",
+    "pendingDecisions_one": "1 quyết định của dream đang chờ trong Đang chờ",
+    "pendingDecisions_other": "{{count}} quyết định của dream đang chờ trong Đang chờ",
     "kind": {
       "merged": "đã gộp",
       "created": "đã tạo",
@@ -2479,21 +2481,11 @@
       "aliases": "Tên khác",
       "identifiers": "Định danh"
     },
-    "tabs": {
-      "resumen": "Tóm tắt",
-      "bandeja": "Hộp thư"
-    },
     "bandeja": {
-      "flaggedTitle": "Bộ nhớ được đánh dấu để xem xét",
-      "quarantineTitle": "Skill trong khu cách ly",
       "merge": "Gộp",
       "keepSeparate": "Giữ riêng biệt",
       "reviewInSkills": "Xem trong Skills",
-      "emptyFlagged": "Không có cặp bộ nhớ nào được đánh dấu để xem xét.",
-      "emptyQuarantine": "Không có skill nào trong khu cách ly.",
       "resolveError": "Không thể xử lý cặp này — có thể đã được xử lý rồi. Hãy làm mới để xem trạng thái hiện tại.",
-      "suggestionsTitle": "Đề xuất skill",
-      "emptySuggestions": "Hiện chưa có đề xuất skill nào.",
       "accept": "Chấp nhận",
       "reject": "Từ chối",
       "rejectHint": "từ chối sẽ ẩn đề xuất này trong khoảng 30 ngày",

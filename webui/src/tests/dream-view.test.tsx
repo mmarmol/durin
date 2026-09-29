@@ -390,8 +390,8 @@ describe("DreamView", () => {
   });
 });
 
-describe("DreamView Bandeja tab", () => {
-  const basePair: api.FlaggedPair = {
+describe("DreamView — the dream's decisions live in Pending", () => {
+  const pair: api.FlaggedPair = {
     ref_a: "person:alice",
     ref_b: "person:alice-smith",
     verdict: "same_entity",
@@ -405,251 +405,56 @@ describe("DreamView Bandeja tab", () => {
     proposal: null,
     source: null,
   };
-
-  const baseQuarantine: api.QuarantineRow = {
-    name: "shady-skill",
-    status: "quarantined",
-    source: "https://example.com/shady.zip",
-    verdict: "caution",
-    findings: [{ category: "network", severity: "caution", where: "SKILL.md", detail: "Makes outbound requests." }],
-  };
+  const suggestion = {
+    id: "sug1", skill: "mailer", type: "evolve", reason: "clearer steps", patch: null, created_at: "",
+  } as unknown as api.SkillSuggestion;
 
   beforeEach(() => {
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run: null, last_run_at_ms: null, events: [] });
   });
 
-  it("shows the Inbox badge count on initial load without opening the tab", async () => {
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([
-      basePair,
-      { ...basePair, ref_a: "person:bob" },
-    ]); // 2 pairs
-    vi.mocked(api.listQuarantine).mockResolvedValue([baseQuarantine]); // 1 quarantined skill
-
-    render(wrap(<DreamView />));
-
-    // Stay on the default Resumen tab — the badge must still surface 3 (2 + 1)
-    // without the user ever opening the Inbox tab.
-    const inboxBtn = await screen.findByRole("button", { name: /Inbox/i });
-    await waitFor(() => expect(inboxBtn).toHaveTextContent("3"));
-    expect(screen.getByText("No dream activity yet.")).toBeInTheDocument();
-  });
-
-  it("renders a flagged pair when the Bandeja tab is clicked", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+  it("has no inbox tab of its own", async () => {
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([pair]);
 
     render(wrap(<DreamView />));
     await screen.findByText("No dream activity yet.");
 
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-
-    expect(await screen.findByText("person:alice")).toBeInTheDocument();
-    expect(screen.getByText("person:alice-smith")).toBeInTheDocument();
-    expect(screen.getByText("Both refs share the same name and email.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Inbox/i })).not.toBeInTheDocument();
   });
 
-  it("calls resolveFlaggedPair with action:merge and removes the row", async () => {
+  it("counts the dream's decisions and opens Pending at the memory pairs", async () => {
     const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "merge" });
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([pair, { ...pair, ref_a: "person:bob" }]);
+    vi.mocked(api.fetchSkillSuggestions).mockResolvedValue([suggestion]);
+    const onOpenPending = vi.fn();
 
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
+    render(wrap(<DreamView onOpenPending={onOpenPending} />));
+    await user.click(await screen.findByRole("button", { name: "3 dream decisions are waiting in Pending" }));
 
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    expect(await screen.findByText("person:alice")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Merge into alice-smith" }));
-
-    await waitFor(() => {
-      expect(api.resolveFlaggedPair).toHaveBeenCalledWith(
-        "tok",
-        {
-          ref_a: "person:alice",
-          ref_b: "person:alice-smith",
-          action: "merge",
-          survivor: "person:alice-smith",
-        },
-      );
-    });
-
-    // Row is removed optimistically after resolution
-    await waitFor(() => {
-      expect(screen.queryByText("person:alice")).not.toBeInTheDocument();
-    });
+    expect(onOpenPending).toHaveBeenCalledWith("flagged_pair");
   });
 
-  it("calls resolveFlaggedPair with action:separate and removes the row", async () => {
+  it("opens Pending at the skill suggestions when no memory pair waits", async () => {
     const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "separate" });
+    vi.mocked(api.fetchSkillSuggestions).mockResolvedValue([suggestion]);
+    const onOpenPending = vi.fn();
 
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
+    render(wrap(<DreamView onOpenPending={onOpenPending} />));
+    await user.click(await screen.findByRole("button", { name: "1 dream decision is waiting in Pending" }));
 
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    expect(await screen.findByText("person:alice")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Keep separate" }));
-
-    await waitFor(() => {
-      expect(api.resolveFlaggedPair).toHaveBeenCalledWith(
-        "tok",
-        { ref_a: "person:alice", ref_b: "person:alice-smith", action: "separate" },
-      );
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByText("person:alice")).not.toBeInTheDocument();
-    });
+    expect(onOpenPending).toHaveBeenCalledWith("skill_suggestion");
   });
 
-  it("shows an inline error message when resolveFlaggedPair fails", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockRejectedValue(new Error("HTTP 409"));
-
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
-
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    expect(await screen.findByText("person:alice")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Merge into alice" }));
-
-    // Error message appears; pair row is still visible (not removed on failure)
-    expect(await screen.findByText(/Could not resolve pair/)).toBeInTheDocument();
-    expect(screen.getByText("person:alice")).toBeInTheDocument();
-  });
-
-  it("shows the judge's proposal and applies it with action:accept", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([
-      {
-        ...basePair,
-        verdict: "related",
-        source: "tier2",
-        proposal: {
-          kind: "relate",
-          renames: { "person:alice": { slug: "alice-jones", name: null } },
-          alias_moves: [{ alias: "Alice", keep_on: "person:alice" }],
-          relation: { from_ref: "person:alice-smith", type: "married_name_of", to_ref: "person:alice" },
-        },
-      },
+  it("says nothing when no dream decision waits, and a skill import is not one", async () => {
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      { name: "shady-skill", status: "quarantined", source: "https://example.com/s.zip", verdict: "caution", findings: [] },
     ]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "accept" });
 
-    render(wrap(<DreamView />));
+    render(wrap(<DreamView onOpenPending={vi.fn()} />));
     await screen.findByText("No dream activity yet.");
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    await waitFor(() => expect(api.fetchSkillSuggestions).toHaveBeenCalled());
 
-    expect(await screen.findByText("Rename person:alice → person:alice-jones")).toBeInTheDocument();
-    expect(screen.getByText("Alias “Alice” → only person:alice")).toBeInTheDocument();
-    expect(screen.getByText("person:alice-smith —married_name_of→ person:alice")).toBeInTheDocument();
-    expect(screen.getByText("investigated")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Apply proposal" }));
-    await waitFor(() => {
-      expect(api.resolveFlaggedPair).toHaveBeenCalledWith("tok", {
-        ref_a: "person:alice",
-        ref_b: "person:alice-smith",
-        action: "accept",
-      });
-    });
-  });
-
-  it("sends only what the user changed in the editor", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "relate" });
-
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    await user.click(await screen.findByRole("button", { name: "Edit…" }));
-
-    await user.selectOptions(screen.getByRole("combobox", { name: "Alice" }), "b");
-    const slug = screen.getByRole("textbox", { name: "Key person:alice" });
-    await user.clear(slug);
-    await user.type(slug, "alice-jones");
-    await user.click(screen.getByRole("checkbox", { name: "Relate them" }));
-    await user.type(screen.getByRole("textbox", { name: "Relation type" }), "sibling_of");
-    await user.click(screen.getByRole("button", { name: "Apply changes" }));
-
-    await waitFor(() => {
-      expect(api.resolveFlaggedPair).toHaveBeenCalledWith("tok", {
-        ref_a: "person:alice",
-        ref_b: "person:alice-smith",
-        action: "relate",
-        alias_moves: [{ alias: "Alice", keep_on: "person:alice-smith" }],
-        renames: { "person:alice": { slug: "alice-jones" } },
-        relation: { from_ref: "person:alice", type: "sibling_of", to_ref: "person:alice-smith" },
-      });
-    });
-  });
-
-  it("reloads the list when a resolution changed keys", async () => {
-    const user = userEvent.setup();
-    const other = { ...basePair, ref_a: "person:alice-smith", ref_b: "person:bob" };
-    vi.mocked(api.fetchFlaggedPairs)
-      .mockResolvedValueOnce([basePair, other]) // badge
-      .mockResolvedValueOnce([basePair, other]) // tab
-      .mockResolvedValue([{ ...other, ref_a: "person:alice", ref_b: "person:bob" }]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({
-      ok: true, action: "merge",
-      refs: { "person:alice": "person:alice", "person:alice-smith": "person:alice" },
-    });
-
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    const merge = await screen.findAllByRole("button", { name: "Merge into alice" });
-    await user.click(merge[0]);
-
-    // The second card now names the survivor, not the merged-away page.
-    await waitFor(() => expect(screen.queryByText("person:alice-smith")).not.toBeInTheDocument());
-    expect(screen.getByText("person:bob")).toBeInTheDocument();
-  });
-
-  it("shows the server's reason when an edit is rejected", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([]);
-    vi.mocked(api.resolveFlaggedPair).mockRejectedValue(
-      new api.ApiError(422, "HTTP 422", "person:alice-jones already exists"),
-    );
-
-    render(wrap(<DreamView />));
-    await screen.findByText("No dream activity yet.");
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-    await user.click(await screen.findByRole("button", { name: "Keep separate" }));
-
-    expect(await screen.findByText(/already exists/)).toBeInTheDocument();
-  });
-
-  it("renders a quarantined skill and calls onOpenSkills when Review in Skills is clicked", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([]);
-    vi.mocked(api.listQuarantine).mockResolvedValue([baseQuarantine]);
-
-    const onOpenSkills = vi.fn();
-    render(wrap(<DreamView onOpenSkills={onOpenSkills} />));
-    await screen.findByText("No dream activity yet.");
-
-    await user.click(screen.getByRole("button", { name: /Inbox/i }));
-
-    expect(await screen.findByText("shady-skill")).toBeInTheDocument();
-    expect(screen.getByText("Makes outbound requests.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Review in Skills" }));
-
-    expect(onOpenSkills).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /waiting in Pending/ })).not.toBeInTheDocument();
   });
 });
+

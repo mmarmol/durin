@@ -534,8 +534,11 @@ returns for it (`item.data`), and resolves through that section's routes:
   closes the request.
 
 Resolving anything shows what it came to and re-reads the list. A source the
-server could not load is named above the list. The domain sections keep their
-own lists; the page only gathers them.
+server could not load is named above the list. The page can open scrolled to
+one source's section (`focusSource`): the Dream section's line counting the
+dream's decisions opens it at the memory pairs, or at the skill suggestions
+when no pair waits. Those two sources are decided only here; the other domain
+sections keep their own lists, and the page gathers them.
 
 ### Memory browser (WebUI)
 

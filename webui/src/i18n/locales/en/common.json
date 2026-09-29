@@ -2458,6 +2458,8 @@
     "loading": "Loading…",
     "empty": "No dream activity yet.",
     "view": "View",
+    "pendingDecisions_one": "1 dream decision is waiting in Pending",
+    "pendingDecisions_other": "{{count}} dream decisions are waiting in Pending",
     "kind": {
       "merged": "merged",
       "created": "created",
@@ -2479,21 +2481,11 @@
       "aliases": "Aliases",
       "identifiers": "Identifiers"
     },
-    "tabs": {
-      "resumen": "Summary",
-      "bandeja": "Inbox"
-    },
     "bandeja": {
-      "flaggedTitle": "Memories flagged for review",
-      "quarantineTitle": "Skills in quarantine",
       "merge": "Merge",
       "keepSeparate": "Keep separate",
       "reviewInSkills": "Review in Skills",
-      "emptyFlagged": "No memory pairs flagged for review.",
-      "emptyQuarantine": "No skills in quarantine.",
       "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state.",
-      "suggestionsTitle": "Skill suggestions",
-      "emptySuggestions": "No skill suggestions right now.",
       "accept": "Accept",
       "reject": "Reject",
       "rejectHint": "rejecting silences it for ~30 days",

@@ -2458,6 +2458,8 @@
     "loading": "Chargement…",
     "empty": "Aucune activité dream pour le moment.",
     "view": "Afficher",
+    "pendingDecisions_one": "1 décision du dream vous attend dans En attente",
+    "pendingDecisions_other": "{{count}} décisions du dream vous attendent dans En attente",
     "kind": {
       "merged": "fusionné",
       "created": "créé",
@@ -2479,21 +2481,11 @@
       "aliases": "Alias",
       "identifiers": "Identifiants"
     },
-    "tabs": {
-      "resumen": "Résumé",
-      "bandeja": "Boîte de réception"
-    },
     "bandeja": {
-      "flaggedTitle": "Mémoires signalées pour révision",
-      "quarantineTitle": "Skills en quarantaine",
       "merge": "Fusionner",
       "keepSeparate": "Garder séparés",
       "reviewInSkills": "Examiner dans Skills",
-      "emptyFlagged": "Aucune paire de mémoires signalée pour révision.",
-      "emptyQuarantine": "Aucun skill en quarantaine.",
       "resolveError": "Impossible de résoudre la paire — elle a peut-être déjà été traitée. Actualisez pour voir l’état actuel.",
-      "suggestionsTitle": "Suggestions de skills",
-      "emptySuggestions": "Aucune suggestion de skill pour le moment.",
       "accept": "Accepter",
       "reject": "Rejeter",
       "rejectHint": "un rejet la masque pendant environ 30 jours",
