@@ -1916,6 +1916,27 @@ def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tm
     bus.publish_outbound.assert_not_awaited()
 
 
+def test_gateway_cron_dream_is_supervised_on_a_dedicated_thread(monkeypatch, tmp_path: Path) -> None:
+    """Supervising a nightly dream holds its thread for over an hour: it gets
+    a thread of its own instead of one of the event loop's few shared
+    default-executor threads, which every short blocking hop needs."""
+    import threading
+
+    seen, _config, _bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
+    supervised_on: list[str] = []
+
+    def _fake_worker(**kwargs):
+        supervised_on.append(threading.current_thread().name)
+        return 0, ""
+
+    monkeypatch.setattr("durin.memory.dream_supervisor.run_dream_worker", _fake_worker)
+    monkeypatch.setattr("durin.cron.reaper.reap_expired_run_sessions", lambda *_a: None)
+
+    job = CronJob(id="dream", name="memory_dream", payload=CronPayload(message=""))
+    assert asyncio.run(seen["cron"].on_job(job)) is None
+    assert supervised_on == ["dream-supervisor"]
+
+
 def test_gateway_automation_trigger_with_no_name_is_skipped(monkeypatch, tmp_path: Path) -> None:
     seen, _config, _bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
 

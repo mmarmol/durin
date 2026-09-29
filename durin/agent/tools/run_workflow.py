@@ -4,8 +4,10 @@ Loads ``<workspace>/workflows/<name>.json``, builds the workflow engine wired to
 node runner (which runs each work node as a real agent turn with that node's tools
 and model), runs it, and returns a result summary. The tool's ``execute`` is async
 but the engine is synchronous and its node runner calls ``asyncio.run`` internally,
-so the engine is driven via ``asyncio.to_thread`` — the inner ``asyncio.run`` then
-runs in a worker thread with no active loop, which is valid.
+so the engine is driven on a worker thread — the inner ``asyncio.run`` then runs
+with no active loop, which is valid. A run can last an hour, so that thread is one
+of its own (``run_in_dedicated_thread``), not one of the event loop's few shared
+default-executor threads.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
+from durin.utils.dedicated_thread import run_in_dedicated_thread
 
 
 def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
@@ -565,7 +568,8 @@ class RunWorkflowTool(Tool, ContextAware):
         if background:
             async def _run_and_inject() -> None:
                 try:
-                    result = await asyncio.to_thread(
+                    result = await run_in_dedicated_thread(
+                        f"workflow-run-{run_id}",
                         engine.run, workflow, task,
                         root_session_key=root_session_key,
                         input_files=input_files or None,
@@ -598,7 +602,8 @@ class RunWorkflowTool(Tool, ContextAware):
             return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
-        engine_future = asyncio.ensure_future(asyncio.to_thread(
+        engine_future = asyncio.ensure_future(run_in_dedicated_thread(
+            f"workflow-run-{run_id}",
             engine.run, workflow, task,
             root_session_key=root_session_key,
             input_files=input_files or None,

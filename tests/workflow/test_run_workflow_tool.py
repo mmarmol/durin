@@ -51,7 +51,7 @@ async def test_missing_workflow_returns_error(tmp_path):
 @pytest.mark.asyncio
 async def test_work_node_runs_through_to_thread_boundary(tmp_path):
     # A work node forces the node runner's inner asyncio.run to execute; it must
-    # run inside the asyncio.to_thread worker (no active loop there) to be valid.
+    # run inside the engine's worker thread (no active loop there) to be valid.
     _write_workflow(tmp_path, "doer", {
         "name": "doer", "start": "a",
         "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],

@@ -181,6 +181,39 @@ async def test_clear_cancel_runs_in_the_same_thread_as_engine_run(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_execute_runs_the_engine_on_a_dedicated_thread(tmp_path, monkeypatch):
+    """A workflow run can take an hour: it gets a thread of its own instead
+    of holding one of the event loop's few shared default-executor threads,
+    which every short blocking hop in the gateway needs."""
+    import threading
+
+    from durin.workflow.engine import WorkflowEngine
+
+    names: list[str] = []
+    real_run = WorkflowEngine.run
+
+    def spy_run(self, *a, **kw):
+        names.append(threading.current_thread().name)
+        return real_run(self, *a, **kw)
+
+    monkeypatch.setattr(WorkflowEngine, "run", spy_run)
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        result = await svc.execute("quick", "task")
+
+    assert result.status == "completed"
+    assert names == [f"workflow-run-{result.run_id}"]
+
+
+@pytest.mark.asyncio
 async def test_normal_completion_leaves_no_cancel_flag(tmp_path):
     """A run that completes without ever being cancelled must not leave a
     stale flag behind either."""

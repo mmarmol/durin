@@ -409,9 +409,13 @@ Re-entries are bounded by `max_reentries` (default 0 = feature off), and the syn
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
 The real runner drives the async `AgentRunner` synchronously per node, so the
-`run_workflow` tool runs the whole (synchronous) engine via `asyncio.to_thread` — the
-inner `asyncio.run` then executes in a worker thread with no active event loop, which
-is valid even though the tool itself runs inside the agent's async tool loop.
+`run_workflow` tool (and `WorkflowsService.execute`) runs the whole (synchronous)
+engine on a worker thread — the inner `asyncio.run` then executes with no active event
+loop, which is valid even though the tool itself runs inside the agent's async tool
+loop. Because a run can hold that thread for an hour, each run gets a thread of its
+own (`run_in_dedicated_thread`, named `workflow-run-<run_id>`) rather than one of the
+event loop's shared default-executor threads (see
+[concurrency.md](concurrency.md)).
 
 ## 3. Diagram
 
@@ -419,7 +423,7 @@ is valid even though the tool itself runs inside the agent's async tool loop.
 flowchart TD
     A([run_workflow name task]) --> B[load_workflow\nworkspace/workflows/name.json]
     B --> C[parse_workflow to Workflow]
-    C --> D[WorkflowEngine.run\nvia asyncio.to_thread]
+    C --> D[WorkflowEngine.run\non a dedicated thread]
     D --> MANIFEST_START[start_run manifest\nstatus='running']
     MANIFEST_START --> E[execute node body\nagent turn or script]
     E --> UPDATE[update_run manifest\nper-node trace]
@@ -942,7 +946,7 @@ frame is added in one place instead of at each emit site; the terminal frame
 (below) reuses `finished_frames` for its per-node entries too. The engine emits
 a progress frame at the start of each node (status `running`) and another when
 the node finishes (`done`/`failed`). Because the graph walk executes on a
-worker thread (`asyncio.to_thread`), frames are marshalled back to the
+worker thread (the run's dedicated thread), frames are marshalled back to the
 gateway's event loop via
 `asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
 being published on the message bus. The WebSocket channel propagates them as
@@ -1185,7 +1189,7 @@ End-to-end for a single `run_workflow` call:
    `ScriptNodeRunner` (for script nodes), an `AgentJudgeRunner` (used only to **pick** a
    winner for parallel `choose`), and a `SubworkflowRunner` (for sub-workflow nodes)
    into the `WorkflowEngine`.
-3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: an agent node
+3. **Run.** The engine runs on a dedicated thread of its own. It walks the graph: an agent node
    runs its body as an agent turn (persisting a lineage'd node session), a script node
    runs its `command`/`script` as a subprocess via the `ScriptNodeRunner` instead (no
    session), and either way the output threads to the next node; a **routing** node

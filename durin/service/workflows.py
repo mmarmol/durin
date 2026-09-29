@@ -30,6 +30,7 @@ from durin.service.types import (
     ValidationFailedError,
 )
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.dedicated_thread import run_in_dedicated_thread
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
 from durin.workflow.artifacts import safe_key
@@ -770,7 +771,7 @@ class WorkflowsService:
         # string here is a real (if invalid) key attempt — matching
         # WorkflowEngine.run's own is-not-None check for the identical value.
         # Raised here, before any provider/engine setup below, never as a bare
-        # ValueError surfacing from inside asyncio.to_thread further down.
+        # ValueError surfacing from inside the run's worker thread further down.
         if work_key is not None:
             try:
                 safe_key(work_key)
@@ -965,7 +966,10 @@ class WorkflowsService:
             # imply "the flag is already cleared", rather than merely usually true.
             on_run_end=_clear_cancel)
         try:
-            result = await asyncio.to_thread(
+            # A run can last an hour: a thread of its own, not one of the
+            # event loop's few shared default-executor threads.
+            result = await run_in_dedicated_thread(
+                f"workflow-run-{rid}",
                 engine.run, workflow, task,
                 root_session_key=root_session_key,
                 input_files=input_files,

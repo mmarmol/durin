@@ -67,8 +67,8 @@ def _fake_provider():
 async def test_background_is_the_default(tmp_path):
     bus = _Bus()
     tool = _make_tool(tmp_path, bus=bus)
-    # Patch WorkflowEngine.run with a plain synchronous MagicMock so asyncio.to_thread
-    # drives it correctly in a worker thread — no AsyncMock, no leaked coroutine.
+    # Patch WorkflowEngine.run with a plain synchronous MagicMock so the run's worker
+    # thread drives it correctly — no AsyncMock, no leaked coroutine.
     # The patch must remain active through the background task's execution (not just the
     # execute() call), so it wraps both the launch and the sleep.
     canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
@@ -92,3 +92,38 @@ async def test_foreground_is_opt_in(tmp_path):
                ))):
         out = await tool.execute(name="noop", task="hi", background=False)
     assert "Workflow run" in out and "completed" in out
+
+
+def _engine_run_recording_thread(names: list[str]):
+    """A WorkflowEngine.run stand-in that records the thread it ran on."""
+    import threading
+
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
+
+    def _run(*_args, **_kwargs):
+        names.append(threading.current_thread().name)
+        return canned
+
+    return _run
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [True, False])
+async def test_the_engine_runs_on_a_dedicated_thread(tmp_path, background):
+    """A workflow run can take an hour: it gets a thread of its own instead
+    of holding one of the event loop's few shared default-executor threads,
+    which every short blocking hop in the gateway needs."""
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    names: list[str] = []
+    with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
+         patch("durin.workflow.engine.WorkflowEngine.run",
+               _engine_run_recording_thread(names)):
+        await tool.execute(name="noop", task="hi", background=background)
+        # A background run reports back through the bus once it is over.
+        for _ in range(200):
+            if bus.injected or not background:
+                break
+            await asyncio.sleep(0.01)
+    assert len(names) == 1
+    assert names[0].startswith("workflow-run-"), names[0]

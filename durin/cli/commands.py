@@ -1398,6 +1398,7 @@ def _run_gateway(
 
             from durin.channels.websocket import publish_dream_progress
             from durin.memory.dream_supervisor import run_dream_worker
+            from durin.utils.dedicated_thread import run_in_dedicated_thread
 
             workspace = config.workspace_path
             _dream_loop = _asyncio.get_running_loop()
@@ -1412,7 +1413,11 @@ def _run_gateway(
             code = 0
             _stderr_tail = ""
             try:
-                code, _stderr_tail = await _asyncio.to_thread(
+                # Supervision lasts the whole dream (over an hour for a
+                # nightly pass): a thread of its own, not one of the default
+                # executor's few shared threads.
+                code, _stderr_tail = await run_in_dedicated_thread(
+                    "dream-supervisor",
                     run_dream_worker,
                     workspace=workspace,
                     mode="full",
