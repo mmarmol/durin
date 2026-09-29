@@ -630,6 +630,67 @@ def test_routing_script_gate_with_gate_fails_but_no_script_failures_is_structura
     assert load_workflow(tmp_path, "anchor_wf").nodes["s"].command == "true"   # untouched
 
 
+def test_converting_a_normal_route_check_to_cases_reaches_the_user_unapplied(tmp_path):
+    """A check whose FAIL is its normal forward route ("no note yet -> draft it")
+    counts as a gate fail on every first run. The fix the pass is told to propose
+    is converting it to a `cases` route — a rewiring outside the auto-applicable
+    shapes, so even in auto mode it must reach the user as a structural suggestion
+    and leave the definition untouched."""
+    data = {
+        "name": "route_wf", "start": "has-note", "improvement_mode": "auto",
+        "nodes": [
+            {"id": "has-note", "kind": "script", "command": "test -f note.md",
+             "on_pass": "send", "on_fail": "draft"},
+            {"id": "draft", "kind": "work", "prompt": "draft note.md", "next": "send"},
+            {"id": "send", "kind": "work", "prompt": "send note.md", "next": None},
+        ],
+    }
+    _write_wf(tmp_path, data, name="route_wf")
+    for i in range(2):
+        run_log.write_run(tmp_path, "route_wf", WorkflowResult(
+            status="completed", final_output="sent", run_id=f"r{i}",
+            runs=[NodeRun(node_id="has-note", iteration=1, output="[exit code 1]", passed=False),
+                  NodeRun(node_id="draft", iteration=1, output="drafted"),
+                  NodeRun(node_id="send", iteration=1, output="sent")],
+        ), ts=float(i + 1))
+
+    invoke = _fake_invoke({
+        "target_id": "has-note", "field": "cases",
+        "proposed": {"PRESENT": "send", "MISSING": "draft"},
+        "reason": "has-note's FAIL is its normal first-run route, not a failure",
+    })
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "route_wf")
+    assert len(recs) == 1 and recs[0]["kind"] == "structural"
+    assert recs[0]["proposal"]["proposed"] == {"PRESENT": "send", "MISSING": "draft"}
+    from durin.workflow.loader import load_workflow
+    node = load_workflow(tmp_path, "route_wf").nodes["has-note"]
+    assert node.on_fail == "draft" and node.cases is None   # untouched
+
+
+def test_the_model_is_told_which_gate_fails_point_at_the_producer(tmp_path):
+    """"Improve the producer, not the gate" is only right for a gate whose FAIL sends
+    the work back to be redone; unscoped, it contradicts the rule that a gate failing
+    on a normal route is not trouble. And a script check converted to `cases` must
+    print its label as its last stdout line and exit 0, or the run aborts there."""
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    prompts = []
+
+    def invoke(prompt, *, model=None):
+        prompts.append(prompt)
+        return LLMResponse(text=json.dumps({
+            "target_id": "a", "field": "prompt", "current": "do it",
+            "proposed": "do it carefully", "reason": "a keeps looping"}), finish_reason="stop")
+
+    run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    (prompt,) = prompts
+    producer_rule = next(s for s in prompt.split(". ") if "PRODUCER" in s)
+    assert "sends the work back" in producer_rule
+    assert "last stdout line and exit 0" in prompt
+
+
 def test_legacy_pending_without_kind_reverts_as_prompt_edit(tmp_path):
     """A pending-validation marker written before the script-repair upgrade has no
     'kind' key at all; _maybe_auto_revert must still treat its absence as the

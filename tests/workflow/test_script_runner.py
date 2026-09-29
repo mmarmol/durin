@@ -8,12 +8,13 @@ from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
 
 
-def _req(node, upstream=None, tmp_path=None, iteration=1, cancel_check=None):
+def _req(node, upstream=None, tmp_path=None, iteration=1, cancel_check=None,
+         fail_loops_back=False):
     return NodeRunRequest(
         node=node, task="the task", upstream_output=upstream, shared_context=[],
         run_id="r1", iteration=iteration, root_session_key=None,
         output_dir=str(tmp_path) if tmp_path else None,
-        cancel_check=cancel_check,
+        cancel_check=cancel_check, fail_loops_back=fail_loops_back,
     )
 
 
@@ -63,6 +64,24 @@ def test_binary_gate_nonzero_is_fail_with_stderr_feedback(tmp_path):
     resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
     assert resp.route_label == "FAIL" and resp.exit_code == 3
     assert "partial" in resp.output and "boom" in resp.output and "exit code 3" in resp.output
+
+
+def test_binary_gate_fail_looping_back_is_framed_as_a_failed_gate(tmp_path):
+    node = ScriptNode(id="g", command="echo missing; exit 3", on_pass=None, on_fail="p")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path, fail_loops_back=True))
+    assert resp.route_label == "FAIL"
+    assert resp.output.endswith("[script gate failed: exit code 3]")
+
+
+def test_binary_gate_fail_routing_forward_carries_a_neutral_exit_note(tmp_path):
+    # The fail target has not run yet: this exit is the check's normal "no" answer,
+    # so its output must not call it a failed gate.
+    node = ScriptNode(id="g", command="echo note.md not present; exit 1", on_pass=None, on_fail="draft")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path, fail_loops_back=False))
+    assert resp.route_label == "FAIL" and resp.exit_code == 1
+    assert "note.md not present" in resp.output
+    assert resp.output.endswith("[exit code 1]")
+    assert "gate failed" not in resp.output
 
 
 def test_cases_label_from_last_stdout_line(tmp_path):

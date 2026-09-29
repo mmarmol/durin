@@ -95,6 +95,14 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   stderr becomes the loop-back feedback), or its last stdout line as the case label — the
   ideal gate for "do the tests pass?"-style checks, where an agent gate would cost a turn
   and could be swayed.
+- **Pass/fail is for checks that can fail; a normal branch is a `cases` route.** A check
+  whose "no" is an expected path ("does `note.json` exist yet? no → go draft it") must
+  print a label (`REUSE` / `DRAFT`) and route with `cases`, not exit 1 into `on_fail`. A
+  FAIL is recorded as a failed gate: self-improvement counts every one as trouble, and a
+  FAIL into a step that leads back to the gate (not by way of its `on_pass` step) reaches
+  it as "Reviewer feedback (address this)". Converting a pass/fail check to `cases`
+  changes its script too: it prints the label as its last stdout line and exits 0 (a
+  non-zero exit on a `cases` node aborts the run).
 - **Per node**: a `model` **or** a `persona` (a SOUL + its model); a work `mode` (`build` =
   may write files, `read` = read-only); built-in `tools` (`none` / `default` — `default` is
   the background tool set: files, shell, search, web, memory search and memory writes,

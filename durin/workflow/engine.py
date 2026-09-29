@@ -99,6 +99,19 @@ class NodeRunRequest:
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
     fail_would_exhaust: bool = False
+    # True when this is a binary routing node whose on_fail target can lead back to
+    # this node in the workflow graph without passing through its on_pass target:
+    # the fail path returns here on a route the pass path does not share, so a FAIL
+    # sends the work round to be redone and judged here again, and the node's output
+    # is remediation for it. That holds whether or not the target has run yet, so
+    # the first time a fixer runs after a failing review it still gets the review as
+    # feedback. False when on_fail never leads back, or leads back only by way of
+    # on_pass (a check whose "no" is a normal branch, e.g. "no note yet -> go draft
+    # it", whose drafting step goes on to the pass step; a retry edge or an outer
+    # loop further on that re-enters the check is not this FAIL's cycle): the
+    # output is then plain context, and framing it as a failure makes the next step
+    # believe an earlier attempt went wrong.
+    fail_loops_back: bool = False
     # Mid-node cancellation poll. For a script node this is the engine's plain
     # cancel check (the subprocess is killed on either cancel mode); for an agent
     # node it is the HARD-cancel check (only a force-stop aborts the in-flight
@@ -226,6 +239,28 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         recorded_outputs=recorded_outputs,
         work_key=work_key,
     )
+
+
+def _reaches(workflow: Workflow, src: str, dst: str, avoid: str | None = None) -> bool:
+    """True when the walk can get from node ``src`` to node ``dst`` along the edges
+    it follows, without passing through node ``avoid``: ``next``,
+    ``on_pass``/``on_fail`` and ``cases`` targets. A parallel node's branches, worker
+    and list source run inside it or before it, so the walk leaves it only through
+    its ``next``; they are not paths onward."""
+    seen: set[str] = {avoid} if avoid else set()
+    stack = [src]
+    while stack:
+        nid = stack.pop()
+        if nid == dst:
+            return True
+        node = workflow.nodes.get(nid)
+        if node is None or nid in seen:
+            continue
+        seen.add(nid)
+        stack += [t for t in (node.next, getattr(node, "on_pass", None),
+                              getattr(node, "on_fail", None),
+                              *(getattr(node, "cases", None) or {}).values()) if t]
+    return False
 
 # Upper bound on messages carried in the running shared-context buffer. A long
 # chain of 'shared' nodes would otherwise grow this without limit and balloon the
@@ -1007,7 +1042,10 @@ class WorkflowEngine:
                 )
 
                 fail_would_exhaust = False
+                fail_loops_back = False
                 if node.cases is None and node.on_fail is not None:
+                    fail_loops_back = _reaches(workflow, node.on_fail, node.id,
+                                               avoid=node.on_pass)
                     t = workflow.nodes.get(node.on_fail)
                     if t is not None:
                         t_budget = min(
@@ -1037,6 +1075,7 @@ class WorkflowEngine:
                                  if isinstance(node, WorkNode) and work_dir is not None else None),
                     budget=budget,
                     fail_would_exhaust=fail_would_exhaust,
+                    fail_loops_back=fail_loops_back,
                     # A script node polls the plain check (its subprocess dies on
                     # either cancel mode); an agent node polls the HARD check so
                     # only a force-stop interrupts its in-flight turn.
@@ -1220,9 +1259,9 @@ class WorkflowEngine:
                         )
                     if target is not None:
                         # Thread this node's output as neutral context before routing to
-                        # the target. Unlike the binary fail-edge (which always carries
-                        # remediation feedback), a cases route may be a forward dispatch,
-                        # not a loop-back, so the framing is intentionally neutral.
+                        # the target: a cases route is a dispatch between normal paths,
+                        # not a verdict on earlier work, so the framing is intentionally
+                        # neutral.
                         prior = upstream_output or ""
                         upstream_output = (
                             f"{prior}\n\nContext from {node.id!r}:\n{output}"
@@ -1238,11 +1277,16 @@ class WorkflowEngine:
                     current = target
                 elif node.routes:
                     if not passed:
-                        # Thread reviewer feedback into upstream so the producer sees it.
+                        # A FAIL into a step that leads back to this gate on a route
+                        # of its own is a revision request: frame it as feedback to
+                        # address. A FAIL into a step that never comes back here, or
+                        # only by way of the pass step, is a forward route (the
+                        # check's normal "no"), so it gets the same neutral framing
+                        # as a cases route — nothing earlier failed.
                         prior = upstream_output or ""
-                        upstream_output = (
-                            f"{prior}\n\nReviewer feedback (address this):\n{output}"
-                        )
+                        header = ("Reviewer feedback (address this):" if fail_loops_back
+                                  else f"Context from {node.id!r}:")
+                        upstream_output = f"{prior}\n\n{header}\n{output}"
                     current = node.on_pass if passed else node.on_fail
                     if current is None:
                         residue = strip_verdict_line(output)

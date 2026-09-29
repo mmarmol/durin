@@ -258,12 +258,18 @@ class ScriptNodeRunner:
             if rc == 0:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
                                        route_label="PASS", exit_code=rc, **logs)
-            # A failing gate's output is the loop-back feedback: what the check
-            # printed, plus why it failed (stderr + exit code).
+            # A non-zero exit's output is what the check printed plus its stderr
+            # tail and exit code. Into a step that leads back to this gate on a
+            # route of its own (req.fail_loops_back), it is loop-back feedback and
+            # says the gate failed; otherwise it is the check's normal "no", so the
+            # note stays a plain exit code instead of reporting a failure that never
+            # happened.
+            exit_note = (f"[script gate failed: exit code {rc}]" if req.fail_loops_back
+                         else f"[exit code {rc}]")
             parts = [p for p in (
                 self._cap(stdout).strip(),
                 f"[stderr]\n{stderr_tail}" if stderr_tail else "",
-                f"[script gate failed: exit code {rc}]",
+                exit_note,
             ) if p]
             return NodeRunResponse(output="\n\n".join(parts), session_key=None,
                                    route_label="FAIL", exit_code=rc, **logs)

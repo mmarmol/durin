@@ -77,7 +77,17 @@ follows `next` or **routes** on a verdict.
   deterministic; the node's text is parsed only as a fallback. For that fallback, a binary
   node's `PASS`/`FAIL` should be its first line and a multi-way label its last line.
 - On a fail / loop-back edge, the node's feedback is threaded into the target's next run so
-  the producer knows what to fix.
+  the producer knows what to fix. The framing depends on the target: into a step that leads
+  back to the gate without passing through its `on_pass` step, the output arrives as
+  "Reviewer feedback (address this)", even the first time that step runs; into a step that
+  never comes back to the gate, or only by way of `on_pass` (it goes on to the pass step,
+  and a retry or outer loop later re-enters the gate), it arrives as neutral context
+  ("Context from '<node>'"), the same framing a `cases` route uses.
+- **A normal branch is `cases`, not `on_fail`.** Binary routing is for a check that can
+  genuinely fail. A check whose "no" is an expected path ("does `note.json` exist yet? no →
+  go draft it") is a `cases` route with one label per outcome (`REUSE` / `DRAFT`): every
+  FAIL is recorded as a failed gate, and workflow self-improvement treats recurring ones
+  as trouble to fix.
 - **Loop awareness is automatic:** on a revisit the engine tells the node "Pass X of Y" and
   marks the last allowed pass as FINAL (deliver, don't iterate); a binary gate whose FAIL
   would exhaust the producer's budget is told its verdict is definitive. Set `max_visits` to
@@ -123,7 +133,12 @@ buffer (the buffer passes through it untouched).
 **Routing semantics (all deterministic):**
 - **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, non-zero = FAIL**; on FAIL the loop-back
   feedback is the script's output plus its stderr tail and exit code, so the producer knows
-  what to fix. `command: "run-my-tests"` as a gate is the canonical use.
+  what to fix. `command: "run-my-tests"` as a gate is the canonical use. The exit note reads
+  `[script gate failed: exit code N]` only when that framing is "Reviewer feedback" (above);
+  otherwise it is a plain `[exit code N]`.
+- A presence or "already done?" check is **multi-way**, not binary: print the label as the
+  last stdout line and exit 0 (`test -f note.json && echo REUSE || echo DRAFT`). Converting
+  a pass/fail check to `cases` changes its script the same way.
 - **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
   A non-zero exit on a `cases` node is a node failure, not a route.
 - **Linear** (`next`): exit 0 continues with stdout as the edge; **non-zero aborts the run**

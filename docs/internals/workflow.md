@@ -119,8 +119,27 @@ and follows an edge. A node may route in one of two shapes:
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
 line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
 the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
-`on_fail`; on a fail the node's feedback is threaded into the loop-back so the producer re-runs
-knowing what to fix. When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
+`on_fail`. How a fail's output is threaded depends on the graph: when the `on_fail` target
+can lead back to the gate without passing through the gate's `on_pass` target (the fail path
+returns on a route the pass path does not share), the fail is a loop-back and the output is
+threaded as `Reviewer feedback (address this):` so the producer re-runs knowing what to fix.
+That holds whether or not the target has run yet, so a fixer reached for the first time from a
+failing review, or a review that fails right after a resume, still frames it as feedback.
+Otherwise the fail is a forward route (a check whose "no" is a normal branch, e.g. "no note
+yet → go draft it") and the output is threaded with the same neutral `Context from '<node>':`
+framing a `cases` route uses, so the next step never reads a routine "no" as an earlier
+failure. That includes a target that comes back to the gate only by way of `on_pass`: when the
+drafting step goes on to the pass step, a retry edge or an outer loop over items that later
+re-enters the check is a cycle of the pass route, not of the fail. Only edges the walk follows
+count as paths: `next`, `on_pass`/`on_fail`, `cases` targets, and a parallel node's `next` (its
+branches, worker and list source run inside it or before it). Two shapes stay ambiguous,
+because the graph cannot tell a routine "no" from a verdict on earlier work: a check whose
+`on_fail` step leads straight back to it (check → create → check again) reads as a loop-back,
+so the creating step gets reviewer framing even on its first run (declare such a check with
+`cases` for neutral framing); and a review whose fix step goes on to the pass route instead of
+back to the review reads as a forward route, so the fix step gets the verdict under neutral
+framing (the verdict text itself still arrives). `NodeRunRequest.fail_loops_back` hands the
+node's runner the same answer (the script runner words its exit note from it, below). When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
@@ -128,8 +147,9 @@ exactly one label; the engine matches the last non-empty line of the output agai
 labels (case-insensitive, surrounding punctuation tolerated), then follows the matching edge.
 A `null` target ends the run; any other target is a node id. If the output matches no label the
 engine tries a `"default"` key — if that is also absent, the run ends as `aborted` naming the
-node and the sorted list of expected labels. Like binary fail-edges, the node's output is
-threaded as reviewer feedback before routing to a non-terminal target. The matched label is
+node and the sorted list of expected labels. Before routing to a non-terminal target, the
+node's output is threaded as neutral context (`Context from '<node>':`), since a case is a
+dispatch between normal paths rather than a verdict on earlier work. The matched label is
 recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail does not apply).
 Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
 and `next` are mutually exclusive. Routing nodes default to **explore** (read-only) mode.
@@ -180,7 +200,9 @@ read.
 **Script routing is exit-code-driven, not text-parsed.** A binary script gate
 (`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
 non-zero is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
-explicit exit-code note, so the loop-back feedback explains what failed. A multi-way
+explicit exit-code note, so the loop-back feedback explains what failed. The note follows
+the same `fail_loops_back` rule as the engine's framing: `[script gate failed: exit code N]`
+when the fail is a loop-back, a plain `[exit code N]` on a forward route. A multi-way
 script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
 agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
 a `cases` node, or on a plain linear node with no routing, is a node failure
@@ -455,7 +477,7 @@ flowchart TD
     F -->|binary on_pass/on_fail| I[route tool verdict\nfallback parse_verdict]
     I --> J{passed?}
     J -->|yes| K[route on_pass]
-    J -->|no| L[route on_fail / loop back\nthread reviewer feedback]
+    J -->|no| L[route on_fail\nloop-back: reviewer feedback\nforward: neutral context]
     K --> H
     L --> H
     F -->|multi-way cases| MW[route tool verdict\nfallback parse_label]
@@ -1389,6 +1411,19 @@ End-to-end for a single `run_workflow` call:
     `<workspace>/workflows/scripts/` referenced by a node with that same evidence.
     The repair lane only edits single-segment filenames: a nested reference (e.g.
     `sub/tool.sh`) is left alone even when it is the one failing.
+
+  `gate_fails` counts every FAIL verdict, including a gate whose FAIL is a normal
+  forward branch (a check whose "no" is expected, e.g. "no note yet → go draft it"):
+  a forward error path, such as a send step failing into a report step, is a real
+  failure, so the count cannot tell the two apart from the edge shape. The model's
+  instructions draw the line instead: "prefer improving the producer over the gate" is
+  scoped to a gate whose FAIL sends the work back to be redone; a gate that fails on a
+  normal route is not trouble, and the right proposal is converting it to a `cases`
+  route with the same targets, never hardening the step it routes to as if a run had
+  failed. Because a script check routed by `cases` must print its label as its last
+  stdout line and exit 0, the model says in the proposal's `reason` how the command
+  changes. That conversion is outside the editable scope, so it lands as a `structural`
+  recommendation (below) for a person to apply.
 
   A script proposal on a node that **routes** (`on_pass`/`on_fail` or `cases` — a
   gate), or a `script_file` referenced by any routing node, is always `manual_only`:
