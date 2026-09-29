@@ -717,3 +717,100 @@ def test_a_folder_deleted_and_created_again_keeps_being_watched(
         assert _wait_until(lambda: after in reindexed), reindexed
     finally:
         watcher.stop()
+
+
+# ---------------------------------------------------------------------------
+# The backfill embeds through the embed server
+# ---------------------------------------------------------------------------
+
+
+def _stub_embedding_stack(
+    monkeypatch: pytest.MonkeyPatch, *, isolation: str,
+) -> list[int]:
+    """Stand in for the config, provider and vector index the watcher
+    builds, with `isolation` configured. Returns the list the fake backfill
+    appends to each time it runs."""
+    from durin.config.schema import Config
+
+    cfg = Config()
+    cfg.memory.embedding.isolation = isolation
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr(
+        "durin.memory.embedding.provider_from_config",
+        lambda config, model=None: object(),
+    )
+    monkeypatch.setattr(
+        "durin.memory.vector_index.VectorIndex", lambda workspace, provider: object(),
+    )
+    ran: list[int] = []
+
+    def fake_backfill(workspace, vi, **kwargs):
+        ran.append(1)
+        return Backfill({}, None)
+
+    monkeypatch.setattr("durin.memory.indexer.backfill_missing_vectors", fake_backfill)
+    return ran
+
+
+def test_the_backfill_waits_for_the_embed_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With isolation "service" the backfill embeds nothing until the embed
+    server is up: embedding earlier would start a second copy of the model
+    in a local worker process while the server is still loading its own."""
+    from durin.memory import embed_server
+
+    ran = _stub_embedding_stack(monkeypatch, isolation="service")
+    server: dict[str, dict] = {}
+    monkeypatch.setattr(embed_server, "read_discovery", lambda: server.get("rec"))
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+
+    watcher.start()
+    try:
+        watcher.request_backfill()
+        time.sleep(1.5)
+        assert ran == []
+
+        server["rec"] = {"port": 1, "token": "t"}
+        assert _wait_until(lambda: ran == [1])
+    finally:
+        watcher.stop()
+
+
+def test_with_no_embed_server_the_backfill_runs_once_the_wait_is_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No gateway serving (a TUI-only setup) or a server that never came up:
+    the backfill does not wait forever, it embeds with the local model copy."""
+    from durin.memory import embed_server
+
+    monkeypatch.setattr(file_watcher_module, "_EMBED_SERVER_WAIT_S", 1.5)
+    ran = _stub_embedding_stack(monkeypatch, isolation="service")
+    monkeypatch.setattr(embed_server, "read_discovery", lambda: None)
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+
+    watcher.start()
+    try:
+        watcher.request_backfill()
+        time.sleep(0.5)
+        assert ran == []
+        assert _wait_until(lambda: ran == [1])
+    finally:
+        watcher.stop()
+
+
+def test_without_the_embed_server_isolation_the_backfill_does_not_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from durin.memory import embed_server
+
+    ran = _stub_embedding_stack(monkeypatch, isolation="process")
+    monkeypatch.setattr(embed_server, "read_discovery", lambda: None)
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+
+    watcher.start()
+    try:
+        watcher.request_backfill()
+        assert _wait_until(lambda: ran == [1], timeout_s=5.0)
+    finally:
+        watcher.stop()

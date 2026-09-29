@@ -296,7 +296,9 @@ class FastembedProvider(EmbeddingProvider):
 
     The model identifier is validated against fastembed's live catalog
     at construction time so config errors surface immediately, not on
-    the first ``embed()`` call. The model itself loads lazily on first
+    the first ``embed()`` call — except with ``isolation="service"``,
+    where it is validated when this process loads the model itself (see
+    ``__init__``). The model itself loads lazily on first
     :meth:`embed` and stays resident for the life of the process. No
     idle eviction in V1 — telemetry (``memory.embedding.load``,
     ``memory.embedding.embed``) gives data to revisit the decision.
@@ -314,10 +316,14 @@ class FastembedProvider(EmbeddingProvider):
     ) -> None:
         self._model_name = model or self.DEFAULT_MODEL
         # Validate at construction time — surface unknown models at the
-        # config boundary instead of at the first embed() call.
-        catalog = list_supported_models()
-        if self._model_name not in catalog:
-            raise ValueError(_unknown_model_error(self._model_name, catalog))
+        # config boundary instead of at the first embed() call. A "service"
+        # consumer validates only when it loads the model itself (`_load`,
+        # which is also how the embed server loads it): reading the catalog
+        # imports fastembed and onnxruntime, which a process whose embeds
+        # all go to the embed server never needs.
+        self._model_checked = False
+        if isolation != "service":
+            self._check_model()
         self._model: Any = None
         # Peak ONNX activation memory scales with the per-run batch, and
         # the CPU arena never returns its high-water mark to the OS —
@@ -331,6 +337,15 @@ class FastembedProvider(EmbeddingProvider):
         # The loop and the Dream daemon thread share one provider (B4); guard
         # the lazy first load so the heavy ONNX model is constructed once.
         self._load_lock = threading.Lock()
+
+    def _check_model(self) -> None:
+        """Raise ValueError when the model is not in fastembed's catalog."""
+        if self._model_checked:
+            return
+        catalog = list_supported_models()
+        if self._model_name not in catalog:
+            raise ValueError(_unknown_model_error(self._model_name, catalog))
+        self._model_checked = True
 
     @property
     def model_name(self) -> str:
@@ -518,6 +533,7 @@ class FastembedProvider(EmbeddingProvider):
         return self.embed([query])[0]
 
     def _load(self) -> None:
+        self._check_model()
         try:
             from fastembed import TextEmbedding  # type: ignore[import-not-found]
         except ImportError as exc:

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -85,6 +86,10 @@ class _Backfill:
 
 _BACKFILL_CHUNK = 50
 
+# How long a requested backfill waits for the standing embed server
+# (isolation "service") before it embeds with this process's own model copy.
+_EMBED_SERVER_WAIT_S = 120.0
+
 
 class MemoryFileWatcher:
     """Watches ``<workspace>/memory/`` for `.md` mutations.
@@ -123,6 +128,12 @@ class MemoryFileWatcher:
         self._embedding_model = embedding_model
         self._vector_index = None
         self._vector_attempted = False
+        # Set with the vector index: whether embeds go to the embed server.
+        self._service_isolation = False
+        # A backfill chunk held back until the embed server is up, and when
+        # it stops waiting (see `_waits_for_embed_server`).
+        self._parked_backfill: _Backfill | None = None
+        self._embed_server_deadline = 0.0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -224,6 +235,7 @@ class MemoryFileWatcher:
         provider and reads the whole vector table, so the agent loop
         requests it once it is serving rather than while the gateway boots.
         """
+        self._embed_server_deadline = time.monotonic() + _EMBED_SERVER_WAIT_S
         self._put_control(_BACKFILL_KEY, _Backfill())
 
     # ------------------------------------------------------------------
@@ -423,9 +435,11 @@ class MemoryFileWatcher:
             from durin.config.loader import load_config
             from durin.memory.embedding import provider_from_config
             from durin.memory.vector_index import VectorIndex
+            cfg = load_config()
             self._vector_index = VectorIndex(
                 self._workspace,
-                provider_from_config(load_config(), model=self._embedding_model))
+                provider_from_config(cfg, model=self._embedding_model))
+            self._service_isolation = cfg.memory.embedding.isolation == "service"
         except Exception as exc:  # noqa: BLE001
             logger.warning("file_watcher: vector index init failed: %s", exc)
             self._vector_index = None
@@ -452,6 +466,10 @@ class MemoryFileWatcher:
         vi = self._get_vector_index()
         if vi is None:
             return
+        if self._waits_for_embed_server():
+            # The worker's idle tick queues it again once the wait is over.
+            self._parked_backfill = _Backfill(cursor)
+            return
         from durin.memory.indexer import backfill_missing_vectors
         try:
             result = backfill_missing_vectors(
@@ -468,6 +486,30 @@ class MemoryFileWatcher:
                 )
         if result.cursor is not None:
             self._put_control(_BACKFILL_KEY, _Backfill(result.cursor))
+
+    def _waits_for_embed_server(self) -> bool:
+        """Whether the backfill holds off for the standing embed server.
+
+        With isolation "service" the gateway spawns an embed server at boot
+        that holds the one warm copy of the model; until it is up, an embed
+        here would load a second copy in a local worker process. A backfill
+        is never urgent, so it waits for the server, for at most
+        `_EMBED_SERVER_WAIT_S` after it was requested: with no gateway
+        serving (a TUI-only setup) or a server that never comes up, it then
+        embeds with the local copy.
+        """
+        if not self._service_isolation or time.monotonic() >= self._embed_server_deadline:
+            return False
+        from durin.memory import embed_server
+
+        return embed_server.read_discovery() is None
+
+    def _resume_backfill(self) -> None:
+        """Queue the held-back backfill chunk once it no longer waits."""
+        parked = self._parked_backfill
+        if parked is not None and not self._waits_for_embed_server():
+            self._parked_backfill = None
+            self._put_control(_BACKFILL_KEY, parked)
 
     def _run_rescan(self) -> None:
         """Re-index every memory file the FTS index is behind on — the
@@ -520,6 +562,10 @@ class MemoryFileWatcher:
                         self._reconcile_folders()
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("file_watcher: folder reconcile failed: %s", exc)
+                    try:
+                        self._resume_backfill()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("file_watcher: backfill resume failed: %s", exc)
                     continue
                 if item is _STOP_SENTINEL:
                     return

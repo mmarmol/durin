@@ -127,3 +127,70 @@ def test_service_mode_end_to_end_over_real_http(tmp_path, monkeypatch):
         thread.join(timeout=10)
         with contextlib.suppress(OSError):
             sock.close()
+
+
+def _catalog_reads(monkeypatch) -> list[int]:
+    """Replace fastembed's model catalog with one that knows only
+    `known/model`, counting reads. Reading the real catalog imports
+    fastembed and onnxruntime."""
+    from durin.memory import embedding as embedding_mod
+
+    reads: list[int] = []
+
+    def catalog():
+        reads.append(1)
+        return {"known/model": {"model": "known/model", "dim": 3}}
+
+    monkeypatch.setattr(embedding_mod, "list_supported_models", catalog)
+    return reads
+
+
+def test_a_service_consumer_never_reads_the_model_catalog_while_served(
+    tmp_path, monkeypatch,
+):
+    """Every embed of a service consumer goes to the embed server, which
+    holds the model, so neither building the provider nor a served embed
+    reads the catalog (and so neither loads fastembed or onnxruntime)."""
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    from durin.memory import embed_server
+    from durin.memory.embedding import FastembedProvider
+
+    reads = _catalog_reads(monkeypatch)
+    monkeypatch.setattr(
+        embed_server, "read_discovery",
+        lambda: {"port": 1, "token": "t", "model": "m"})
+    monkeypatch.setattr(
+        embed_server, "service_embed",
+        lambda texts, *, rec: [[7.0] for _ in texts])
+
+    provider = FastembedProvider(model="known/model", isolation="service")
+    assert provider.embed(["a"]) == [[7.0]]
+    assert reads == []
+
+
+def test_a_service_consumer_checks_the_model_when_it_loads_its_own_copy(
+    tmp_path, monkeypatch,
+):
+    """The embed server builds its provider from the same config and then
+    holds the model inline, as a consumer does after falling back: loading
+    that copy refuses an unknown model with the catalog's own message."""
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    from durin.memory.embedding import FastembedProvider
+
+    reads = _catalog_reads(monkeypatch)
+    provider = FastembedProvider(model="unknown/model", isolation="service")
+    assert reads == []
+    provider._isolation = "inline"
+    with pytest.raises(ValueError, match="unknown/model"):
+        provider.embed(["a"])
+    assert provider._model is None
+
+
+@pytest.mark.parametrize("isolation", ["inline", "process"])
+def test_other_isolations_check_the_model_when_built(isolation, monkeypatch):
+    from durin.memory.embedding import FastembedProvider
+
+    reads = _catalog_reads(monkeypatch)
+    with pytest.raises(ValueError, match="unknown/model"):
+        FastembedProvider(model="unknown/model", isolation=isolation)
+    assert reads == [1]
