@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -271,5 +272,32 @@ describe("ThreadComposer — document attachments", () => {
     );
     expect(textarea.value).toBe("read both");
     expect(screen.getAllByTestId("document-chip")).toHaveLength(2);
+  });
+
+  it("clears the size error once an attachment is removed", async () => {
+    // The error asks the user to remove one; after they do, it no longer
+    // describes the message.
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} maxMessageBytes={4096} />);
+
+    await act(async () => {
+      fireEvent.change(fileInputOf(), {
+        target: {
+          files: [
+            docFile("a.pdf", "application/pdf", 2000),
+            docFile("b.pdf", "application/pdf", 2000),
+          ],
+        },
+      });
+    });
+    await waitForDocsReady(2);
+    const textarea = screen.getByLabelText(/message input/i);
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    const [firstChip] = screen.getAllByTestId("document-chip");
+    fireEvent.click(within(firstChip).getByRole("button"));
+
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

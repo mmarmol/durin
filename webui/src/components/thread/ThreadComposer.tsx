@@ -1226,7 +1226,10 @@ export function ThreadComposer({
                 labelTranscribing={t("audio.transcribing")}
                 labelPending={t("audio.processing")}
                 labelRemove={t("thread.composer.remove")}
-                onRemove={() => removeAudio(a.id)}
+                onRemove={() => {
+                  removeAudio(a.id);
+                  setInlineError(null);
+                }}
               />
             ))}
           </div>
@@ -1243,7 +1246,10 @@ export function ThreadComposer({
                 labelRemove={t("thread.composer.remove")}
                 labelReading={t("thread.composer.reading")}
                 formatError={formatDocumentRejection}
-                onRemove={() => removeDocument(doc.id)}
+                onRemove={() => {
+                  removeDocument(doc.id);
+                  setInlineError(null);
+                }}
               />
             ))}
           </div>
