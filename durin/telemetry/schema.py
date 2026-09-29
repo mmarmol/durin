@@ -1954,11 +1954,13 @@ class AutomationsEventMatchedEvent(TypedDict):
     """An inbound channel message was routed by the trigger matcher.
 
     ``action`` is one of: woke (claim-wake resumed a paused run), fired (a
-    trigger matched and a new run was started), queued (a trigger matched
-    but the automation was busy and the event was queued), passed_busy (a
-    trigger matched, the automation was busy, and no queue was wired so the
-    message fell through as a normal turn instead), drained (a run finished
-    and the automation's queue had a fresh event, which was fired next).
+    trigger matched and a new run was started; stamped when the run starts,
+    not when it ends), failed (a trigger matched but the fire raised before
+    the run started), queued (a trigger matched but the automation
+    was busy and the event was queued), passed_busy (a trigger matched, the
+    automation was busy, and no queue was wired so the message fell through
+    as a normal turn instead), drained (a run finished and the automation's
+    queue had a fresh event, which was fired next).
     """
 
     automation: str

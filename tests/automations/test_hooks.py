@@ -38,10 +38,12 @@ class FakeRuntime:
         self.answer_calls: list[tuple] = []
         self._busy = busy or set()
 
-    async def fire(self, name, *, source, task=None, origin=None):
+    async def fire(self, name, *, source, task=None, origin=None, on_started=None):
         self.fire_calls.append((name, source, task, origin))
         if name in self._busy:
             raise AutomationBusyError(name)
+        if on_started is not None:
+            on_started()
         return {"status": "done"}
 
     async def answer_nowait(self, name, run_id, answer):

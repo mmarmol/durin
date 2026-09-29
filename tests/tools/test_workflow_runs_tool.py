@@ -515,8 +515,8 @@ async def test_unknown_action_is_a_clear_error(tool: WorkflowRunsTool):
 # parent_run_id) with its own node -- proving a run's cost includes its
 # children. All timestamps use LOCAL noon so `datetime.fromtimestamp(...).date()`
 # lands on COST_DATE regardless of the machine's timezone (see
-# `_candidate_telemetry_dates`, which is local-time based to match
-# `get_session_logger`'s `date.today()`).
+# `_candidate_telemetry_dates`, which is local-time based to match the
+# local date `TelemetryLogger.log` files each event under).
 
 COST_RUN = "cccccc999999"
 COST_CHILD = "dddddd888888"
@@ -788,6 +788,54 @@ async def test_cost_sums_telemetry_spanning_midnight(tmp_path: Path, monkeypatch
     total_line = next(ln for ln in out.splitlines() if ln.startswith("TOTAL"))
     assert "calls=2" in total_line
     assert "prompt=300" in total_line   # 100 + 200 -- both sides of midnight counted
+
+
+@pytest.mark.asyncio
+async def test_cost_sums_one_visit_whose_telemetry_rolled_over_at_midnight(tmp_path: Path, monkeypatch):
+    # One node visit still running at midnight: its session logger moves to
+    # the next day's file mid-visit, so the visit's calls are split across
+    # two files with the same session key. Written through the real logger
+    # (local-time clock), both halves must land on the same node row.
+    from types import SimpleNamespace
+
+    from durin.telemetry import logger as tlog
+
+    tel_dir = tmp_path / "telemetry"
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
+    run_id = "aaaaaa333333"
+    started_at = datetime(2024, 3, 5, 23, 50, 0).timestamp()
+    finished_at = datetime(2024, 3, 6, 0, 10, 0).timestamp()
+    manifest = _cost_manifest(
+        run_id, "cost-workflow", parent_run_id=None,
+        runs=[{"node_id": "fetch", "iteration": 1, "status": "ok",
+               "session_key": f"workflow:{run_id}:fetch:1"}],
+    )
+    manifest["started_at"] = started_at
+    manifest["finished_at"] = finished_at
+    manifest["ts"] = finished_at
+    _write_manifest(tmp_path, "cost-workflow", run_id, manifest)
+
+    clock = [started_at + 60]
+    monkeypatch.setattr(tlog, "time", SimpleNamespace(time=lambda: clock[0]))
+    tlog.close_all_handles()
+    node_log = tlog.get_session_logger(f"workflow:{run_id}:fetch:1")
+    node_log.log("provider.call", {"model": "claude-sonnet-5", "prompt_tokens": 100,
+                                   "completion_tokens": 10})
+    clock[0] = finished_at - 60
+    node_log.log("provider.call", {"model": "claude-sonnet-5", "prompt_tokens": 200,
+                                   "completion_tokens": 20})
+    tlog.close_all_handles()
+    assert sorted(p.name for p in tel_dir.iterdir()) == [
+        f"workflow_{run_id}_fetch_1_2024-03-05.jsonl",
+        f"workflow_{run_id}_fetch_1_2024-03-06.jsonl",
+    ]
+
+    tool = WorkflowRunsTool(workspace=str(tmp_path))
+    out = await tool.execute(action="cost", run_id=run_id)
+    fetch_line = next(ln for ln in out.splitlines() if ln.strip().startswith("fetch "))
+    assert "calls=2" in fetch_line
+    assert "prompt=300" in fetch_line
+    assert "(unattributed)" not in out
 
 
 @pytest.mark.asyncio
