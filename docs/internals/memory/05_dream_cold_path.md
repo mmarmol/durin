@@ -883,7 +883,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
-| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap per extract and refine pass; the pass yields (extract after the current session, refine after the current chunk) and resumes on the next run. 0 = run to completion. |
+| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap per extract, refine and skill-review pass; the pass yields (extract after the current session, refine after the current chunk, the skill review after the current batch) and resumes on the next run. 0 = run to completion. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |

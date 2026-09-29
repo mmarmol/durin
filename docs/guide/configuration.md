@@ -374,7 +374,7 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `skill_suggestions_enabled` | `true` | Also evaluate manual workspace skills in the daily curation and enqueue proposed edits as suggestions (never auto-applied) |
 | `model_override` | `null` | Dream model (deprecated — prefer `agents.aux_models.memory`); `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |
 | `min_seconds_between_runs` | `300` | Throttle for reactive triggers; `0` disables throttle (daily cron is never throttled) |
-| `max_seconds_per_run` | `3600` | Wall-clock cap per extract and refine pass; the pass yields and resumes on the next run; `0` = run to completion |
+| `max_seconds_per_run` | `3600` | Wall-clock cap per extract, refine and skill-review pass; the pass yields and resumes on the next run; `0` = run to completion |
 | `session_summaries_enabled` | `true` | Nightly pass that writes a session summary for conversations that went idle without compacting or `/new`, so every conversation leaves a searchable record |
 | `session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor |
 | `max_rss_mb` | `0` | RSS cap in MB for the dream worker's process tree; above it the tree is stopped and the dream retries on the next trigger. `0` = automatic (a fraction of total RAM) |

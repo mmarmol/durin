@@ -222,11 +222,13 @@ add).
 ### Judge parse failures — `memory.dream.parse_failure` with `stage=curation|suggestions`
 
 The judge reviews the selected skills in batches (see
-`02_lifecycle_and_curation.md` §4). When a batch's answer cannot be used — cut
-at the output limit (`finish_reason: "length"`, never parsed, since a repaired
-fragment would apply an edit whose replacement text stops short), a provider
-error, or output that cannot be parsed at all (unloadable JSON or wrong
-top-level type — prose instead of the action object) — the pass emits the
+`02_lifecycle_and_curation.md` §4). When a batch's answer cannot be used — one
+the model did not finish (any `finish_reason` but `stop`: cut at the output
+limit, filtered, refused; never parsed, since a repaired fragment would apply
+an edit whose replacement text stops short), a provider error, or output that
+cannot be parsed at all (unloadable JSON, wrong top-level type — prose instead
+of the action object — or `actions` / `observations` that are not lists of
+objects) — the pass emits the
 shared `memory.dream.parse_failure` event with `stage=curation` (auto path) or
 `stage=suggestions` (manual path), carrying `finish_reason` and, for an
 unparseable answer, the parser's `error`. That batch stamps nothing: its skills
@@ -259,7 +261,8 @@ exceeded `skill_curation.DEFAULT_BUDGET` and rolled to a later run — a
 `deferred > 0` reading is the visible sign that curation throughput is behind
 the rate skills are changing — `backfilled` is how many skills got a
 deterministic frontmatter repair this run, `failed` how many selected skills
-got no usable judge answer (left unstamped for the next run), and `stalled`
+got no usable judge answer, their own or because the pass ended before them
+(left unstamped for the next run), and `stalled`
 how many delta skills were set aside after repeated failed reviews. An
 empty-delta run still emits with
 all-zero counts, so a dashboard reading this event can distinguish "curation

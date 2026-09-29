@@ -277,7 +277,7 @@ def run_full_dream(
             summary = curate_catalog(
                 workspace, judge=default_llm_invoke, usage=usage,
                 drift_check=check_upstream_drift,
-                allowlist=list(config.skills.security.allowlist))
+                allowlist=list(config.skills.security.allowlist), max_seconds=max_s)
             skills_improved = summary.get("applied", 0)
             obs = summary.get("observations", {})
             logger.info(
@@ -303,7 +303,8 @@ def run_full_dream(
                 from durin.memory.llm_invoke import default_llm_invoke
 
                 sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
-                sg = suggest_manual_skills(workspace, judge=default_llm_invoke, usage=sg_usage)
+                sg = suggest_manual_skills(workspace, judge=default_llm_invoke, usage=sg_usage,
+                                           max_seconds=max_s)
                 logger.info(
                     "skill suggestions: reviewed={} suggested={} suppressed={} "
                     "failed={} stalled={}",

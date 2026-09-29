@@ -9,9 +9,11 @@ the pass never scales with catalog size. `budget` caps the per-day delta; the
 rest carries over (un-cursored → a later day), logged.
 
 The selected skills are judged in batches whose answer fits the model's output
-limit, each parsed, applied and stamped on its own. A batch whose answer is cut
-or unreadable is split and retried within the pass, down to single skills; a
-skill whose own review keeps failing is set aside instead of re-paid every pass.
+limit, each parsed, applied and stamped on its own. A batch whose answer is
+unfinished, unreadable or refused is split and retried within the pass, down to
+single skills; a skill whose own review failed goes last next pass, and one
+that keeps failing is set aside instead of re-paid every pass. The pass ends
+early when the model keeps failing, or when its time cap is reached.
 
 Judges by CONTENT (Hermes rule: not usage counts). Judge is injected so the core
 is unit-testable without a provider; it returns the provider's response (whose
@@ -31,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
@@ -58,6 +61,12 @@ _BATCH_SKILLS = 8
 _STALL_REVIEWS = 3
 _STALL_DAYS = 7
 _FAILURES = ".curation_failures.json"
+# A pass ends once this many single-skill reviews in a row got no usable
+# answer: past that, the model is failing rather than a skill (an outage, a
+# preset whose answers never parse), and splitting further would only
+# multiply calls that fail. A skill whose review failed goes after the others
+# next pass, so a pass that ends on such skills has reviewed the rest first.
+_FAILED_IN_A_ROW = 3
 logger = logging.getLogger(__name__)
 
 _NO_OBS = {"applied": 0, "declined": 0, "kept": 0}
@@ -74,27 +83,31 @@ def _emit(event: str, **data) -> None:
 
 def _parse_judge_output(raw: object) -> tuple[dict | None, str | None]:
     """Parse the judge's JSON object: ``(object, None)``, or ``(None, error)``
-    when the output cannot be parsed at all (unloadable JSON or wrong
-    top-level type) — distinct from a valid object with empty actions, which
-    is a completed review. Same None-vs-empty contract (and fence-strip +
-    repair tolerance) as the dream-pass parsers.
+    when the output cannot be used at all (unloadable JSON, wrong top-level
+    type, or ``actions`` / ``observations`` that are not lists of objects) —
+    distinct from a valid object with empty actions, which is a completed
+    review. A null list is an empty one.
 
-    Only an answer that does not open as the object itself is unwrapped from a
-    fence, and up to its LAST fence: skills carry code fences, and an `evolve`
-    quoting one would otherwise lose the whole answer to the quoted snippet."""
+    The whole answer goes to JSON repair, which finds the object behind a
+    preamble, a reasoning block or a markdown fence by itself. Nothing is cut
+    out of it first: skills carry code fences, an `evolve` quotes them, and a
+    cut aimed at a fence around the answer can end inside a quoted one — its
+    repair is an edit whose replacement stops there. An answer holding more
+    than one JSON value comes back as a list and is refused, not guessed at."""
     from json_repair import repair_json
 
-    s = str(raw or "").strip()
-    if not s.startswith("{"):
-        m = re.search(r"```(?:json)?\s*(.*)```", s, re.DOTALL)
-        if m:
-            s = m.group(1).strip()
     try:
-        obj = json.loads(repair_json(s))
+        obj = json.loads(repair_json(str(raw or "").strip()))
     except (ValueError, TypeError) as exc:
         return None, str(exc)
     if not isinstance(obj, dict):
         return None, f"expected a JSON object, got {type(obj).__name__}"
+    for key in ("actions", "observations"):
+        items = obj.get(key)
+        if items is None:
+            obj[key] = []
+        elif not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+            return None, f'"{key}" is not a list of objects'
     return obj, None
 
 
@@ -228,19 +241,23 @@ def _text(reply: object) -> str:
 
 def _ask(judge: Callable, prompt: str, stage: str) -> tuple[dict | None, str | None]:
     """One judge call: ``(answer, None)``, or ``(None, why)`` when the answer
-    cannot be used — ``"length"``: cut at the output limit, and never parsed,
-    because a repaired fragment reads as a complete edit whose replacement
-    stops mid-text; ``"error"``: the provider gave up and the text is its
-    error message; ``"unparseable"``. Every unusable answer is reported."""
+    cannot be used. Only an answer the model finished is parsed — finish
+    reason ``"stop"``, or none from a judge that returns bare text. Any other
+    reason (``"length"``: cut at the output limit; a content filter or a
+    refusal; ``"error"``: the provider gave up and the text is its error
+    message) is the ``why``, and the text is never parsed: a repaired
+    fragment reads as a complete edit whose replacement stops mid-text. An
+    answer that does not parse is ``"unparseable"``. Every unusable answer
+    is reported."""
     reply = judge(prompt)
     raw = _text(reply)
     finish = getattr(reply, "finish_reason", None)
-    cut_or_error = finish in ("length", "error")
-    parsed, error = (None, None) if cut_or_error else _parse_judge_output(raw)
+    finished = finish in (None, "stop")
+    parsed, error = _parse_judge_output(raw) if finished else (None, None)
     if parsed is not None:
         return parsed, None
     _emit_curation_parse_failure(stage, raw, finish_reason=finish, error=error)
-    return None, finish if cut_or_error else "unparseable"
+    return None, "unparseable" if finished else str(finish)
 
 
 def _batches(sizes: list[tuple[str, int]]) -> list[list[str]]:
@@ -257,30 +274,60 @@ def _batches(sizes: list[tuple[str, int]]) -> list[list[str]]:
     return out
 
 
-def _review_in_batches(batches: list[list[str]],
-                       review: Callable[[list[str]], str | None]) -> tuple[list[str], list[str]]:
+def _clock() -> float:
+    return time.monotonic()
+
+
+def _review_in_batches(batches: list[list[str]], review: Callable[[list[str]], str | None],
+                       *, stage: str, max_seconds: float = 0) -> tuple[list[str], list[str]]:
     """Run ``review`` (a batch → ``None`` once its answer was used, else why
-    not) over ``batches``. A batch whose answer could not be used is split in
-    halves and retried in this same pass, down to single skills, so one
-    skill's oversized or unreadable review never holds back the others. A
-    provider error ends the pass: splitting cannot help, and more calls would
-    only multiply the outage. Returns the skills reviewed and the skills whose
-    review failed alone."""
+    not) over ``batches``. A batch whose answer could not be used, or whose
+    answer raised while being applied, is split in halves and retried in this
+    same pass, down to single skills, so one skill's review never holds back
+    the others. A provider error is no exception: a request refused for its
+    content (past the model's context, caught by a filter) or answered too
+    slowly for the request timeout fails for that batch and not for a smaller
+    one.
+
+    The pass ends early once ``_FAILED_IN_A_ROW`` single-skill reviews in a row
+    got nothing usable — the model, not a skill, is failing: an outage, a
+    preset whose answers never parse — or once ``max_seconds`` (0: no cap)
+    have passed; the skills not reached carry over. Returns the skills
+    reviewed and the skills whose review failed alone."""
+    started = _clock()
     done: list[str] = []
     failed: list[str] = []
+    in_a_row = 0
     queue = list(batches)
     while queue:
+        if max_seconds and _clock() - started >= max_seconds:
+            remaining = sum(len(b) for b in queue)
+            logger.warning("%s: max_seconds_per_run (%ss) reached; %d skill(s) carry over",
+                           stage, max_seconds, remaining)
+            _emit("memory.dream.max_seconds_reached", kind=stage, max_seconds=max_seconds,
+                  elapsed_ms=int((_clock() - started) * 1000), remaining=remaining)
+            break
         batch = queue.pop(0)
-        why = review(batch)
+        try:
+            why = review(batch)
+        except Exception:  # noqa: BLE001 — one answer's malformed field must not end the pass
+            logger.exception("%s: applying the answer for %s failed", stage, batch)
+            why = "raised"
         if why is None:
             done += batch
-        elif why == "error":
-            break
+            in_a_row = 0
         elif len(batch) > 1:
             half = (len(batch) + 1) // 2
             queue[:0] = [batch[:half], batch[half:]]
         else:
             failed += batch
+            in_a_row += 1
+            if in_a_row >= _FAILED_IN_A_ROW:
+                logger.warning(
+                    "%s: %d single-skill reviews in a row got no usable answer; the model "
+                    "is failing, not a skill — %d skill(s) carry over", stage, in_a_row,
+                    sum(len(b) for b in queue))
+                break
     return done, failed
 
 
@@ -303,25 +350,27 @@ def _read_failures(workspace: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _set_aside(workspace: Path, stage: str, names: list[str]) -> set[str]:
-    """The skills in ``names`` whose review failed alone ``_STALL_REVIEWS``
-    passes in a row on their current body and rules, the last one less than
-    ``_STALL_DAYS`` days ago."""
+def _triage(workspace: Path, stage: str, names: list[str]) -> tuple[list[str], int]:
+    """The skills of ``names`` to review this pass, and how many are set
+    aside: those whose review failed alone ``_STALL_REVIEWS`` passes in a row
+    on their current body and rules, the last one less than ``_STALL_DAYS``
+    days ago. A skill whose last review failed goes after the others."""
     records = _read_failures(workspace).get(stage)
     if not isinstance(records, dict):
-        return set()
-    out: set[str] = set()
+        return names, 0
+    keep: list[str] = []
     for name in names:
         rec = records.get(name)
-        if not isinstance(rec, dict) or int(rec.get("failures", 0)) < _STALL_REVIEWS:
-            continue
-        try:
-            last = date.fromisoformat(str(rec.get("at")))
-        except ValueError:
-            continue
-        if (_today() - last).days < _STALL_DAYS and rec.get("key") == _review_key(workspace, name):
-            out.add(name)
-    return out
+        if isinstance(rec, dict) and int(rec.get("failures", 0)) >= _STALL_REVIEWS:
+            try:
+                last = date.fromisoformat(str(rec.get("at")))
+            except ValueError:
+                last = None
+            if (last and (_today() - last).days < _STALL_DAYS
+                    and rec.get("key") == _review_key(workspace, name)):
+                continue
+        keep.append(name)
+    return sorted(keep, key=lambda n: n in records), len(names) - len(keep)
 
 
 def _record_reviews(workspace: Path, stage: str, *, done: list[str], failed: list[str]) -> None:
@@ -353,8 +402,9 @@ def _record_reviews(workspace: Path, stage: str, *, done: list[str], failed: lis
 def curate_catalog(workspace, *, judge: Callable,
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET,
                    drift_check: Callable | None = None,
-                   allowlist=None) -> dict:
-    """One delta-curation pass.
+                   allowlist=None, max_seconds: float = 0) -> dict:
+    """One delta-curation pass. ``max_seconds`` (0: no cap) stops it starting
+    new batches; what it did not reach carries over.
 
     Returns {'reviewed', 'applied', 'deferred', 'observations'}, plus
     'failed' (selected skills no usable answer covered — left unstamped for
@@ -397,12 +447,11 @@ def curate_catalog(workspace, *, judge: Callable,
                 if int(r.get("id", 0)) not in waiting and not r.get("stalled_at")]
     delta += sorted(n for n in {r.get("skill") for r in open_obs}
                     if n in auto and n not in delta)
-    set_aside = _set_aside(workspace, "curation", delta)
-    delta = [n for n in delta if n not in set_aside]
-    stalled = {"stalled": len(set_aside)} if set_aside else {}
+    delta, set_aside = _triage(workspace, "curation", delta)
+    stalled = {"stalled": set_aside} if set_aside else {}
     if not delta:
         _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
-             backfilled=backfilled, failed=0, stalled=len(set_aside))
+             backfilled=backfilled, failed=0, stalled=set_aside)
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
                 "observations": {**_NO_OBS, "open": len(so.open_observations(workspace))},
                 "principles": len(so.active_principles(workspace)), **stalled}
@@ -445,8 +494,6 @@ def curate_catalog(workspace, *, judge: Callable,
         for r in so.suppressed_observations(workspace)
     ]
 
-    principles = so.active_principles(workspace)
-
     # User hand-edits since the last curation: dream must treat these as
     # intentional — evolve only for a concrete reason, never revert silently.
     user_edits = {
@@ -462,11 +509,14 @@ def curate_catalog(workspace, *, judge: Callable,
         nonlocal applied, cross_skill_open
         in_scope = set(batch) | ({"all"} if cross_skill_open else set())
         obs_shown = [r for r in open_obs if r.get("skill") in in_scope]
+        # Read per batch: a principle an earlier batch's answer added or
+        # retired is in force for this one.
         prompt = _build_prompt(
             {n: catalog[n] for n in batch}, usage or {},
             {n: upstream[n] for n in batch if n in upstream}, obs_shown,
             [d for d in declined if d["skill"] in set(batch) | {"all"}],
-            principles, {n: user_edits[n] for n in batch if n in user_edits},
+            so.active_principles(workspace),
+            {n: user_edits[n] for n in batch if n in user_edits},
             workspace=workspace,
             bundles=_bundle_views(workspace, sorted(batch, key=lambda n: n not in with_obs)))
         parsed, why = _ask(judge, prompt, "curation")
@@ -513,7 +563,8 @@ def curate_catalog(workspace, *, judge: Callable,
 
     sizes = [(n, len(catalog[n]) + sum(len(t) for t in _bundle_view(workspace, n).values()))
              for n in selected]
-    done, failed = _review_in_batches(_batches(sizes), review)
+    done, failed = _review_in_batches(_batches(sizes), review, stage="curation",
+                                      max_seconds=max_seconds)
     _record_reviews(workspace, "curation", done=done, failed=failed)
     unreviewed = len(selected) - len(done)
     if unreviewed:
@@ -521,7 +572,7 @@ def curate_catalog(workspace, *, judge: Callable,
             "curation: no usable judge answer for %d of %d selected skill(s); "
             "left unstamped so they re-enter the next run", unreviewed, len(selected))
     _emit("skill.curation_run", reviewed=len(selected), applied=applied,
-         deferred=deferred, backfilled=backfilled, failed=unreviewed, stalled=len(set_aside))
+         deferred=deferred, backfilled=backfilled, failed=unreviewed, stalled=set_aside)
     return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
             "backfilled": backfilled,
             **({"failed": unreviewed, "judge_parse_failed": True} if unreviewed else {}),
@@ -692,13 +743,14 @@ def _apply_actions(workspace: Path, actions: list, scope: list[str],
 
 def suggest_manual_skills(workspace, *, judge: Callable,
                           usage: dict | None = None,
-                          budget: int = DEFAULT_BUDGET) -> dict:
+                          budget: int = DEFAULT_BUDGET, max_seconds: float = 0) -> dict:
     """Curation for MANUAL skills: run the same judge, but ENQUEUE its actions as
     suggestions for user review instead of applying them. The auto path
     (curate_catalog) is untouched. Conclusions covered by a live rejection
     tombstone are suppressed. Evaluation state is tracked in a sidecar cursor so
     manual skill files are never written. Reviewed in batches like
-    curate_catalog, with the same split-and-retry and set-aside."""
+    curate_catalog, with the same split-and-retry, early end, time cap and
+    set-aside."""
     from durin.agent import skill_suggestions as sg
 
     workspace = Path(workspace)
@@ -707,9 +759,8 @@ def suggest_manual_skills(workspace, *, judge: Callable,
         if s["mode"] == "manual" and s["source"] == "workspace"
     ]
     delta = [n for n in manual if sg.needs_suggestion(workspace, n)]
-    set_aside = _set_aside(workspace, "suggestions", delta)
-    delta = [n for n in delta if n not in set_aside]
-    stalled = {"stalled": len(set_aside)} if set_aside else {}
+    delta, set_aside = _triage(workspace, "suggestions", delta)
+    stalled = {"stalled": set_aside} if set_aside else {}
     if not delta:
         return {"reviewed": 0, "suggested": 0, "suppressed": 0, **stalled}
 
@@ -746,7 +797,8 @@ def suggest_manual_skills(workspace, *, judge: Callable,
             sg.mark_suggested(workspace, n)
         return None
 
-    done, failed = _review_in_batches(_batches([(n, len(catalog[n])) for n in selected]), review)
+    done, failed = _review_in_batches(_batches([(n, len(catalog[n])) for n in selected]), review,
+                                      stage="suggestions", max_seconds=max_seconds)
     _record_reviews(workspace, "suggestions", done=done, failed=failed)
     unreviewed = len(selected) - len(done)
     if unreviewed:

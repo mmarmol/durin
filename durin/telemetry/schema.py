@@ -1535,9 +1535,10 @@ class MemoryDreamSkillSignalsEvent(TypedDict):
 class MemoryDreamMaxSecondsReachedEvent(TypedDict):
     """A pass hit ``memory.dream.max_seconds_per_run`` and yielded. The
     extract pass resumes by per-session cursor; the refine pass by its
-    verdict cache (``judged`` so far, ``remaining`` candidates)."""
+    verdict cache (``judged`` so far, ``remaining`` candidates); the skill
+    review passes leave the ``remaining`` skills unstamped for the next run."""
 
-    kind: str  # "extract" | "refine"
+    kind: str  # "extract" | "refine" | "curation" | "suggestions"
     max_seconds: int
     elapsed_ms: int
     sessions_done: NotRequired[int]

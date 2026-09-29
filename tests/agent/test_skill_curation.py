@@ -362,6 +362,27 @@ def test_an_answer_quoting_fenced_code_is_not_mistaken_for_a_fenced_answer(tmp_p
     assert "ls -lah" in (ss.read_skill_content(ws, "shell2") or "")
 
 
+def test_a_fence_before_the_answer_does_not_cut_the_code_it_quotes(tmp_path):
+    """Reasoning or prose ahead of the answer may name a fence; the answer
+    after it quotes the skill's code block. A cut from that first fence to
+    the answer's last one ended inside the replacement, and repaired, applied
+    an edit that dropped the closing fence and all that followed it."""
+    import json
+    ws = tmp_path / "ws"
+    _mk(ws, "lister", "Run:\n\n```bash\nls\n```\n\nThen report the files.")
+    answer = json.dumps({"actions": [{
+        "type": "evolve", "name": "lister", "old": "```bash\nls\n```",
+        "new": "```bash\nls -la\n```", "rationale": "show hidden files"}],
+        "observations": []})
+
+    res = curate_catalog(ws, judge=lambda p: (
+        "<think>The skill's ```bash block only runs ls</think>\n" + answer))
+
+    assert "judge_parse_failed" not in res and res["applied"] == 1
+    assert "```bash\nls -la\n```\n\nThen report the files." in (
+        ss.read_skill_content(ws, "lister") or "")
+
+
 def test_curate_survives_evolve_action_missing_its_text(tmp_path, monkeypatch):
     """A judge action missing `old`/`new` must cost one action, not the pass.
 
