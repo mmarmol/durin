@@ -74,13 +74,17 @@ class MemoryDiagnosticsResult(Result):
     gc_counts: list[int] = []
     # glibc allocator view (0.0 = not glibc/unknown). rss_mb far above
     # malloc_in_use_mb = freed memory retained in arenas (the janitor's
-    # trim territory), not live-object growth.
+    # trim territory), not live-object growth. malloc_resident_mb is the
+    # part of malloc_system_mb in RAM (the other two keep counting pages a
+    # trim returned): malloc_resident_mb - malloc_in_use_mb is what a trim
+    # can still give back.
     malloc_system_mb: float = 0.0
     malloc_in_use_mb: float = 0.0
     malloc_free_mb: float = 0.0
+    malloc_resident_mb: float = 0.0
     # Resident memory outside glibc malloc (CPython object arenas, native
     # libraries' own mappings, thread stacks, code): growth here is out of
-    # the janitor's reach. A floor (rss minus the arenas); 0.0 = unknown.
+    # the janitor's reach. rss minus malloc_resident_mb; 0.0 = unknown.
     non_malloc_mb: float = 0.0
     # Host context so a reader can judge headroom without a second call.
     total_mb: float

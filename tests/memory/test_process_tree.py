@@ -58,14 +58,17 @@ def test_memory_snapshot_has_malloc_fields() -> None:
         assert snap["malloc_system_mb"] > 0.0
         assert snap["malloc_in_use_mb"] > 0.0
         assert snap["malloc_free_mb"] >= 0.0
+        assert snap["malloc_resident_mb"] > 0.0
     else:
         assert snap["malloc_system_mb"] == 0.0
         assert snap["malloc_in_use_mb"] == 0.0
         assert snap["malloc_free_mb"] == 0.0
+        assert snap["malloc_resident_mb"] == 0.0
 
 
-def _malloc(system_mb: float) -> dict:
-    return {"system_mb": system_mb, "in_use_mb": 170.0, "free_mb": system_mb - 170.0}
+def _malloc(system_mb: float, resident_mb: float | None = None) -> dict:
+    return {"system_mb": system_mb, "in_use_mb": 170.0, "free_mb": system_mb - 170.0,
+            "resident_mb": system_mb if resident_mb is None else resident_mb}
 
 
 def test_memory_snapshot_reports_resident_memory_outside_malloc(monkeypatch) -> None:
@@ -76,13 +79,45 @@ def test_memory_snapshot_reports_resident_memory_outside_malloc(monkeypatch) -> 
 
     monkeypatch.setattr("durin.utils.process_tree.tree_rss_mb", lambda: (900.0, 0.0))
     monkeypatch.setattr("durin.utils.glibc_malloc.malloc_stats_mb", lambda: _malloc(420.0))
-    assert memory_snapshot()["non_malloc_mb"] == 480.0
+    snap = memory_snapshot()
+    assert snap["non_malloc_mb"] == 480.0
+    assert snap["malloc_resident_mb"] == 420.0
 
-    # After a trim the arenas still count the released pages, so the
-    # difference can dip below zero: it is a floor, never negative.
+    # After a trim the arenas still count the released pages (system 420)
+    # while only 190MB of them is resident: what lives outside malloc is
+    # rss minus the resident part, not minus the books.
     monkeypatch.setattr("durin.utils.process_tree.tree_rss_mb", lambda: (300.0, 0.0))
+    monkeypatch.setattr(
+        "durin.utils.glibc_malloc.malloc_stats_mb", lambda: _malloc(420.0, resident_mb=190.0))
+    assert memory_snapshot()["non_malloc_mb"] == 110.0
+
+    # Residency unreadable: unknown, not a figure that hides trimmed pages.
+    monkeypatch.setattr(
+        "durin.utils.glibc_malloc.malloc_stats_mb", lambda: _malloc(420.0, resident_mb=0.0))
     assert memory_snapshot()["non_malloc_mb"] == 0.0
 
     # No allocator signal (not glibc): unknown, not "all of rss".
     monkeypatch.setattr("durin.utils.glibc_malloc.malloc_stats_mb", lambda: None)
-    assert memory_snapshot()["non_malloc_mb"] == 0.0
+    snap = memory_snapshot()
+    assert snap["non_malloc_mb"] == 0.0
+    assert snap["malloc_resident_mb"] == 0.0
+
+
+def test_a_trim_does_not_move_the_memory_outside_malloc() -> None:
+    """On real glibc: a trim returns freed arena pages to the OS and nothing
+    else, so the resident memory outside malloc must read the same on both
+    sides of it (instead of dropping by what the trim released)."""
+    from durin.utils.glibc_malloc import malloc_stats_mb, malloc_trim
+    from durin.utils.process_tree import memory_snapshot
+
+    if malloc_stats_mb() is None:
+        return
+    blocks = [bytearray(64 * 1024) for _ in range(1600)]     # ~100MB, touched
+    live = blocks[1::2]
+    del blocks
+    before = memory_snapshot()
+    malloc_trim()
+    after = memory_snapshot()
+    assert before["rss_mb"] - after["rss_mb"] >= 40            # the trim did release
+    assert abs(after["non_malloc_mb"] - before["non_malloc_mb"]) <= 10
+    del live

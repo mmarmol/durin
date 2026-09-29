@@ -268,40 +268,53 @@ _memory_telemetry_started = threading.Event()
 # next periodic tick.
 _malloc_trim_requested = threading.Event()
 
-# The janitor calls malloc_trim(0) once the freed memory the arenas have
-# piled up since the last trim reaches this share of the live heap, and never
-# for less than the floor. Relative, because what counts as waste scales with
-# the heap: a gateway holding ~240MB freed against ~170MB live wastes more
-# than half its heap yet never reaches a fixed half-gigabyte bar. Since the
-# last trim, because mallinfo2 keeps counting trimmed pages as free
+# The janitor calls malloc_trim(0) once the freed memory the arenas keep
+# resident has grown, since the last trim, to this share of the live heap,
+# and never for less than the floor. Relative, because what counts as waste
+# scales with the heap: a gateway holding ~240MB freed against ~170MB live
+# wastes more than half its heap yet never reaches a fixed half-gigabyte bar.
+# Resident, because mallinfo2 keeps counting trimmed pages as free
 # (malloc_trim madvises them away but leaves the chunks in the arena's
-# books), so after one large trim the free figure stays high and an absolute
-# bar re-trims on every pass for a few MB. The floor is also what makes a
-# release worth an INFO line.
+# books): after a trim its free figure stays put whether or not reuse pages
+# the chunks back in. Since the last trim, because the sub-page leftovers a
+# trim cannot release stay resident and must not re-trigger every pass. The
+# floor is also what makes a release worth an INFO line.
 _MALLOC_TRIM_HELD_RATIO = 0.5
 _MALLOC_TRIM_MIN_MB = 64.0
+
+
+def _held_mb(resident_mb: float, in_use_mb: float, free_mb: float) -> float:
+    """Freed memory the arenas keep in RAM: what a trim can hand back.
+    Without a residency reading (resident 0.0), the arenas' freed total,
+    which also counts pages an earlier trim already returned."""
+    if resident_mb <= 0.0:
+        return free_mb
+    return max(0.0, resident_mb - in_use_mb)
 
 
 class _MallocJanitor:
     """When to trim glibc arenas, from one ``memory_snapshot`` per pass."""
 
     def __init__(self) -> None:
-        # The lowest malloc_free_mb seen since the last trim: free memory
-        # above it has been freed since, and is resident until trimmed. Zero
-        # before the first trim, so all of the process' freed memory counts.
-        self._free_floor_mb = 0.0
+        # The lowest resident freed memory seen since the last trim: what
+        # rises above it was freed, or paged back in by reuse, since then.
+        # Zero before the first trim, so all of it counts.
+        self._held_floor_mb = 0.0
 
     def maybe_trim(self, snapshot: dict, *, force: bool = False) -> dict | None:
-        """Trim when enough freed memory has piled up since the last trim
-        (always, with ``force``). Returns the ``gateway.memory.trimmed``
+        """Trim when enough freed memory has become resident since the last
+        trim (always, with ``force``). Returns the ``gateway.memory.trimmed``
         payload, or None when no trim ran (below the bar, or no glibc)."""
         from durin.utils import glibc_malloc, process_tree
 
         if snapshot.get("malloc_system_mb", 0.0) <= 0.0:
             return None
-        free_mb = snapshot.get("malloc_free_mb", 0.0)
-        self._free_floor_mb = min(self._free_floor_mb, free_mb)
-        grown_mb = free_mb - self._free_floor_mb
+        held_mb = _held_mb(
+            snapshot.get("malloc_resident_mb", 0.0),
+            snapshot.get("malloc_in_use_mb", 0.0),
+            snapshot.get("malloc_free_mb", 0.0))
+        self._held_floor_mb = min(self._held_floor_mb, held_mb)
+        grown_mb = held_mb - self._held_floor_mb
         bar_mb = max(
             _MALLOC_TRIM_MIN_MB,
             _MALLOC_TRIM_HELD_RATIO * snapshot.get("malloc_in_use_mb", 0.0))
@@ -309,11 +322,13 @@ class _MallocJanitor:
             return None
         released = glibc_malloc.malloc_trim()
         after = glibc_malloc.malloc_stats_mb()
-        self._free_floor_mb = after["free_mb"] if after else free_mb
+        self._held_floor_mb = (
+            _held_mb(after["resident_mb"], after["in_use_mb"], after["free_mb"])
+            if after else held_mb)
         return {
             "rss_before_mb": snapshot.get("rss_mb", 0.0),
             "rss_after_mb": process_tree.process_rss_mb(),
-            "retained_mb": round(free_mb, 1),
+            "retained_mb": round(snapshot.get("malloc_free_mb", 0.0), 1),
             "grown_mb": round(grown_mb, 1),
             "forced": force,
             "released": released,

@@ -3796,6 +3796,11 @@
             "title": "Malloc In Use Mb",
             "type": "number"
           },
+          "malloc_resident_mb": {
+            "default": 0.0,
+            "title": "Malloc Resident Mb",
+            "type": "number"
+          },
           "malloc_system_mb": {
             "default": 0.0,
             "title": "Malloc System Mb",

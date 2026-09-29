@@ -258,10 +258,12 @@ async def test_memory_diagnostics_serves_the_memory_outside_malloc(svc, local, m
     monkeypatch.setattr("durin.utils.process_tree.memory_snapshot", lambda: {
         "rss_mb": 900.0, "children_mb": 0.0, "threads": 12, "gc_counts": [0, 0, 0],
         "malloc_system_mb": 420.0, "malloc_in_use_mb": 170.0, "malloc_free_mb": 250.0,
-        "non_malloc_mb": 480.0, "total_mb": 2000.0, "available_mb": 900.0,
+        "malloc_resident_mb": 190.0, "non_malloc_mb": 710.0,
+        "total_mb": 2000.0, "available_mb": 900.0,
     })
     out = await svc.memory_diagnostics(MemoryDiagnosticsQuery(), local)
-    assert out.non_malloc_mb == 480.0
+    assert out.malloc_resident_mb == 190.0
+    assert out.non_malloc_mb == 710.0
 
 
 async def test_logs_list_telemetry_reads_the_instance_directory(svc, local, monkeypatch, tmp_path):

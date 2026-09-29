@@ -189,32 +189,47 @@ On glibc the snapshot includes the allocator's live-vs-retained split
 `mallinfo2`; 0.0 elsewhere), which separates "objects are growing" from
 "the allocator retains freed pages" without attaching a debugger — the
 distinction that resolved a box diagnosis of a 3.8GB-resident gateway holding
-only ~190MB live. `non_malloc_mb` is the resident memory the allocator does
-not account for — RSS minus `malloc_system_mb`, floored at 0.0: CPython's
+only ~190MB live. `mallinfo2` cannot say what is in RAM: `malloc_trim`
+returns page runs of free chunks to the OS but leaves the chunks in the
+arena's books, so `malloc_system_mb` and `malloc_free_mb` keep counting the
+returned pages, and pages that later allocations touch again look the same
+to them. `malloc_resident_mb` is the part of `malloc_system_mb` actually in
+RAM, read page by page: the arenas are located from `/proc/self/maps` (the
+brk `[heap]` for the main arena; every other arena's heaps sit at 64 MiB
+boundaries and are confirmed by their own headers, read through
+`/proc/self/mem`), residency is counted with `mincore`, and mmap'd blocks
+count as resident. The reading is kept only when the heaps found add up to
+`mallinfo2`'s arena bytes (with slack for arenas growing mid-walk);
+otherwise it is 0.0 (unknown), as it is off glibc. The snapshot then decomposes as RSS = `malloc_in_use_mb` + resident
+freed memory (`malloc_resident_mb - malloc_in_use_mb`, what a trim can still
+give back) + `non_malloc_mb`. `non_malloc_mb` is the resident memory the
+allocator does not account for — RSS minus `malloc_resident_mb`: CPython's
 object arenas (mapped directly, not malloc'd), native libraries that map
 their own memory, thread stacks, mapped code. Growth there is invisible in
-the malloc split and out of reach of any trim. It is a lower bound: a trim
-returns pages to the OS while the arenas keep counting them, so right after
-one RSS can sit below `malloc_system_mb`.
+the malloc split and out of reach of any trim, and a trim does not move it.
 
 The same tick acts as a malloc janitor (`_MallocJanitor` in
 `durin/service/wiring.py`): it calls `malloc_trim(0)`, which releases pages
 of already-freed arena chunks only — live allocations are untouchable by
-design. The trigger is relative and counts only memory freed since the last
-trim: it trims once that growth reaches half of `malloc_in_use_mb`, and
+design. The trigger is resident freed memory that has piled up since the
+last trim: it trims once that growth reaches half of `malloc_in_use_mb`, and
 never for less than 64 MB. Relative, because what counts as waste scales
-with the live heap. Since the last trim, because `mallinfo2` keeps counting
-trimmed pages as free, so `malloc_free_mb` stays high after a trim and an
-absolute bar would re-trim every pass for a few MB; the janitor tracks the
-lowest `malloc_free_mb` seen since its last trim and measures growth above
-it. `request_malloc_trim()` wakes the janitor for an immediate forced pass —
+with the live heap. Resident, because only resident pages are worth a trim
+and `malloc_free_mb` cannot tell them from returned ones: after a trim it
+stays put while reuse pages the chunks back in. Since the last trim,
+because the sub-page leftovers a trim cannot release stay resident; the
+janitor tracks the lowest resident freed memory seen since its last trim and
+measures growth above it, so memory paged back in by reuse, or freed anew,
+is trimmed once it adds up, and a few MB coming back is left for later.
+Without a residency reading the janitor falls back to `malloc_free_mb`.
+`request_malloc_trim()` wakes the janitor for an immediate forced pass —
 the voice idle sweep calls it after unloading an engine, whose memory glibc
 would otherwise keep resident until the next tick. Each trim emits
-`gateway.memory.trimmed` (observed RSS before/after, the freed total and
-the part freed since the last trim, whether it was forced); the log line is
-INFO only when the trim gave back at least 64 MB of RSS, DEBUG otherwise.
-The ctypes helpers live in `durin/utils/glibc_malloc.py` and no-op off
-glibc.
+`gateway.memory.trimmed` (observed RSS before/after, the arenas' freed
+total as `mallinfo2` books it, the resident freed memory that piled up since
+the last trim, whether it was forced); the log line is INFO only when the
+trim gave back at least 64 MB of RSS, DEBUG otherwise. The ctypes helpers
+live in `durin/utils/glibc_malloc.py` and no-op off glibc.
 
 Tools call `emit_tool_event(event_type, data)` from
 `durin/agent/tools/_telemetry.py`. This free function:

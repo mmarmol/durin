@@ -1,6 +1,7 @@
-"""Gateway malloc janitor: trim glibc arenas when the freed memory they have
-piled up since the last trim is large next to the live heap, report what the
-trim recovered, and trim at once when asked (after a voice engine unload)."""
+"""Gateway malloc janitor: trim glibc arenas when the freed memory they keep
+resident has grown, since the last trim, to a large share of the live heap;
+report what the trim recovered; and trim at once when asked (after a voice
+engine unload)."""
 from __future__ import annotations
 
 import threading
@@ -11,38 +12,53 @@ from loguru import logger
 import durin.service.wiring as wiring
 
 
-def _snapshot(free_mb: float, in_use_mb: float = 170.0, rss_mb: float = 900.0) -> dict:
+def _snapshot(held_mb: float, in_use_mb: float = 170.0, rss_mb: float = 900.0,
+              free_mb: float | None = None) -> dict:
+    """``held_mb`` is the freed memory the arenas keep resident; ``free_mb``
+    what mallinfo2 counts as free, which also includes pages an earlier trim
+    already handed back (so it is never below ``held_mb``)."""
+    free = held_mb if free_mb is None else free_mb
     return {
         "rss_mb": rss_mb,
-        "malloc_system_mb": in_use_mb + free_mb,
+        "malloc_system_mb": in_use_mb + free,
         "malloc_in_use_mb": in_use_mb,
-        "malloc_free_mb": free_mb,
+        "malloc_free_mb": free,
+        "malloc_resident_mb": in_use_mb + held_mb,
     }
 
 
 @pytest.fixture
 def glibc(monkeypatch):
-    """A fake glibc whose mallinfo2 keeps reporting trimmed pages as free,
-    as the real one does: malloc_trim madvises page runs of free chunks away
-    but leaves the chunks (and so the free figure) in the arena's books."""
-    state = {"free_mb": 0.0, "trims": 0}
+    """A fake glibc that behaves like the real one around a trim:
+    malloc_trim hands the resident page runs of free chunks back to the OS
+    (all but ``slack_mb`` of sub-page leftovers) but leaves the chunks, and
+    so mallinfo2's free figure, in the arena's books."""
+    state = {"held_mb": 0.0, "free_mb": 0.0, "in_use_mb": 170.0,
+             "slack_mb": 5.0, "trims": 0}
 
     def _trim() -> bool:
         state["trims"] += 1
+        state["held_mb"] = min(state["held_mb"], state["slack_mb"])
         return True
 
     monkeypatch.setattr("durin.utils.glibc_malloc.malloc_trim", _trim)
     monkeypatch.setattr(
         "durin.utils.glibc_malloc.malloc_stats_mb",
-        lambda: {"system_mb": 0.0, "in_use_mb": 0.0, "free_mb": state["free_mb"]},
+        lambda: {"system_mb": state["in_use_mb"] + state["free_mb"],
+                 "in_use_mb": state["in_use_mb"], "free_mb": state["free_mb"],
+                 "resident_mb": state["in_use_mb"] + state["held_mb"]},
     )
     monkeypatch.setattr("durin.utils.process_tree.process_rss_mb", lambda: 700.0)
     return state
 
 
-def _pass(janitor, glibc, free_mb: float, **kw):
-    glibc["free_mb"] = free_mb
-    return janitor.maybe_trim(_snapshot(free_mb, **kw))
+def _pass(janitor, glibc, held_mb: float, free_mb: float | None = None,
+          in_use_mb: float = 170.0, **kw):
+    glibc["held_mb"] = held_mb
+    glibc["free_mb"] = held_mb if free_mb is None else free_mb
+    glibc["in_use_mb"] = in_use_mb
+    return janitor.maybe_trim(
+        _snapshot(held_mb, in_use_mb=in_use_mb, free_mb=free_mb, **kw))
 
 
 def test_no_trim_without_glibc_signal(monkeypatch) -> None:
@@ -50,7 +66,8 @@ def test_no_trim_without_glibc_signal(monkeypatch) -> None:
         "durin.utils.glibc_malloc.malloc_trim",
         lambda: (_ for _ in ()).throw(AssertionError("must not trim")))
     snapshot = {"rss_mb": 3000.0, "malloc_system_mb": 0.0,
-                "malloc_in_use_mb": 0.0, "malloc_free_mb": 0.0}
+                "malloc_in_use_mb": 0.0, "malloc_free_mb": 0.0,
+                "malloc_resident_mb": 0.0}
     assert wiring._MallocJanitor().maybe_trim(snapshot) is None
     assert wiring._MallocJanitor().maybe_trim(snapshot, force=True) is None
 
@@ -71,35 +88,60 @@ def test_small_retention_is_left_alone(glibc) -> None:
     assert glibc["trims"] == 0
 
 
-def test_no_retrim_after_a_spike_until_new_memory_is_freed(glibc) -> None:
+def test_pages_reused_after_a_trim_are_trimmed_again_while_free_stays_flat(glibc) -> None:
+    """Between two samples the heap reuses the trimmed chunks (paging them
+    back in) and frees them again. mallinfo2's free figure never moves, yet
+    the pages are resident again, and the janitor must see and trim them."""
+    janitor = wiring._MallocJanitor()
+    assert _pass(janitor, glibc, 250.0) is not None
+    assert _pass(janitor, glibc, 190.0, free_mb=250.0) is not None
+    assert glibc["trims"] == 2
+
+
+def test_after_a_spike_a_small_comeback_waits_until_it_adds_up(glibc) -> None:
     janitor = wiring._MallocJanitor()
     assert _pass(janitor, glibc, 1500.0) is not None
-    # mallinfo2 still reports the trimmed pages as free; the few MB freed
-    # since are not worth another trim every pass.
-    assert _pass(janitor, glibc, 1510.0) is None
-    assert _pass(janitor, glibc, 1532.0) is None
+    # mallinfo2 still reports the trimmed 1.5GB as free; only 8-32MB per
+    # pass comes back resident: not worth a trim every pass...
+    assert _pass(janitor, glibc, 25.0, free_mb=1500.0) is None
+    assert _pass(janitor, glibc, 50.0, free_mb=1500.0) is None
     assert glibc["trims"] == 1
-    # The heap reuses the trimmed chunks (paging them back in), then frees
-    # them again: that is fresh resident retention, and it is trimmed.
-    assert _pass(janitor, glibc, 1000.0) is None
-    assert _pass(janitor, glibc, 1400.0) is not None
+    # ...until it reaches the bar (half of the 170MB live heap).
+    assert _pass(janitor, glibc, 95.0, free_mb=1500.0) is not None
     assert glibc["trims"] == 2
+
+
+def test_freed_memory_a_trim_cannot_release_does_not_retrigger(glibc) -> None:
+    # Sub-page leftovers stay resident whatever the trim does; they must
+    # not read as fresh retention on every later pass.
+    glibc["slack_mb"] = 120.0
+    janitor = wiring._MallocJanitor()
+    assert _pass(janitor, glibc, 400.0) is not None
+    assert _pass(janitor, glibc, 120.0, free_mb=400.0) is None
+    assert glibc["trims"] == 1
+
+
+def test_without_a_residency_reading_the_books_decide(glibc) -> None:
+    # malloc_resident_mb 0.0 = residency unreadable: fall back to the
+    # arenas' freed total.
+    snapshot = {**_snapshot(240.0), "malloc_resident_mb": 0.0}
+    glibc["held_mb"] = glibc["free_mb"] = 240.0
+    assert wiring._MallocJanitor().maybe_trim(snapshot) is not None
 
 
 def test_forced_trim_ignores_the_bar(glibc) -> None:
     assert _pass(wiring._MallocJanitor(), glibc, 10.0) is None
-    glibc["free_mb"] = 10.0
     assert wiring._MallocJanitor().maybe_trim(_snapshot(10.0), force=True) is not None
     assert glibc["trims"] == 1
 
 
 def test_trim_event_reports_recovery(glibc) -> None:
-    event = _pass(wiring._MallocJanitor(), glibc, 1500.0, rss_mb=3600.0)
+    event = _pass(wiring._MallocJanitor(), glibc, 1300.0, free_mb=1500.0, rss_mb=3600.0)
     assert event == {
         "rss_before_mb": 3600.0,
         "rss_after_mb": 700.0,
         "retained_mb": 1500.0,
-        "grown_mb": 1500.0,
+        "grown_mb": 1300.0,
         "forced": False,
         "released": True,
     }
@@ -127,10 +169,10 @@ def test_pass_logs_only_a_meaningful_release_at_info(glibc, monkeypatch) -> None
     janitor = wiring._MallocJanitor()
     records, sink = _capture_logs()
     try:
-        glibc["free_mb"] = 1500.0
+        glibc["held_mb"] = glibc["free_mb"] = 1500.0
         wiring._janitor_pass(janitor, force=False)      # gives back 1.1GB
         rss_after["mb"] = 302.0
-        glibc["free_mb"] = 10.0
+        glibc["held_mb"] = glibc["free_mb"] = 10.0
         wiring._janitor_pass(janitor, force=True)       # gives back 8MB
     finally:
         logger.remove(sink)
