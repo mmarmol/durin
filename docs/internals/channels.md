@@ -206,7 +206,10 @@ starter refuses cleanly rather than raising.
 **Liveness.** Discord also runs a REST-based liveness probe alongside the
 gateway connection; when the probe detects a zombie socket the heartbeat
 cannot see, it force-closes the connection so the crash supervisor above
-reconnects it.
+reconnects it. Slack's Socket Mode client reconnects on its own; a watchdog
+(`SlackChannel._watch_socket`) checks the session every few seconds, forces a
+reconnect when it stays down past a grace window, and logs both the drop and
+the recovery, so the log shows Slack coming back.
 
 ### Config edits reach a running channel
 
