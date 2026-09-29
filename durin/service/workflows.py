@@ -30,12 +30,12 @@ from durin.service.types import (
     ValidationFailedError,
 )
 from durin.utils.atomic_write import atomic_write_text
-from durin.utils.dedicated_thread import run_in_dedicated_thread
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
 from durin.workflow.artifacts import safe_key
 from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
 from durin.workflow.result import WorkflowResult
+from durin.workflow.run_threads import run_on_workflow_thread
 from durin.workflow.spec import WorkflowError, parse_workflow
 from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
 
@@ -966,11 +966,11 @@ class WorkflowsService:
             # imply "the flag is already cleared", rather than merely usually true.
             on_run_end=_clear_cancel)
         try:
-            # A run can last an hour: a thread of its own, not one of the
-            # event loop's few shared default-executor threads.
-            result = await run_in_dedicated_thread(
-                f"workflow-run-{rid}",
-                engine.run, workflow, task,
+            # A run can last an hour: a thread from the bounded workflow-run
+            # pool, not one of the event loop's few shared default-executor
+            # threads.
+            result = await run_on_workflow_thread(
+                rid, engine.run, workflow, task,
                 root_session_key=root_session_key,
                 input_files=input_files,
                 output_format=output_format,

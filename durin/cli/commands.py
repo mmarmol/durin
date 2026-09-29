@@ -1571,7 +1571,7 @@ def _run_gateway(
 
     # Marshals a service-path run's progress frames onto the runs:feed
     # websocket key. The engine walk that calls this runs on a worker thread
-    # (WorkflowsService.execute's asyncio.to_thread), so publishing to the bus
+    # (WorkflowsService.execute's workflow-run thread), so publishing to the bus
     # must hop back onto the gateway's own event loop via
     # run_coroutine_threadsafe — exactly like run_workflow.py's identical
     # per-chat progress publisher. That loop isn't running yet at this point

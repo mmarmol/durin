@@ -71,16 +71,29 @@ hops.** `asyncio.to_thread` borrows a thread from the event loop's default
 executor, which every short blocking hop shares and which is sized from the
 CPU count (`min(32, cpus + 4)` — six threads on a two-CPU host). A job that
 would hold such a thread for minutes or hours shrinks that pool for its whole
-run, and a few at once would leave every other hop queued behind them. Those
-jobs — supervising a cron dream (`on_cron_job`), walking a workflow run
-(`WorkflowsService.execute`, the `run_workflow` tool) — go through
+run, and a few at once would leave every other hop queued behind them.
+Supervising a cron dream (`on_cron_job`) goes through
 `durin/utils/dedicated_thread.py::run_in_dedicated_thread` instead: one named
-thread per job (`dream-supervisor`, `workflow-run-<run_id>`), awaited like
-`to_thread` (context variables copied in; cancelling the awaiting task does
-not stop the job, whose late result is dropped). The threads are not daemons,
-so, like the default executor's workers, an interpreter exit waits for them;
-a restart re-execs without waiting. Reactive dreams run on a daemon thread
-they start themselves (`dream-<trigger>`), outside the pool as well.
+thread per job (`dream-supervisor`), awaited like `to_thread` (context
+variables copied in; cancelling the awaiting task does not stop the job,
+whose late result is dropped). The cron scheduler's job slots already pace
+it. Workflow runs (`WorkflowsService.execute`, the `run_workflow` tool) are
+paced by nothing upstream — API launches, background `run_workflow` calls and
+`parallel` automations start as fast as they arrive — so a thread per run
+would turn a burst into a burst of threads. They go through
+`durin/workflow/run_threads.py::run_on_workflow_thread`: a pool of their own,
+sized by `MAX_CONCURRENT_RUNS` to what the paced sources can have running
+together at their default caps (the cron job slots, where scheduled
+automations run, plus the interactive lane, where a chat turn waits on its
+foreground run). A run past the bound waits its turn in launch order, holding no
+thread, and logs that it waits; a run cancelled while it waits never starts,
+and one cancelled after it started runs to the end, like `to_thread`. The
+running thread is named `workflow-run-<run_id>`. A paused run (waiting on a
+person) has returned from the engine and holds no thread. None of these
+threads is a daemon, so, like the default executor's workers, an interpreter
+exit waits for them; a restart re-execs without waiting. Reactive dreams run
+on a daemon thread they start themselves (`dream-<trigger>`), outside the
+pool as well.
 
 Three per-request hot paths honor the invariant by *avoiding* the disk rather
 than by hopping threads — a `to_thread` hop per request would just trade loop
@@ -485,7 +498,8 @@ without a restart (see [loop](loop.md)).
 |---|---|---|
 | `cross_process_lock` | `durin/utils/file_lock.py` | Reentrant cross-process advisory `flock` on `<target>.lock`; in-process `threading.Lock` fallback where `fcntl`/`msvcrt` are unavailable. |
 | `_held_set` (thread-local) | `durin/utils/file_lock.py` | Per-thread set of held lock paths enabling same-thread reentrancy; does **not** cross `asyncio.to_thread`, which is why the turn lease and save lock use separate files. |
-| `run_in_dedicated_thread` | `durin/utils/dedicated_thread.py` | Awaits a long blocking job (cron dream supervision, a workflow run) on a named thread of its own instead of a default-executor thread; same contract as `asyncio.to_thread`. |
+| `run_in_dedicated_thread` | `durin/utils/dedicated_thread.py` | Awaits a long blocking job (cron dream supervision) on a named thread of its own instead of a default-executor thread; same contract as `asyncio.to_thread`. |
+| `run_on_workflow_thread` | `durin/workflow/run_threads.py` | Awaits a workflow run's engine walk on a pool of its own, at most `MAX_CONCURRENT_RUNS` at once; runs past the bound wait their turn without a thread. Same contract as `asyncio.to_thread`. |
 | `session_turn_lease` | `durin/session/turn_lease.py` | Async context manager holding `<key>.turn.lock` for a whole turn (600 s acquire timeout) via `asyncio.to_thread`; wraps interactive turns and all out-of-turn savers. |
 | `SessionManager.reload` / `.save` | `durin/session/manager.py` | `reload` drops the cache and re-reads (load-per-turn); `save` does the atomic `.jsonl`/`.meta.json`/`.md` + FTS write under `cross_process_lock(<key>.jsonl)`. |
 | `save_config` / `mutate_config` | `durin/config/loader.py` | `save_config` wraps the split-layout write in the config lock; `mutate_config` is the lost-update-safe read-modify-write entry point. |

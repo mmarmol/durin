@@ -412,10 +412,13 @@ The real runner drives the async `AgentRunner` synchronously per node, so the
 `run_workflow` tool (and `WorkflowsService.execute`) runs the whole (synchronous)
 engine on a worker thread — the inner `asyncio.run` then executes with no active event
 loop, which is valid even though the tool itself runs inside the agent's async tool
-loop. Because a run can hold that thread for an hour, each run gets a thread of its
-own (`run_in_dedicated_thread`, named `workflow-run-<run_id>`) rather than one of the
-event loop's shared default-executor threads (see
-[concurrency.md](concurrency.md)).
+loop. Because a run can hold that thread for an hour, it comes from a pool of
+workflow-run threads (`durin/workflow/run_threads.py::run_on_workflow_thread`, named
+`workflow-run-<run_id>` while the run executes) rather than from the event loop's
+shared default-executor threads. The pool runs at most `MAX_CONCURRENT_RUNS` at once;
+a run launched past that waits its turn, in launch order, before its manifest is
+written (see [concurrency.md](concurrency.md)). A sub-workflow runs inline on its
+parent's thread, and a paused run holds none, so neither takes a slot.
 
 ## 3. Diagram
 
@@ -423,7 +426,7 @@ event loop's shared default-executor threads (see
 flowchart TD
     A([run_workflow name task]) --> B[load_workflow\nworkspace/workflows/name.json]
     B --> C[parse_workflow to Workflow]
-    C --> D[WorkflowEngine.run\non a dedicated thread]
+    C --> D[WorkflowEngine.run\non a workflow-run thread]
     D --> MANIFEST_START[start_run manifest\nstatus='running']
     MANIFEST_START --> E[execute node body\nagent turn or script]
     E --> UPDATE[update_run manifest\nper-node trace]
@@ -562,7 +565,11 @@ minutes clears its ghosts at the next boot, while a run owned by another live pr
 AND periodically (a background thread wired in the service registry), so an orphan left
 by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
 additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
-Manifests written before the owner field existed fall back to a generous
+A paused run is usually answered after a restart, so its manifest names a process that
+is gone; the workflows service's resume claim (`claim_for_resume`, which moves the
+manifest off `needs_input` before the engine starts) therefore re-stamps the owner to
+the resuming process, so a resume waiting for a free workflow-run thread is not swept
+as crashed. Manifests written before the owner field existed fall back to a generous
 `started_at` age threshold.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
@@ -946,7 +953,7 @@ frame is added in one place instead of at each emit site; the terminal frame
 (below) reuses `finished_frames` for its per-node entries too. The engine emits
 a progress frame at the start of each node (status `running`) and another when
 the node finishes (`done`/`failed`). Because the graph walk executes on a
-worker thread (the run's dedicated thread), frames are marshalled back to the
+worker thread (the run's workflow-run thread), frames are marshalled back to the
 gateway's event loop via
 `asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
 being published on the message bus. The WebSocket channel propagates them as
@@ -1189,7 +1196,7 @@ End-to-end for a single `run_workflow` call:
    `ScriptNodeRunner` (for script nodes), an `AgentJudgeRunner` (used only to **pick** a
    winner for parallel `choose`), and a `SubworkflowRunner` (for sub-workflow nodes)
    into the `WorkflowEngine`.
-3. **Run.** The engine runs on a dedicated thread of its own. It walks the graph: an agent node
+3. **Run.** The engine runs on a workflow-run thread, once one is free. It walks the graph: an agent node
    runs its body as an agent turn (persisting a lineage'd node session), a script node
    runs its `command`/`script` as a subprocess via the `ScriptNodeRunner` instead (no
    session), and either way the output threads to the next node; a **routing** node

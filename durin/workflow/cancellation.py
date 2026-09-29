@@ -1,7 +1,7 @@
 """Process-global cancellation registry for workflow runs.
 
 A background workflow run executes in a worker thread (``run_workflow`` ->
-``run_in_dedicated_thread`` -> ``WorkflowEngine.run``), so the agent that launched it
+``run_on_workflow_thread`` -> ``WorkflowEngine.run``), so the agent that launched it
 cannot reach into that thread to stop it. Instead the engine polls a cooperative
 cancel flag: a run is cancelled by registering its ``run_id`` here, and the
 engine checks it at the top of its node walk (either mode) plus mid-node

@@ -5,9 +5,9 @@ node runner (which runs each work node as a real agent turn with that node's too
 and model), runs it, and returns a result summary. The tool's ``execute`` is async
 but the engine is synchronous and its node runner calls ``asyncio.run`` internally,
 so the engine is driven on a worker thread — the inner ``asyncio.run`` then runs
-with no active loop, which is valid. A run can last an hour, so that thread is one
-of its own (``run_in_dedicated_thread``), not one of the event loop's few shared
-default-executor threads.
+with no active loop, which is valid. A run can last an hour, so that thread comes
+from the bounded pool of workflow-run threads (``run_on_workflow_thread``), not
+from the event loop's few shared default-executor threads.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
-from durin.utils.dedicated_thread import run_in_dedicated_thread
+from durin.workflow.run_threads import run_on_workflow_thread
 
 
 def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
@@ -568,9 +568,8 @@ class RunWorkflowTool(Tool, ContextAware):
         if background:
             async def _run_and_inject() -> None:
                 try:
-                    result = await run_in_dedicated_thread(
-                        f"workflow-run-{run_id}",
-                        engine.run, workflow, task,
+                    result = await run_on_workflow_thread(
+                        run_id, engine.run, workflow, task,
                         root_session_key=root_session_key,
                         input_files=input_files or None,
                         output_format=output_format or None,
@@ -602,9 +601,8 @@ class RunWorkflowTool(Tool, ContextAware):
             return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
-        engine_future = asyncio.ensure_future(run_in_dedicated_thread(
-            f"workflow-run-{run_id}",
-            engine.run, workflow, task,
+        engine_future = asyncio.ensure_future(run_on_workflow_thread(
+            run_id, engine.run, workflow, task,
             root_session_key=root_session_key,
             input_files=input_files or None,
             output_format=output_format or None,

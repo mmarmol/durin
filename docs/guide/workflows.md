@@ -398,7 +398,12 @@ clean up.
   per-node trace (status, verdict, and the session each node produced). A
   run started by a subworkflow node records its caller's run id, so the
   dashboard can mark it as a sub-run of the parent. The web dashboard's
-  Workflows pane reads these to show run history.
+  Workflows pane reads these to show run history. The manifest appears when
+  the run starts executing: durin executes a bounded number of runs at once,
+  so in a burst (many API launches or background runs together) the extra
+  ones wait their turn and start, in launch order, as others finish; the
+  gateway log notes each run that has to wait. A run paused on your input
+  does not count against that bound.
 - **Node sessions:** every node's conversation is a normal, searchable
   durin session (`workflow:<run_id>:<node_id>:...`), so a node's reasoning
   is navigable after the fact the same way a sub-agent's is.

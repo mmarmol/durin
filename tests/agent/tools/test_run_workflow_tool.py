@@ -127,3 +127,54 @@ async def test_the_engine_runs_on_a_dedicated_thread(tmp_path, background):
             await asyncio.sleep(0.01)
     assert len(names) == 1
     assert names[0].startswith("workflow-run-"), names[0]
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_background_runs_executes_at_most_the_run_bound_at_once(tmp_path):
+    """Background launches return at once, so nothing paces them: runs past
+    the bound wait their turn instead of each starting a thread, and every
+    one still reports back."""
+    import threading
+
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS
+
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    gate = threading.Event()
+    lock = threading.Lock()
+    counts = {"running": 0, "peak": 0}
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
+
+    def _gated_run(*_args, **_kwargs):
+        with lock:
+            counts["running"] += 1
+            counts["peak"] = max(counts["peak"], counts["running"])
+        try:
+            gate.wait(10.0)
+            return canned
+        finally:
+            with lock:
+                counts["running"] -= 1
+
+    burst = MAX_CONCURRENT_RUNS + 2
+    with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
+         patch("durin.workflow.engine.WorkflowEngine.run", _gated_run):
+        try:
+            for _ in range(burst):
+                await tool.execute(name="noop", task="hi", background=True)
+            for _ in range(500):
+                if counts["running"] >= MAX_CONCURRENT_RUNS:
+                    break
+                await asyncio.sleep(0.01)
+            # Give any run that was not held back the time to start too.
+            await asyncio.sleep(0.3)
+            peak = counts["peak"]
+        finally:
+            gate.set()
+        for _ in range(1000):
+            if len(bus.injected) == burst:
+                break
+            await asyncio.sleep(0.01)
+
+    assert peak == MAX_CONCURRENT_RUNS
+    assert len(bus.injected) == burst

@@ -4,10 +4,12 @@
 executor, which every short blocking hop in the gateway shares (file I/O,
 ``flock``, synchronous SDK calls) and which is sized from the CPU count —
 ``min(32, cpus + 4)``, six threads on a two-CPU host. A job that holds its
-thread for minutes or hours (supervising a dream, walking a workflow) shrinks
-that pool for its whole run; a few of them at once leave every other hop
-queued behind them. :func:`run_in_dedicated_thread` starts a named thread per
-job instead, so long jobs never compete with short hops for the pool.
+thread for minutes or hours (supervising a dream) shrinks that pool for its
+whole run; a few of them at once leave every other hop queued behind them.
+:func:`run_in_dedicated_thread` starts a named thread per job instead, so long
+jobs never compete with short hops for the pool. It suits jobs something
+upstream already paces; workflow runs, which nothing does, take a bounded pool
+of their own instead (``durin.workflow.run_threads``).
 """
 
 from __future__ import annotations

@@ -393,18 +393,25 @@ def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
 
 
 def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
-    """Move a ``needs_input`` manifest to ``running`` IN PLACE, preserving every
-    other field — called under ``run_lock_target``'s lock, right before the caller
-    releases it and actually resumes the run, so a ``cancel_run`` (or an approval
-    reject) racing in right behind sees this run is no longer ``needs_input`` and
-    refuses instead of finalizing a run that is, by then, genuinely resuming.
-    ``WorkflowEngine.run``'s own ``_start_manifest`` fully rewrites the manifest
-    again moments later (a fresh ``started_at``, the resumed walk's own ``runs``) —
-    this claim only needs to survive the brief window between releasing this lock
-    and that first real write, not to be a lasting record itself."""
+    """Move a ``needs_input`` manifest to ``running`` IN PLACE, owned by this
+    process, preserving every other field — called under ``run_lock_target``'s
+    lock, right before the caller releases it and actually resumes the run, so a
+    ``cancel_run`` (or an approval reject) racing in right behind sees this run is
+    no longer ``needs_input`` and refuses instead of finalizing a run that is, by
+    then, genuinely resuming. ``WorkflowEngine.run``'s own ``_start_manifest``
+    fully rewrites the manifest once the resume gets a workflow-run thread (a fresh
+    ``started_at``, the resumed walk's own ``runs``) — this claim only needs to
+    survive until that first real write, not to be a lasting record itself. That
+    can take a while when every run thread is busy, and a paused run is usually
+    answered after a restart, so its recorded owner is often a dead process: the
+    claim re-stamps the owner, or the crash sweep would flip the waiting resume to
+    ``crashed``."""
+    from durin.utils.process_tree import process_identity
+
     prior = read_manifest(workspace, name, run_id) or {}
     record = dict(prior)
     record["status"] = "running"
+    record["owner"] = process_identity()
     path = _record_path(workspace, name, run_id)
     path.write_text(json.dumps(record), encoding="utf-8")
     return record
