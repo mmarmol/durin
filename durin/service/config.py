@@ -761,6 +761,8 @@ class ConfigService:
         self, query: ChannelsListQuery, principal: Principal
     ) -> ChannelsListResult:
         principal.require(Scope.CONFIG_READ)
+        import asyncio
+
         from durin.channels.registry import discover_all
         from durin.config.loader import load_config
         from durin.extras import REGISTRY, _module_present
@@ -768,7 +770,11 @@ class ConfigService:
         config = load_config()
         extra = getattr(config.channels, "__pydantic_extra__", None) or {}
         items: list[dict[str, Any]] = []
-        for name, cls in sorted(discover_all().items()):
+        # Imports every channel's module and SDK, which a gateway boot skips
+        # for the disabled ones, so the first listing pays for them. In a
+        # worker thread: on the event loop it would stall every chat meanwhile.
+        discovered = await asyncio.to_thread(discover_all)
+        for name, cls in sorted(discovered.items()):
             section = extra.get(name)
             enabled = (
                 bool(section.get("enabled")) if isinstance(section, dict) else False

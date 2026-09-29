@@ -39,8 +39,14 @@ then the external adapters registered under the Python `entry_points` group
 always win if a plugin registers the same name. `ChannelManager._init_channels`
 walks those names, checks `config.channels.<name>.enabled`, and only for the
 ones that are on calls `load_channel(name)`, which imports that one module (or
-loads that one plugin) — so a gateway boot never pays for the SDK imports of a
-channel that is off.
+loads that one plugin). A channel that is off has its adapter module neither
+imported nor loaded at startup, though its SDK can still arrive another way:
+the Telegram service routes (`durin/service/channels_telegram.py`), which the
+gateway always mounts, import the Telegram SDK. Listing the channels
+(`GET /api/v1/channels`, the dashboard's channel settings) imports every
+adapter and loads every plugin with `discover_all()`, in a worker thread so
+the event loop keeps serving meanwhile. A config save that compares a disabled
+channel's section with its defaults imports only that channel.
 
 **Inbound authorization and pairing.** Authorization is enforced once,
 centrally, at the message-bus ingress via `MessageBus.publish_inbound`. When
@@ -155,7 +161,7 @@ flowchart TD
     F --> G
     G --> H[for each channel name]
     H --> I{config.channels.name.enabled?}
-    I -- No --> J[skip: module never imported]
+    I -- No --> J[skip: module not imported]
     I -- Yes --> Q["load_channel(name)<br/>import that module / load that plugin"]
     Q --> K["_resolve_section_secrets(section)<br/>expand \${secret:} refs"]
     K --> L[cls(config, bus, **kwargs)]
@@ -205,10 +211,13 @@ channel at once, so a gateway stop spends the time of the slowest channel
 rather than the sum of all of them. Each `channel.stop()` gets at most
 `_CHANNEL_STOP_TIMEOUT_S`; the bound sits above the longest stop a channel
 takes on purpose (the WhatsApp bridge gives its Node process ten seconds to
-exit) and only catches a stop that hangs, which is logged by channel name,
-cancelled and left to die with the process. The wait uses `asyncio.wait`
-with a timeout, so it holds even for a `stop()` that ignores its
-cancellation.
+exit) and only catches a stop that hangs, which is logged by channel name and
+cancelled. The wait uses `asyncio.wait` with a timeout, so `stop_all` returns
+at the bound even when a `stop()` ignores its cancellation, and the rest of
+the shutdown (the session flush) still runs. Such a stop still delays the
+process exit: `asyncio.run` waits for every task it cancels, until the stop
+ends or the process is killed (`durin gateway stop` sends SIGKILL once its
+grace window runs out).
 
 Slack bounds its own stop more tightly. Closing the Socket Mode client waits
 for the WebSocket closing handshake and connection teardown with Slack, which
@@ -861,8 +870,8 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
 | `SendReceipt` | `durin/bus/events.py` | Frozen dataclass returned by `send`: `thread_key: str | None` naming the thread a send landed in, in the inbound matcher's per-channel key vocabulary. See "Send receipts" above. |
 | `available_channel_names` | `durin/channels/registry.py` | Names of built-in (pkgutil scan) and external (entry_points) channels, with nothing imported or loaded. Built-ins shadow plugins of the same name. What gateway startup walks. |
-| `load_channel` | `durin/channels/registry.py` | Imports the one built-in module, or loads the one plugin, for a channel name and returns its class; `None` when no channel has that name. Used for each enabled channel at startup and on hot-start. |
-| `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes, importing every one. Built-ins shadow plugins of the same name. Used where every channel's class is needed (channel listings, onboarding, config pruning), not at gateway startup. |
+| `load_channel` | `durin/channels/registry.py` | Imports the one built-in module, or loads the one plugin, for a channel name and returns its class; `None` when no channel has that name. Used for each enabled channel at startup, on hot-start, and when a config save compares a disabled channel's section with its defaults. |
+| `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes, importing every one. Built-ins shadow plugins of the same name. Used where every channel's class is needed (channel listings, onboarding), not at gateway startup. |
 | `generate_code` | `durin/pairing/store.py` | Creates a pairing code (`ABCD-EFGH` format, 8 chars) for an unapproved DM sender and writes it to `pairing.json` with a TTL. |
 | `approve_code` | `durin/pairing/store.py` | Moves a pending code to the approved set; returns `(channel, sender_id)` or `None` if expired or absent. |
 | `is_approved` | `durin/pairing/store.py` | Read-only check: is `sender_id` in the approved set for `channel`? |
@@ -958,8 +967,9 @@ mychannel = "mypkg.channels.mychannel:MyChannel"
 ```
 
 will be discovered at startup and can be enabled with
-`channels.mychannel.enabled = true` in `config.json`. The gateway loads the
-entry point only when that section is enabled.
+`channels.mychannel.enabled = true` in `config.json`. Gateway startup loads the
+entry point only when that section is enabled; listing the channels
+(`GET /api/v1/channels`) loads every one.
 
 ### CLI / TUI / webui surfaces
 

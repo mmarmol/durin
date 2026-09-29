@@ -47,7 +47,9 @@ _CHANNEL_STABLE_UPTIME_S = 300.0
 # so this also caps the channel phase of a gateway stop. It sits above the
 # longest stop a channel takes on purpose (the WhatsApp bridge gives its Node
 # process ten seconds to exit after SIGTERM) and exists so a stop that hangs
-# cannot hold the process open.
+# cannot hold up the rest of the shutdown (the session flush). A stop that
+# also ignores its cancellation still delays the process exit: asyncio.run
+# waits for every task it cancels.
 _CHANNEL_STOP_TIMEOUT_S = 15.0
 
 _BOOL_CAMEL_ALIASES: dict[str, str] = {
@@ -229,8 +231,7 @@ class ChannelManager:
 
         Channel names come from the package listing and the installed
         plugins' entry points, with nothing imported; only a channel whose
-        section is enabled has its module imported (or its plugin loaded), so
-        a boot does not pay for the SDKs of channels that are off.
+        section is enabled has its module imported (or its plugin loaded).
         """
         self._ensure_channel_extras()
         from durin.channels.registry import available_channel_names
@@ -562,8 +563,8 @@ class ChannelManager:
 
         Channels stop concurrently, so the slowest one, not their sum, sets
         how long this takes; each stop is bounded by
-        ``_CHANNEL_STOP_TIMEOUT_S``, and one that overruns is logged,
-        cancelled and left to die with the process.
+        ``_CHANNEL_STOP_TIMEOUT_S``. One that overruns is logged and
+        cancelled, and this returns without waiting for it.
         """
         logger.info("Stopping all channels...")
 
