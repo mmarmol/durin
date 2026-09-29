@@ -18,7 +18,8 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, TextIO
 
 from loguru import logger
 
@@ -34,24 +35,29 @@ from durin.agent.tools.mcp import (
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.paths import get_logs_dir
 
-_mcp_stderr_handle = None  # module-level shared handle
+_mcp_stderr_handles: dict[Path, TextIO] = {}  # one append handle per server stderr file
 
 _MCP_MAX_REDIRECTS = 5  # cap redirect chains on MCP HTTP transports (DoS / redirect-loop guard)
 
 
-def _mcp_stderr_log():
-    """Shared append handle for MCP-server stderr so server banners don't
-    corrupt the TUI (the SDK defaults errlog to sys.stderr). Line-buffered,
-    errors replaced; falls back to sys.stderr if the file can't be opened."""
-    global _mcp_stderr_handle
-    if _mcp_stderr_handle is not None:
-        return _mcp_stderr_handle
+def _mcp_stderr_log(server: str) -> TextIO:
+    """Append handle for one MCP server's stderr so server banners don't
+    corrupt the TUI (the SDK defaults errlog to sys.stderr).
+
+    Each server gets its own file: servers spawn at the same moment and
+    write their stderr with no prefix, so in a shared file a spawn failure
+    (e.g. a missing interpreter) could not be tied to its server.
+    Line-buffered, errors replaced; falls back to sys.stderr if the file
+    can't be opened."""
     try:
-        path = get_logs_dir() / "mcp-stderr.log"
-        _mcp_stderr_handle = open(path, "a", buffering=1, errors="replace")  # noqa: SIM115
+        path = get_logs_dir() / f"mcp-stderr-{_sanitize_name(server)}.log"
+        handle = _mcp_stderr_handles.get(path)
+        if handle is None:
+            handle = open(path, "a", buffering=1, errors="replace")  # noqa: SIM115
+            _mcp_stderr_handles[path] = handle
+        return handle
     except Exception:  # noqa: BLE001
-        _mcp_stderr_handle = sys.stderr
-    return _mcp_stderr_handle
+        return sys.stderr
 
 
 @dataclass
@@ -420,9 +426,9 @@ class MCPServerConnection:
             _inject_shared_github_token(_resolve_secret_map(cfg.env)) or None,
         )
         params = StdioServerParameters(command=command, args=args, env=env)
-        errlog = _mcp_stderr_log()
+        errlog = _mcp_stderr_log(self.name)
         try:
-            # The child writes its stderr straight into this shared file with no
+            # The child writes its stderr straight into this file with no
             # prefix, so the header is what dates a spawn failure (e.g. a missing
             # interpreter) and ties it to one gateway process.
             stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")

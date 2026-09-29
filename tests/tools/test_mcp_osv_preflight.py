@@ -298,7 +298,7 @@ class TestOpenStdioIntegration:
             async def __aexit__(self, *exc):
                 return False
 
-        monkeypatch.setattr(mc, "_mcp_stderr_log", lambda: io.StringIO())
+        monkeypatch.setattr(mc, "_mcp_stderr_log", lambda _server: io.StringIO())
         monkeypatch.setattr(
             "mcp.client.stdio.stdio_client", lambda *a, **k: _FakeCM()
         )

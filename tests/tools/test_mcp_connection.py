@@ -879,7 +879,7 @@ async def test_transport_http_falls_back_to_sse(monkeypatch) -> None:
 async def test_stdio_errlog_routed_to_logfile(monkeypatch, tmp_path) -> None:
     import durin.agent.tools.mcp_connection as mc
 
-    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "_mcp_stderr_handles", {})
     monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
 
     captured = {}
@@ -897,7 +897,7 @@ async def test_stdio_errlog_routed_to_logfile(monkeypatch, tmp_path) -> None:
 
     import sys as _sys
     assert captured["errlog"] is not _sys.stderr
-    log = tmp_path / "mcp-stderr.log"
+    log = tmp_path / "mcp-stderr-srv.log"
     assert log.exists() and "srv" in log.read_text()
 
 
@@ -914,7 +914,7 @@ async def test_stdio_errlog_header_dates_the_session(monkeypatch, tmp_path) -> N
 
     import durin.agent.tools.mcp_connection as mc
 
-    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "_mcp_stderr_handles", {})
     monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
 
     @asynccontextmanager
@@ -926,7 +926,7 @@ async def test_stdio_errlog_header_dates_the_session(monkeypatch, tmp_path) -> N
     conn = mc.MCPServerConnection("srv", MCPServerConfig(command="fake"), ToolRegistry())
     await conn._open_stdio()
 
-    header = (tmp_path / "mcp-stderr.log").read_text().strip().splitlines()[-1]
+    header = (tmp_path / "mcp-stderr-srv.log").read_text().strip().splitlines()[-1]
     match = re.fullmatch(
         r"=== (\S+) MCP server 'srv' stdio session \(durin pid (\d+)\) ===", header
     )
@@ -935,6 +935,37 @@ async def test_stdio_errlog_header_dates_the_session(monkeypatch, tmp_path) -> N
     assert stamp.tzinfo is not None
     assert abs(datetime.now(stamp.tzinfo) - stamp) < timedelta(minutes=1)
     assert int(match.group(2)) == os.getpid()
+
+
+@pytest.mark.skipif(not os.path.exists("/usr/bin/env"), reason="needs /usr/bin/env")
+async def test_servers_spawned_together_write_stderr_to_separate_files(
+    monkeypatch, tmp_path
+) -> None:
+    """Every stderr line of a stdio server lands in that server's own file.
+
+    The child writes its stderr straight into the file with no prefix, and
+    servers spawn in the same instant. Each spawn failure here (``/usr/bin/env``
+    naming a missing program) must sit in its own server's file, after that
+    server's header, with nothing from the other server.
+    """
+    import durin.agent.tools.mcp_connection as mc
+    from durin.agent.tools.mcp import connect_mcp_servers
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01)
+    monkeypatch.setattr(mc, "_mcp_stderr_handles", {})
+    monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
+
+    servers = {
+        name: MCPServerConfig(command="/usr/bin/env", args=[f"durin-test-missing-{name}"])
+        for name in ("alpha", "beta")
+    }
+    await connect_mcp_servers(servers, ToolRegistry(), errors={})
+
+    for name, other in (("alpha", "beta"), ("beta", "alpha")):
+        text = (tmp_path / f"mcp-stderr-{name}.log").read_text()
+        assert f"MCP server '{name}' stdio session" in text
+        assert f"durin-test-missing-{name}" in text
+        assert other not in text
 
 
 @pytest.mark.skipif(not os.path.exists("/usr/bin/env"), reason="needs /usr/bin/env")
@@ -956,7 +987,7 @@ async def test_servers_that_die_at_spawn_fail_fast_when_connected_together(
 
     monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 10.0)
     monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01)
-    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "_mcp_stderr_handles", {})
     monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
 
     names = ("broken1", "broken2", "broken3")

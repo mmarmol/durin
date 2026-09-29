@@ -157,7 +157,7 @@ async def test_warn_policy_allows_spawn(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(mc, "_mcp_stderr_log", lambda: __import__("io").StringIO())
+    monkeypatch.setattr(mc, "_mcp_stderr_log", lambda _server: __import__("io").StringIO())
     monkeypatch.setattr("mcp.client.stdio.stdio_client", lambda *a, **k: _FakeCM())
 
     from durin.agent.tools.mcp_connection import MCPServerConnection
