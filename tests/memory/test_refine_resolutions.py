@@ -120,15 +120,50 @@ def test_malformed_proposal_does_not_end_the_pass(tmp_path):
     assert out["judged"] == 1 and out["resolved"] == []
 
 
-def test_unsure_proposal_escalates_and_is_flagged_when_still_short(tmp_path, monkeypatch):
+def test_the_investigating_judges_proposal_is_applied_whatever_its_confidence(
+        tmp_path, monkeypatch):
+    """The investigating judge read both pages and their lineage. A change it
+    proposes short of a merge removes nothing and can be reverted, and people
+    applied such proposals down to 55% by hand — so it is applied, not queued."""
     _pair(tmp_path)
     monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
-        "related", 80, "probably an edition", proposal=RELATE))
+        "related", 62, "probably an edition", proposal=RELATE))
     out = run_refine(tmp_path, llm_invoke=_stub("related", 75, RELATE),
                      escalate_floor=70, resolve_threshold=85)
-    assert out["resolved"] == []
+    assert out["resolved"] and out["resolved"][0]["kind"] == "relate"
+    assert read_flagged(tmp_path) == []
+    assert _load(tmp_path, "topic:dnd_5e").relations == [{"to": B, "type": "edition_of"}]
+
+
+def test_an_unclear_investigating_judge_still_asks_a_person(tmp_path, monkeypatch):
+    _pair(tmp_path)
+    monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
+        "unclear", 80, "cannot tell", proposal=RELATE))
+    out = run_refine(tmp_path, llm_invoke=_stub("unclear", 80),
+                     escalate_floor=70, resolve_threshold=85)
+    assert out["resolved"] == [] and out["merged"] == []
     [rec] = read_flagged(tmp_path)
-    assert (rec["source"], rec["proposal"]["kind"]) == ("tier2", "relate")
+    assert (rec["source"], rec["verdict"]) == ("tier2", "unclear")
+
+
+def test_the_investigating_judges_merge_keeps_its_floor(tmp_path, monkeypatch):
+    """A merge folds two pages into one, so it keeps a confidence floor: at or
+    above it the investigating judge merges, below it a person decides."""
+    merge = {"kind": "merge", "survivor": B}
+    _pair(tmp_path)
+    monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
+        "same", 59, "one game", proposal=merge))
+    out = run_refine(tmp_path, llm_invoke=_stub("same", 80, merge),
+                     escalate_floor=70, tier2_confidence_threshold=60)
+    assert out["merged"] == []
+    assert [r["verdict"] for r in read_flagged(tmp_path)] == ["same"]
+
+    monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
+        "same", 60, "one game", proposal=merge))
+    out = run_refine(tmp_path, llm_invoke=_stub("same", 80, merge),
+                     escalate_floor=70, tier2_confidence_threshold=60, recheck_cooldown_s=0)
+    assert [m["canonical"] for m in out["merged"]] == [B]
+    assert not (tmp_path / "memory" / "entities" / "topic" / "5e.md").exists()
 
 
 def test_tier2_can_apply_its_own_confident_proposal(tmp_path, monkeypatch):
@@ -149,12 +184,14 @@ def test_confident_tier2_different_is_not_flagged(tmp_path, monkeypatch):
     assert read_flagged(tmp_path) == []
 
 
-def test_unsure_tier2_different_is_still_flagged(tmp_path, monkeypatch):
+def test_the_investigating_judges_different_settles_the_pair(tmp_path, monkeypatch):
+    """Two pages the investigating judge found distinct, with nothing to
+    change, are not a question for a person, however sure it was."""
     _pair(tmp_path)
     monkeypatch.setattr(rd, "_escalate_judge", lambda ws, a, b, **kw: JudgeResult(
-        "different", 70, "not sure"))
+        "different", 55, "not sure"))
     run_refine(tmp_path, llm_invoke=_stub("unclear", 80), escalate_floor=70)
-    assert len(read_flagged(tmp_path)) == 1
+    assert read_flagged(tmp_path) == []
 
 
 def test_merge_goes_into_the_judges_survivor(tmp_path):

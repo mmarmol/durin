@@ -1091,6 +1091,24 @@ class MemoryAbsorbEscalationFailedEvent(TypedDict):
     error: str  # head of the exception message
 
 
+class MemoryAbsorbPersonResolvedEvent(TypedDict):
+    """A person decided a flagged memory pair (the Pending page or the API),
+    recorded next to what the judge proposed and how sure it was. Use to see
+    how often people follow each judge's proposals, and at what confidence,
+    before moving the dream's confidence floors."""
+
+    ref_a: str
+    ref_b: str
+    action: str  # "accept" | "merge" | "separate" | "disambiguate" | "relate"
+    verdict: str | None  # the judge's verdict on the flagged pair
+    confidence: int | None  # the judge's confidence, 0-100
+    source: str | None  # "tier1" | "tier2" | "rereview"
+    proposal: str | None  # the proposal's kind, None when the judge proposed nothing
+    followed: bool  # applied the proposal, or made the same kind of change
+    session_key: NotRequired[str | None]
+    iteration: NotRequired[int]
+
+
 class MemoryAbsorbEscalationCappedEvent(TypedDict):
     """A borderline pair was NOT escalated because the run hit its per-run
     Tier-2 ceiling. The pair keeps the cheap verdict. Use to detect a run
@@ -2060,6 +2078,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
     "memory.absorb.escalation_capped": MemoryAbsorbEscalationCappedEvent,
     "memory.absorb.escalation_failed": MemoryAbsorbEscalationFailedEvent,
+    "memory.absorb.person_resolved": MemoryAbsorbPersonResolvedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,

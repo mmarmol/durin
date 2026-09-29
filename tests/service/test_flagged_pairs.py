@@ -323,3 +323,48 @@ async def test_resolve_stale_pair_is_a_conflict(tmp_path: Path):
         await _service(tmp_path).resolve_flagged(ResolveFlaggedRequest(
             ref_a=E, ref_b=G, action="relate",
             relation=RelationIn(from_ref=E, type="x", to_ref=G)), LOCAL)
+
+
+# ---------------------------------------------------------------------------
+# What a person decides is recorded
+# ---------------------------------------------------------------------------
+
+
+def _decisions(log_path: Path) -> list[dict]:
+    import json
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    return [e["data"] for e in events if e["type"] == "memory.absorb.person_resolved"]
+
+
+async def test_a_person_following_or_overriding_a_proposal_is_recorded(tmp_path: Path):
+    """What a person decides on each waiting pair, next to what the judge
+    proposed and how sure it was, is the evidence the dream's confidence
+    floors are tuned with."""
+    from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
+
+    _entity(tmp_path, E, "5e", ["D&D"])
+    _entity(tmp_path, G, "Dungeons & Dragons", ["D&D"])
+    add_flagged(tmp_path, E, G, verdict="related", confidence=72, reasoning="r", source="tier2",
+                proposal={"kind": "relate",
+                          "relation": {"from_ref": E, "type": "edition_of", "to_ref": G}})
+    add_flagged(tmp_path, "person:alice", "person:alice-v2", verdict="same", confidence=65,
+                reasoning="r", source="tier2",
+                proposal={"kind": "merge", "survivor": "person:alice"})
+    log_path = tmp_path / "telemetry.jsonl"
+    token = bind_telemetry(TelemetryLogger(log_path))
+    try:
+        await _service(tmp_path).resolve_flagged(
+            ResolveFlaggedRequest(ref_a=E, ref_b=G, action="accept"), LOCAL)
+        await _service(tmp_path).resolve_flagged(
+            ResolveFlaggedRequest(ref_a="person:alice", ref_b="person:alice-v2",
+                                  action="separate"), LOCAL)
+    finally:
+        reset_telemetry(token)
+
+    accepted, separated = _decisions(log_path)
+    fields = ("ref_a", "ref_b", "action", "verdict", "confidence", "source", "proposal", "followed")
+    assert {k: accepted.get(k) for k in fields} == {
+        "ref_a": E, "ref_b": G, "action": "accept", "verdict": "related", "confidence": 72,
+        "source": "tier2", "proposal": "relate", "followed": True}
+    assert {k: separated.get(k) for k in ("action", "proposal", "confidence", "followed")} == {
+        "action": "separate", "proposal": "merge", "confidence": 65, "followed": False}

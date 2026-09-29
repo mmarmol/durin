@@ -126,7 +126,7 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     escalateFloor:
       typeof d.auto_absorb?.escalate_floor === "number" ? d.auto_absorb.escalate_floor : 70,
     tier2Confidence:
-      typeof d.auto_absorb?.tier2_confidence_threshold === "number" ? d.auto_absorb.tier2_confidence_threshold : 80,
+      typeof d.auto_absorb?.tier2_confidence_threshold === "number" ? d.auto_absorb.tier2_confidence_threshold : 60,
     judgeConcurrency:
       typeof d.auto_absorb?.judge_concurrency === "number" ? d.auto_absorb.judge_concurrency : 3,
     recheckDays:

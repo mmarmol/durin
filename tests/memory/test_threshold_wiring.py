@@ -39,12 +39,13 @@ def test_run_extract_pass_forwards_thresholds_to_session(monkeypatch, tmp_path):
 
 
 def test_auto_absorb_defaults_follow_the_measured_experience():
-    """Escalation is on by default and the investigating judge has its own
-    merge floor; the per-pass budget defaults to an hour."""
+    """Escalation is on by default and the investigating judge has its own,
+    lower merge floor — people applied its proposals by hand well below the
+    old 80; the per-pass budget defaults to an hour."""
     from durin.config.schema import MemoryDreamConfig
     cfg = AutoAbsorbConfig()
     assert cfg.escalate_floor == 70
-    assert cfg.tier2_confidence_threshold == 80
+    assert cfg.tier2_confidence_threshold == 60
     assert cfg.confidence_threshold == 95
     assert MemoryDreamConfig().max_seconds_per_run == 3600
 

@@ -458,11 +458,11 @@ class AutoAbsorbConfig(Base):
         description="Confidence floor above which pairs the cheap judge can't settle (verdict 'unclear', or 'same' below confidence_threshold) escalate to a bounded investigating sub-agent; 0 disables escalation",
     )
     tier2_confidence_threshold: int = Field(
-        default=80,
+        default=60,
         ge=0,
         le=100,
         validation_alias=AliasChoices("tier2ConfidenceThreshold", "tier2_confidence_threshold"),
-        description="Confidence floor (0-100) for a merge decided by the investigating sub-agent after an escalation; below it the pair is flagged for review instead. The cheap judge's own verdicts keep using confidence_threshold",
+        description="Confidence floor (0-100) for a merge decided by the investigating sub-agent after an escalation; below it the pair waits for a person on the Pending page. Its other proposals (an edge, who keeps an alias, a clearer key) are applied whatever its confidence. The cheap judge's own verdicts keep using confidence_threshold",
     )
     judge_concurrency: int = Field(
         default=3,
@@ -489,14 +489,14 @@ class AutoAbsorbConfig(Base):
     auto_resolve: bool = Field(
         default=True,
         validation_alias=AliasChoices("autoResolve", "auto_resolve"),
-        description="Let the dream apply the judges' non-merge resolutions on its own (alias ownership, the edge between related pages, clearer keys) when confident; false sends every proposal to the Inbox",
+        description="Let the dream apply the judges' non-merge resolutions on its own (alias ownership, the edge between related pages, clearer keys) when confident; false leaves every proposal for a person on the Pending page",
     )
     resolve_threshold: int = Field(
         default=85,
         ge=0,
         le=100,
         validation_alias=AliasChoices("resolveThreshold", "resolve_threshold"),
-        description="Judge confidence floor (0-100) for applying a non-merge resolution automatically; below it the proposal goes to the Inbox",
+        description="Confidence floor (0-100) for applying a non-merge resolution the cheap judge proposed; below it (from escalate_floor up) the pair escalates to the investigating sub-agent, whose own proposals are applied whatever their confidence",
     )
     auto_rename: bool = Field(
         default=True,
