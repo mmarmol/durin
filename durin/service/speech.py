@@ -90,6 +90,11 @@ class SpeechSynthesisService:
             return
         await self._get().warmup()
         self._provider = None   # release the engine; use-time reloads lazily
+        # Its memory goes back to glibc's arenas, which keep it resident
+        # until trimmed: trim now, not at the malloc janitor's next pass.
+        from durin.service.wiring import request_malloc_trim
+
+        request_malloc_trim()
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("", encoding="utf-8")
 

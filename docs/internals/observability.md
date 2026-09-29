@@ -223,8 +223,9 @@ measures growth above it, so memory paged back in by reuse, or freed anew,
 is trimmed once it adds up, and a few MB coming back is left for later.
 Without a residency reading the janitor falls back to `malloc_free_mb`.
 `request_malloc_trim()` wakes the janitor for an immediate forced pass —
-the voice idle sweep calls it after unloading an engine, whose memory glibc
-would otherwise keep resident until the next tick. Each trim emits
+a voice service's boot predownload and the voice idle sweep call it after
+releasing an engine, whose memory glibc would otherwise keep resident until
+the next tick. Each trim emits
 `gateway.memory.trimmed` (observed RSS before/after, the arenas' freed
 total as `mallinfo2` books it, the resident freed memory that piled up since
 the last trim, whether it was forced); the log line is INFO only when the
