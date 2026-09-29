@@ -119,14 +119,18 @@ and follows an edge. A node may route in one of two shapes:
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
 line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
 the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
-`on_fail`. How a fail's output is threaded depends on the per-node visit counts: when the
-`on_fail` target already ran in this walk, the fail is a real loop-back and the output is
-threaded as `Reviewer feedback (address this):` so the producer re-runs knowing what to fix;
-when the target has not run yet, the fail is a forward route (a check whose "no" is a normal
+`on_fail`. How a fail's output is threaded depends on the graph: when the `on_fail` target
+can lead back to the gate (the fail edge closes a cycle), the fail is a real loop-back and the
+output is threaded as `Reviewer feedback (address this):` so the producer re-runs knowing what
+to fix. That holds whether or not the target has run yet, so a fixer reached for the first time
+from a failing review, or a review that fails right after a resume, still frames it as feedback.
+When the target never leads back, the fail is a forward route (a check whose "no" is a normal
 branch, e.g. "no note yet → go draft it") and the output is threaded with the same neutral
 `Context from '<node>':` framing a `cases` route uses, so the next step never reads a routine
-"no" as an earlier failure. `NodeRunRequest.fail_loops_back` hands the node's runner the same
-answer (the script runner words its exit note from it, below). When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
+"no" as an earlier failure. Only edges the walk follows count as paths: `next`,
+`on_pass`/`on_fail`, `cases` targets, and a parallel node's `next` (its branches, worker and
+list source run inside it or before it). `NodeRunRequest.fail_loops_back` hands the node's
+runner the same answer (the script runner words its exit note from it, below). When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
@@ -189,8 +193,7 @@ read.
 non-zero is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
 explicit exit-code note, so the loop-back feedback explains what failed. The note follows
 the same `fail_loops_back` rule as the engine's framing: `[script gate failed: exit code N]`
-when `on_fail` leads back to a node that already ran, a plain `[exit code N]` on a forward
-route. A multi-way
+when `on_fail` leads back to the gate, a plain `[exit code N]` on a forward route. A multi-way
 script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
 agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
 a `cases` node, or on a plain linear node with no routing, is a node failure

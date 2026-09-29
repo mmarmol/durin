@@ -107,6 +107,35 @@ def test_script_check_failing_into_a_first_visit_target_is_neutral_context(tmp_p
     assert "gate failed" not in upstream
 
 
+def test_script_gate_failing_into_a_fixer_that_leads_back_is_a_failed_gate(tmp_path):
+    """A test gate that opens a "fix the failing tests" loop fails before the fixer
+    ever ran. The fixer leads back to the gate, so this first FAIL is still a
+    revision request: reviewer framing and the gate-failed note."""
+    marker = tmp_path / "fixed"
+    gate_cmd = f'test -f "{marker}" || {{ echo "2 tests failing" >&2; exit 1; }}'
+    wf = parse_workflow({"name": "t", "start": "tests", "nodes": [
+        {"id": "tests", "kind": "script", "command": gate_cmd, "on_pass": None, "on_fail": "fix"},
+        {"id": "fix", "prompt": "fix the failing tests", "next": "tests"},
+    ]})
+
+    from durin.workflow.engine import NodeRunResponse
+    passes = []
+
+    def fixer(req):
+        passes.append(req.upstream_output or "")
+        marker.write_text("ok")
+        return NodeRunResponse(output="fixed", session_key="s")
+
+    eng = WorkflowEngine(node_runner=fixer,
+                         script_runner=ScriptNodeRunner(str(tmp_path)),
+                         workspace=str(tmp_path))
+    result = eng.run(wf, "task")
+    assert result.status == "completed"
+    (only,) = passes
+    assert "Reviewer feedback (address this):" in only
+    assert "2 tests failing" in only and "[script gate failed: exit code 1]" in only
+
+
 def test_script_cases_routing_and_needs_input(tmp_path):
     wf = parse_workflow({"name": "t", "start": "c", "nodes": [
         {"id": "c", "kind": "script",

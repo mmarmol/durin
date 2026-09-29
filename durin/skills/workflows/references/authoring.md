@@ -77,10 +77,10 @@ follows `next` or **routes** on a verdict.
   deterministic; the node's text is parsed only as a fallback. For that fallback, a binary
   node's `PASS`/`FAIL` should be its first line and a multi-way label its last line.
 - On a fail / loop-back edge, the node's feedback is threaded into the target's next run so
-  the producer knows what to fix. The framing depends on the target: back into a step that
-  already ran this run, the output arrives as "Reviewer feedback (address this)"; into a
-  step that has not run yet, it arrives as neutral context ("Context from '<node>'"), the
-  same framing a `cases` route uses.
+  the producer knows what to fix. The framing depends on the target: into a step that leads
+  back to the gate, the output arrives as "Reviewer feedback (address this)", even the
+  first time that step runs; into a step that never comes back to the gate, it arrives as
+  neutral context ("Context from '<node>'"), the same framing a `cases` route uses.
 - **A normal branch is `cases`, not `on_fail`.** Binary routing is for a check that can
   genuinely fail. A check whose "no" is an expected path ("does `note.json` exist yet? no →
   go draft it") is a `cases` route with one label per outcome (`REUSE` / `DRAFT`): every
@@ -132,8 +132,8 @@ buffer (the buffer passes through it untouched).
 - **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, non-zero = FAIL**; on FAIL the loop-back
   feedback is the script's output plus its stderr tail and exit code, so the producer knows
   what to fix. `command: "run-my-tests"` as a gate is the canonical use. The exit note reads
-  `[script gate failed: exit code N]` only when `on_fail` leads back to a step that already
-  ran; into a step that has not run yet it is a plain `[exit code N]`.
+  `[script gate failed: exit code N]` only when `on_fail` leads back to the gate; into a
+  step that never comes back to it, it is a plain `[exit code N]`.
 - A presence or "already done?" check is **multi-way**, not binary: print the label and exit
   0 (`test -f note.json && echo REUSE || echo DRAFT`).
 - **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
