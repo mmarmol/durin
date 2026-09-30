@@ -308,9 +308,11 @@ with a warning in the log.
 The entry and the catalog are read under the provider the run actually goes
 to: a preset (or the default model) on `"auto"` uses the provider its model
 routes to, and a spelling such as `zai-coding-plan` or `zaiCodingPlan` reads
-the `zai_coding_plan` entry. Only a model that no configured provider serves
-has neither and takes `agents.defaults`. A preset that sets only `model` and a
-`temperature` therefore runs with the model's real limits.
+the `zai_coding_plan` entry. A preset that sets only `model` and a
+`temperature` therefore runs with the model's real limits. A model with no
+entry and no real limits takes `agents.defaults`: one that no configured
+provider serves, or one the catalog does not list and `model_capabilities`
+does not describe, as is common for a local or custom model.
 
 A model's entry holds only what you put there: durin never copies a preset's
 values or `agents.defaults` into it. A preset's `temperature` or limits apply
