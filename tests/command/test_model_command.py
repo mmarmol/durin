@@ -428,7 +428,7 @@ async def test_effort_variant_keeps_the_presets_compaction_settings(tmp_path) ->
     compaction ratio and cap must survive the switch."""
     loop = _make_loop(tmp_path)
     loop.model_presets["fast"] = loop.model_presets["fast"].model_copy(
-        update={"preemptive_compact_ratio": 0.6, "preemptive_compact_max_tokens": 20_000}
+        update={"preemptive_compact_ratio": 0.6, "preemptive_compact_max_tokens": 300_000}
     )
     loop.set_model_preset("fast", publish_update=False)
 
@@ -437,8 +437,8 @@ async def test_effort_variant_keeps_the_presets_compaction_settings(tmp_path) ->
     variant = loop.model_presets["fast:high"]
     assert variant.reasoning_effort == "high"
     assert variant.preemptive_compact_ratio == 0.6
-    assert variant.preemptive_compact_max_tokens == 20_000
-    assert loop.consolidator.preemptive_compact_max_tokens == 20_000
+    assert variant.preemptive_compact_max_tokens == 300_000
+    assert loop.consolidator.preemptive_compact_max_tokens == 300_000
 
 
 @pytest.mark.asyncio

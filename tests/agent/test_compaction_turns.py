@@ -100,6 +100,19 @@ async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [20_000, 1])
+async def test_a_cap_under_the_fixed_prompt_does_not_compact_every_turn(tmp_path, cap):
+    """A cap under the prompt's fixed part (here about 26,000 tokens of
+    system prompt and tool schemas) compacted on every turn from the second:
+    37 provider calls for 10 turns instead of 10. The cap never goes under
+    the minimum, so these turns fit without a compaction."""
+    result = await _run_turns(tmp_path, turns=10, window=200_000, preemptive_compact_max_tokens=cap)
+
+    assert result["compactions"] == [0] * 10
+    assert result["provider_calls"] == 10
+
+
+@pytest.mark.asyncio
 async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
     """context_block_limit is the runner's whole budget: on a 1M window with a
     40,000 limit the session must compact before it reaches the limit, not

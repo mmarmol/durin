@@ -206,8 +206,8 @@ of the context window at which durin compresses history before the next LLM
 call. When unset it inherits from `agents.defaults.preemptive_compact_ratio`.
 Its optional `preemptive_compact_max_tokens` caps that point in tokens,
 whatever the ratio: compression starts at the smaller of the two. When unset
-it inherits `agents.defaults.preemptive_compact_max_tokens`; a value at or
-above the model's window leaves the preset on its ratio alone.
+it inherits `agents.defaults.preemptive_compact_max_tokens`; `0` turns the
+cap off for that preset, leaving it on its ratio alone.
 
 ## Aux-model presets
 

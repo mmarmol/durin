@@ -213,8 +213,8 @@ def test_threshold_falls_back_to_ceiling_on_invalid_ratio(monkeypatch):
 
     # The absolute cap does not depend on the ratio: it still bounds the
     # ceiling-only trigger.
-    c.preemptive_compact_max_tokens = 500
-    assert c._preemptive_trigger() == (500, "cap")
+    big = _stub_consolidator(window=1_000_000, max_completion=200, safety=100, ratio=0)
+    assert big._preemptive_trigger() == (256_000, "cap")
 
 
 # ===========================================================================
@@ -587,8 +587,11 @@ def test_set_provider_applies_per_preset_ratio(tmp_path):
 
 def test_set_provider_without_a_ratio_uses_the_default_one(tmp_path):
     """set_provider with preemptive_compact_ratio=None — a preset that sets no
-    ratio — runs with the loop's default (agents.defaults') ratio."""
+    ratio — runs with the loop's default (agents.defaults') ratio, not with
+    the ratio the previous preset set."""
     loop = _make_loop(tmp_path, context_window_tokens=200, preemptive_compact_ratio=0.3)
+    loop.consolidator.set_provider(loop.provider, "frugal", 500, preemptive_compact_ratio=0.15)
+    assert loop.consolidator.preemptive_compact_ratio == 0.15
     loop.consolidator.set_provider(loop.provider, "x", 500)
     assert loop.consolidator.preemptive_compact_ratio == 0.3
 
@@ -624,14 +627,31 @@ def test_agent_defaults_cap_is_256k_and_null_disables_it():
     assert AgentDefaults(preemptiveCompactMaxTokens=300_000).preemptive_compact_max_tokens == 300_000
 
 
-def test_the_cap_refuses_zero_and_negative_counts():
-    """0 would compact on every turn; unset is written as null, never 0."""
+def test_zero_or_a_negative_count_means_no_cap():
+    """0 is the usual "no cap" spelling; under agents.defaults it reads as
+    null, on a preset it stays 0, "no cap for this preset", since a preset's
+    null inherits agents.defaults' cap."""
+    for off in (0, -1):
+        assert AgentDefaults(preemptive_compact_max_tokens=off).preemptive_compact_max_tokens is None
+        preset = ModelPresetConfig(model="m", preemptive_compact_max_tokens=off)
+        assert preset.preemptive_compact_max_tokens == 0
+
+
+def test_a_cap_under_the_minimum_is_refused_on_write():
+    """A cap under the fixed part of a prompt makes every turn compact."""
     from pydantic import ValidationError
-    for bad in (0, -1):
+
+    from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS
+
+    assert PREEMPTIVE_COMPACT_MIN_TOKENS == 64_000
+    for low in (1, 20_000, 63_999):
         with pytest.raises(ValidationError):
-            AgentDefaults(preemptive_compact_max_tokens=bad)
+            AgentDefaults(preemptive_compact_max_tokens=low)
         with pytest.raises(ValidationError):
-            ModelPresetConfig(model="m", preemptive_compact_max_tokens=bad)
+            ModelPresetConfig(model="m", preemptive_compact_max_tokens=low)
+    assert AgentDefaults(preemptive_compact_max_tokens=64_000).preemptive_compact_max_tokens == 64_000
+    preset = ModelPresetConfig(model="m", preemptive_compact_max_tokens=64_000)
+    assert preset.preemptive_compact_max_tokens == 64_000
 
 
 def test_a_preset_cap_is_unset_unless_given():
@@ -653,23 +673,29 @@ def test_the_shipped_default_is_the_same_on_every_construction_path():
         assert param.default == shipped, ctor
 
 
-def test_the_schema_offers_the_cap_as_a_nullable_positive_integer():
-    """The settings editor reads this schema: a nullable integer with a
-    minimum of 1 is what makes an emptied field save null and 0 be refused."""
+def test_the_schema_describes_the_cap_to_the_settings_editor():
+    """The settings editor reads this schema. Under agents.defaults: a
+    nullable integer of at least 64,000, so an emptied field saves null (no
+    cap) and a lower number is refused before it is sent. On a preset: 0 is
+    valid too ("no cap for this preset"), so the schema sets no minimum and
+    the server refuses 1 to 63,999."""
     from durin.config.schema import Config
 
     schema = Config.model_json_schema(by_alias=False)
-    for model, default in (("AgentDefaults", 256_000), ("ModelPresetConfig", None)):
-        field = schema["$defs"][model]["properties"]["preemptive_compact_max_tokens"]
-        assert {"type": "integer", "minimum": 1} in field["anyOf"], model
-        assert {"type": "null"} in field["anyOf"], model
-        assert field["default"] == default, model
+    defaults = schema["$defs"]["AgentDefaults"]["properties"]["preemptive_compact_max_tokens"]
+    assert {"type": "integer", "minimum": 64_000} in defaults["anyOf"]
+    assert {"type": "null"} in defaults["anyOf"]
+    assert defaults["default"] == 256_000
+    preset = schema["$defs"]["ModelPresetConfig"]["properties"]["preemptive_compact_max_tokens"]
+    assert {"type": "integer"} in preset["anyOf"]
+    assert {"type": "null"} in preset["anyOf"]
+    assert preset["default"] is None
 
 
-def test_config_set_saves_null_and_refuses_zero(tmp_path, monkeypatch):
-    """The path the settings editor and `durin config set` write through: null
-    persists (it differs from the default, so the non-default save keeps it)
-    and 0 is refused before anything is written."""
+def test_config_set_writes_off_as_null_and_refuses_a_low_cap(tmp_path):
+    """The path the settings editor and `durin config set` write through: 0
+    and null both save null, which persists (it differs from the default), and
+    a cap under the minimum is refused before anything is written."""
     from pydantic import ValidationError
 
     from durin.cli.config_cmd import apply_setting, parse_value
@@ -681,10 +707,83 @@ def test_config_set_saves_null_and_refuses_zero(tmp_path, monkeypatch):
     canonical = Config().model_dump(mode="json", by_alias=False)
 
     with pytest.raises(ValidationError):
-        apply_setting(canonical, key, parse_value("0"))
+        apply_setting(canonical, key, parse_value("20000"))
 
-    save_config(apply_setting(canonical, key, parse_value("null")), path)
-    assert load_config(path).agents.defaults.preemptive_compact_max_tokens is None
+    for off in ("0", "null"):
+        save_config(apply_setting(canonical, key, parse_value(off)), path)
+        assert load_config(path).agents.defaults.preemptive_compact_max_tokens is None
+
+
+def _write_config(tmp_path, defaults: dict, presets: dict | None = None):
+    import json
+
+    data = {
+        "agents": {"defaults": {"model": "openai/gpt-4.1", **defaults}},
+        "providers": {"openai": {"apiKey": "sk-test-not-real"}},
+    }
+    if presets is not None:
+        data["modelPresets"] = presets
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("value, expected", [
+    (0, None),
+    (-5, None),
+    (20_000, 64_000),
+    ("lots", 256_000),
+])
+def test_a_hand_edited_cap_never_costs_the_rest_of_the_config(tmp_path, value, expected):
+    """One bad value used to fail validation, and the loader fell back to the
+    default config: providers, channels and presets gone. 0 or less reads as
+    no cap, a count under the minimum is raised to it, and anything else is
+    dropped, so the rest of the file always loads."""
+    from durin.config.loader import load_config
+
+    cfg = load_config(_write_config(tmp_path, {"preemptiveCompactMaxTokens": value}))
+    assert cfg.agents.defaults.model == "openai/gpt-4.1"
+    assert cfg.providers.openai.api_key == "sk-test-not-real"
+    assert cfg.agents.defaults.preemptive_compact_max_tokens == expected
+
+
+@pytest.mark.parametrize("value, expected", [
+    (0, 0),
+    (-5, 0),
+    (20_000, 64_000),
+    ("lots", None),
+])
+def test_a_hand_edited_preset_cap_never_costs_the_rest_of_the_config(tmp_path, value, expected):
+    from durin.config.loader import load_config
+
+    presets = {"roomy": {"model": "gpt-4.1", "provider": "openai", "preemptiveCompactMaxTokens": value}}
+    cfg = load_config(_write_config(tmp_path, {}, presets))
+    assert cfg.providers.openai.api_key == "sk-test-not-real"
+    assert cfg.model_presets["roomy"].preemptive_compact_max_tokens == expected
+
+
+def test_a_cap_under_the_minimum_is_raised_to_it_at_run_time():
+    """A loop or consolidator built directly (the SDK, a test) is not
+    validated: the trigger still never goes under the minimum."""
+    c = _stub_consolidator(window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, cap=20_000)
+    assert c._preemptive_trigger() == (64_000, "cap")
+    c.preemptive_compact_max_tokens = 1
+    assert c._preemptive_trigger() == (64_000, "cap")
+    c.preemptive_compact_max_tokens = 0
+    assert c._preemptive_trigger() == (500_000, "ratio")
+
+
+def test_a_preset_turns_the_cap_off_with_zero(tmp_path):
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+    c.set_provider(loop.provider, "bulky", 1_000_000, preemptive_compact_max_tokens=0)
+    assert c._preemptive_trigger() == (500_000, "ratio")
+    assert c._trigger_for(
+        c.run_limits(1_000_000, 8192, preemptive_compact_max_tokens=0),
+    ) == (500_000, "ratio")
+    # A preset that sets none takes agents.defaults' cap back.
+    c.set_provider(loop.provider, "other", 1_000_000)
+    assert c._preemptive_trigger() == (256_000, "cap")
 
 
 def test_a_preset_cap_applies_while_active_and_a_preset_without_one_inherits(tmp_path):

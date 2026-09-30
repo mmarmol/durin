@@ -964,7 +964,14 @@ are untouched, where a high ratio would mean shipping a huge prompt every turn.
 **The absolute cap.** A ratio stops bounding cost on the largest windows: 0.5
 of a 1M window fires only at 500K, so every long turn would ship up to half a
 million tokens before anything is summarized. `preemptive_compact_max_tokens`
-bounds the trigger in tokens whatever the window, and `null` removes it. It only
+bounds the trigger in tokens whatever the window; `null` or `0` removes it (on
+a preset `null` inherits, so there only `0` does). It never goes under
+`PREEMPTIVE_COMPACT_MIN_TOKENS`: a cap at or under the prompt's fixed part
+(system prompt, tool schemas, summary) compacted on every turn, each
+compaction able to archive only the turn before it. The schema refuses a
+lower value on write, the loader raises a hand-edited one to the minimum
+rather than reject the whole file, and the consolidator applies the same
+floor to a loop built in code. It only
 ever lowers the trigger, so a window whose ratio trigger is already below it is
 unaffected. It applies after the small-window floor: on a window under
 `_SMALL_CTX_WINDOW_LIMIT` whose floored trigger would pass the cap, the cap
@@ -1080,7 +1087,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `unified_session` | `false` | Collapse all channels to one shared session. |
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
-| `preemptive_compact_max_tokens` | `256000` | Absolute cap on the preemptive trigger, in tokens: compaction fires at the smaller of this and the ratio's trigger; `null` for the ratio alone — see [Compaction thresholds](#compaction-thresholds). |
+| `preemptive_compact_max_tokens` | `256000` | Absolute cap on the preemptive trigger, in tokens (at least `64000`): compaction fires at the smaller of this and the ratio's trigger; `null` or `0` for the ratio alone — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
 | `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. A set `context_block_limit` is the whole input budget of the loop's runs and its subagents', and compaction and history replay stay under it — see [Compaction thresholds](#compaction-thresholds). An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |

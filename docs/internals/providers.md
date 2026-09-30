@@ -579,7 +579,7 @@ model_presets:
     temperature: 0.1
     reasoning_effort: null
     preemptive_compact_ratio: 0.5
-    preemptive_compact_max_tokens: null  # optional: unset takes agents.defaults'
+    preemptive_compact_max_tokens: null  # optional: unset takes agents.defaults', 0 = no cap
 ```
 
 **Provider credentials**

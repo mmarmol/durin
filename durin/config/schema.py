@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -20,6 +20,16 @@ if TYPE_CHECKING:
     from durin.agent.tools.web import WebToolsConfig
 
 logger = logging.getLogger(__name__)
+
+# The smallest absolute compaction cap. The system prompt, tool schemas and
+# summary a prompt always carries run to tens of thousands of tokens; a cap
+# at or under that part makes every turn compact, and each compaction can
+# only archive the one turn before it.
+PREEMPTIVE_COMPACT_MIN_TOKENS = 64_000
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 class Base(BaseModel):
@@ -954,13 +964,36 @@ class ModelPresetConfig(Base):
         serialization_alias="preemptiveCompactRatio",
         description="Fraction of context_window_tokens above which compaction fires before the next LLM call instead of waiting for a context-overflow 400; None inherits agents.defaults.preemptive_compact_ratio",
     )
+    # Three states, since null already means "inherit": null takes the
+    # agents.defaults cap, 0 is no cap for this preset, any other value is
+    # this preset's own (at least PREEMPTIVE_COMPACT_MIN_TOKENS).
     preemptive_compact_max_tokens: int | None = Field(
         default=None,
-        ge=1,
         validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
         serialization_alias="preemptiveCompactMaxTokens",
-        description="Absolute cap, in tokens, on where pre-emptive compaction fires for this preset, whatever the ratio; None inherits agents.defaults.preemptive_compact_max_tokens, and a value at or above the window leaves the preset on its ratio alone",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires for this preset, whatever the ratio; None inherits agents.defaults.preemptive_compact_max_tokens, 0 means no cap for this preset, otherwise at least 64000",
     )
+
+    @field_validator("preemptive_compact_max_tokens", mode="before")
+    @classmethod
+    def _negative_cap_is_no_cap(cls, value: Any) -> Any:
+        if _is_number(value) and value < 0:
+            logger.warning(
+                "config: a preset's preemptive_compact_max_tokens is %s; reading it as 0, no cap for the preset",
+                value,
+            )
+            return 0
+        return value
+
+    @field_validator("preemptive_compact_max_tokens")
+    @classmethod
+    def _cap_is_off_or_above_the_minimum(cls, value: int | None) -> int | None:
+        if value is not None and 0 < value < PREEMPTIVE_COMPACT_MIN_TOKENS:
+            raise ValueError(
+                f"must be 0 (no cap for this preset), null (the agents.defaults cap) "
+                f"or at least {PREEMPTIVE_COMPACT_MIN_TOKENS}"
+            )
+        return value
 
     def to_generation_settings(self) -> Any:
         from durin.providers.base import GenerationSettings
@@ -1102,11 +1135,24 @@ class AgentDefaults(Base):
     # whose ratio trigger is already lower never reaches it.
     preemptive_compact_max_tokens: int | None = Field(
         default=256_000,
-        ge=1,
+        ge=PREEMPTIVE_COMPACT_MIN_TOKENS,
         validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
         serialization_alias="preemptiveCompactMaxTokens",
-        description="Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger when the active preset doesn't override it; null = no cap (the ratio alone)",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger when the active preset doesn't override it; at least 64000; null or 0 = no cap (the ratio alone)",
     )
+
+    @field_validator("preemptive_compact_max_tokens", mode="before")
+    @classmethod
+    def _zero_cap_is_no_cap(cls, value: Any) -> Any:
+        # 0 is the usual spelling of "no cap"; null is this key's own.
+        if _is_number(value) and value <= 0:
+            if value < 0:
+                logger.warning(
+                    "config: agents.defaults.preemptive_compact_max_tokens is %s; reading it as null, no cap",
+                    value,
+                )
+            return None
+        return value
     decision_log_enabled: bool = Field(default=True, description="Record key decisions/findings in a task-state anchor that survives compaction")
     compaction_learnings_enabled: bool = Field(default=True, description="Distil durable user learnings (preferences, corrections) at compaction time")
     decision_log_max_entries: int = Field(default=10, ge=1, le=100, description="Cap on decision-log entries (the log is re-injected every turn)")

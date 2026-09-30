@@ -45,7 +45,7 @@ import pydantic
 from loguru import logger
 from pydantic import BaseModel
 
-from durin.config.schema import Config
+from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS, Config
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
@@ -600,6 +600,32 @@ def _env_replace(match: re.Match[str]) -> str:
 
 
 _LIMIT_KEYS = ("max_tokens", "maxTokens", "context_window_tokens", "contextWindowTokens")
+_COMPACT_CAP_KEYS = ("preemptive_compact_max_tokens", "preemptiveCompactMaxTokens")
+
+
+def _scrub_compact_cap(block: dict, where: str) -> None:
+    """Make a hand-edited compaction cap loadable: a count under the minimum
+    is raised to it, a fractional one rounded down, and a value that is no
+    number at all dropped (the default, or for a preset agents.defaults'
+    cap). 0 or less is left for the schema, which reads it as no cap."""
+    for key in _COMPACT_CAP_KEYS:
+        if key not in block:
+            continue
+        value = block[key]
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            del block[key]
+            logger.warning("config: {}.{} is {!r}, not a token count; treating it as unset", where, key, value)
+            continue
+        count = int(value)
+        if 0 < count < PREEMPTIVE_COMPACT_MIN_TOKENS:
+            logger.warning(
+                "config: {}.{} is {}, under the {} minimum; raising it to the minimum",
+                where, key, value, PREEMPTIVE_COMPACT_MIN_TOKENS,
+            )
+            count = PREEMPTIVE_COMPACT_MIN_TOKENS
+        block[key] = count
 
 
 def drop_unusable_limits(data: dict) -> dict:
@@ -609,8 +635,10 @@ def drop_unusable_limits(data: dict) -> dict:
     (the model's own limit, or the default) instead of failing validation,
     which would reject the whole config. The schema refuses such a value on
     write; one saved before it did (a settings editor wrote a cleared number
-    as 0) must not stop the config from loading or being edited. Each drop is
-    logged. Mutates and returns *data*."""
+    as 0) must not stop the config from loading or being edited. A compaction
+    cap under ``agents.defaults`` or on a preset is made loadable the same way
+    (``_scrub_compact_cap``). Each change is logged. Mutates and returns
+    *data*."""
 
     def scrub(block: Any, where: str) -> None:
         if not isinstance(block, dict):
@@ -627,6 +655,7 @@ def drop_unusable_limits(data: dict) -> dict:
     defaults = agents.get("defaults") if isinstance(agents, dict) else None
     if isinstance(defaults, dict):
         scrub(defaults, "agents.defaults")
+        _scrub_compact_cap(defaults, "agents.defaults")
         for key in ("fallback_models", "fallbackModels"):
             items = defaults.get(key)
             if isinstance(items, list):
@@ -637,6 +666,8 @@ def drop_unusable_limits(data: dict) -> dict:
         if isinstance(presets, dict):
             for name, preset in presets.items():
                 scrub(preset, f"{key}.{name}")
+                if isinstance(preset, dict):
+                    _scrub_compact_cap(preset, f"{key}.{name}")
     providers = data.get("providers")
     if isinstance(providers, dict):
         for provider, block in providers.items():

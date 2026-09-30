@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 import tiktoken
 from loguru import logger
 
+from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
@@ -1036,8 +1037,18 @@ class Consolidator:
             context_window_tokens=self.context_window_tokens,
             max_completion_tokens=self.max_completion_tokens,
             ratio=self.preemptive_compact_ratio,
-            cap=self.preemptive_compact_max_tokens,
+            cap=self._effective_cap(self.preemptive_compact_max_tokens),
         )
+
+    @staticmethod
+    def _effective_cap(cap: int | None) -> int | None:
+        """The cap a check applies: None or 0 and under (a preset's "no cap")
+        is none, and a count under the minimum is raised to it. The config is
+        validated against the same rules, but a loop built in code is not,
+        and a cap under the prompt's fixed part would compact every turn."""
+        if cap is None or cap <= 0:
+            return None
+        return max(cap, PREEMPTIVE_COMPACT_MIN_TOKENS)
 
     def _preset_ratio(self, ratio: float | None) -> float:
         """A preset's ratio, or the default one when the preset sets none."""
@@ -1063,7 +1074,7 @@ class Consolidator:
             context_window_tokens=context_window_tokens,
             max_completion_tokens=max_completion_tokens,
             ratio=self._preset_ratio(preemptive_compact_ratio),
-            cap=self._preset_cap(preemptive_compact_max_tokens),
+            cap=self._effective_cap(self._preset_cap(preemptive_compact_max_tokens)),
         )
 
     def _input_budget_for(self, limits: CompactionLimits) -> int:
