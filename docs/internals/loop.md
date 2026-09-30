@@ -437,14 +437,20 @@ The handlers, in order:
 - **`_state_run`** — calls `_run_agent_loop`, which delegates to
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
-  is stored on the context. An overflow that aborted *before any tool ran*
+  is stored on the context. An overflow before the turn's first model call
   (the consolidator's trigger ceiling is held strictly under the input budget
   of the run that follows, sized by the model the turn runs on, so a
   successful BUILD consolidation always fits — an iteration-0 overflow means
   it failed) triggers one bounded retry: force a fresh
   consolidation, rebuild the context, re-run
-  (`overflow_retry.forced_consolidation`); skipped once a tool has run, so
-  side-effecting tools never re-fire. The forced consolidation skips the
+  (`overflow_retry.forced_consolidation`). The rebuild has BUILD's shape:
+  the turn's own message, which BUILD has saved by then, stays out of the
+  replayed history (`get_history` stops at the position BUILD saved it at)
+  and is added once, as the current message. Only an attempt that appended
+  nothing but the runner's overflow placeholder is retried, since the
+  rebuild starts the turn over: a tool that ran would run again, an answer
+  already given would be given twice, and a queued message the attempt took
+  into the turn would be lost. The forced consolidation skips the
   idle check and the real-usage vetoes below: the overflow is newer proof
   than the provider's last count, and a vetoed retry would overflow again,
   as would every later turn of the session.
@@ -452,7 +458,14 @@ The handlers, in order:
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
   the `.meta.json` sidecar), then schedules a background
-  `maybe_consolidate_by_tokens`. A tool result too large for the persisted
+  `maybe_consolidate_by_tokens`. The new messages are everything the run
+  appended after the prompt it started from, so the save starts at that
+  prompt's length whatever its shape: the build merges the current message
+  into the last history message when both are user messages, and BUILD has
+  already saved the current message itself. A turn that fails on an overflow
+  saves the runner's overflow placeholder, an assistant message saying so,
+  so the session does not end on the unanswered message and the next turn's
+  message is not merged into it. A tool result too large for the persisted
   transcript is spilled to a recoverable file *before* it is truncated, and the
   pointer back to the full output leads the saved text, whose whole length
   stays within the cap. A later turn previews an over-cap entry from its head,

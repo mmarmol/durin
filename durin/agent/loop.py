@@ -404,6 +404,10 @@ class TurnContext:
     usage: dict[str, int] = field(default_factory=dict)
 
     user_persisted_early: bool = False
+    # Where BUILD saved the turn's own message in session.messages (None: not
+    # saved). The overflow retry's history stops before it, since the rebuilt
+    # prompt adds that message again as its current one, as BUILD's did.
+    user_message_index: int | None = None
     save_skip: int = 0
 
     outbound: OutboundMessage | None = None
@@ -3934,6 +3938,8 @@ class AgentLoop:
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
+        if ctx.user_persisted_early:
+            ctx.user_message_index = len(ctx.session.messages) - 1
 
         return "ok"
 
@@ -3977,15 +3983,21 @@ class AgentLoop:
             ).items():
                 ctx.usage[_usage_key] = ctx.usage.get(_usage_key, 0) + _usage_value
 
-            # In-turn recovery for an overflow that aborted before any tool
-            # ran: BUILD's consolidation must have failed (the consolidator
+            # In-turn recovery for an overflow before the turn's first model
+            # call: BUILD's consolidation must have failed (the consolidator
             # budget is structurally tighter than the runner's, so a
             # successful consolidation always fits). Force a fresh
-            # consolidation, rebuild the context, and retry — bounded, and
-            # skipped once a tool has run so we never re-fire side effects.
+            # consolidation, rebuild the context, and retry — bounded. Only an
+            # attempt that appended nothing but the runner's overflow
+            # placeholder is retried: the rebuild starts the turn over, so a
+            # tool that ran would run again, an answer already given would be
+            # given twice, and a queued message the attempt took into the
+            # turn (off its queue now) would be lost.
             if (
                 stop_reason == "mid_turn_precheck_overflow"
                 and not tools_used
+                and not had_injections
+                and len(all_msgs) == len(ctx.initial_messages) + 1
                 and attempt < _MAX_OVERFLOW_RETRIES
             ):
                 logger.warning(
@@ -4005,10 +4017,14 @@ class AgentLoop:
                     limits=self._compaction_limits(ctx.run_snapshot),
                 )
                 ctx.pending_summary = self._format_pending_summary(ctx.session)
+                # The same shape BUILD built: the turn's own message, saved
+                # since, stays out of the history and is added once, as the
+                # current message; left in, the prompt would carry it twice.
                 ctx.history = ctx.session.get_history(
                     max_messages=self._max_messages,
                     max_tokens=self._replay_token_budget(ctx.run_snapshot),
                     include_timestamps=True,
+                    end=ctx.user_message_index,
                 )
                 ctx.initial_messages = self._build_initial_messages(
                     ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
@@ -4046,7 +4062,12 @@ class AgentLoop:
         if ctx.final_content is None or not ctx.final_content.strip():
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
-        ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
+        # The run's own messages are everything after the prompt it started
+        # from, whatever that prompt's shape: the current message is its last
+        # entry, or was merged into a user message the history ended on. That
+        # message is in the session already (BUILD saved it; an empty one
+        # carries nothing to save), so the save starts right after the prompt.
+        ctx.save_skip = len(ctx.initial_messages)
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
         merge_turn_media_into_last_assistant(ctx.all_messages, extra)

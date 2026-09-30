@@ -6,6 +6,7 @@ a session actually does turn after turn."""
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -13,14 +14,29 @@ import pytest
 
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
-from durin.providers.base import GenerationSettings, LLMResponse
+from durin.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 from durin.utils.helpers import estimate_prompt_tokens
 
 _REPLY = "Here is a reply. " * 40
+_OVERFLOW_REPLY = "Error: prompt overflow"
 
 
 def _turn_text(i: int) -> str:
     return f"turn {i}: please remember fact number {i}. " + ("more context words " * 400)
+
+
+def _marker(i: int) -> str:
+    """What only turn *i*'s own message carries (every turn text starts with it)."""
+    return f"turn {i}:"
+
+
+def _text_of(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
 
 
 async def _run_turns(
@@ -30,8 +46,19 @@ async def _run_turns(
     window: int,
     turn_model: str | None = None,
     agents_md: str | None = None,
+    texts: list[str] | None = None,
+    tool_turns: tuple[int, ...] = (),
+    overflow_turns: tuple[int, ...] = (),
+    session_messages: list[dict[str, Any]] | None = None,
     **loop_kwargs: Any,
 ) -> dict[str, Any]:
+    """Run *turns* turns on one session.
+
+    Each reply is tagged ``REPLY-<n>`` so a delivered reply can be looked up
+    in the saved session. On a turn in *tool_turns* the model first lists the
+    workspace, then answers. On a turn in *overflow_turns* the first run
+    stops before its first call, as it does when the incoming message pushes
+    a prompt at its ceiling over the budget, and the turn retries."""
     if agents_md is not None:
         # Part of every prompt's fixed part, like the system prompt itself.
         (tmp_path / "AGENTS.md").write_text(agents_md, encoding="utf-8")
@@ -41,15 +68,28 @@ async def _run_turns(
     provider.estimate_prompt_tokens.return_value = (0, "none")
     main_prompts: list[int] = []
     calls = {"n": 0}
+    turn = {"i": -1}
 
     async def _chat(*_args, messages=None, tools=None, **_kwargs):
         calls["n"] += 1
         prompt_tokens = estimate_prompt_tokens(messages or [], tools or None)
+        usage = {"prompt_tokens": max(1, prompt_tokens), "completion_tokens": 10}
         if tools:
             main_prompts.append(prompt_tokens)
-        return LLMResponse(
-            content=_REPLY, usage={"prompt_tokens": max(1, prompt_tokens), "completion_tokens": 10},
+            if turn["i"] in tool_turns and not any(m.get("role") == "tool" for m in _this_turn(messages)):
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCallRequest(id=f"call_{calls['n']}", name="list_dir", arguments={"path": "."})],
+                    usage=usage,
+                )
+        return LLMResponse(content=f"REPLY-{calls['n']} {_REPLY}", usage=usage)
+
+    def _this_turn(messages):
+        start = max(
+            (idx for idx, m in enumerate(messages) if _marker(turn["i"]) in _text_of(m)),
+            default=len(messages),
         )
+        return messages[start:]
 
     provider.chat_with_retry = _chat
     provider.chat_stream_with_retry = _chat
@@ -76,36 +116,146 @@ async def _run_turns(
         return await real_archive(messages)
 
     loop.consolidator.archive = _archive  # type: ignore[method-assign]
+    attempts: list[dict[str, Any]] = []
+    real_run = loop.runner.run
+
+    async def _run(spec):
+        if turn["i"] in overflow_turns and not any(a["turn"] == turn["i"] for a in attempts):
+            spec = dataclasses.replace(spec, context_block_limit=1_000)
+        result = await real_run(spec)
+        attempts.append({
+            "turn": turn["i"], "stop_reason": result.stop_reason,
+            "prompt": list(spec.initial_messages),
+        })
+        return result
+
+    loop.runner.run = _run  # type: ignore[method-assign]
+    session = loop.sessions.get_or_create("cli:sim")
+    if session_messages is not None:
+        session.messages = [dict(m) for m in session_messages]
+        loop.sessions.save(session)
     replies: list[str | None] = []
     compactions: list[int] = []
+    tails: list[str | None] = []
     for i in range(turns):
+        turn["i"] = i
         before = len(archives)
-        out = await loop.process_direct(_turn_text(i), session_key="cli:sim", model_preset=turn_model)
+        text = texts[i] if texts is not None else _turn_text(i)
+        out = await loop.process_direct(text, session_key="cli:sim", model_preset=turn_model)
         while background:
             await background.pop(0)
         replies.append(out.content if out is not None else None)
         compactions.append(len(archives) - before)
+        saved = loop.sessions.get_or_create("cli:sim").messages
+        tails.append(saved[-1].get("role") if saved else None)
     return {
         "loop": loop,
+        "session": loop.sessions.get_or_create("cli:sim"),
         "replies": replies,
         "compactions": compactions,
         "provider_calls": calls["n"],
         "main_prompts": main_prompts,
+        "attempts": attempts,
+        "tails": tails,
     }
 
 
+def _assert_turns_saved(result: dict[str, Any], *, from_index: int = 0) -> None:
+    """Every reply the user got is in the saved session, the session
+    alternates (no two user messages in a row, no tool result without the
+    assistant message that called it) and never ends on a user message, and
+    no prompt a turn started from carries that turn's own message twice."""
+    messages = result["session"].messages[from_index:]
+    saved = "\n".join(_text_of(m) for m in messages if m.get("role") == "assistant")
+    for reply in result["replies"]:
+        assert reply, result["replies"]
+        if not reply.startswith(_OVERFLOW_REPLY):
+            assert reply.split(" ", 1)[0] in saved, (reply[:40], [m.get("role") for m in messages])
+    roles = [m.get("role") for m in messages]
+    assert not any(a == b == "user" for a, b in zip(roles, roles[1:])), roles
+    called: set[str] = set()
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            called.add(call["id"])
+        if message.get("role") == "tool":
+            assert message.get("tool_call_id") in called, roles
+    assert result["tails"] == ["assistant"] * len(result["tails"]), result["tails"]
+    for attempt in result["attempts"]:
+        text = "\n".join(_text_of(m) for m in attempt["prompt"])
+        assert text.count(_marker(attempt["turn"])) == 1, (attempt["turn"], attempt["stop_reason"])
+
+
 @pytest.mark.asyncio
-async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path):
+@pytest.mark.parametrize("turns", [9, 30])
+async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path, turns):
     """On a window whose trigger is its ceiling, one safety buffer under the
     runner's budget, the incoming message can push the prompt over the budget
     after BUILD found it under the trigger. The forced compaction that follows
     must run: the provider's earlier count said the previous prompt fit, and
-    letting that veto it left the retry to overflow too, on every later turn."""
-    result = await _run_turns(tmp_path, turns=9, window=40_000)
+    letting that veto it left the retry to overflow too, on every later turn.
 
-    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    The rescued turn's reply must reach the session too. Its retry rebuilt the
+    history with the turn's own message in it, already saved at BUILD, so the
+    prompt carried that message twice and SAVE skipped one message too many:
+    the reply was lost, the session ended on a user message, and every later
+    turn merged into it and lost its reply the same way."""
+    result = await _run_turns(tmp_path, turns=turns, window=40_000)
+
+    failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
+    assert any(a["stop_reason"] == "mid_turn_precheck_overflow" for a in result["attempts"])
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_rescued_turn_that_used_tools_is_saved_whole(tmp_path):
+    """A turn rescued by the overflow retry that calls a tool: the assistant
+    message carrying the call is saved with its result, not the result alone."""
+    result = await _run_turns(
+        tmp_path, turns=4, window=200_000, tool_turns=(2,), overflow_turns=(2,),
+    )
+
+    assert [a["stop_reason"] for a in result["attempts"] if a["turn"] == 2] == [
+        "mid_turn_precheck_overflow", "completed",
+    ]
+    _assert_turns_saved(result)
+    saved = result["session"].messages
+    turn_start = next(i for i, m in enumerate(saved) if _text_of(m).startswith(_marker(2)))
+    assert [m["role"] for m in saved[turn_start:turn_start + 4]] == ["user", "assistant", "tool", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_a_message_too_large_to_fit_leaves_later_turns_saved(tmp_path):
+    """A message that cannot fit even after the forced compaction fails the
+    turn. The session keeps an assistant message saying so, rather than ending
+    on the user message, so the short turns after it are answered and saved."""
+    texts = [
+        "turn 0: hello", "turn 1: hello",
+        "turn 2: " + ("a very long paste " * 3000),
+        "turn 3: short again", "turn 4: short", "turn 5: short",
+    ]
+    result = await _run_turns(tmp_path, turns=6, window=40_000, texts=texts)
+
+    assert result["replies"][2].startswith(_OVERFLOW_REPLY)
+    assert [r.startswith(_OVERFLOW_REPLY) for r in result["replies"][3:]] == [False] * 3
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_merged_into_an_unanswered_message_keeps_its_reply(tmp_path):
+    """A session that already ends on a user message (a turn saved without a
+    reply by an older version): the build merges the new message into it, and
+    SAVE must still save the reply, or every later turn merges the same way."""
+    unanswered = [
+        {"role": "user", "content": "an earlier question", "timestamp": "2026-09-30T10:00:00"},
+        {"role": "assistant", "content": "an earlier answer", "timestamp": "2026-09-30T10:00:01"},
+        {"role": "user", "content": "a question that got no reply", "timestamp": "2026-09-30T10:01:00"},
+    ]
+    result = await _run_turns(tmp_path, turns=3, window=200_000, session_messages=unanswered)
+
+    # The two unanswered messages stay as they were; from there on it alternates.
+    _assert_turns_saved(result, from_index=len(unanswered))
 
 
 @pytest.mark.asyncio
@@ -134,7 +284,7 @@ async def test_a_trigger_under_the_fixed_prompt_does_not_compact_every_turn(tmp_
         preemptive_compact_ratio=0.05,
     )
 
-    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) <= 1, result["compactions"]
 
@@ -148,7 +298,7 @@ async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
 
     result = await _run_turns(tmp_path, turns=12, window=1_000_000, context_block_limit=40_000)
 
-    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
     budget = input_budget_tokens(1_000_000, 8192, 40_000)
@@ -173,7 +323,7 @@ async def test_a_turn_on_a_smaller_model_compacts_by_that_models_limits(tmp_path
         tmp_path, turns=10, window=1_000_000, turn_model="small", model_presets=presets,
     )
 
-    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
     assert max(result["main_prompts"]) <= input_budget_tokens(45_000, 8192)
