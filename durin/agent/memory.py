@@ -858,12 +858,12 @@ class Consolidator:
         self,
         session: Session,
         replay_max_messages: int | None,
-    ) -> tuple[str | None, dict[str, list[str]]] | None:
+    ) -> tuple[list[str], dict[str, list[str]]] | None:
         """Archive messages that would be hidden by the replay message window.
 
-        Returns the round's ``(summary, tags)`` — the same pair ``archive()``
+        Returns the round's ``(summaries, tags)`` — what ``_archive_in_pieces``
         produces — or ``None`` when there was nothing to archive. The caller
-        needs the tags too: they ride the summary into the session-summary
+        needs the tags too: they ride the summaries into the session-summary
         store, not only into the session's metadata.
         """
         end_idx = self._replay_overflow_boundary(session, replay_max_messages)
@@ -878,11 +878,10 @@ class Consolidator:
             len(chunk),
             replay_max_messages,
         )
-        summary, tags = await self.archive(self._unsummarized(session, chunk))
-        self._merge_session_tags(session, tags)
+        summaries, tags = await self._archive_in_pieces(session, self._unsummarized(session, chunk))
         session.last_consolidated = end_idx
         self.sessions.save(session)
-        return summary, tags
+        return summaries, tags
 
     def _unsummarized(self, session: Session, chunk: list[dict]) -> list[dict]:
         """Drop the head of *chunk* the nightly session-summary pass already
@@ -1223,6 +1222,60 @@ class Consolidator:
                 trigger, bound = value, name
         return max(1, trigger), bound
 
+    def _summarizer_pieces(self, messages: list[dict]) -> list[list[dict]]:
+        """*messages* in order, cut at message boundaries into runs whose
+        text fits one summarizing call (``_input_token_budget``). Those calls
+        run on the loop's own model whatever model the turn ran on, so a chunk
+        sized by a turn on a larger window, or the span several rounds
+        archived, can be many times that budget; handed over whole, all but
+        its head would be cut off and never summarized. A single message over
+        the budget is a run of its own, and the only text still cut."""
+        budget = self._input_token_budget
+        if not messages or budget <= 0:
+            return [messages] if messages else []
+        try:
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+            def count(text: str) -> int:
+                return len(encoding.encode(text))
+        except Exception:
+
+            def count(text: str) -> int:
+                return len(text) // 4 + 1
+
+        pieces: list[list[dict]] = []
+        piece: list[dict] = []
+        used = 0
+        for message in messages:
+            line = MemoryStore._format_messages([message])
+            # Counted with the newline that joins it to the next line, so a
+            # run's lines add up to at least its joined text.
+            cost = count(line + "\n") if line else 0
+            if piece and used + cost > budget:
+                pieces.append(piece)
+                piece, used = [], 0
+            piece.append(message)
+            used += cost
+        pieces.append(piece)
+        return pieces
+
+    async def _archive_in_pieces(
+        self, session: Session, messages: list[dict],
+    ) -> tuple[list[str], dict[str, list[str]]]:
+        """Summarize *messages* in as many calls as ``_summarizer_pieces``
+        cuts them into: each summary that came back (one block each, like a
+        round's), and the tags of all of them, also merged into the session's
+        own. A call that fails raw-archives its run (``archive``)."""
+        summaries: list[str] = []
+        tags: dict[str, list[str]] = {"entities": [], "topics": []}
+        for piece in self._summarizer_pieces(messages):
+            summary, piece_tags = await self.archive(piece)
+            self._merge_session_tags(session, piece_tags)
+            self._collect_tags(tags, piece_tags)
+            if summary:
+                summaries.append(summary)
+        return summaries, tags
+
     def _truncate_to_token_budget(self, text: str) -> str:
         """Truncate text so it fits within the consolidation LLM's token budget."""
         budget = self._input_token_budget
@@ -1547,10 +1600,9 @@ class Consolidator:
                 replay_max_messages,
             )
             if replay_round is not None:
-                replay_summary, replay_tags = replay_round
+                replay_summaries, replay_tags = replay_round
                 self._collect_tags(new_tags, replay_tags)
-                if replay_summary:
-                    new_summaries.append(replay_summary)
+                new_summaries.extend(replay_summaries)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
                     session,
@@ -1683,19 +1735,17 @@ class Consolidator:
                     len(chunk),
                 )
                 pending = self._unsummarized(session, chunk)
-                summary, tags = await self.archive(pending)
+                summaries, tags = await self._archive_in_pieces(session, pending)
                 # Advance the cursor either way: on success the chunk was
                 # summarized; on failure archive() already raw-archived it as
                 # a breadcrumb. Re-archiving the same chunk on the next call
                 # would just emit duplicate [RAW] entries.
-                if summary:
-                    new_summaries.append(summary)
-                self._merge_session_tags(session, tags)
+                new_summaries.extend(summaries)
                 self._collect_tags(new_tags, tags)
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 rounds_run += 1
-                if not summary:
+                if not summaries:
                     # No summary has two causes. An empty chunk means the
                     # nightly session-summary pass already covered this span,
                     # so archive() never called an LLM and nothing failed —
@@ -1814,14 +1864,21 @@ class Consolidator:
                     "post-compaction hook raised for {}",
                     session.key,
                 )
-        # Concern B (task-state anchor): one LLM call per compaction
-        # extracts key decisions/findings from the span just archived
-        # and appends them to the decision log so they survive in
+        # The span is everything this call archived, over all its rounds:
+        # each extraction below reads it in the same summarizer-sized runs a
+        # round's chunk is summarized in, so no call sees only its head.
+        extracting = self.decision_log_enabled or self.compaction_learnings_enabled
+        pieces = self._summarizer_pieces(span) if extracting else []
+        # Concern B (task-state anchor): one LLM call per compaction (per run
+        # of the span) extracts key decisions/findings from the span just
+        # archived and appends them to the decision log so they survive in
         # runtime context after the raw messages leave the window.
         # Best-effort: failures must never break consolidation.
         if self.decision_log_enabled:
             try:
-                decisions = await self.extract_decisions(span)
+                decisions: list[str] = []
+                for piece in pieces:
+                    decisions.extend(await self.extract_decisions(piece))
                 if decisions:
                     from datetime import timezone
 
@@ -1861,7 +1918,9 @@ class Consolidator:
         # feedback entities; we rely on it.
         if self.compaction_learnings_enabled:
             try:
-                learnings = await self.extract_learnings(span)
+                learnings: list[dict[str, str]] = []
+                for piece in pieces:
+                    learnings.extend(await self.extract_learnings(piece))
                 if learnings:
                     from datetime import timezone
 

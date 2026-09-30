@@ -67,6 +67,9 @@ async def _run_turns(
     provider.generation = GenerationSettings(max_tokens=8192)
     provider.estimate_prompt_tokens.return_value = (0, "none")
     main_prompts: list[int] = []
+    # The calls made without tools (the summary, decision-log and learnings
+    # calls of a compaction), as (system prompt, input) pairs.
+    side_calls: list[tuple[str, str]] = []
     calls = {"n": 0}
     turn = {"i": -1}
 
@@ -74,6 +77,8 @@ async def _run_turns(
         calls["n"] += 1
         prompt_tokens = estimate_prompt_tokens(messages or [], tools or None)
         usage = {"prompt_tokens": max(1, prompt_tokens), "completion_tokens": 10}
+        if not tools:
+            side_calls.append((_text_of(messages[0]), _text_of(messages[-1])))
         if tools:
             main_prompts.append(prompt_tokens)
             if turn["i"] in tool_turns and not any(m.get("role") == "tool" for m in _this_turn(messages)):
@@ -155,6 +160,7 @@ async def _run_turns(
         "compactions": compactions,
         "provider_calls": calls["n"],
         "main_prompts": main_prompts,
+        "side_calls": side_calls,
         "attempts": attempts,
         "tails": tails,
     }
@@ -358,3 +364,40 @@ async def test_a_turn_on_a_smaller_model_compacts_by_that_models_limits(tmp_path
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
     assert max(result["main_prompts"]) <= input_budget_tokens(45_000, 8192)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_on_a_larger_model_is_summarized_whole(tmp_path):
+    """A turn's model sizes the chunks a compaction archives, but the summary,
+    the decision log and the learnings are written by the loop's own model,
+    within its input budget. On a loop whose model has 32,768 tokens and turns
+    on a 1M preset, a chunk several times that budget was cut down to it, and
+    most of the span was never summarized. A span is now summarized in as
+    many calls as that budget needs, and no call's input is cut."""
+    import tiktoken
+
+    from durin.config.schema import ModelPresetConfig
+    from durin.utils.prompt_templates import render_template
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=32_768),
+        "big": ModelPresetConfig(
+            model="test-model", context_window_tokens=1_000_000, preemptive_compact_max_tokens=100_000,
+        ),
+    }
+    texts = [f"turn {i}: fact {i}. " + ("more context words " * 2000) for i in range(14)]
+    result = await _run_turns(
+        tmp_path, turns=14, window=32_768, turn_model="big", model_presets=presets, texts=texts,
+    )
+
+    budget = result["loop"].consolidator._input_token_budget
+    encoding = tiktoken.get_encoding("cl100k_base")
+    for _system, text in result["side_calls"]:
+        assert "... (truncated)" not in text
+        assert len(encoding.encode(text)) <= budget
+    archive_prompt = render_template("agent/consolidator_archive.md", strip=True)
+    summarized = "\n".join(text for system, text in result["side_calls"] if system == archive_prompt)
+    session = result["session"]
+    archived = [m for m in session.messages[:session.last_consolidated] if m.get("content")]
+    assert len(archived) > 4
+    assert [m["content"] for m in archived if m["content"] not in summarized] == []

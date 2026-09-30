@@ -830,8 +830,8 @@ class TestCompactorSkipsSummarizedSpan:
 
         await loop.consolidator.maybe_consolidate_by_tokens(session)
 
-        # archive() ran on an empty remainder, so no provider call was made.
-        assert archive_calls == [[]]
+        # Nothing was left to summarize: no summarizing call, no provider call.
+        assert archive_calls == []
         assert loop.provider.chat_with_retry.await_count == 0
         done = [d for t, d in events if t == "compaction.completed"]
         assert done and done[0]["exit_reason"] == "already_summarized"

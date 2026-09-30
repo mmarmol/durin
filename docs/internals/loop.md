@@ -902,7 +902,8 @@ Two metadata splits matter:
   log — see below).
 - **Compaction never edits messages in place.** When the consolidator archives
   a span it advances `last_consolidated` and appends the span's summary as a
-  new block onto the session-summary projection (bounded; oldest blocks
+  new block (one per summarizing call, when the span took several; see the
+  compaction thresholds below) onto the session-summary projection (bounded; oldest blocks
   evicted as the cap is hit, their discovered-path trailers salvaged into a
   synthetic head block rather than lost). Only the part of the span the
   nightly session-summary pass has not already summarized is sent to the LLM;
@@ -946,20 +947,28 @@ distinct:
 
 | Number | Formula | What it bounds |
 |---|---|---|
-| `_input_token_budget` | `window − max_completion_tokens − buffer`, and at most `context_block_limit − buffer` | Size of the text handed to the consolidation LLM. Reserves the *real* completion ceiling, because that call has to fit too. |
+| `_input_token_budget` | `window − max_completion_tokens − buffer`, and at most `context_block_limit − buffer` | Size of the text handed to one summarizing call. Reserves the *real* completion ceiling, because that call has to fit too. Sized by the loop's own model, which does the summarizing. |
 | `_preemptive_ceiling` | `window − min(max_completion_tokens, reservation cap) − 2×buffer`, and at most `context_block_limit − buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. A `context_block_limit` replaces the runner's window-derived budget outright when set, which is why the ceiling also stays one buffer under it. |
 | `_preemptive_trigger_tokens` | `min(window × effective_ratio, preemptive_compact_max_tokens, ceiling)` | Where compaction actually fires. |
 
 The history replayed into a turn is bounded the same way: by the window's input
 budget, and by `context_block_limit` when that is set.
 
-All of these belong to the model the turn runs on. A turn on another model
-than the loop's own (a cron job's per-job model, a persona's model) sizes its
-compaction and its history replay by that model's window and output ceiling,
-and by its preset's ratio and cap (`Consolidator.run_limits`), from BUILD to
-the compaction scheduled after SAVE. Sizing it by the loop's model would put
-the trigger above the smaller model's budget whenever the loop's model has
-the larger window.
+The trigger, its ceiling and the replay budget belong to the model the turn
+runs on. A turn on another model than the loop's own (a cron job's per-job
+model, a persona's model) sizes its compaction and its history replay by that
+model's window and output ceiling, and by its preset's ratio and cap
+(`Consolidator.run_limits`), from BUILD to the compaction scheduled after
+SAVE. Sizing it by the loop's model would put the trigger above the smaller
+model's budget whenever the loop's model has the larger window.
+
+`_input_token_budget` does not follow the turn: the summary, the decision-log
+extraction and the learnings extraction all run on the loop's own model. A
+chunk sized by a turn on a larger window than the loop's, or the span several
+rounds archived, can be many times that budget, so each is cut at message
+boundaries into runs that fit it (`_summarizer_pieces`) and summarized one
+run per call, each summary its own block. Only a single message larger than
+the budget is still truncated.
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a
