@@ -740,8 +740,12 @@ client registration. See [docs/internals/mcp.md](../internals/mcp.md) for OAuth 
 
 Each stdio server writes its stderr to its own file,
 `<durin_home>/logs/mcp-stderr-<server>.log`, and every spawn starts with a
-line giving the time, the server name and the gateway's PID. When a server
-fails to start, the cause is in that file.
+line giving the time, the server name and the gateway's PID. When a server's
+process fails to start (a missing interpreter, for example), the cause is in
+that file; the gateway log and the server's MCP status show only
+`unhandled errors in a TaskGroup (1 sub-exception)`. A server refused before
+it spawns, by `malware_check` or `spawn_egress_policy`, writes nothing there:
+the refusal is in the gateway log and the server's MCP status.
 
 MCP server sampling (server-initiated LLM calls) is governed by `sampling` under each server entry:
 

@@ -137,7 +137,7 @@ commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/doc
 - [CLI & in-session commands](https://github.com/mmarmol/durin/blob/main/docs/guide/cli.md)
 - [Configuration reference](https://github.com/mmarmol/durin/blob/main/docs/guide/configuration.md)
 - [Providers & models](https://github.com/mmarmol/durin/blob/main/docs/guide/providers.md)
-- [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
+- [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, WhatsApp, WebSocket, or a channel plugin
 - [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
 - [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
 - [Automations](https://github.com/mmarmol/durin/blob/main/docs/guide/automations.md) — standing triggers that fire a workflow on their own
