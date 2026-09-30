@@ -179,6 +179,7 @@ class InterpretImageTool(Tool):
                 model=self._aux.model, response=response,
                 duration_ms=(time.monotonic() - _started) * 1000.0,
                 purpose="vision",
+                max_tokens=_MAX_RESPONSE_TOKENS,
             )
         except Exception as e:
             self._emit("ask_vision.error", {

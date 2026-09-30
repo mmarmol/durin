@@ -136,6 +136,21 @@ prompt/cached/completion token counts, `duration_ms`, the final
 the ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
 
+The row also says what limits the call ran under, so a run squeezed by a wrong
+window or output cap is visible from telemetry alone. `max_tokens` is the output
+cap the request asked for — the agent runner's dynamic value (the model's cap
+clamped to the room the prompt leaves in the window), a caller's explicit value,
+or the provider's own default; the aux bridges pass theirs to
+`emit_call_telemetry`. `context_window_tokens` and `input_budget_tokens` are the
+window and input budget (window minus the capped output reservation and safety
+buffer, or `context_block_limit`) of the agent run the call belongs to. They come
+from a ContextVar the runner binds (`bind_call_limits`) around each of its own
+requests and nothing else — a tool that calls another model during the run, or a
+subagent it spawns, is not held to the run's limits and its rows omit them. A
+workflow node binds its run's limits the same way around its verdict, delivery
+and re-entry calls. Calls outside a run (memory, judge, compaction, the aux
+bridges, personas) carry `max_tokens` only.
+
 `purpose` says on whose behalf the call was made, so a session's spend splits
 by caller without bracketing rows between other events by timestamp. It is a
 ContextVar bound next to the telemetry logger (`bind_telemetry(logger,

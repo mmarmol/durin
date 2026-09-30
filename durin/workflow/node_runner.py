@@ -18,13 +18,15 @@ import contextvars
 import dataclasses
 import json
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from durin.agent.hook import AgentHook, CompositeHook
-from durin.agent.runner import AgentRunner, AgentRunSpec
+from durin.agent.runner import AgentRunner, AgentRunSpec, input_budget_tokens, provider_max_output
 from durin.agent.tools.base import Tool
 from durin.agent.tools.context import ToolContext
 from durin.agent.tools.file_state import FileStates
@@ -35,6 +37,7 @@ from durin.config.schema import ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
+from durin.telemetry.logger import bind_call_limits, reset_call_limits
 from durin.utils.prompt_templates import render_template
 from durin.workflow.engine import (
     NodeExecutionError,
@@ -1024,8 +1027,11 @@ class AgentNodeRunner:
         reentries_left = getattr(req.node, "max_reentries", 0) or 0
         while (node_max_turns is not None and result.stop_reason == "max_iterations"
                and reentries_left > 0):
-            if not self._wants_reentry(result.messages, model, tools_registry,
-                                       provider=node_provider, temperature=persona_temperature):
+            with self._node_call_limits(node_window, node_provider):
+                wants_reentry = self._wants_reentry(
+                    result.messages, model, tools_registry,
+                    provider=node_provider, temperature=persona_temperature)
+            if not wants_reentry:
                 break
             reentries_left -= 1
             steer = getattr(req.node, "reentry_prompt", "") or (
@@ -1139,9 +1145,10 @@ class AgentNodeRunner:
             if routed.label is not None:
                 route_label = routed.label
             else:
-                route_label = self._derive_route_label(
-                    all_messages, route_labels, model, tools_registry,
-                    provider=node_provider, temperature=persona_temperature)
+                with self._node_call_limits(node_window, node_provider):
+                    route_label = self._derive_route_label(
+                        all_messages, route_labels, model, tools_registry,
+                        provider=node_provider, temperature=persona_temperature)
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact
@@ -1153,9 +1160,10 @@ class AgentNodeRunner:
         # see `_derive_structured_output` — paying no extra LLM call.
         if node_schema is not None:
             try:
-                payload = self._derive_structured_output(
-                    all_messages, node_schema, model, tools_registry, delivered,
-                    provider=node_provider, temperature=persona_temperature)
+                with self._node_call_limits(node_window, node_provider):
+                    payload = self._derive_structured_output(
+                        all_messages, node_schema, model, tools_registry, delivered,
+                        provider=node_provider, temperature=persona_temperature)
             except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
                 raise self._on_failure(req, all_messages, exc)
             final_output = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1215,6 +1223,22 @@ class AgentNodeRunner:
         except Exception:  # noqa: BLE001 - any failure → fall back to text-parse in the engine
             logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
         return None
+
+    @staticmethod
+    @contextmanager
+    def _node_call_limits(window: int | None, provider: Any) -> Iterator[None]:
+        """Tag the node's own verdict / delivery / re-entry calls with its
+        run's context window and input budget — the budget its agent turn was
+        sized to (no output cap on the spec, so the provider's; no block
+        limit) — so their ``provider.call`` rows read like the turn's own."""
+        token = bind_call_limits(
+            context_window_tokens=window,
+            input_budget_tokens=input_budget_tokens(window, provider_max_output(provider)),
+        )
+        try:
+            yield
+        finally:
+            reset_call_limits(token)
 
     def _chat(self, *, provider=None, **kwargs) -> LLMResponse:
         """One provider round-trip for the forced-tool verdict/delivery calls
