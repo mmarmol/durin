@@ -1595,6 +1595,36 @@ def _capped_limit(value: int, real: int | None, *, field: str, provider: str, mo
     return real
 
 
+def _output_within_window(max_tokens: int, window: int, *, provider: str, model: str) -> int:
+    """*max_tokens*, or *window* when the output cap is larger: a request
+    never produces more tokens than its window holds. Logged once when a
+    configured cap is cut."""
+    if max_tokens <= window:
+        return max_tokens
+    key = (provider, model, "max_tokens>window", max_tokens, window)
+    if key not in _LIMIT_CAP_WARNED:
+        _LIMIT_CAP_WARNED.add(key)
+        logger.warning(
+            "config: max_tokens %s for %s/%s is above its context window %s; using %s",
+            f"{max_tokens:,}", provider, model, f"{window:,}", f"{window:,}",
+        )
+    return window
+
+
+def _documented_output_cap(provider: str, model: str) -> int | None:
+    """The model's output cap in the capability snapshot (its documented
+    figure, keyed by the bare model name), when the snapshot knows it."""
+    try:
+        from durin.providers.capabilities import get_model_capabilities
+
+        caps = get_model_capabilities(model, provider)
+    except Exception:  # noqa: BLE001 - a second opinion only; its absence changes nothing
+        return None
+    if caps.source != "snapshot":
+        return None
+    return caps.max_output_tokens or None
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -1747,11 +1777,9 @@ class Config(BaseSettings):
             real_out,
             d.max_tokens,
         ) if v is not None)
-        return (
-            _capped_limit(ctx, real_ctx, field="context_window_tokens", provider=provider, model=model),
-            _capped_limit(mt, real_out, field="max_tokens", provider=provider, model=model),
-            bool(known_ctx),
-        )
+        ctx = _capped_limit(ctx, real_ctx, field="context_window_tokens", provider=provider, model=model)
+        mt = _capped_limit(mt, real_out, field="max_tokens", provider=provider, model=model)
+        return ctx, _output_within_window(mt, ctx, provider=provider, model=model), bool(known_ctx)
 
     def _real_limits(self, provider: str, model: str, caps: Any) -> tuple[int | None, int | None]:
         """The model's real ``(window, output limit)``: a ``model_capabilities``
@@ -1759,21 +1787,41 @@ class Config(BaseSettings):
         ``provider/model`` before the bare model name, field by field — else
         the catalog row's. The override is the user's word on a model the
         catalog has stale or wrong, so it is what configured values are
-        capped at and what an unset value takes."""
+        capped at and what an unset value takes.
+
+        A catalog output limit is bounded twice, since a catalog row can carry
+        a figure no request may ask for (an aggregator lists 943,717 output
+        tokens for glm-5.3, whose documented cap is 131,072): by the model's
+        documented cap in the capability snapshot, and by its window — a
+        request never produces more tokens than its window holds.
+        """
         overrides = [
             self.model_capabilities.get(f"{provider}/{model}"),
             self.model_capabilities.get(model),
         ]
 
-        def _real(field: str) -> int | None:
+        def _override(field: str) -> int | None:
             for override in overrides:
                 value = getattr(override, field, None) if override is not None else None
                 if value:
                     return value
+            return None
+
+        def _real(field: str) -> int | None:
+            value = _override(field)
+            if value:
+                return value
             value = getattr(caps, field, None) if caps is not None else None
             return value or None
 
-        return _real("max_input_tokens"), _real("max_output_tokens")
+        real_ctx, real_out = _real("max_input_tokens"), _real("max_output_tokens")
+        if real_out and not _override("max_output_tokens"):
+            documented = _documented_output_cap(provider, model)
+            if documented and documented < real_out:
+                real_out = documented
+        if real_out and real_ctx and real_out > real_ctx:
+            real_out = real_ctx
+        return real_ctx, real_out
 
     def model_real_limits(self, provider: str, model: str) -> tuple[int | None, int | None]:
         """The real ``(window, output limit)`` of *model* on *provider* (a

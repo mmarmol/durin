@@ -218,6 +218,9 @@ provider accepts, and it is rejected instead of being compacted first. A value
 **below** it is kept — a smaller window or output cap is a legitimate way to
 bound cost. When the catalog is stale or wrong for a model, declare its real
 limits under `model_capabilities` rather than raising a window past the cap.
+A catalog output limit is also held to the model's documented cap (some
+aggregator rows list far more than the model can emit), and an output cap is
+never larger than the window it runs in.
 `durin doctor` lists every configured value that differs from the real limit
 in its "model limits" check: one above warns, one below is listed so a
 forgotten cap does not go unnoticed. To go back to the model's own limit, unset

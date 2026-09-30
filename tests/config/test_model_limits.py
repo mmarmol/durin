@@ -468,6 +468,37 @@ def test_a_provider_qualified_override_wins_over_the_bare_one() -> None:
     assert cfg.resolve_preset("turbo").context_window_tokens == 250_000
 
 
+def test_an_output_limit_takes_the_models_documented_cap(monkeypatch) -> None:
+    """An aggregator catalog row can carry a figure no request may ask for
+    (943,717 output tokens for glm-5.3 on OpenRouter); the model's
+    documented cap in the capability snapshot bounds it."""
+    import durin.providers.capabilities as capabilities
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"openrouter": [
+        ModelInfo(id="z-ai/glm-5.3", max_input_tokens=1_310_720, max_output_tokens=943_717),
+    ]})
+    monkeypatch.setattr(capabilities, "_load_capabilities_snapshot", lambda: {
+        "glm-5.3": {"max_input_tokens": 1_000_000, "max_output_tokens": 131_072},
+    })
+    cfg = _config()
+    resolved = cfg.resolve_preset_limits(ModelPresetConfig(model="z-ai/glm-5.3", provider="openrouter"))
+    assert (resolved.context_window_tokens, resolved.max_tokens) == (1_310_720, 131_072)
+
+
+def test_an_output_limit_is_never_above_the_window(monkeypatch, warnings_logged) -> None:
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="odd-model", max_input_tokens=16_384, max_output_tokens=50_000),
+    ]})
+    cfg = _config()
+    resolved = cfg.resolve_preset_limits(ModelPresetConfig(model="odd-model", provider="zai_coding_plan"))
+    assert resolved.max_tokens == 16_384
+    capped = cfg.resolve_preset_limits(ModelPresetConfig(
+        model="my-local-model", provider="zai_coding_plan", context_window_tokens=8_192, max_tokens=12_000,
+    ))
+    assert capped.max_tokens == 8_192
+    assert any("12,000" in m and "8,192" in m for m in warnings_logged)
+
+
 def test_routed_provider_names_the_registry_key_a_run_goes_to() -> None:
     cfg = _routed_config()
     assert cfg.routed_provider("auto", "glm-5-turbo") == "zai_coding_plan"

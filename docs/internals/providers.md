@@ -195,7 +195,12 @@ A configured value above the model's real limit is capped to it by
 runner's input budget admit prompts the provider rejects, and an output cap above
 the model's maximum is rejected outright. The real limit is the
 `model_capabilities` override when one is declared — the user's word on a model
-the catalog has stale or wrong — else the catalog row. The first time each
+the catalog has stale or wrong — else the catalog row. A catalog output limit is
+bounded twice more, since a row can carry a figure no request may ask for (an
+aggregator lists 943,717 output tokens for glm-5.3, documented at 131,072): by the
+model's documented cap in the capability snapshot (`model_capabilities.json`, keyed
+by the bare model name) and by the model's window. Whatever the source, a resolved
+`max_tokens` is never above the resolved window (`_output_within_window`). The first time each
 distinct `(provider, model, field, configured, real)` is capped, the process logs
 one warning naming them; later resolutions stay silent. A value below the real
 limit is kept (a deliberate cost cap). Nothing is capped for a model with neither
