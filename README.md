@@ -95,8 +95,8 @@ watch a run, open a paused checkpoint, and pick up right where it stopped.
   OpenRouter and other gateways that reach hundreds of models. Switch
   mid-conversation, or run fully local with Ollama / llama.cpp / vLLM / LM Studio.
 - **Talk to it anywhere.** A CLI, a Textual TUI, a browser dashboard, and chat
-  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket, and more — all
-  reach the same agent and the same memory.
+  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket, or a channel
+  plugin — all reach the same agent and the same memory.
 - **Local-first & private.** Runs as a daemon on your own machine under
   `~/.durin/`; nothing phones home.
 - **Personas, voice, and schedules.** Per-channel personas (a SOUL + a model),
@@ -137,7 +137,7 @@ commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/doc
 - [CLI & in-session commands](https://github.com/mmarmol/durin/blob/main/docs/guide/cli.md)
 - [Configuration reference](https://github.com/mmarmol/durin/blob/main/docs/guide/configuration.md)
 - [Providers & models](https://github.com/mmarmol/durin/blob/main/docs/guide/providers.md)
-- [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
+- [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, WhatsApp, WebSocket, or a channel plugin
 - [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
 - [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
 - [Automations](https://github.com/mmarmol/durin/blob/main/docs/guide/automations.md) — standing triggers that fire a workflow on their own

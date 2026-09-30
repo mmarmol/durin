@@ -5,6 +5,287 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.4 — 2026-09-30
+
+### Highlights
+
+- **Restarts are quicker, and a stop ends cleanly.**
+  - At boot the gateway loads only the channels you enabled, and MCP servers
+    connect at the same time, so startup waits for the slowest server instead
+    of each one in turn. The first memory health scan waits a minute, out of
+    the way of channel startup, and `gateway.log` says how long each startup
+    phase took.
+  - At a stop, channels stop together, and Slack waits at most 1 second for
+    its Socket Mode close, which used to hold the stop for about 5 seconds.
+    Open event streams and waiting `/v1/chat/completions` requests are ended
+    instead of cut off. In a local test, a stop with one of them open went
+    from 3.1-3.6 seconds, with tracebacks in the log, to 0.3-0.4 seconds with
+    none. (#668, #671)
+- **The dream acts on what its investigating judge proposes.** On one
+  install, 28 "related" proposals from that judge, at 55-82% confidence,
+  waited on the Pending page in September and were then applied by hand,
+  unchanged. What it proposes short of a merge (a relation between the pages,
+  who keeps an alias, a clearer key) is now applied at any confidence, and its
+  merges apply from 60% instead of 80%. `durin memory revert` undoes any of
+  them. (#660)
+- **The gateway keeps answering while heavy work runs.**
+  - Reading the memory folder, as git, the dream or a health scan do, no
+    longer floods the file watcher. On one install, a script running git
+    against `memory/` took the gateway from 0.7 GB to 5.4 GB of memory. Reads
+    no longer reach the watcher at all.
+  - Searches no longer wait for the alias index to be rebuilt after a dream.
+    They keep the previous index until the new one is ready. Five searches at
+    once used to wait 8-11 seconds each.
+  - A voice note is decoded off the event loop; a 2-minute note used to stall
+    every conversation for 2.4 seconds. Nightly dreams and workflow runs get
+    threads of their own instead of holding the shared pool that every short
+    blocking step uses. (#662, #664, #670)
+- **The dream's skill review makes progress however many skills changed.**
+  After 0.11.2 changed the curation rules, one install had 113 skills to
+  review again, and the same 50 came back each dream: they were judged in one
+  call whose answer came back unusable. Skills are now reviewed in small
+  batches, each saved on its own, and a failing batch is split and retried. A
+  dream still reviews at most 50 skills and carries the rest over to the
+  next. When the model itself keeps failing, the pass stops after a few
+  calls. (#663)
+- **Workflow nodes hand over the file they drafted.** A node with an output
+  schema can deliver a JSON file from its working folder with `deliver_file`,
+  instead of retyping the whole payload. A rejection names the failing field,
+  so the node fixes the file in place and calls again. On one install,
+  retyping a 21 KB diagnosis took about 20,000 completion tokens and 3
+  minutes. (#666)
+
+### Upgrade notes
+
+- **Seven channels are removed:** Microsoft Teams, Matrix, Feishu, DingTalk,
+  QQ, WeCom and WeChat (Weixin). A config section still enabled for one of
+  them is not started, and the gateway logs a warning naming it
+  (`channels.feishu is enabled, but durin has no channel named 'feishu' …`).
+  Remove the section to clear the warning. The same warning covers an enabled
+  plugin channel whose package is not installed. A disabled section for one
+  of them gets no warning and is never pruned from `config.json`; remove it
+  by hand. `durin channels login weixin` is gone with the channel. (#661)
+- **The removed channels' files stay on disk.** Nothing deletes what they
+  stored under `~/.durin/`: `weixin/` (WeChat's login state), `matrix-store/`,
+  `dedup/feishu.json` and `dedup/matrix.json`, and the `media/` folders named
+  after them. Teams kept its conversations in the workspace, under
+  `state/msteams_conversations*`. Delete them, and any secrets you stored for
+  these channels (`durin secret list`, `durin secret rm`), when you no longer
+  need them. (#661)
+- **The `matrix` extra is gone, and so is `lark-oapi`.** Drop `matrix` from
+  your install command. Feishu's SDK, `lark-oapi`, was a base dependency that
+  every install downloaded; durin no longer depends on it. (#661)
+- **Each MCP server has its own stderr file.** A stdio server writes to
+  `~/.durin/logs/mcp-stderr-<server>.log`, and each spawn starts with a line
+  giving the time, the server name and the gateway's PID. When a server's
+  process fails to start, the cause is there. A server refused before it
+  spawns, by the malware check or `spawn_egress_policy`, has its reason in the
+  gateway log instead. The shared `mcp-stderr.log` is no longer written; an
+  old one is left in place for you to delete. (#668)
+- **The investigating judge merges from 60.** The default of
+  `memory.dream.auto_absorb.tier2_confidence_threshold` is now 60 (was 80); a
+  value you set yourself is kept. Its other proposals apply whatever their
+  confidence while `auto_resolve` is on; set `auto_resolve` to `false` to
+  decide those yourself. `auto_resolve` does not hold back merges: raise
+  `tier2_confidence_threshold` to send more of them to the Pending page.
+  (#660)
+- **Telemetry files follow each event's day.** A process that runs past
+  midnight writes each day's events to that day's file
+  (`<session>_<date>.jsonl`), not to the file of the day it started, so old
+  days now age out under retention. The 10,000-event cap per file starts
+  again each day: a gateway that hit it no longer stays silent every day
+  after. (#667)
+- **Most workflow runs execute 8 at a time.** API launches and resumes,
+  background `run_workflow` calls, a chat's included, and automations fired
+  by anything but their schedule share that bound. Further runs wait and
+  start in launch order as others finish, and the gateway log notes each
+  wait. A new run has no record until it starts, so while it waits neither
+  the `tasks` tool nor the workflow's runs show it; that log line is its
+  only trace. A run a chat is waiting on and a scheduled automation always
+  start at once. (#670)
+- **A stop ends open streams and `/v1` requests.** An event stream
+  (`GET /api/v1/sessions/{key}/events`, or a streaming send) ends when the
+  gateway stops or restarts; reattach and catch up from the history. A
+  `/v1/chat/completions` request running or queued at a stop answers `409
+  turn_stopped`, or its stream ends with that error frame. A non-streaming
+  one used to get a 500. (#671)
+
+### Memory and the dream
+
+- **Only real changes reach the file watcher.**
+  - It is told of files created, edited, moved or deleted, and of folders
+    created, moved or deleted, never of reads. It never watches
+    `memory/.git`, `archive/` or `pending/`.
+  - A burst of writes to one file is one re-index. A backlog past 10,000
+    files becomes one rescan of what the index is behind on.
+  - A folder deleted and created again, or moved, stays watched, and a moved
+    folder's old paths leave the index. (#662)
+- **The embedding model stays in the embed server.** With `isolation:
+  service`, the gateway no longer loads fastembed or onnxruntime for the
+  watcher, memory search or anything else (about 70 MB of peak memory). The
+  watcher's vector backfill starts once the agent loop is serving, and it
+  waits up to 2 minutes for the embed server instead of starting a local
+  worker with a second copy of the model. With no server by then (a TUI-only
+  setup, or a server that never came up), it embeds with a local copy.
+  (#662)
+- **The alias index rebuilds in the background.** The gateway builds it on a
+  thread of its own at startup and after each dream, and swaps it in when it
+  is ready. Entity writes made meanwhile are kept. (#664)
+- **Search work leaves the event loop.** After the search pipeline,
+  `memory_search` reads pages, applies its caps and renders its answer in the
+  same worker thread, so other conversations no longer wait on it. On 0.11.2
+  that step once took 14 seconds on the event loop. (#664)
+- **An investigated pair with nothing to change is settled.** A "different"
+  or "related" from the investigating judge that proposes no change settles
+  the pair instead of sending it to you. (#660)
+
+### Skills
+
+- **The skill review runs in batches.** The daily curation and the
+  manual-skill suggestions judge at most 8 skills, and 12,000 characters of
+  skill text, per call. Each batch's result is applied and recorded on its
+  own. (#663)
+- **Only a finished answer is applied.** An answer cut at the output limit,
+  filtered or refused is not parsed, so a half-written edit never reaches a
+  skill. A refused batch is split in halves, down to one skill. After 3
+  single-skill failures in a row the pass ends, and the skills it did not
+  reach wait for the next pass without penalty. (#663)
+- **A skill that keeps failing is set aside.** After 3 passes in a row in
+  which its own review failed, it is not reviewed until its text or the
+  curation rules change, or 7 days pass. These failures are kept in
+  `skills/.curation_failures.json`. (#663)
+- **The time cap covers the skill review.** `memory.dream.max_seconds_per_run`
+  now also bounds the curation and suggestion passes. (#663)
+- **The Dream feed shows what was not recovered.** A refused review call no
+  longer shows as "Dream output unparseable during curation". A pass that
+  left skills unreviewed shows one warning line instead. (#663)
+
+### Workflows
+
+- **`deliver_file`.** A node with the file tools (`tools: "default"`), a
+  working folder and an output schema can deliver a JSON object from a file
+  in its working folder. It gets the same schema check as `deliver`, and the
+  last valid delivery from either tool wins. Paths outside the working folder
+  are refused. The built-in `workflows` skill tells authors to end a
+  draft-first prompt with it. (#666)
+- **The node is told who writes the output file.** Both delivery replies say
+  that the engine writes the node's `output_file` when the step ends, so the
+  node does not write it by hand. (#666)
+- **A check's "no" that goes forward is not framed as a failed review.**
+  - A FAIL that sends the work back to be redone still reaches that step as
+    "Reviewer feedback". A FAIL that goes forward to a normal next step
+    reaches it as neutral context, and a script check's note reads
+    `[exit code N]` instead of `[script gate failed: exit code N]`.
+  - A check whose FAIL step leads straight back to it (check, create, check
+    again) still reads as a loop-back, so the creating step gets "Reviewer
+    feedback" and `[script gate failed: exit code N]` even on its first run.
+    Declare such a check as a `cases` route instead.
+  - Workflow self-improvement proposes turning a check with a normal "no"
+    into a `cases` route, for you to apply, and the `workflows` skill teaches
+    the same rule. (#665)
+- **The typical run time respects routes.** The "prior runs" estimate is left
+  out for a workflow whose recent runs took different routes. A resumed run
+  counts toward the routes but not the time, since only its last leg was
+  timed. (#666)
+- **A resume that cannot start leaves the run paused.** A resume rejected
+  before it starts, or cancelled while it waits for a thread, puts the paused
+  run back as it was, so you can answer it again. A cancel that lands
+  meanwhile wins. For a run an automation started, the automation still ends
+  its own run as failed, so the pause is no longer tied to it. A resume
+  through the `run_workflow` tool claims nothing, so while it waits for a
+  thread a cancel or a second resume can race it. (#670)
+
+### Gateway
+
+- **Startup.** Only enabled channels are imported, and a disabled plugin is
+  not loaded; the rest load when the dashboard first lists channels, off the
+  event loop. The Telegram SDK is still imported at every boot, by the
+  Telegram routes the gateway always mounts. An enabled channel that fails
+  to import is logged with its reason. Each startup phase logs
+  `Startup: <phase> took Xs`, and the first memory health check runs 60
+  seconds after the agent loop starts. (#671)
+- **Stop.**
+  - The gateway stops taking messages first. Messages that arrive during the
+    stop are kept and answered after the restart, in order per conversation.
+  - Channels stop at the same time, each within 15 seconds, and Slack waits at
+    most 1 second for its Socket Mode close.
+  - The web server finishes its own exit before the rest is cancelled,
+    instead of being cut off mid-exit with tracebacks in the log. (#671)
+- **The memory janitor trims by what is really in RAM.** On Linux, it trims
+  once freed memory still in RAM has grown by half the live heap since the
+  last trim, never for less than 64 MB. It used to wait for 512 MB freed:
+  one gateway held 223-262 MB freed for about 27 hours without a trim. A voice
+  engine that unloads is followed by an immediate trim. A trim logs at INFO
+  only when it returned at least 64 MB. (#670)
+- **Long jobs get their own threads.** Dream supervision and every workflow
+  run no longer hold a thread of the shared pool that file reads, locks and
+  other short blocking steps use. (#670)
+
+### MCP
+
+- **Servers connect at the same time,** each within its own 30 seconds. Their
+  tools are registered in config order, so tool listings stay the same from
+  one boot to the next. (#668)
+- **A server that exits at spawn fails fast.** It is retried and reported as
+  a failed connect, instead of timing out after 30 seconds. The gateway log
+  and its MCP status still show only
+  `unhandled errors in a TaskGroup (1 sub-exception)`; the cause is in the
+  server's stderr file. (#668)
+- **The malware check runs off the event loop.** A slow `api.osv.dev` no
+  longer freezes other servers' connects or the agent loop. (#668)
+- **The schema size is logged.** After each connect pass the gateway logs one
+  line with the number of MCP tool definitions, their estimated tokens (the
+  figure `tools.mcp_deferral.threshold_tokens` is compared with) and whether
+  deferral is active. A change to `tools.mcp_deferral.enabled` or
+  `threshold_tokens` takes effect after a gateway restart. (#668)
+- **`mcp_manage` and `mcp_search` are never deferred.** They were counted as
+  MCP tools, so turning deferral on would have hidden them behind
+  `mcp_find_tools`. (#668)
+
+### Telemetry
+
+- **Automation matches are stamped when the run starts.**
+  `automations.event_matched` with action `fired` is written as the run
+  starts, not when it ends. A fire that raises before the run starts records
+  the new action `failed`. (#667)
+- **Search timings.** `memory.recall` gains `postprocess_duration_ms` and
+  `total_duration_ms`; `duration_ms` is still the pipeline alone. An archive
+  search reports all three, where its `duration_ms` used to be 0. (#664)
+- **Dream parse failures carry more.** `memory.dream.parse_failure` gains
+  `raw_len`, `raw_tail`, and, when known, `finish_reason` and the parser's
+  `error`. `skill.curation_run` gains `failed` and `stalled`. A skill set
+  aside emits `skill.curation_stalled`, and a pass that left something
+  unrecovered emits `skill.curation_unrecovered`. The skill passes report
+  their time cap as `memory.dream.max_seconds_reached`, with `kind`
+  `curation` or `suggestions`. (#663)
+- **Your decisions on flagged pairs are recorded.** Each one is a
+  `memory.absorb.person_resolved` event, next to the judge's verdict,
+  confidence and proposal, and whether you followed it. (#660)
+- **Memory figures.** The `gateway.memory` event and
+  `GET /api/v1/diagnostics/memory` gain `malloc_resident_mb` and
+  `non_malloc_mb`. `gateway.memory.trimmed` gains `grown_mb` and `forced`.
+  (#670)
+
+### Fixes
+
+- **`read_file` takes `path` and `paths` together.** They are read as one
+  batch, `path` first with its own `offset`, `limit` and `pages`. An empty
+  `path` next to `paths` no longer fails the call. (#667)
+- **The forced delivery reads the tool that answered.** When a node's turn
+  ends without a delivery and the provider answers the forced call with
+  another tool, that tool's arguments are no longer checked as the payload.
+  (#666)
+- **Telemetry push.** Events emitted from several threads at once no longer
+  send empty batches. (#664)
+- **Spanish settings.** Five dream settings had their title and help
+  swapped, and one showed its help as its title. Each text is back in its
+  place. (#660)
+
+### Dependencies
+
+- PyJWT 2.14.0 in the lockfile. (#669)
+- watchdog 4.0.2 or later. (#662)
+
 ## 0.11.3 — 2026-09-29
 
 ### Highlights

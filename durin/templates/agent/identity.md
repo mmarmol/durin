@@ -114,7 +114,7 @@ procedure you just finished and can write down properly → `skill_write` direct
 When in doubt, observe — the dream turns good observations into skills.
 
 {{ platform_policy }}
-{% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
+{% if channel == 'telegram' or channel == 'discord' %}
 ## Format Hint
 This conversation is on a messaging app. Use short paragraphs. Avoid large headings (#, ##). Use **bold** sparingly. No tables — use plain lists.
 {% elif channel == 'whatsapp' %}

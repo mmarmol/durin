@@ -489,7 +489,7 @@ class AutoAbsorbConfig(Base):
     auto_resolve: bool = Field(
         default=True,
         validation_alias=AliasChoices("autoResolve", "auto_resolve"),
-        description="Let the dream apply the judges' non-merge resolutions on its own (alias ownership, the edge between related pages, clearer keys) when confident; false leaves every proposal for a person on the Pending page",
+        description="Let the dream apply the judges' non-merge resolutions on its own (alias ownership, the edge between related pages, clearer keys): the first judge's from resolve_threshold, the investigating judge's at any confidence; false leaves every non-merge proposal for a person on the Pending page (merges follow their own thresholds)",
     )
     resolve_threshold: int = Field(
         default=85,

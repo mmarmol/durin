@@ -393,7 +393,7 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `judge_concurrency` | `3` | Judge calls in flight at once during the refine pass (1–8); merges stay one at a time, in candidate order |
 | `recheck_days` | `7` | Days before a pair without a settled verdict (an unparseable reply, an `unclear`, a `same` below the merge threshold) is judged again; `0` re-judges it every run. Provider failures are never remembered |
 | `semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize` judges pairs whose names share a token or contain each other first, then the rest by distance; `require` judges only those; `off` orders by distance alone. Alias pairs are always judged |
-| `auto_resolve` | `true` | Let the dream apply the judges' non-merge resolutions on its own — who owns a contested alias, the typed edge between related entities, a clearer key — when confident; `false` leaves every proposal for you on the dashboard's Pending page |
+| `auto_resolve` | `true` | Let the dream apply the judges' non-merge resolutions on its own — who owns a contested alias, the typed edge between related entities, a clearer key: the first judge's from `resolve_threshold`, the investigating judge's at any confidence; `false` leaves every non-merge proposal for you on the dashboard's Pending page (merges follow their own thresholds) |
 | `resolve_threshold` | `85` | Confidence floor (0-100) for applying a non-merge resolution the cheap judge proposed; below it (from `escalate_floor` up) the pair goes to the investigating sub-agent, whose own proposal is applied whatever its confidence |
 | `auto_rename` | `true` | Allow automatic resolutions and merges to give an entity a clearer key (every reference is redirected); `false` applies the rest and leaves keys unchanged |
 
@@ -737,6 +737,15 @@ Each entry is an `MCPServerConfig`:
 `oauth` can be `true` (DCR defaults) or an `MCPOAuthConfig` object with `scope`,
 `client_id`, `client_secret`, and `callback_port` (default `1456`) for static
 client registration. See [docs/internals/mcp.md](../internals/mcp.md) for OAuth setup.
+
+Each stdio server writes its stderr to its own file,
+`<durin_home>/logs/mcp-stderr-<server>.log`, and every spawn starts with a
+line giving the time, the server name and the gateway's PID. When a server's
+process fails to start (a missing interpreter, for example), the cause is in
+that file; the gateway log and the server's MCP status show only
+`unhandled errors in a TaskGroup (1 sub-exception)`. A server refused before
+it spawns, by `malware_check` or `spawn_egress_policy`, writes nothing there:
+the refusal is in the gateway log and the server's MCP status.
 
 MCP server sampling (server-initiated LLM calls) is governed by `sampling` under each server entry:
 

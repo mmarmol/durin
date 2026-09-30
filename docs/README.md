@@ -23,8 +23,8 @@ runtime:
   summary, and *cron* for scheduled work.
 
 Every chat surface — terminal CLI, the Textual TUI, the web dashboard, and chat
-channels like Telegram, Discord, Slack, WhatsApp, email, a raw WebSocket, and
-more — funnels through the same internal message bus and the same agent loop.
+channels like Telegram, Discord, Slack, WhatsApp, email, a raw WebSocket, or a
+channel plugin — funnels through the same internal message bus and the same agent loop.
 Channels differ only in their I/O; the agent's behaviour is identical regardless
 of where the message came from.
 
