@@ -578,8 +578,10 @@ class Consolidator:
         # a 1M-window model wants ~0.15 (you pay for every token shipped, so
         # waiting until 500K means shipping a huge prompt every turn). Set
         # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
-        # overrides; otherwise inherits from ``AgentDefaults``.
+        # overrides; otherwise inherits from ``AgentDefaults``. The default is
+        # kept apart so switching away from a preset's ratio restores it.
         self.preemptive_compact_ratio = preemptive_compact_ratio
+        self._default_preemptive_compact_ratio = preemptive_compact_ratio
         # Absolute bound on the same trigger, in tokens; None leaves the ratio
         # alone. The ratio stops bounding cost on the largest windows (0.5 of
         # 1M fires only at 500K), so the trigger is the smaller of the two. A
@@ -711,14 +713,15 @@ class Consolidator:
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = provider.generation.max_tokens
-        # Per-preset ratio override (Tier 2 A1). When the model preset
-        # changes (set_model_preset → _apply_provider_snapshot), callers
-        # can supply the preset's preemptive_compact_ratio. None leaves
-        # the existing ratio untouched.
-        if preemptive_compact_ratio is not None:
-            self.preemptive_compact_ratio = preemptive_compact_ratio
-        # Per-preset cap: the preset's own while it is active. A preset that
-        # sets none gets the default cap back, never the previous preset's.
+        # Per-preset ratio and cap (Tier 2 A1). When the model preset changes
+        # (set_model_preset → _apply_provider_snapshot), callers supply the
+        # preset's own values, which apply while it is active. A preset that
+        # sets none (None) gets the default back, never the previous preset's.
+        self.preemptive_compact_ratio = (
+            self._default_preemptive_compact_ratio
+            if preemptive_compact_ratio is None
+            else preemptive_compact_ratio
+        )
         self.preemptive_compact_max_tokens = (
             self._default_preemptive_compact_max_tokens
             if preemptive_compact_max_tokens is None

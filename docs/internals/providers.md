@@ -534,7 +534,7 @@ Provider rules the serialization honors:
 | `ModelCapabilities` | `durin/providers/capabilities.py` | Frozen capability snapshot: vision, audio, pdf, video, function calling, reasoning, prompt caching, `source` provenance field |
 | `get_model_capabilities` | `durin/providers/capabilities.py` | Four-tier capability lookup entry point |
 | `model_capabilities.json` | `durin/providers/data/model_capabilities.json` | Vendored consensus snapshot (LiteLLM + OpenRouter + models.dev); keyed by bare lowercased model name |
-| `ProviderSnapshot` | `durin/providers/factory.py` | Immutable result: `provider`, `model`, `context_window_tokens`, `signature`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` (`None` = the preset sets no cap, and the `agents.defaults` one applies) |
+| `ProviderSnapshot` | `durin/providers/factory.py` | Immutable result: `provider`, `model`, `context_window_tokens`, `signature`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` (`None` = the preset sets none, and the `agents.defaults` value applies) |
 | `build_provider_snapshot` | `durin/providers/factory.py` | Primary factory: resolve preset → match provider → instantiate backend → wrap in FallbackProvider |
 | `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |

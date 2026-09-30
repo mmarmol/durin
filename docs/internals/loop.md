@@ -951,10 +951,11 @@ unaffected. It applies after the small-window floor: on a window just under
 `_SMALL_CTX_WINDOW_LIMIT`, where the floor's fraction would pass the cap, the
 cap wins. As one more term of the `min` it cannot lift the trigger past the
 ceiling, so the overflow invariant holds with it. A preset's own
-`preemptive_compact_max_tokens` replaces the default while that preset is
-active; a preset that sets none runs with the `agents.defaults` value, whatever
-the previous preset set. The cap governs the loop's session compaction only:
-workflow nodes and subagents prune by the runner's input budget instead.
+`preemptive_compact_ratio` and `preemptive_compact_max_tokens` replace the
+`agents.defaults` ones while that preset is active; a key the preset leaves
+unset takes the `agents.defaults` value, whatever the previous preset set. The
+cap governs the loop's session compaction only: workflow nodes and subagents
+prune by the runner's input budget instead.
 
 `compaction.preemptive_trigger`, `compaction.deferred` and
 `compaction.completed` name the bound that set the trigger in `trigger_bound`

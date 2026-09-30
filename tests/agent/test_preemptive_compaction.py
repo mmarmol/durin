@@ -428,13 +428,37 @@ def test_set_provider_applies_per_preset_ratio(tmp_path):
     assert loop.consolidator.context_window_tokens == 1_000_000
 
 
-def test_set_provider_without_explicit_ratio_preserves_current(tmp_path):
-    """set_provider with preemptive_compact_ratio=None leaves the current
-    value untouched (the global default → preset case where preset doesn't
-    override)."""
+def test_set_provider_without_a_ratio_uses_the_default_one(tmp_path):
+    """set_provider with preemptive_compact_ratio=None — a preset that sets no
+    ratio — runs with the loop's default (agents.defaults') ratio."""
     loop = _make_loop(tmp_path, context_window_tokens=200, preemptive_compact_ratio=0.3)
     loop.consolidator.set_provider(loop.provider, "x", 500)
     assert loop.consolidator.preemptive_compact_ratio == 0.3
+
+
+def test_a_presets_ratio_does_not_stick_after_switching_away(tmp_path):
+    """Regression: after a preset at 0.15, a preset that sets no ratio kept
+    compacting at 0.15 instead of taking agents.defaults' ratio back."""
+    loop = _make_loop(
+        tmp_path,
+        context_window_tokens=1_000_000,
+        preemptive_compact_max_tokens=None,
+        model_presets={
+            "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+            "frugal": ModelPresetConfig(
+                model="test-model",
+                context_window_tokens=1_000_000,
+                preemptive_compact_ratio=0.15,
+            ),
+        },
+    )
+    c = loop.consolidator
+    loop.set_model_preset("frugal", publish_update=False)
+    assert c._preemptive_trigger() == (150_000, "ratio")
+
+    loop.set_model_preset("default", publish_update=False)
+    assert c.preemptive_compact_ratio == 0.5
+    assert c._preemptive_trigger() == (500_000, "ratio")
 
 
 def test_agent_defaults_cap_is_256k_and_null_disables_it():
