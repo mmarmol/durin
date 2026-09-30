@@ -1017,6 +1017,18 @@ overflow. The vetoes guard against a rough estimate that runs high; the
 overflow is the runner's own measurement, taken after the provider's last
 count, and it says the prompt does not fit.
 
+**The fixed-prompt floor.** No minimum on the cap can know the prompt: a
+large system prompt, many tool schemas or a long summary can put the part
+compaction may not archive over the trigger (a low ratio on a big window is
+enough). Such a prompt cannot be compacted under the trigger; every
+compaction archived the turn before it and the next turn compacted again.
+When a compaction ends still over its trigger, the level it reached is
+remembered per session (in memory, bounded like the veto state), and the
+session's next compaction waits until the prompt has grown past that level
+by a normal cycle's runway (trigger − target), or reaches the ceiling
+(`compaction.deferred` with reason `fixed_prompt`). A compaction that does
+get under the trigger clears it, and a forced one ignores it.
+
 ### After DONE (post-processing in `_dispatch`)
 
 Once the state machine returns, `_dispatch` publishes the outbound message,

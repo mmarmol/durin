@@ -24,8 +24,17 @@ def _turn_text(i: int) -> str:
 
 
 async def _run_turns(
-    tmp_path, *, turns: int, window: int, turn_model: str | None = None, **loop_kwargs: Any,
+    tmp_path,
+    *,
+    turns: int,
+    window: int,
+    turn_model: str | None = None,
+    agents_md: str | None = None,
+    **loop_kwargs: Any,
 ) -> dict[str, Any]:
+    if agents_md is not None:
+        # Part of every prompt's fixed part, like the system prompt itself.
+        (tmp_path / "AGENTS.md").write_text(agents_md, encoding="utf-8")
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(max_tokens=8192)
@@ -110,6 +119,24 @@ async def test_a_cap_under_the_fixed_prompt_does_not_compact_every_turn(tmp_path
 
     assert result["compactions"] == [0] * 10
     assert result["provider_calls"] == 10
+
+
+@pytest.mark.asyncio
+async def test_a_trigger_under_the_fixed_prompt_does_not_compact_every_turn(tmp_path):
+    """The minimum cannot know the prompt: here a 40,000-token AGENTS.md on
+    top of the system prompt and tool schemas puts its fixed part over the
+    trigger (0.05 of a 1M window). No compaction can get such a prompt under
+    the trigger; each one archived the turn before, and the next turn
+    compacted again. After one, the session now waits until it has grown by
+    a compaction's runway before trying again."""
+    result = await _run_turns(
+        tmp_path, turns=8, window=1_000_000, agents_md="guidance " * 40_000,
+        preemptive_compact_ratio=0.05,
+    )
+
+    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    assert failed == [], result["replies"]
+    assert sum(result["compactions"]) <= 1, result["compactions"]
 
 
 @pytest.mark.asyncio

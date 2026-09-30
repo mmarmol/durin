@@ -1063,6 +1063,83 @@ async def test_a_forced_compaction_runs_under_the_trigger(tmp_path, monkeypatch)
     assert c.archive.await_count >= 1
 
 
+def _estimates(first: int, then: int):
+    """An estimator reporting *first*, then *then* on every later call."""
+    calls = {"n": 0}
+
+    def _estimate(_session, **_kwargs):
+        calls["n"] += 1
+        return (first if calls["n"] == 1 else then), "test"
+
+    return _estimate
+
+
+def _ineffective_compaction_setup(tmp_path, monkeypatch):
+    """Window 200: trigger 150 (the small-window floor), target 75, ceiling
+    200. The estimate stays at 160 after archiving: the part compaction may
+    not archive is over the trigger."""
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=10)
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 10)
+    return telemetry, c, session
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_that_cannot_get_under_the_trigger_is_not_repeated_every_turn(
+    tmp_path, monkeypatch,
+):
+    telemetry, c, session = _ineffective_compaction_setup(tmp_path, monkeypatch)
+    c.estimate_session_prompt_tokens = _estimates(170, 160)
+    await c.maybe_consolidate_by_tokens(session)
+    archived = c.archive.await_count
+    assert archived >= 1
+
+    # One more turn: over the trigger, but not a compaction's runway past where
+    # the last one ended. (Its provider count would lift the one-turn
+    # post-compaction park; clearing it isolates the floor.)
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c._awaiting_real_usage.clear()
+    c.estimate_session_prompt_tokens = _estimates(180, 180)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count == archived
+    deferrals = [e[1] for e in telemetry.events if e[0] == "compaction.deferred"]
+    assert deferrals[-1]["reason"] == "fixed_prompt"
+
+    # At the ceiling it compacts whatever the last one managed.
+    c.estimate_session_prompt_tokens = _estimates(200, 160)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count > archived
+
+
+@pytest.mark.asyncio
+async def test_the_fixed_prompt_floor_yields_to_an_overflow_and_to_a_working_compaction(
+    tmp_path, monkeypatch,
+):
+    telemetry, c, session = _ineffective_compaction_setup(tmp_path, monkeypatch)
+    c.estimate_session_prompt_tokens = _estimates(170, 160)
+    await c.maybe_consolidate_by_tokens(session)
+    archived = c.archive.await_count
+
+    # An overflow forces a compaction through the floor.
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c.estimate_session_prompt_tokens = _estimates(180, 70)
+    await c.maybe_consolidate_by_tokens(session, force=True)
+    assert c.archive.await_count > archived
+
+    # That one got under the trigger, so the prompt's fixed part fits after
+    # all: the next check over the trigger compacts again.
+    archived = c.archive.await_count
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c._awaiting_real_usage.clear()
+    c.estimate_session_prompt_tokens = _estimates(160, 70)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count > archived
+
+
 def test_session_tracking_dicts_are_bounded():
     """Per-session veto state must not grow without bound on a long-lived gateway."""
     from durin.agent.memory import Consolidator

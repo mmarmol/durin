@@ -655,6 +655,16 @@ class Consolidator:
         # extra compaction, so it is not worth persisting.
         self._fit_baseline: dict[str, int] = {}
         self._awaiting_real_usage: dict[str, int] = {}
+        # Per session, where the last compaction that could not get the
+        # prompt under its trigger left it: the part compaction may not
+        # archive (system prompt, tool schemas, summary, the current turn) is
+        # at or over the trigger there, so compacting again on the next turn
+        # would archive that one turn and nothing more, turn after turn. The
+        # next compaction waits until the prompt has grown by a normal
+        # cycle's runway past this level (never past the ceiling). Cleared by
+        # a compaction that does get under the trigger; in-memory and
+        # bounded like the veto state above.
+        self._compaction_floor: dict[str, int] = {}
 
     @staticmethod
     def _bounded_put(store: dict[str, int], key: str, value: int) -> None:
@@ -1576,6 +1586,10 @@ class Consolidator:
             # counts veto a compaction the real prompt does not need, unless
             # an overflow has already proved it does.
             deferral = None if force else self._defer_to_real_usage(session, estimated, trigger)
+            if deferral is None and not force:
+                floor = self._compaction_floor.get(session.key)
+                if floor is not None and estimated < min(floor + (trigger - target), ceiling):
+                    deferral = "fixed_prompt"
             if deferral is not None:
                 logger.debug(
                     "Token consolidation deferred ({}) for {}: rough={} trigger={}",
@@ -1689,6 +1703,15 @@ class Consolidator:
                     break
 
             if rounds_run:
+                # The estimate is only fresh after a round that ran to its
+                # re-measure: over the trigger there, compaction cannot get
+                # this prompt under it, and the next one waits for a runway;
+                # under it, the prompt's fixed part fits after all.
+                if exit_reason in ("target_reached", "no_boundary", "max_rounds"):
+                    if estimated >= trigger:
+                        self._bounded_put(self._compaction_floor, session.key, estimated)
+                    else:
+                        self._compaction_floor.pop(session.key, None)
                 # The real-usage park is armed in _post_compaction_hooks, which
                 # also covers the replay-window path.
                 _logger = current_telemetry()

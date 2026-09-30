@@ -208,14 +208,16 @@ class SessionArchivedEvent(TypedDict):
 
 
 class CompactionDeferredEvent(TypedDict):
-    """A rough estimate over the trigger was vetoed by the provider's own
-    token accounting, so no consolidation ran this turn.
+    """A rough estimate over the trigger did not lead to a consolidation this
+    turn.
 
     ``reason`` is ``post_compaction`` (a compaction just shortened the
-    conversation and no fresh provider count exists yet) or ``provider_fit``
+    conversation and no fresh provider count exists yet), ``provider_fit``
     (the last real prompt came in under the trigger and the estimate has only
-    drifted modestly since). ``trigger_bound`` and ``cap_tokens`` as on
-    ``compaction.preemptive_trigger``."""
+    drifted modestly since), or ``fixed_prompt`` (the session's last
+    compaction could not get the prompt under the trigger, and it has not
+    grown by a compaction's runway since). ``trigger_bound`` and
+    ``cap_tokens`` as on ``compaction.preemptive_trigger``."""
     session_key: str
     reason: str
     estimated_tokens: int
