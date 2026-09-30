@@ -364,6 +364,37 @@ def test_an_auto_default_model_takes_the_limits_of_the_provider_it_runs_on() -> 
     assert (preset.context_window_tokens, preset.max_tokens) == (1_000_000, 131_072)
 
 
+def test_a_local_models_limits_never_ask_its_server(monkeypatch) -> None:
+    """A local provider's live model list carries ids only, never limits,
+    and asking an unreachable server blocks for seconds; the limits come
+    from the static catalog, which a reachable server does not replace."""
+    import durin.providers.local_models as local_models
+    from durin.providers.factory import build_provider_snapshot
+
+    calls: list[str] = []
+
+    def _live(api_base, api_key=None, timeout=3.0):
+        calls.append(api_base)
+        return ["qwen-local"]  # a reachable server that lists the model
+
+    monkeypatch.setattr(local_models, "list_local_models", _live)
+    monkeypatch.setattr(pc, "_load_index", lambda: {
+        "zai_coding_plan": [_GLM_53],
+        "lm_studio": [ModelInfo(id="qwen-local", max_input_tokens=32_768, max_output_tokens=8_192)],
+    })
+    cfg = _routed_config()
+    cfg.providers.lm_studio.api_base = "http://127.0.0.1:9/v1"
+    cfg.providers.vllm.api_base = "http://10.255.255.1:8000/v1"
+    cfg.agents.defaults.fallback_models = [
+        InlineFallbackConfig(model="qwen-local", provider="lm_studio"),
+        InlineFallbackConfig(model="qwen3-coder-30b", provider="vllm"),
+    ]
+    resolved = cfg.resolve_preset_limits(ModelPresetConfig(model="qwen-local", provider="lm_studio"))
+    assert (resolved.context_window_tokens, resolved.max_tokens) == (32_768, 8_192)
+    build_provider_snapshot(cfg)
+    assert calls == []
+
+
 def test_routed_provider_names_the_registry_key_a_run_goes_to() -> None:
     cfg = _routed_config()
     assert cfg.routed_provider("auto", "glm-5-turbo") == "zai_coding_plan"

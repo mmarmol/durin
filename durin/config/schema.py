@@ -1687,7 +1687,9 @@ class Config(BaseSettings):
         """Return ``(entry, caps)`` for a ``(provider, model)``: the user's
         ``ModelEntry`` override (if any) and the catalog capabilities (if any).
 
-        Codex models inherit the matching ``openai`` caps via
+        The catalog row comes from ``catalog_model_limits``, which never makes
+        a request (a local server's live list has no limits to offer). Codex
+        models inherit the matching ``openai`` caps via
         ``provider_models('openai_codex')``; the lookup uses the static codex
         slug fallback (no token → no network), so it is safe to consult here.
         """
@@ -1698,9 +1700,9 @@ class Config(BaseSettings):
             if pc is not None:
                 entry = (getattr(pc, "models", None) or {}).get(model)
             try:
-                from durin.providers.provider_catalog import catalog_model_caps
+                from durin.providers.provider_catalog import catalog_model_limits
 
-                caps = catalog_model_caps(provider, model)
+                caps = catalog_model_limits(provider, model)
             except Exception:  # noqa: BLE001
                 caps = None
         return entry, caps

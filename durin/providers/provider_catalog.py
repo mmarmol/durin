@@ -130,3 +130,26 @@ def catalog_model_caps(provider: str, model: str) -> ModelInfo | None:
         if mi.id == model:
             return mi
     return None
+
+
+def catalog_model_limits(provider: str, model: str) -> ModelInfo | None:
+    """The catalog row that carries (provider, model)'s window and output
+    limit, read without a network request.
+
+    A local provider's live ``/v1/models`` list (see ``provider_models``)
+    carries model ids only, never limits, and asking a server that does not
+    answer blocks for seconds — on every resolve of every preset and
+    fallback on that provider, which the gateway does at the start of each
+    message. Its limits therefore come from the static index (vendored floor
+    plus the refresh cache), the same row whether the server is up or not.
+    Other providers read the index through ``catalog_model_caps``.
+    """
+    from durin.providers.registry import find_by_name
+
+    spec = find_by_name(provider)
+    if spec is not None and getattr(spec, "is_local", False):
+        for mi in _load_index().get(provider, ()):
+            if mi.id == model:
+                return mi
+        return None
+    return catalog_model_caps(provider, model)

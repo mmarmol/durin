@@ -150,8 +150,13 @@ overrides declared under the active provider's `models` dict. The result is a
 own". `Config.resolve_preset_limits(preset)` fills them the same way for every kind
 of preset, through `Config._model_limits`: a value the preset sets wins, then the
 `ModelEntry` under `providers.<provider>.models.<model>`, then the catalog
-(`catalog_model_caps`, `durin/providers/provider_catalog.py`: `max_input_tokens`
+(`catalog_model_limits`, `durin/providers/provider_catalog.py`: `max_input_tokens`
 for the window, `max_output_tokens` for the output cap), then `agents.defaults`.
+The catalog lookup never makes a request: a local provider's live `/v1/models`
+list carries model ids only, so its limits come from the static index (vendored
+floor plus the refresh cache) whether its server answers or not, and resolving a
+preset or fallback on a local provider — which the gateway does at the start of
+every message — never waits on that server.
 `openai_codex` is not in the catalog, so each codex slug inherits the matching
 `openai` entry's caps. The entry, the catalog row and the cap are read under
 `Config.routed_provider(provider, model)`: the registry name the factory builds

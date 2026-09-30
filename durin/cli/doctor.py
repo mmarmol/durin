@@ -1049,7 +1049,7 @@ def check_model_limits() -> CheckResult:
     listed as information only — a smaller window or output cap is a
     legitimate way to bound cost, but a forgotten one silently shrinks every
     run on that model."""
-    from durin.providers.provider_catalog import catalog_model_caps
+    from durin.providers.provider_catalog import catalog_model_limits
 
     try:
         cfg = load_config()
@@ -1059,7 +1059,7 @@ def check_model_limits() -> CheckResult:
     below: list[str] = []
     for where, provider, model, window, max_tokens in _configured_model_limits(cfg):
         try:
-            caps = catalog_model_caps(provider, model)
+            caps = catalog_model_limits(provider, model)
         except Exception:  # noqa: BLE001 - an unreadable catalog row compares with nothing
             caps = None
         if caps is None:
