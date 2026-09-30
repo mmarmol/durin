@@ -1392,6 +1392,29 @@ async def test_a_turn_on_another_model_does_not_wait_on_the_level(tmp_path, monk
     assert await _compacts_at(c, session, 240, limits=c.run_limits(300, 0))
 
 
+@pytest.mark.asyncio
+async def test_a_span_quoting_a_special_token_is_summarized_uncut(tmp_path, monkeypatch):
+    """Text that spells a tokenizer's special token (a pasted
+    "<|endoftext|>") is ordinary text to summarize: the tokenizer refuses it
+    unless told otherwise, and a span holding it must neither stop the
+    compaction nor be cut down for it."""
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    c.max_completion_tokens = 20
+    session = _session_with_messages(loop, count=4)
+    session.messages[2]["content"] = "a pasted <|endoftext|> marker"
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 10)
+    c.estimate_session_prompt_tokens = _estimates(170, 60)
+
+    await c.maybe_consolidate_by_tokens(session)
+
+    archived = [m for call in c.archive.await_args_list for m in call.args[0]]
+    assert session.messages[2] in archived
+    text = memory_module.MemoryStore._format_messages(session.messages[2:3])
+    assert c._truncate_to_token_budget(text) == text
+
+
 def _estimate_sequence(*values: int):
     """An estimator reporting *values* in turn, then the last one again."""
     queue = list(values)

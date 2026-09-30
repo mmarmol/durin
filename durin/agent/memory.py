@@ -1260,7 +1260,9 @@ class Consolidator:
             encoding = tiktoken.get_encoding("cl100k_base")
 
             def count(text: str) -> int:
-                return len(encoding.encode(text))
+                # Text that spells a special token ("<|endoftext|>" in a
+                # pasted document) is ordinary text here.
+                return len(encoding.encode(text, disallowed_special=()))
         except Exception:
 
             def count(text: str) -> int:
@@ -1306,7 +1308,9 @@ class Consolidator:
             return truncate_text(text, _RAW_ARCHIVE_MAX_CHARS)
         try:
             enc = tiktoken.get_encoding("cl100k_base")
-            tokens = enc.encode(text)
+            # Counted as _summarizer_pieces counts it, special-token text
+            # included, so a run it sized is never cut here.
+            tokens = enc.encode(text, disallowed_special=())
             if len(tokens) <= budget:
                 return text
             return enc.decode(tokens[:budget]) + "\n... (truncated)"
