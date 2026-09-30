@@ -1026,9 +1026,10 @@ class AgentNodeRunner:
             route_decided = routed.decided
         # The forced calls below (re-entry assessment, `route`, `deliver`) are sent
         # from a work-loop run's messages the way that run would send its next
-        # request — what it pruned stays pruned and the request fits its input
-        # budget (see AgentRunner.request_view) — rather than the whole unpruned
-        # history, which can exceed the budget the loop itself kept to.
+        # request — what it pruned stays pruned, the request fits its input
+        # budget, and its output cap is clamped to the room left in the window
+        # (see AgentRunner.request_view) — rather than the whole unpruned history
+        # with the model's full output cap, which together can exceed the window.
         view_spec = AgentRunSpec(
             initial_messages=[],
             tools=tools_registry,
@@ -1041,7 +1042,7 @@ class AgentNodeRunner:
             session_key=node_session_key,
         )
 
-        def forced_view(run) -> Callable[[list[dict]], list[dict]]:
+        def forced_view(run) -> Callable[[list[dict]], tuple[list[dict], int | None]]:
             prune_state = run.prune_state
             return lambda messages: self.runner.request_view(view_spec, messages, prune_state)
 
@@ -1275,11 +1276,11 @@ class AgentNodeRunner:
         the work loop just rendered — `route` is already in it from turn 1 (see `_RouteTool`) —
         so this call's tools array is identical to the loop's and the provider's cached prompt
         prefix survives into the turn's last request; only `tool_choice` pins the verdict.
-        `view` maps the request's messages to what is sent: the loop's pruned view, fitted
-        to its input budget. `provider`/`temperature` are the node's resolved call identity
-        (see `_resolve_node_provider` / `_execute`) — None defaults to the runner's own
-        provider and generation temperature."""
-        route_messages = view(list(messages) + [{
+        `view` maps the request's messages to what is sent and its output cap: the loop's
+        pruned view, fitted to its input budget. `provider`/`temperature` are the node's
+        resolved call identity (see `_resolve_node_provider` / `_execute`) — None defaults
+        to the runner's own provider and generation temperature."""
+        route_messages, max_tokens = view(list(messages) + [{
             "role": "user",
             "content": ("Record your verdict for this step now by calling the `route` tool with "
                         "exactly one of: " + ", ".join(labels) + "."),
@@ -1288,7 +1289,7 @@ class AgentNodeRunner:
             resp = self._chat(
                 messages=route_messages, tools=tools.get_definitions(),
                 tool_choice={"type": "function", "function": {"name": "route"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -1306,9 +1307,11 @@ class AgentNodeRunner:
         """One provider round-trip for the forced-tool verdict/delivery calls
         (route / re-entry / deliver), via ``chat_with_retry``: transient
         transport failures retry instead of failing the call, ``max_tokens``
-        resolves to the model's configured output cap (a bare ``chat()``
-        silently used the 4096 signature default — a reasoning model plus a
-        large deliver payload overflowed it, truncating the tool arguments),
+        is the cap the caller passes — the model's output cap clamped to the
+        room the prompt leaves in the node's window — or, when None, the
+        model's configured output cap (a bare ``chat()`` silently used the
+        4096 signature default — a reasoning model plus a large deliver
+        payload overflowed it, truncating the tool arguments),
         long generations ride the streaming transport, and the round-trip
         lands in telemetry as ``provider.call`` from the retry wrapper.
         ``provider`` (the node's resolved call identity — see
@@ -1332,7 +1335,9 @@ class AgentNodeRunner:
         this one call: the shared prefix (everything but the appended tail) is
         still identical to what the work loop just sent, which is what the
         provider's prompt cache keys on. `view` maps the request's messages to
-        what is sent: the loop's pruned view, fitted to its input budget."""
+        what is sent and its output cap: the loop's pruned view, fitted to its
+        input budget (the appended tool is small next to the cap's safety
+        margin)."""
         tool = {"type": "function", "function": {
             "name": "assess",
             "description": "Report whether you can produce your complete final "
@@ -1340,7 +1345,7 @@ class AgentNodeRunner:
                            "work is still missing.",
             "parameters": {"type": "object", "required": ["verdict"], "properties": {
                 "verdict": {"enum": ["deliver", "continue"]}}}}}
-        convo = view(list(messages) + [{
+        convo, max_tokens = view(list(messages) + [{
             "role": "user",
             "content": ("You have used all your tool rounds. Call `assess`: verdict "
                         "'deliver' if you can produce your complete final output "
@@ -1351,7 +1356,7 @@ class AgentNodeRunner:
             resp = self._chat(
                 messages=convo, tools=tools.get_definitions() + [tool],
                 tool_choice={"type": "function", "function": {"name": "assess"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -1388,8 +1393,9 @@ class AgentNodeRunner:
         toward a smaller payload; an ``error`` finish_reason raises immediately
         with the provider's message — neither is misreported as a schema failure.
         Each attempt sends ``view`` of the conversation so far: the loop's pruned
-        view, fitted to its input budget. Raises after the attempt budget — a
-        schema'd node with no valid payload has failed, there is no text fallback."""
+        view, fitted to its input budget, with its output cap. Raises after the
+        attempt budget — a schema'd node with no valid payload has failed, there
+        is no text fallback."""
         if captured.payload is not None:
             return captured.payload
 
@@ -1406,10 +1412,11 @@ class AgentNodeRunner:
         }]
         last_error = "the model made no deliver tool call"
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
+            sent, max_tokens = view(convo)
             resp = self._chat(
-                messages=view(convo), tools=full_tools,
+                messages=sent, tools=full_tools,
                 tool_choice={"type": "function", "function": {"name": "deliver"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             finish_reason = getattr(resp, "finish_reason", None)
             if finish_reason == "error":
                 # The retry wrapper already exhausted transport retries — this

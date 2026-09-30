@@ -559,7 +559,10 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   and budget fit the run's next request would get, from the run's own prune
   state (`AgentRunResult.prune_state`), so what the run pruned stays pruned byte
   for byte and the request fits the run's input budget instead of carrying the
-  whole unpruned history.
+  whole unpruned history. It also returns the output cap that request would
+  carry, chosen as the loop chooses it (`_request_max_tokens`): with a known
+  window, the ceiling clamped to the room the messages leave in it; without
+  one, the provider's own.
 
 The placeholder is informative rather than opaque:
 - it names the tool;

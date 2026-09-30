@@ -10,6 +10,7 @@ for byte, fitted under the same budget.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
@@ -41,14 +42,18 @@ class _Reader(LLMProvider):
     """Reads one file per loop request, then answers in text without calling
     `route` or `deliver`. Every request reports its size as usage, as a real
     provider does, so the runner's estimates anchor on what it sent. A forced
-    call is answered with the tool it names."""
+    call is answered with the tool it names, and the output cap it asked for
+    is recorded."""
 
-    def __init__(self, files, forced_args):
+    def __init__(self, files, forced_args, output_cap=None):
         super().__init__()
+        if output_cap is not None:
+            self.generation = dataclasses.replace(self.generation, max_tokens=output_cap)
         self.files = files
         self.forced_args = forced_args
         self.loop: list[list[dict]] = []
         self.forced: list[tuple[list[dict], list[dict]]] = []
+        self.forced_max_tokens: list[int] = []
 
     def get_default_model(self) -> str:
         return "test-model"
@@ -59,6 +64,7 @@ class _Reader(LLMProvider):
         if isinstance(tool_choice, dict):
             name = tool_choice["function"]["name"]
             self.forced.append((sent, tools))
+            self.forced_max_tokens.append(kwargs["max_tokens"])
             return LLMResponse(content=None, finish_reason="tool_calls", usage=usage, tool_calls=[
                 ToolCallRequest(id=f"forced{len(self.forced)}", name=name,
                                 arguments=self.forced_args[name])])
@@ -70,28 +76,30 @@ class _Reader(LLMProvider):
         return LLMResponse(content="Everything I read checks out.", usage=usage)
 
 
-def _config() -> Config:
+def _config(window: int) -> Config:
     config = Config()
     config.agents.defaults.provider = "zai_coding_plan"
     config.agents.defaults.model = "test-model"
-    config.providers.zai_coding_plan.models["test-model"] = ModelEntry(context_window_tokens=WINDOW)
+    config.providers.zai_coding_plan.models["test-model"] = ModelEntry(context_window_tokens=window)
     return config
 
 
-def _run(tmp_path, node: WorkNode):
+def _run(tmp_path, node: WorkNode, *, window: int | None = WINDOW, reads: int = READS,
+         output_cap: int | None = None):
     files = []
-    for n in range(READS):
+    for n in range(reads):
         path = tmp_path / "docs" / f"doc{n}.txt"
-        path.parent.mkdir(exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"document {n}\n{_TEXT}", encoding="utf-8")
         files.append(path)
     model = _Reader(files, {
         "route": {"label": "PASS"},
         "assess": {"verdict": "deliver"},
         "deliver": {"summary": "fine"},
-    })
+    }, output_cap=output_cap)
     nr = AgentNodeRunner(AgentRunner(model), SessionManager(workspace=tmp_path),
-                         default_model="test-model", app_config=_config())
+                         default_model="test-model",
+                         app_config=_config(window) if window is not None else None)
     resp = nr(NodeRunRequest(node=node, task="t", upstream_output="the work", shared_context=[],
                              run_id="r1", iteration=1, root_session_key=None))
     return model, resp
@@ -133,3 +141,41 @@ def test_the_reentry_assessment_stays_inside_the_budget(tmp_path):
     assert tools[-1]["function"]["name"] == "assess"
     assert estimate_prompt_tokens(forced, tools) <= BUDGET
     assert _pruned(model.loop[READS - 1]) <= _pruned(forced)
+
+
+# ── the forced calls' output cap leaves room for their prompt ────────────────
+
+# The box's GLM output cap, far more than a 64K window has left beside a
+# long node's prompt: a provider that checks prompt + max_tokens against the
+# window rejects such a request.
+BIG_CAP = 131_072
+CAP_WINDOW = 64_000
+CAP_READS = 10
+SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
+
+
+def _cap_nodes() -> list[WorkNode]:
+    return [
+        WorkNode(id="route", prompt="Judge.", tools="default", on_pass=None, on_fail="route"),
+        WorkNode(id="deliver", prompt="Summarize.", tools="default", output_schema=SCHEMA, next=None),
+        WorkNode(id="assess", prompt="Gather.", tools="default",
+                 max_turns=CAP_READS, max_reentries=1, next=None),
+    ]
+
+
+def test_the_forced_calls_ask_for_no_more_output_than_the_window_has_room_for(tmp_path):
+    """Clamped the way the work loop clamps its own requests: the output cap,
+    at most what the window leaves after the prompt (and the safety buffer)."""
+    for node in _cap_nodes():
+        model, _ = _run(tmp_path / node.id, node, window=CAP_WINDOW, reads=CAP_READS,
+                        output_cap=BIG_CAP)
+        assert model.forced, node.id
+        for (sent, tools), max_tokens in zip(model.forced, model.forced_max_tokens):
+            assert max_tokens < BIG_CAP, node.id
+            assert estimate_prompt_tokens(sent, tools) + max_tokens <= CAP_WINDOW, node.id
+
+
+def test_without_a_window_the_forced_calls_keep_the_models_output_cap(tmp_path):
+    for node in _cap_nodes():
+        model, _ = _run(tmp_path / node.id, node, window=None, reads=CAP_READS, output_cap=BIG_CAP)
+        assert model.forced_max_tokens and set(model.forced_max_tokens) == {BIG_CAP}, node.id

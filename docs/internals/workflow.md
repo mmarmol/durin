@@ -294,11 +294,14 @@ calls finishes (`AgentRunSpec.end_turn_after_tools`), with no request after it (
 forced-tool calls (route / re-entry / deliver) are sent from the work-loop run's messages the
 way that run would send its next request (`AgentRunner.request_view`, given the run's
 `AgentRunResult.prune_state`): results the loop pruned stay pruned, placeholders byte for
-byte, and the request is fitted under the same input budget — a forced call built from the
-whole unpruned history could exceed the budget the loop kept to and miss its cached prefix.
+byte, the request is fitted under the same input budget, and its `max_tokens` is the model's
+output cap clamped to the room the prompt leaves in the window, as the loop's own requests
+are (the model's configured cap, not a hardcoded signature default, when no window is
+known). A forced call built from the whole unpruned history with the full output cap could
+exceed the budget the loop kept to, miss its cached prefix, and ask for more than the window
+holds — which a provider that checks prompt plus output against the window rejects.
 They go through
-`chat_with_retry`, so transient transport failures retry and `max_tokens` resolves to the
-model's configured output cap rather than a hardcoded signature default. The delivery loop
+`chat_with_retry`, so transient transport failures retry. The delivery loop
 reads `finish_reason`: a `length` response is named as truncation and the retry is steered
 toward a more concise payload (a truncated tool-call JSON otherwise repairs into a partial
 object and gets misreported as a missing required field); an `error` response fails the
@@ -764,8 +767,9 @@ alone on its last line, and in that same reply call `route` with it — the call
   as the work loop, `tool_choice` pinned to `{"type": "function", "function": {"name":
   "route"}}`. It runs as a separate `provider.chat` (the runner reaches the provider via
   `AgentRunner.provider`) over the node's conversation as its loop would send it next — pruned
-  the way the loop pruned it and fitted under its input budget (§2) — and is wrapped so **any
-  failure yields no label** (`route_label=None`) — the run never breaks on it.
+  the way the loop pruned it, fitted under its input budget, with its output cap clamped to
+  the room left in the window (§2) — and is wrapped so **any failure yields no label**
+  (`route_label=None`) — the run never breaks on it.
 
 When neither produced a valid label — the model never called it, the forced call errored,
 or the provider did not honour it — the engine **falls back to parsing the node's text

@@ -636,25 +636,36 @@ class AgentRunner:
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
         prune_state: Any = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int | None]:
         """*messages* as the run that kept *prune_state* would send them on its
-        next request: the same context governance (results it pruned stay
+        next request, with the output cap that request would carry.
+
+        The messages get the same context governance (results it pruned stay
         pruned, placeholders byte for byte, and a new batch fires if the size
         calls for one) and the same fit under the run's input budget, trimming
-        oversized results when the view is still over it. For a request made
-        outside the loop from a finished run's messages — a caller's forced
-        tool call — so it costs no more than the loop's own requests and keeps
-        their cached prefix. Without *prune_state* the view starts fresh. Never
-        raises: on a governance failure the messages get the loop's minimal
-        repair."""
+        oversized results when the view is still over it. The cap is chosen as
+        the loop chooses it: with a known window, the output ceiling clamped to
+        the room the messages leave in it, so prompt and output together never
+        ask for more than the window; without one, None leaves the provider's
+        own. For a request made outside the loop from a finished run's
+        messages — a caller's forced tool call — so it costs no more than the
+        loop's own requests and keeps their cached prefix. Without
+        *prune_state* the view starts fresh. Never raises: on a governance
+        failure the messages get the loop's minimal repair."""
         spec = self._with_result_cap(spec)
         provider = spec.provider or self.provider
         state = prune_state if prune_state is not None else _PruneState(trusted_from=len(messages))
         view = self._govern_messages(spec, messages, provider, state, None)
+        max_tokens_override = None
         decision = self._estimate_and_budget(spec, view, provider)
-        if decision is not None and decision[0] > decision[1]:
-            view, _fit, _estimate = self._emergency_trim_for_budget(spec, view, decision[1], provider)
-        return view
+        if decision is not None:
+            estimate, budget = decision
+            if estimate > budget:
+                view, _fit, trimmed = self._emergency_trim_for_budget(spec, view, budget, provider)
+                if trimmed is not None:
+                    estimate = trimmed
+            max_tokens_override = self._effective_max_tokens(spec, estimate, provider)
+        return view, self._request_max_tokens(spec, max_tokens_override)
 
     def _govern_messages(
         self,
@@ -1648,6 +1659,26 @@ class AgentRunner:
         }])
         return updated
 
+    @staticmethod
+    def _request_max_tokens(spec: AgentRunSpec, max_tokens_override: int | None) -> int | None:
+        """The output cap a request sends, or None to leave the provider's own."""
+        if max_tokens_override is not None:
+            # Dynamic output budget reused from the precheck estimate: fills
+            # the room the prompt actually left, up to the ceiling. Applied
+            # even when ``spec.max_tokens`` is unset (the main-loop case),
+            # overriding the provider's generation default so a capped input
+            # reservation can't let input+output overflow the window.
+            return max_tokens_override
+        if spec.context_window_tokens:
+            # No estimate available (finalization-retry / direct callers) but
+            # a window is known: send a conservative window-safe cap. Input
+            # already fits under ``window - reservation - buffer``, so
+            # ``_MAX_OUTPUT_RESERVATION`` of output can never overflow.
+            ceiling = spec.max_tokens if isinstance(spec.max_tokens, int) else _MAX_OUTPUT_RESERVATION
+            return min(ceiling, _MAX_OUTPUT_RESERVATION)
+        # No window to protect — honour the configured ceiling verbatim.
+        return spec.max_tokens
+
     def _build_request_kwargs(
         self,
         spec: AgentRunSpec,
@@ -1703,23 +1734,9 @@ class AgentRunner:
         }
         if spec.temperature is not None:
             kwargs["temperature"] = spec.temperature
-        if max_tokens_override is not None:
-            # Dynamic output budget reused from the precheck estimate: fills
-            # the room the prompt actually left, up to the ceiling. Applied
-            # even when ``spec.max_tokens`` is unset (the main-loop case),
-            # overriding the provider's generation default so a capped input
-            # reservation can't let input+output overflow the window.
-            kwargs["max_tokens"] = max_tokens_override
-        elif spec.context_window_tokens:
-            # No estimate available (finalization-retry / direct callers) but
-            # a window is known: send a conservative window-safe cap. Input
-            # already fits under ``window - reservation - buffer``, so
-            # ``_MAX_OUTPUT_RESERVATION`` of output can never overflow.
-            ceiling = spec.max_tokens if isinstance(spec.max_tokens, int) else _MAX_OUTPUT_RESERVATION
-            kwargs["max_tokens"] = min(ceiling, _MAX_OUTPUT_RESERVATION)
-        elif spec.max_tokens is not None:
-            # No window to protect — honour the configured ceiling verbatim.
-            kwargs["max_tokens"] = spec.max_tokens
+        max_tokens = self._request_max_tokens(spec, max_tokens_override)
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         if spec.reasoning_effort is not None:
             kwargs["reasoning_effort"] = spec.reasoning_effort
         # Sampling params. top_p is a standard OpenAI param; top_k and
