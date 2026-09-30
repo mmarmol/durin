@@ -388,6 +388,24 @@ def test_deliver_file_refuses_paths_outside_the_working_folder(tmp_path):
     provider.chat_with_retry.assert_awaited_once()
 
 
+def test_deliver_file_resolves_a_managed_path_where_write_file_writes_it(tmp_path):
+    """write_file puts memory/x.json in the workspace's memory/, not the working
+    folder: deliver_file names the same file by that path — and refuses it, as it
+    lies outside the working folder — instead of reading a different one."""
+    work = _work_dir(tmp_path)
+    ws_draft = tmp_path / "ws" / "memory" / "draft.json"
+    ws_draft.parent.mkdir(parents=True)
+    ws_draft.write_text(json.dumps({"queries": ["workspace"]}), encoding="utf-8")
+    (work / "memory").mkdir()
+    (work / "memory" / "draft.json").write_text(json.dumps({"queries": ["folder"]}), encoding="utf-8")
+
+    seen, resp, provider = _run_calls(
+        tmp_path, _file_node(), work, [("deliver_file", {"path": "memory/draft.json"})],
+        chat_responses=[_forced({"queries": ["forced"]})])
+    assert "outside your working directory" in seen["results"][0]
+    assert json.loads(resp.output) == {"queries": ["forced"]}
+
+
 def test_deliver_file_names_the_failing_field_and_accepts_the_fixed_file(tmp_path):
     """A schema rejection names the field, so the model edits the draft in place and
     calls again — the payload is never retyped."""

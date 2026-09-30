@@ -119,12 +119,14 @@ class _FsTool(Tool, ContextAware):
         return current_file_states(self._fallback_file_states)
 
     def _resolve(self, path: str) -> Path:
+        """Resolve a path the tool reads (see ``resolve_workspace_path``'s ``read``)."""
         return resolve_workspace_path(
             path,
             self._workspace,
             self._allowed_dir,
             self._extra_allowed_dirs,
             work_dir=self._work_dir(),
+            read=True,
         )
 
     def _resolve_write(self, path: str) -> Path:
@@ -175,6 +177,23 @@ class _FsTool(Tool, ContextAware):
             denied_subdirs=denied,
             deny_durin_stores=True,
         )
+
+    def _display_bases(self) -> tuple[Path | None, Path | None]:
+        """The workspace and the relative-path base, resolved the way a found
+        file's path is, so a path under either is recognized as such."""
+        work_dir = self._work_dir()
+        return (self._workspace.resolve() if self._workspace else None,
+                work_dir.resolve() if work_dir else None)
+
+    def _readback_path(self, fp: Path) -> str:
+        """*fp* named so that this tool resolves the name back to it: relative to
+        the folder relative paths resolve in when it lies there, from the
+        workspace root in a managed area, absolute elsewhere."""
+        from durin.agent.tools.work_area import display_path
+
+        if self._workspace is None:
+            return str(fp)
+        return display_path(fp, *self._display_bases())
 
     def _display_path(self, fp: Path) -> str:
         """Workspace-relative path for telemetry; falls back to absolute."""

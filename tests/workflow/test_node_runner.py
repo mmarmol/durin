@@ -349,13 +349,15 @@ def test_a_nodes_file_tools_resolve_relative_paths_in_its_working_folder(tmp_pat
 def test_a_node_is_told_where_relative_paths_and_commands_resolve(tmp_path):
     _, user = _working_folder_node_run(tmp_path)
     assert "relative path in the file tools resolves here" in user
-    assert f"Shell commands start in the workspace root ({tmp_path.resolve()})" in user
+    assert f"The workspace root is: {tmp_path.resolve()}" in user
+    assert "Shell commands start in the workspace root, not here" in user
 
 
-def test_a_node_without_exec_is_not_told_where_commands_start(tmp_path):
+def test_a_node_without_exec_is_told_the_root_but_not_where_commands_start(tmp_path):
     tools, user = _working_folder_node_run(tmp_path, mode="read")
     assert "exec" not in tools.tool_names
     assert "relative path in the file tools resolves here" in user
+    assert f"The workspace root is: {tmp_path.resolve()}" in user
     assert "Shell commands" not in user
 
 

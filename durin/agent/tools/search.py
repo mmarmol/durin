@@ -101,13 +101,6 @@ def _matches_type(name: str, file_type: str | None) -> bool:
 class _SearchTool(_FsTool):
     _IGNORE_DIRS = set(ListDirTool._IGNORE_DIRS)
 
-    def _display_bases(self) -> tuple[Path | None, Path | None]:
-        """The workspace and the relative-path base, resolved the way a found
-        file's path is, so a path under either is recognized as such."""
-        work_dir = self._work_dir()
-        return (self._workspace.resolve() if self._workspace else None,
-                work_dir.resolve() if work_dir else None)
-
     def _display_path(self, target: Path, root: Path,
                       bases: tuple[Path | None, Path | None] = (None, None)) -> str:
         """The path printed for *target*: one read_file resolves back to it —

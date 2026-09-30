@@ -10,6 +10,7 @@ working folder (``ToolContext.work_dir``) as their base for relative paths.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -126,6 +127,122 @@ async def test_convert_to_markdown_resolves_in_the_working_folder(layout) -> Non
     result = await ConvertToMarkdownTool.create(ctx).execute(path="attachment.csv")
     assert "error" not in result
     assert result["path"] == str(work / "attachment.csv")
+
+
+@pytest.fixture
+def repo(layout):
+    """A repository checked out at the workspace root, as the box keeps its code
+    under mxhero-repos/."""
+    ws, work, ctx = layout
+    code = ws / "mxhero-repos" / "share-links"
+    code.mkdir(parents=True)
+    (code / "shares.ts").write_text("export const disposition = 'attachment';\n", encoding="utf-8")
+    return ws, work, ctx
+
+
+@pytest.mark.asyncio
+async def test_a_folder_at_the_workspace_root_is_read_from_there(repo) -> None:
+    """The working folder has no mxhero-repos/, so a relative path into it reads
+    the workspace root's."""
+    ws, _, ctx = repo
+    assert "disposition" in await ReadFileTool.create(ctx).execute(
+        path="mxhero-repos/share-links/shares.ts")
+    found = await GrepTool.create(ctx).execute(pattern="disposition", path="mxhero-repos/")
+    printed = found.splitlines()[0]
+    assert printed == str(ws / "mxhero-repos" / "share-links" / "shares.ts")
+    # A fresh read state, so the read is not answered "unchanged since last read".
+    fresh = dataclasses.replace(ctx, file_state_store=FileStates())
+    assert "disposition" in await ReadFileTool.create(fresh).execute(path=printed)
+    assert "share-links" in await ListDirTool.create(ctx).execute(path="mxhero-repos")
+
+
+@pytest.mark.asyncio
+async def test_a_file_at_the_workspace_root_never_stands_in_for_a_missing_one(repo) -> None:
+    """A stray file another run left at the root is not read in place of this
+    run's: only a path into a folder there falls back."""
+    _, _, ctx = repo
+    missing = await ReadFileTool.create(ctx).execute(path="slack-context.json")
+    assert "File not found" in missing and "another ticket" not in missing
+
+
+@pytest.mark.asyncio
+async def test_the_working_folders_copy_wins_and_writes_stay_in_it(repo) -> None:
+    ws, work, ctx = repo
+    (ws / "mxhero-repos" / "notes.md").write_text("theirs", encoding="utf-8")
+    await WriteFileTool.create(ctx).execute(path="mxhero-repos/notes.md", content="ours")
+    assert (work / "mxhero-repos" / "notes.md").read_text(encoding="utf-8") == "ours"
+    assert (ws / "mxhero-repos" / "notes.md").read_text(encoding="utf-8") == "theirs"
+    read = ReadFileTool.create(ctx)
+    assert "ours" in await read.execute(path="mxhero-repos/notes.md")
+    # A path the working folder does not have is still read from the root's folder.
+    assert "disposition" in await read.execute(path="mxhero-repos/share-links/shares.ts")
+
+
+@pytest.mark.asyncio
+async def test_a_parent_path_never_falls_back_to_the_root(repo, tmp_path) -> None:
+    _, _, ctx = repo
+    (tmp_path / "outside.txt").write_text("outside the workspace", encoding="utf-8")
+    result = await ReadFileTool.create(ctx).execute(path="../outside.txt")
+    assert "outside the workspace" not in result
+
+
+@pytest.mark.asyncio
+async def test_repo_overview_names_a_folder_by_a_path_that_reads_back(repo) -> None:
+    from durin.agent.tools.repo_overview import RepoOverviewTool
+
+    ws, work, ctx = repo
+    tool = RepoOverviewTool.create(ctx)
+    assert (await tool.execute(path=".")).splitlines()[0] == "# Repository overview: ."
+    header = (await tool.execute(path="mxhero-repos")).splitlines()[0]
+    named = header.removeprefix("# Repository overview: ")
+    assert named == str(ws / "mxhero-repos")
+    assert "share-links" in await ListDirTool.create(ctx).execute(path=named)
+
+
+@pytest.mark.asyncio
+async def test_execute_code_runs_its_script_in_the_working_folder(layout) -> None:
+    """The script's own open() and the tools it calls read the same file."""
+    import sys
+
+    from durin.agent.tools.code_execution import ExecuteCodeTool
+
+    if sys.platform == "win32":
+        pytest.skip("execute_code needs Unix sockets")
+    _, _, ctx = layout
+    code = ("from durin_tools import read_file\n"
+            "print('rpc:', read_file(path='ticket.json'))\n"
+            "print('open:', open('ticket.json').read())\n")
+    out = json.loads(await ExecuteCodeTool.create(ctx).execute(code=code))
+    assert "open: {\"id\": 23164}" in out["output"], out
+
+
+@pytest.mark.asyncio
+async def test_memory_ingest_resolves_in_the_working_folder(layout, monkeypatch) -> None:
+    from durin.agent.tools.memory_ingest import MemoryIngestTool
+
+    _, work, ctx = layout
+    (work / "report.md").write_text("# Report\n", encoding="utf-8")
+    seen: dict = {}
+
+    def fake_ingest(workspace, source, **kwargs):
+        seen["source"] = source
+        return {"id": "x", "source": str(source), "meta_path": "m", "size_bytes": 1,
+                "content": "c", "job_id": None}
+
+    monkeypatch.setattr("durin.agent.tools.memory_ingest.ingest_artifact", fake_ingest)
+    await MemoryIngestTool.create(ctx).execute(path="report.md")
+    assert seen["source"] == work / "report.md"
+
+
+@pytest.mark.asyncio
+async def test_convert_to_markdown_answers_for_the_folder_itself(layout, tmp_path) -> None:
+    """"." names a folder, not a document: an error reply, not a crash."""
+    _, _, ctx = layout
+    chat = ToolContext(config=ToolsConfig(), workspace=str(tmp_path), file_state_store=FileStates())
+    for tool_ctx in (ctx, chat):
+        tool = ConvertToMarkdownTool.create(tool_ctx)
+        for path in (".", "./"):
+            assert "error" in await tool.execute(path=path)
 
 
 @pytest.mark.asyncio

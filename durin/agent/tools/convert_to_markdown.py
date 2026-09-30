@@ -20,7 +20,7 @@ from typing import Any
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
-from durin.agent.tools.work_area import anchored_base
+from durin.agent.tools.work_area import read_base
 from durin.memory.doc_convert import (
     SUPPORTED_SUFFIXES,
     ConvertedDoc,
@@ -86,8 +86,7 @@ class ConvertToMarkdownTool(Tool):
 
         source = Path(path_str).expanduser()
         if not source.is_absolute():
-            base = anchored_base(source.parts[0], self._workspace, self._work_dir)
-            source = (base / source).resolve()
+            source = (read_base(source, self._workspace, self._work_dir) / source).resolve()
         if not source.is_file():
             return {"error": f"file not found: {source}"}
 

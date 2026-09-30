@@ -353,10 +353,11 @@ Any `work` node can be tuned independently. `model` and `persona` are mutually e
   parallel writing branches fork the folder and their writes
   reconcile back; read branches and dynamic workers are handed the folder directly. You do
   not declare the folder — it exists per run; just have nodes read and write files normally:
-  a relative path in the file tools (`read_file("ticket.json")`) resolves there. Shell
-  commands (`exec`) start in the workspace root, so a script under `workflows/scripts/` runs
-  as `python3 workflows/scripts/<name>.py`, and a command on the folder's files needs a `cd`
-  into it or full paths.
+  a relative path in the file tools (`read_file("ticket.json")`) resolves there, and a read
+  into a folder at the workspace root that the working folder lacks (a repository kept there)
+  reads the root's. Shell commands (`exec`) start in the workspace root, so a script under
+  `workflows/scripts/` runs as `python3 workflows/scripts/<name>.py`, and a command on the
+  folder's files needs a `cd` into it or full paths; `execute_code` scripts run in the folder.
   To hand produced files back to the caller, declare `output: {"file": true}` on the
   envelope: the run result then reports the working-folder path AND the list of produced
   files. Copy out anything that must outlive the run — working folders are pruned once

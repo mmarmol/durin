@@ -165,7 +165,7 @@ class InterpretAudioTool(Tool):
 
         try:
             resolved = resolve_workspace_path(
-                str(audio_path), workspace=self._workspace, work_dir=self._work_dir,
+                str(audio_path), workspace=self._workspace, work_dir=self._work_dir, read=True,
             )
         except PermissionError as e:
             return f"Error: {e}"

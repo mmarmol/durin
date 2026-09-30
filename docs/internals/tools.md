@@ -185,9 +185,14 @@ The subagent manager and the workflow node runner build their contexts with
 `aux_providers` and `app_config` populated, so subagent-scoped tools register
 there exactly as they do in the main loop (see `durin/agent/aux_bridges.py`
 for how the bridge handles are built). The node runner also sets `work_dir`,
-the node's working folder: the tools that take a path resolve a relative one
-there instead of in a session's work area, with the same exception for a
-managed top-level area, which resolves from the workspace root.
+the node's working folder: the tools that take a path (the file tools,
+`repo_overview`, `interpret_image`, `interpret_audio`, `convert_to_markdown`,
+`memory_ingest`) resolve a relative one there instead of in a session's work
+area, with the same exception for a managed top-level area, which resolves from
+the workspace root, and `execute_code` runs its script there. A read of a path
+the folder (or a session's work area) does not have, into a folder at the
+workspace root, reads the root's (`resolve_workspace_path(..., read=True)`);
+a file at the root itself and any write never fall back.
 
 The `subagent` scope is the *background-safe* set: files (notebooks
 included), exec, search, web, memory search and memory writes,

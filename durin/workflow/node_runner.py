@@ -31,6 +31,7 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.path_utils import is_under
 from durin.agent.tools.registry import ToolRegistry
+from durin.agent.tools.work_area import anchored_base
 from durin.config.schema import ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
@@ -202,10 +203,11 @@ class _DeliverFileTool(Tool):
     _plugin_discoverable = False
 
     def __init__(self, schema: dict, capture: _DeliverCapture, work_dir: str, *,
-                 output_file: str | None = None) -> None:
+                 workspace: Path, output_file: str | None = None) -> None:
         self._schema = schema
         self._capture = capture
         self._work_dir = Path(work_dir)
+        self._workspace = workspace
         self._output_file = output_file
 
     @property
@@ -234,7 +236,11 @@ class _DeliverFileTool(Tool):
         root = self._work_dir
         target = Path(path).expanduser()
         if not target.is_absolute():
-            target = root / target
+            # The node's file tools' rule, so a path names the file write_file
+            # wrote: one under a managed area (memory/, workflows/, ...) is the
+            # workspace's, and is refused below as outside the working folder.
+            first = target.parts[0] if target.parts else ""
+            target = anchored_base(first, self._workspace, root) / target
         if not is_under(target, root):
             return None, (f"{path} is outside your working directory {root}; "
                           "deliver_file reads only files there")
@@ -911,22 +917,28 @@ class AgentNodeRunner:
         user = req.task
         if req.upstream_output:
             user = f"{req.task}\n\n--- Output of the previous step ---\n{req.upstream_output}"
+        # The workspace the node's file tools resolve against (a writing branch's
+        # private copy of the working folder, or the workspace itself).
+        tools_workspace = req.workspace_override or str(self.sessions.workspace.resolve())
         tools_registry = self._build_tools(req.node, req.workspace_override, req.output_dir)
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             user = (
                 f"{user}\n\n--- Working directory ---\n"
                 f"Your working directory for this run is: {req.output_dir}\n"
+                f"The workspace root is: {tools_workspace}\n"
                 "Earlier steps' files are here; create and edit files here so the steps "
-                "after you see them. A relative path in the file tools resolves here (one "
-                "under a durin area such as workflows/ or memory/ resolves from the "
-                "workspace root)."
+                "after you see them. A relative path in the file tools resolves here, "
+                "except that one under a durin area (workflows/, memory/, skills/, ...) "
+                "resolves from the workspace root, and one into another folder of the "
+                "workspace root (a repository kept there) is read from there when this "
+                "folder does not have it."
             )
             # exec keeps its own start: the workspace root, where a workflow's
             # scripts are run as `python3 workflows/scripts/...`.
             exec_cwd = getattr(tools_registry.get("exec"), "working_dir", None)
             if exec_cwd and Path(exec_cwd).resolve() != Path(req.output_dir).resolve():
-                user += (f"\nShell commands start in the workspace root ({exec_cwd}), "
-                         "not here: cd here first or give full paths.")
+                user += ("\nShell commands start in the workspace root, not here: cd here "
+                         "first or give full paths.")
         user = f"{user}{self._pass_note(req)}"
         prior_messages: list[dict] | None = None
         if self._is_persistent(req) and req.iteration > 1:
@@ -1039,7 +1051,8 @@ class AgentNodeRunner:
                 node_schema, delivered, output_file=output_file, file_option=file_option))
             if file_option:
                 tools_registry.register(_DeliverFileTool(
-                    node_schema, delivered, req.output_dir, output_file=output_file))
+                    node_schema, delivered, req.output_dir,
+                    workspace=Path(tools_workspace), output_file=output_file))
         routed = _RouteCapture()
         # A valid `route` call ends the work loop once its round of tool calls is
         # done (the runner's end_turn_after_tools), keeping the text sent with it.

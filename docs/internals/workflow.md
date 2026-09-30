@@ -99,15 +99,26 @@ output. **Output travels two channels.** The **text** of a node's output is the 
 becomes the next node's input (above). For **files**, every sequential agent node with file
 tools shares ONE **working folder** for the run (`<workspace>/.workflow/<run>/work/`,
 `durin/workflow/artifacts.py`) — it reads earlier steps' files there and writes its own there.
-The node's prompt names the folder as its working directory, and the node's tools that take a
-path (`read_file`, `write_file`, `edit_file`, `list_dir`, `grep`, `interpret_image`,
-`interpret_audio`, `convert_to_markdown`) resolve a relative one there (`ToolContext.work_dir`):
-a path under a managed top-level name (`workflows/`, `memory/`, `skills/`, ...) still resolves
-from the workspace root, as in the chat's work area, and an absolute path is used as given.
-`grep` prints paths that lead back to what it found (relative inside the folder, from the
-workspace root in a managed area, absolute elsewhere). `exec` keeps starting in the workspace root, where a
-workflow's scripts are run as `python3 workflows/scripts/...`; a node that has it is told so
-in its prompt, with the advice to `cd` into the folder or give full paths.
+The node's prompt names the folder as its working directory and names the workspace root, and
+the node's tools that take a path (`read_file`, `write_file`, `edit_file`, `list_dir`, `grep`,
+`repo_overview`, `interpret_image`, `interpret_audio`, `convert_to_markdown`, `memory_ingest`)
+resolve a relative one there (`ToolContext.work_dir`):
+- a path under a managed top-level name (`workflows/`, `memory/`, `skills/`, ...) still
+  resolves from the workspace root, as in the chat's work area, and an absolute path is used
+  as given;
+- a read of a path the folder does not have, into a folder at the workspace root (a repository
+  checked out there, such as `mxhero-repos/…`), reads the root's (`work_area.read_base`) —
+  never a file lying at the root itself, so a stray file another run left there is not read
+  in place of this run's, and never a write, which always lands in the folder;
+- `deliver_file` resolves by the same rule, so a path names the file `write_file` wrote (one in
+  a managed area is then refused as outside the folder).
+
+`grep` prints, and `repo_overview` names, paths that lead back to what they found (relative
+inside the folder, from the workspace root in a managed area, absolute elsewhere).
+`execute_code` runs its script in the folder, so the script's own `open()` reads what its
+`read_file` calls read. `exec` keeps starting in the workspace root, where a workflow's scripts
+are run as `python3 workflows/scripts/...`; a node that has it is told so in its prompt, with
+the advice to `cd` into the folder or give full paths.
 Because it is one shared folder, created and edited files accumulate in a single place and
 each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
 on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than

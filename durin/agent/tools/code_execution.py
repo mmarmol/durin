@@ -190,13 +190,15 @@ class ExecuteCodeTool(Tool):
             except Exception as e:  # noqa: BLE001 — one tool failing must not kill execute_code
                 logger.debug("execute_code: could not build {}: {}", tool_cls.__name__, e)
         cfg = getattr(ctx.config, "code_execution", None) or CodeExecutionConfig()
-        return cls(tools=instances, config=cfg, workspace=ctx.workspace)
+        return cls(tools=instances, config=cfg, workspace=ctx.workspace,
+                   work_dir=getattr(ctx, "work_dir", None))
 
     def __init__(
         self,
         tools: dict[str, Tool] | None = None,
         config: CodeExecutionConfig | None = None,
         workspace: str | None = None,
+        work_dir: str | None = None,
     ):
         self._tools = {
             name: tool for name, tool in (tools or {}).items()
@@ -204,6 +206,9 @@ class ExecuteCodeTool(Tool):
         }
         self._config = config or CodeExecutionConfig()
         self._workspace = workspace
+        # A workflow node's working folder: the script runs there, so its own
+        # open() of a relative path reads the file its read_file calls read.
+        self._work_dir = work_dir
 
     @property
     def name(self) -> str:
@@ -252,6 +257,9 @@ class ExecuteCodeTool(Tool):
             finally:
                 with_suppress_close(writer)
 
+        if self._work_dir:
+            # A subprocess cannot start in a folder no step has created yet.
+            Path(self._work_dir).mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="durin_exec_code_") as tmpdir:
             tmp = Path(tmpdir)
             (tmp / "durin_tools.py").write_text(_generate_stub(), encoding="utf-8")
@@ -268,7 +276,7 @@ class ExecuteCodeTool(Tool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     stdin=asyncio.subprocess.DEVNULL,
-                    cwd=self._workspace or str(tmp),
+                    cwd=self._work_dir or self._workspace or str(tmp),
                     env=self._child_env(tmp),
                 )
                 status = "success"
