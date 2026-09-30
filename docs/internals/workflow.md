@@ -775,9 +775,10 @@ output**:
   line's first word (followed by anything — "FAIL" and what to fix), or `PASS` alone or
   followed by punctuation (`PASS.`, `PASS — caveats`). A line that goes on in words after
   `PASS` ("Pass the id to the handler", a bullet of a FAIL's fix list) is prose and never
-  passes the work. When no line states a verdict, the first non-empty line is read the way
-  verdicts were read when they came first: `PASS` when it starts with `PASS`. Default is
-  `False` (FAIL) — an empty or unparseable answer loops back, never silently passes.
+  passes the work. When no line states a verdict, the first non-empty line is read as a
+  leading verdict: `PASS` when it starts with `PASS`, so a prompt that puts the verdict first
+  still routes. Default is `False` (FAIL) — an empty or unparseable answer loops back, never
+  silently passes.
 - **`parse_label` (multi-way)** scans lines **from the end** for one whose full stripped,
   de-punctuated text equals a declared case label (case-insensitive); it returns the **last**
   match.

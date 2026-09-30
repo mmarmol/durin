@@ -36,10 +36,10 @@ def _verdict_line(lines: list[str]) -> tuple[int, bool] | None:
 
     The last PASS or FAIL line wins, read from the end because the node is
     asked to end its reply with the verdict (leading markdown or list markers
-    ignored, any case). Failing that, the first non-empty line is read the way
-    a verdict was read before it moved to the end: PASS when it starts with
-    'PASS', FAIL when it starts with 'FAIL' — so a prompt that still puts the
-    verdict first, even with words after it on that line, routes as it did."""
+    ignored, any case). Failing that, the first non-empty line is read as a
+    leading verdict: PASS when it starts with 'PASS', FAIL when it starts with
+    'FAIL' — so a prompt that puts the verdict first, even with words after it
+    on that line, still routes."""
     for i in range(len(lines) - 1, -1, -1):
         s = _LEADING_PUNCT.sub("", lines[i].strip())
         if _FAIL_LINE.match(s):
