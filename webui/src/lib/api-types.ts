@@ -4623,6 +4623,11 @@ export interface components {
         };
         /** ModelCapabilitiesResult */
         ModelCapabilitiesResult: {
+            /**
+             * Context Window Tokens
+             * @default null
+             */
+            context_window_tokens: number | null;
             /** Max Input Tokens */
             max_input_tokens: number | null;
             /** Model */

@@ -4148,6 +4148,18 @@
       },
       "ModelCapabilitiesResult": {
         "properties": {
+          "context_window_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context Window Tokens"
+          },
           "max_input_tokens": {
             "anyOf": [
               {

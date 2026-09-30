@@ -3070,6 +3070,7 @@ def _status_data(
     """Structured snapshot backing both the rendered rows and ``--json``."""
     from durin.cli.tui.startup import memory_summary
     from durin.config.loader import _is_split_layout
+    from durin.providers.factory import preset_context_window
     from durin.providers.registry import PROVIDERS
     from durin.utils.oauth import any_token_present
 
@@ -3082,7 +3083,10 @@ def _status_data(
         "model": model,
         "preset_tag": preset_tag,
         "provider": d.provider,
-        "context_window_tokens": d.context_window_tokens,
+        # The window the chat runs with: the active preset's model's (entry,
+        # catalog, then agents.defaults), capped by the fallback models' —
+        # the value the agent loop's provider snapshot uses.
+        "context_window_tokens": preset_context_window(config, config.resolve_preset()),
     }
     aux = getattr(config.agents, "aux_models", None)
     aux_map: dict[str, str] = {}

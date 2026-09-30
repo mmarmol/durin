@@ -512,7 +512,9 @@ durin status
 ```
 
 `durin status` shows a factual snapshot (model, providers, channels, gateway,
-memory, config) without health judgement. `durin doctor` runs the full check
+memory, config) without health judgement. Its model row carries the context window
+the chat runs with — the active preset's model's, capped by the fallback models' —
+the same value the agent loop uses. `durin doctor` runs the full check
 battery with exit-code semantics. The two surfaces are deliberately distinct.
 
 ### WebUI

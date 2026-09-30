@@ -1109,7 +1109,7 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
-        from durin.providers.factory import make_provider
+        from durin.providers.factory import make_provider, preset_context_window
 
         if bus is None:
             bus = MessageBus()
@@ -1117,7 +1117,11 @@ class AgentLoop:
         provider = extra.pop("provider", None) or make_provider(config)
         resolved = config.resolve_preset()
         model = extra.pop("model", None) or resolved.model
-        context_window_tokens = extra.pop("context_window_tokens", None) or resolved.context_window_tokens
+        # Capped by the fallback models' windows, as the gateway's provider
+        # snapshot is: a failover must fit the same prompt.
+        context_window_tokens = (
+            extra.pop("context_window_tokens", None) or preset_context_window(config, resolved)
+        )
         provider_snapshot_loader = extra.pop("provider_snapshot_loader", None)
         preset_snapshot_loader = extra.pop("preset_snapshot_loader", None) or preset_helpers.make_preset_snapshot_loader(
             config,

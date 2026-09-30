@@ -619,7 +619,14 @@ agents:
 - **Settings webui**: provider-first model picker writes `(provider, model)` pair to
   config; the provider field is `"auto"` unless the user selects a specific override.
 - **`durin status`**: shows each configured provider, its credential status, and the
-  active model.
+  active model with the context window the chat runs with — the active preset's
+  model's (§4.1), capped by the fallback models' windows, the value the agent loop's
+  provider snapshot uses (`preset_context_window`), not `agents.defaults`.
+- **Settings model rows**: the default and aux model editors show the window a run on
+  that provider and model gets, from `GET /api/v1/model/capabilities`'
+  `context_window_tokens` (the same `preset_context_window`); `max_input_tokens` there
+  is the model's own limit. The pickers and the Providers catalog list each model's
+  own limit to choose from.
 - **`durin doctor`**: validates that the active provider has an API key and that the
   capability snapshot loaded.
 - **API `PATCH /api/v1/config`**: updates config fields; a preset switch takes effect

@@ -188,6 +188,10 @@ class ModelCapabilitiesQuery(Query):
 class ModelCapabilitiesResult(Result):
     model: str
     max_input_tokens: int | None
+    # The window a run on this (provider, model) gets: its providers entry,
+    # then the catalog, then agents.defaults, capped by the catalog and by the
+    # fallback models' windows. ``max_input_tokens`` is the model's own limit.
+    context_window_tokens: int | None = None
     supports_vision: bool
     supports_audio_input: bool
     supports_function_calling: bool
@@ -742,9 +746,18 @@ class ConfigService:
             caps = get_model_capabilities(query.model, query.provider, overrides=overrides)
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"could not resolve capabilities: {e}") from e
+        try:
+            from durin.config.schema import ModelPresetConfig
+            from durin.providers.factory import preset_context_window
+
+            window: int | None = preset_context_window(
+                cfg, ModelPresetConfig(model=query.model, provider=query.provider or "auto"))
+        except Exception:  # noqa: BLE001 - the window is extra detail; the capabilities still answer
+            window = None
         return ModelCapabilitiesResult(
             model=query.model,
             max_input_tokens=getattr(caps, "max_input_tokens", None),
+            context_window_tokens=window,
             supports_vision=bool(getattr(caps, "supports_vision", False)),
             supports_audio_input=bool(getattr(caps, "supports_audio_input", False)),
             supports_function_calling=bool(getattr(caps, "supports_function_calling", False)),

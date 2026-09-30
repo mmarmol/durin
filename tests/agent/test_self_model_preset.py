@@ -302,6 +302,33 @@ def test_from_config_injects_default_preset(tmp_path) -> None:
     assert loop.model_presets["default"].model == "openai/gpt-4.1"
 
 
+def test_from_config_runs_under_the_window_capped_by_the_fallbacks(tmp_path, monkeypatch) -> None:
+    """The TUI and the SDK build their loop with from_config and no window of
+    their own: it must be the window the gateway's provider snapshot (and
+    `durin status`) uses — the active preset's, capped by every fallback
+    model's so a failover fits the same prompt — not the preset's alone."""
+    from unittest.mock import patch
+
+    import durin.providers.provider_catalog as pc
+    from durin.config.schema import Config
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+    config = Config.model_validate({
+        "agents": {"defaults": {
+            "model": "glm-5.3", "provider": "zai_coding_plan", "workspace": str(tmp_path),
+            "fallbackModels": ["turbo"],
+        }},
+        "modelPresets": {"turbo": {"model": "glm-5-turbo", "provider": "zai_coding_plan"}},
+    })
+    with patch("durin.providers.factory.make_provider", return_value=_provider("glm-5.3")):
+        loop = AgentLoop.from_config(config)
+    assert loop.context_window_tokens == 200_000
+
+
 def test_from_config_static_preset_loader_does_not_enable_hot_reload(tmp_path) -> None:
     from unittest.mock import patch
 
