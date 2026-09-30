@@ -55,6 +55,21 @@ _FALLBACK_ERROR_TOKENS = (
 )
 
 
+def _failover_max_tokens(requested: Any, ceiling: Any) -> int | None:
+    """The output cap a failover request sends: the fallback model's own
+    ceiling, but never more than the request asked for. The caller sized its
+    request to the room the prompt leaves in a window that already fits every
+    fallback, so a fallback with a larger output limit must not undo that.
+    ``None`` when neither is known (the provider then uses its default)."""
+    if isinstance(requested, int) and isinstance(ceiling, int):
+        return min(requested, ceiling)
+    if isinstance(ceiling, int):
+        return ceiling
+    if isinstance(requested, int):
+        return requested
+    return None
+
+
 class FallbackProvider(LLMProvider):
     """Wrap a primary provider and transparently failover to fallback models.
 
@@ -220,7 +235,11 @@ class FallbackProvider(LLMProvider):
                 for name in ("model", "max_tokens", "temperature", "reasoning_effort")
             }
             kwargs["model"] = fallback_model
-            kwargs["max_tokens"] = fallback.max_tokens
+            max_tokens = _failover_max_tokens(original_values["max_tokens"], fallback.max_tokens)
+            if max_tokens is None:
+                kwargs.pop("max_tokens", None)
+            else:
+                kwargs["max_tokens"] = max_tokens
             kwargs["temperature"] = fallback.temperature
             if fallback.reasoning_effort is None:
                 kwargs.pop("reasoning_effort", None)

@@ -498,6 +498,42 @@ class TestFallbackModelParameter:
         assert fallback.chat_calls[0]["temperature"] == 0.4
         assert "reasoning_effort" not in fallback.chat_calls[0]
 
+    @pytest.mark.asyncio
+    async def test_failover_never_asks_for_more_output_than_the_request(self) -> None:
+        """The runner sizes max_tokens to the room the prompt leaves in the
+        run's window, which already fits every fallback. A fallback whose own
+        output limit is larger (its model's catalog limit) must not send more,
+        or the failover overflows the window it was supposed to fit."""
+        primary = _FakeProvider("primary", _error_response())
+        fallback = _FakeProvider("fallback", _make_response("ok"))
+        fb = FallbackProvider(
+            primary=primary,
+            fallback_presets=[_fallback("fallback-model", max_tokens=131_072)],
+            provider_factory=MagicMock(return_value=fallback),
+        )
+
+        await fb.chat_stream(
+            messages=[{"role": "user", "content": "hi"}],
+            model="primary-model",
+            max_tokens=3000,
+        )
+
+        assert fallback.chat_stream_calls[0]["max_tokens"] == 3000
+
+    @pytest.mark.asyncio
+    async def test_failover_without_a_requested_cap_sends_the_fallbacks(self) -> None:
+        primary = _FakeProvider("primary", _error_response())
+        fallback = _FakeProvider("fallback", _make_response("ok"))
+        fb = FallbackProvider(
+            primary=primary,
+            fallback_presets=[_fallback("fallback-model", max_tokens=131_072)],
+            provider_factory=MagicMock(return_value=fallback),
+        )
+
+        await fb.chat(messages=[{"role": "user", "content": "hi"}], model="primary-model")
+
+        assert fallback.chat_calls[0]["max_tokens"] == 131_072
+
 
 class TestNoFallbackWhenEmptyList:
     @pytest.mark.asyncio

@@ -231,6 +231,14 @@ auth or content filter errors), it tries each fallback preset in order. Failover
 skipped when content has already started streaming. A circuit breaker trips the primary
 after three consecutive failures and gates it for 60 seconds before retrying.
 
+Each fallback preset carries its own model's limits (§4.1), and the run's window is
+the smallest of the primary's and every fallback's (`preset_context_window`), so the
+prompt fits whichever model serves it. A failover request sends the fallback's model,
+temperature and reasoning effort, and as `max_tokens` the fallback's own output cap or
+the request's, whichever is smaller: the runner sized the request's cap to the room its
+prompt leaves in that shared window, and a fallback with a larger output limit must not
+undo it.
+
 ### 4.5 One transport: every completion streams
 
 `chat_with_retry` (the request entry point every caller uses, directly or via
