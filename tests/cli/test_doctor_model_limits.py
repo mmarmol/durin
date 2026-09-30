@@ -104,6 +104,19 @@ def test_a_preset_is_checked_against_the_provider_it_runs_on(provider: str) -> N
     assert "231,072" in r.message and "200,000" in r.message
 
 
+def test_a_capability_override_is_the_real_limit_the_doctor_compares_with() -> None:
+    from durin.config.schema import ModelCapabilityOverride
+
+    cfg = _cfg()
+    cfg.model_capabilities["zai_coding_plan/glm-5-turbo"] = ModelCapabilityOverride(max_input_tokens=300_000)
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=300_000)
+    assert "glm-5-turbo" not in _run(cfg).message
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=350_000)
+    r = _run(cfg)
+    assert r.status == "warn"
+    assert "350,000" in r.message and "300,000" in r.message
+
+
 def test_the_fallback_that_caps_the_chat_window_is_named() -> None:
     cfg = _cfg()
     cfg.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")

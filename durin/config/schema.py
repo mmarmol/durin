@@ -1573,8 +1573,8 @@ _LIMIT_CAP_WARNED: set[tuple[str, str, str, int, int]] = set()
 
 
 def _capped_limit(value: int, real: int | None, *, field: str, provider: str, model: str) -> int:
-    """*value*, or the model's real limit (*real*, from the catalog) when
-    *value* is above it.
+    """*value*, or the model's real limit (*real*: a ``model_capabilities``
+    override, else the catalog) when *value* is above it.
 
     A configured window above what the provider accepts sends prompts the
     budget says still fit, and the provider rejects them instead of durin
@@ -1588,7 +1588,8 @@ def _capped_limit(value: int, real: int | None, *, field: str, provider: str, mo
     if key not in _LIMIT_CAP_WARNED:
         _LIMIT_CAP_WARNED.add(key)
         logger.warning(
-            "config: %s %s for %s/%s is above the model's real %s (catalog); using %s",
+            "config: %s %s for %s/%s is above the model's real %s "
+            "(model_capabilities or the catalog); using %s",
             field, f"{value:,}", provider, model, f"{real:,}", f"{real:,}",
         )
     return real
@@ -1728,11 +1729,12 @@ class Config(BaseSettings):
         (``_capped_limit``). A model no provider serves has no entry or
         catalog row, so an unset value comes from ``agents.defaults``.
         ``window_known`` says the window was set on the preset, on the entry
-        or in the catalog, not guessed from ``agents.defaults``.
+        or in the catalog, not guessed from ``agents.defaults``. "The
+        catalog" is the model's real limit (``_real_limits``): a
+        ``model_capabilities`` override before the catalog row.
         """
         d = self.agents.defaults
-        real_ctx = caps.max_input_tokens if caps and caps.max_input_tokens else None
-        real_out = caps.max_output_tokens if caps and caps.max_output_tokens else None
+        real_ctx, real_out = self._real_limits(provider, model, caps)
         known_ctx = [v for v in (
             context_window_tokens,
             entry.context_window_tokens if entry else None,
@@ -1750,6 +1752,34 @@ class Config(BaseSettings):
             _capped_limit(mt, real_out, field="max_tokens", provider=provider, model=model),
             bool(known_ctx),
         )
+
+    def _real_limits(self, provider: str, model: str, caps: Any) -> tuple[int | None, int | None]:
+        """The model's real ``(window, output limit)``: a ``model_capabilities``
+        override of ``max_input_tokens`` / ``max_output_tokens`` — keyed
+        ``provider/model`` before the bare model name, field by field — else
+        the catalog row's. The override is the user's word on a model the
+        catalog has stale or wrong, so it is what configured values are
+        capped at and what an unset value takes."""
+        overrides = [
+            self.model_capabilities.get(f"{provider}/{model}"),
+            self.model_capabilities.get(model),
+        ]
+
+        def _real(field: str) -> int | None:
+            for override in overrides:
+                value = getattr(override, field, None) if override is not None else None
+                if value:
+                    return value
+            value = getattr(caps, field, None) if caps is not None else None
+            return value or None
+
+        return _real("max_input_tokens"), _real("max_output_tokens")
+
+    def model_real_limits(self, provider: str, model: str) -> tuple[int | None, int | None]:
+        """The real ``(window, output limit)`` of *model* on *provider* (a
+        routed registry name), as the limit resolution caps against."""
+        _entry, caps = self._resolve_model_params(provider, model)
+        return self._real_limits(provider, model, caps)
 
     def resolve_preset_limits(self, preset: ModelPresetConfig) -> ModelPresetConfig:
         """*preset* with concrete ``context_window_tokens`` / ``max_tokens``,

@@ -193,7 +193,9 @@ preset's `context_window_tokens` / `max_tokens`, an inline fallback's) wins;
 whatever is left unset comes from:
 
 1. the model's entry under `providers.<provider>.models.<model>`,
-2. the model catalog (the window and output limit the provider publishes),
+2. the model's real limits: its `max_input_tokens` / `max_output_tokens` under
+   `model_capabilities` if you declared them, else the model catalog (the window
+   and output limit the provider publishes),
 3. `agents.defaults.context_window_tokens` / `agents.defaults.max_tokens`.
 
 The entry and the catalog are read under the provider the run actually goes
@@ -208,16 +210,18 @@ values or `agents.defaults` into it. A preset's `temperature` or limits apply
 to runs on that preset alone, and `agents.defaults` stays the fallback of the
 last step above.
 
-A configured value **above** what the model really accepts (the catalog's) is
-capped to the catalog value when the run starts, and one warning names the
-provider, the model, the configured and the real value: a window larger than
-the real one lets a prompt grow past what the provider accepts, and it is
-rejected instead of being compacted first. A value **below** the catalog's is
-kept — a smaller window or output cap is a legitimate way to bound cost.
-`durin doctor` lists every configured value that differs from the catalog in
-its "model limits" check: one above warns, one below is listed so a forgotten
-cap does not go unnoticed. To go back to the model's own limit, unset the
-value (a model name with dots goes in brackets, see
+A configured value **above** what the model really accepts (step 2: your
+`model_capabilities` value, else the catalog's) is capped to it when the run
+starts, and one warning names the provider, the model, the configured and the
+real value: a window larger than the real one lets a prompt grow past what the
+provider accepts, and it is rejected instead of being compacted first. A value
+**below** it is kept — a smaller window or output cap is a legitimate way to
+bound cost. When the catalog is stale or wrong for a model, declare its real
+limits under `model_capabilities` rather than raising a window past the cap.
+`durin doctor` lists every configured value that differs from the real limit
+in its "model limits" check: one above warns, one below is listed so a
+forgotten cap does not go unnoticed. To go back to the model's own limit, unset
+the value (a model name with dots goes in brackets, see
 [keys that contain dots](#inspecting-and-editing-config)):
 
 ```
@@ -227,7 +231,10 @@ durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tok
 **`model_capabilities`** — user-declared capability overrides keyed by model name
 (bare or `provider/model`). Provider-qualified keys win over bare names. Any field
 left `null` falls through to the vendored snapshot. Useful for local fine-tunes or
-when the snapshot is wrong for your deployment.
+when the snapshot is wrong for your deployment. `max_input_tokens` and
+`max_output_tokens` set here are the model's real limits for
+[model limits](#model-limits): the value an unset window or output cap takes, and
+the ceiling a configured one is capped at.
 
 ---
 

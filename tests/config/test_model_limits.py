@@ -441,6 +441,33 @@ def test_a_named_fallback_that_caps_the_window_is_named() -> None:
     assert capping is not None and capping.label == "turbo"
 
 
+@pytest.mark.parametrize("key", ["zai_coding_plan/glm-5-turbo", "glm-5-turbo"])
+def test_a_capability_override_is_the_models_real_limit(key: str, warnings_logged) -> None:
+    """When the catalog is stale or wrong, model_capabilities is the user's
+    word on the model: a configured value up to it is not capped, and an
+    unset one takes it."""
+    from durin.config.schema import ModelCapabilityOverride
+
+    cfg = _config(turbo=ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan"))
+    cfg.model_capabilities[key] = ModelCapabilityOverride(max_input_tokens=300_000, max_output_tokens=150_000)
+    assert cfg.resolve_preset("turbo").context_window_tokens == 300_000
+    assert cfg.resolve_preset("turbo").max_tokens == 150_000
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=280_000)
+    assert cfg.resolve_preset("turbo").context_window_tokens == 280_000
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=400_000)
+    assert cfg.resolve_preset("turbo").context_window_tokens == 300_000
+    assert any("300,000" in m and "400,000" in m for m in warnings_logged)
+
+
+def test_a_provider_qualified_override_wins_over_the_bare_one() -> None:
+    from durin.config.schema import ModelCapabilityOverride
+
+    cfg = _config(turbo=ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan"))
+    cfg.model_capabilities["glm-5-turbo"] = ModelCapabilityOverride(max_input_tokens=300_000)
+    cfg.model_capabilities["zai_coding_plan/glm-5-turbo"] = ModelCapabilityOverride(max_input_tokens=250_000)
+    assert cfg.resolve_preset("turbo").context_window_tokens == 250_000
+
+
 def test_routed_provider_names_the_registry_key_a_run_goes_to() -> None:
     cfg = _routed_config()
     assert cfg.routed_provider("auto", "glm-5-turbo") == "zai_coding_plan"

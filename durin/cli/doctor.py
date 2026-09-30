@@ -1068,17 +1068,15 @@ def _chat_window_notes(cfg) -> list[str]:
 
 
 def check_model_limits() -> CheckResult:
-    """Every configured window and output cap against the model's catalog
-    limits.
+    """Every configured window and output cap against the model's real
+    limits — a ``model_capabilities`` override, else the catalog — the same
+    reference the runtime caps against.
 
-    A value above the catalog's warns: the run caps it to the catalog value,
-    but the config claims a window the provider does not accept (and a stale
-    value there tends to be copied to the next model). A value below is
-    listed as information only — a smaller window or output cap is a
-    legitimate way to bound cost, but a forgotten one silently shrinks every
-    run on that model."""
-    from durin.providers.provider_catalog import catalog_model_limits
-
+    A value above the real one warns: the run caps it, but the config claims
+    a window the provider does not accept (and a stale value there tends to
+    be copied to the next model). A value below is listed as information
+    only — a smaller window or output cap is a legitimate way to bound cost,
+    but a forgotten one silently shrinks every run on that model."""
     try:
         cfg = load_config()
     except Exception:  # noqa: BLE001
@@ -1087,14 +1085,12 @@ def check_model_limits() -> CheckResult:
     below: list[str] = []
     for where, provider, model, window, max_tokens in _configured_model_limits(cfg):
         try:
-            caps = catalog_model_limits(provider, model)
+            real_window, real_output = cfg.model_real_limits(provider, model)
         except Exception:  # noqa: BLE001 - an unreadable catalog row compares with nothing
-            caps = None
-        if caps is None:
             continue
         for label, value, real in (
-            ("context window", window, caps.max_input_tokens),
-            ("output cap", max_tokens, caps.max_output_tokens),
+            ("context window", window, real_window),
+            ("output cap", max_tokens, real_output),
         ):
             if value is None or not real or value == real:
                 continue

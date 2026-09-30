@@ -149,9 +149,11 @@ overrides declared under the active provider's `models` dict. The result is a
 `ModelPresetConfig` (and on an `InlineFallbackConfig`); `None` means "the model's
 own". `Config.resolve_preset_limits(preset)` fills them the same way for every kind
 of preset, through `Config._model_limits`: a value the preset sets wins, then the
-`ModelEntry` under `providers.<provider>.models.<model>`, then the catalog
-(`catalog_model_limits`, `durin/providers/provider_catalog.py`: `max_input_tokens`
-for the window, `max_output_tokens` for the output cap), then `agents.defaults`.
+`ModelEntry` under `providers.<provider>.models.<model>`, then the model's real
+limits (`Config._real_limits`: a `model_capabilities` override of
+`max_input_tokens` / `max_output_tokens`, keyed `provider/model` before the bare
+name, else the catalog via `catalog_model_limits`,
+`durin/providers/provider_catalog.py`), then `agents.defaults`.
 The catalog lookup never makes a request: a local provider's live `/v1/models`
 list carries model ids only, so its limits come from the static index (vendored
 floor plus the refresh cache) whether its server answers or not, and resolving a
@@ -188,14 +190,17 @@ model ref, an inline `aux_models.subagents` pair), the placed model of
 `resolve_aux_preset` (judge, dream, automations — never the default model's
 limits), and `build_static_preset_snapshot` for a loop wired without a loader.
 
-A configured value above the catalog's is capped to it by `_capped_limit`
-(`durin/config/schema.py`): a window above the real one lets the runner's input
-budget admit prompts the provider rejects, and an output cap above the model's
-maximum is rejected outright. The first time each distinct
-`(provider, model, field, configured, real)` is capped, the process logs one
-warning naming them; later resolutions stay silent. A value below the catalog's
-is kept (a deliberate cost cap). Nothing is capped for a model the catalog does
-not know.
+A configured value above the model's real limit is capped to it by
+`_capped_limit` (`durin/config/schema.py`): a window above the real one lets the
+runner's input budget admit prompts the provider rejects, and an output cap above
+the model's maximum is rejected outright. The real limit is the
+`model_capabilities` override when one is declared — the user's word on a model
+the catalog has stale or wrong — else the catalog row. The first time each
+distinct `(provider, model, field, configured, real)` is capped, the process logs
+one warning naming them; later resolutions stay silent. A value below the real
+limit is kept (a deliberate cost cap). Nothing is capped for a model with neither
+an override nor a catalog row. `Config.model_real_limits(provider, model)` is the
+same reference for `durin doctor`.
 
 ### 4.2 Provider matching
 
