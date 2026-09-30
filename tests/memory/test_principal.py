@@ -304,6 +304,43 @@ def test_pinned_refs_cache_stays_bounded(tmp_path):
     assert stale_key not in principal_mod._pinned_refs_cache
 
 
+def test_pinned_refs_cache_sweep_tolerates_a_concurrent_sweep(tmp_path, monkeypatch):
+    """Concurrent searches resolve the pinned set from worker threads. Two of
+    them can sweep the same stale entry: the one that deletes second must not
+    raise, or a memory_search fails over a cache housekeeping race."""
+    import time
+
+    from durin.memory import principal as principal_mod
+    from durin.memory.principal import resolve_pinned_refs
+
+    class _RacedCache(dict):
+        """On its ``race_on``-th snapshot, another thread's sweep empties the
+        cache right after this thread took the snapshot."""
+
+        def __init__(self, data, race_on):
+            super().__init__(data)
+            self._calls = 0
+            self._race_on = race_on
+
+        def items(self):
+            self._calls += 1
+            snapshot = list(super().items())
+            if self._calls == self._race_on:
+                self.clear()
+            return snapshot
+
+    # The TTL sweep deletes a stale entry another thread already removed.
+    stale = {str(tmp_path / f"stale{i}"): (time.monotonic() - 1000, frozenset())
+             for i in range(3)}
+    monkeypatch.setattr(principal_mod, "_pinned_refs_cache", _RacedCache(stale, race_on=1))
+    resolve_pinned_refs(tmp_path / "fresh")
+
+    # The size cap evicts an oldest entry another thread already removed.
+    full = {str(tmp_path / f"ws{i}"): (time.monotonic(), frozenset()) for i in range(16)}
+    monkeypatch.setattr(principal_mod, "_pinned_refs_cache", _RacedCache(full, race_on=2))
+    resolve_pinned_refs(tmp_path / "fresh")
+
+
 def test_library_awareness_is_titles_only_by_default(tmp_path):
     import json
 

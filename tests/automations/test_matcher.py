@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 
 import pytest
@@ -77,17 +78,35 @@ def _whatsapp_msg(*, sender="alice", chat_id="12345", content="hello there", is_
 
 
 class FakeRuntime:
-    """Records fire/answer calls; fire() raises AutomationBusyError for names in `busy`."""
+    """Records fire/answer calls. Like the real runtime, fire() raises
+    AutomationBusyError for names in `busy` before any run starts, and
+    otherwise calls `on_started` once the run has started. `fail_before_start`
+    / `fail_after_start` make fire() raise on either side of that point, and
+    `gate` holds a started run open until it is set."""
 
-    def __init__(self, busy: set[str] | None = None):
+    def __init__(self, busy: set[str] | None = None, *,
+                 fail_before_start: set[str] | None = None,
+                 fail_after_start: set[str] | None = None,
+                 gate: asyncio.Event | None = None):
         self.fire_calls: list[tuple] = []
         self.answer_calls: list[tuple] = []
         self._busy = busy or set()
+        self._fail_before_start = fail_before_start or set()
+        self._fail_after_start = fail_after_start or set()
+        self._gate = gate
 
-    async def fire(self, name, *, source, task=None, origin=None):
+    async def fire(self, name, *, source, task=None, origin=None, on_started=None):
         self.fire_calls.append((name, source, task, origin))
         if name in self._busy:
             raise AutomationBusyError(name)
+        if name in self._fail_before_start:
+            raise RuntimeError("spec vanished")
+        if on_started is not None:
+            on_started()
+        if self._gate is not None:
+            await self._gate.wait()
+        if name in self._fail_after_start:
+            raise RuntimeError("delivery blew up")
         return {"status": "done"}
 
     async def answer_nowait(self, name, run_id, answer):
@@ -513,6 +532,23 @@ async def test_sequential_messages_no_enqueue_passthrough(tmp_path):
     assert rt.fire_calls[0][2] == "first"
 
 
+_ORIGIN = {"channel": "email", "sender": "alice@example.com", "chat_id": "alice@example.com",
+           "thread": "digest-1", "subject": "Re: quarterly report"}
+
+
+def _spy_emits(matcher: TriggerMatcher) -> list[str]:
+    """Record the action of every automations.event_matched the matcher emits."""
+    events: list[str] = []
+    orig_emit = matcher._emit
+
+    def spy_emit(automation_name, channel, action):
+        events.append(action)
+        orig_emit(automation_name, channel, action)
+
+    matcher._emit = spy_emit
+    return events
+
+
 async def test_automationbusy_fallback_enqueues(tmp_path):
     """Belt-and-braces: if the pending-fires guard somehow misses (e.g. the
     fire task already started/finished its own bookkeeping) and
@@ -524,12 +560,11 @@ async def test_automationbusy_fallback_enqueues(tmp_path):
     rt = FakeRuntime(busy={"l1"})
     queued = []
     matcher = TriggerMatcher(tmp_path, runtime=rt, enqueue=lambda name, event: queued.append((name, event)))
-    origin = {"channel": "email", "sender": "alice@example.com", "chat_id": "alice@example.com",
-              "thread": "digest-1", "subject": "Re: quarterly report"}
+    events = _spy_emits(matcher)
 
     # Call _fire directly to simulate the guard having already been cleared
     # (empty pending set) while runtime.fire() still raises AutomationBusyError.
-    await matcher._fire("l1", "email", "hello there", origin)
+    await matcher._fire("l1", "email", "hello there", _ORIGIN)
 
     assert len(rt.fire_calls) == 1
     assert len(queued) == 1
@@ -537,23 +572,16 @@ async def test_automationbusy_fallback_enqueues(tmp_path):
     assert automation_name == "l1"
     assert event["content"] == "hello there"
     assert event["source"] == "channel"
+    assert events == ["queued"]  # no run started, so never "fired" as well
 
 
-async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):
-    """`_dispatch_match` must not claim "fired" before runtime.fire()
-    actually returns; the fired event is emitted from inside `_fire` only
-    on success."""
+async def test_fired_telemetry_emitted_once_the_fire_task_starts_the_run(tmp_path):
+    """`_dispatch_match` must not claim "fired" before the scheduled fire
+    task has actually started a run."""
     _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
     rt = FakeRuntime()
-    events = []
     matcher = TriggerMatcher(tmp_path, runtime=rt)
-    orig_emit = matcher._emit
-
-    def spy_emit(automation_name, channel, action):
-        events.append(action)
-        orig_emit(automation_name, channel, action)
-
-    matcher._emit = spy_emit
+    events = _spy_emits(matcher)
 
     consumed = await matcher.handle_inbound(_email_msg())
     assert events == []  # not emitted yet — fire task hasn't run
@@ -561,6 +589,81 @@ async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):
 
     assert consumed is True
     assert events == ["fired"]
+
+
+async def test_fired_is_recorded_when_the_run_starts_not_when_it_ends(tmp_path):
+    """A matched message that starts a long run is stamped at the match, not
+    minutes later when the run finishes."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    gate = asyncio.Event()
+    rt = FakeRuntime(gate=gate)
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    events = _spy_emits(matcher)
+
+    await matcher.handle_inbound(_email_msg())
+    await _drain()
+    assert events == ["fired"]  # the run is still going
+
+    gate.set()
+    await _drain()
+    assert events == ["fired"]  # and its end adds nothing
+
+
+async def test_fired_is_recorded_when_the_run_raises_after_starting(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime(fail_after_start={"l1"})
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    events = _spy_emits(matcher)
+
+    await matcher._fire("l1", "email", "hello there", _ORIGIN)
+
+    assert events == ["fired"]
+    assert matcher._pending_fires == set()
+
+
+async def test_real_runtime_records_the_match_before_the_run_finishes(tmp_path, _per_test_telemetry_dir):
+    """Through the real runtime, the telemetry file reads in the order things
+    happened: the run starts, the match is recorded, then the run finishes."""
+    import json
+
+    from durin.automations.runtime import AutomationsRuntime
+    from durin.workflow.result import WorkflowResult
+
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                            work_key=None, root_session_key=None, paced=False):
+        return WorkflowResult(status="completed", final_output="out", run_id=run_id)
+
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20)
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+
+    await matcher.handle_inbound(_email_msg())
+    await asyncio.gather(*list(matcher._tasks))
+
+    rows = [json.loads(line)
+            for path in _per_test_telemetry_dir.glob("automation_l1_*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()]
+    order = [(r["type"], (r.get("data") or {}).get("action")) for r in rows
+             if r["type"] in ("automations.fired", "automations.event_matched",
+                              "automations.run_finished")]
+    assert order == [
+        ("automations.fired", None),
+        ("automations.event_matched", "fired"),
+        ("automations.run_finished", None),
+    ]
+
+
+async def test_fire_failing_before_the_run_starts_is_recorded_as_failed(tmp_path):
+    """The match still leaves a record when no run could be started."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime(fail_before_start={"l1"})
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    events = _spy_emits(matcher)
+
+    await matcher._fire("l1", "email", "hello there", _ORIGIN)
+
+    assert events == ["failed"]
 
 
 async def test_fire_task_is_tracked_then_discarded_on_completion(tmp_path):

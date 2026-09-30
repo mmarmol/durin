@@ -79,6 +79,83 @@ def test_script_gate_fail_loops_back_with_feedback(tmp_path):
     assert result.status == "completed"
     # second producer pass received the gate's stderr as reviewer feedback
     assert "missing marker" in (passes[1] or "") and "exit code 1" in (passes[1] or "")
+    assert "Reviewer feedback (address this):" in passes[1]
+    assert "[script gate failed: exit code 1]" in passes[1]
+
+
+def test_script_check_failing_into_a_first_visit_target_is_neutral_context(tmp_path):
+    """A check whose non-zero exit routes FORWARD to a step that has not run yet
+    ("note.md not present → go draft it") is the normal path, not a failure: the
+    drafting step gets the check's output as plain context, with no reviewer or
+    gate-failure framing that would make it believe an earlier attempt failed."""
+    check = 'test -f note.md || { echo "check-note: note.md not present"; exit 1; }'
+    wf = parse_workflow({"name": "t", "start": "has-note", "nodes": [
+        {"id": "has-note", "kind": "script", "command": check,
+         "on_pass": "send", "on_fail": "draft"},
+        {"id": "draft", "prompt": "draft the note", "next": "send"},
+        {"id": "send", "prompt": "send it", "next": None},
+    ]})
+    eng = engine_for(tmp_path, ["drafted", "sent"])
+    result = eng.run(wf, "task")
+    assert result.status == "completed"
+    draft_req = eng._node_runner.calls[0]
+    assert draft_req.node.id == "draft"
+    upstream = draft_req.upstream_output or ""
+    assert "Context from 'has-note':" in upstream
+    assert "check-note: note.md not present" in upstream and "exit code 1" in upstream
+    assert "Reviewer feedback" not in upstream
+    assert "gate failed" not in upstream
+
+
+def test_script_gate_failing_into_a_fixer_that_leads_back_is_a_failed_gate(tmp_path):
+    """A test gate that opens a "fix the failing tests" loop fails before the fixer
+    ever ran. The fixer leads back to the gate, so this first FAIL is still a
+    revision request: reviewer framing and the gate-failed note."""
+    marker = tmp_path / "fixed"
+    gate_cmd = f'test -f "{marker}" || {{ echo "2 tests failing" >&2; exit 1; }}'
+    wf = parse_workflow({"name": "t", "start": "tests", "nodes": [
+        {"id": "tests", "kind": "script", "command": gate_cmd, "on_pass": None, "on_fail": "fix"},
+        {"id": "fix", "prompt": "fix the failing tests", "next": "tests"},
+    ]})
+
+    from durin.workflow.engine import NodeRunResponse
+    passes = []
+
+    def fixer(req):
+        passes.append(req.upstream_output or "")
+        marker.write_text("ok")
+        return NodeRunResponse(output="fixed", session_key="s")
+
+    eng = WorkflowEngine(node_runner=fixer,
+                         script_runner=ScriptNodeRunner(str(tmp_path)),
+                         workspace=str(tmp_path))
+    result = eng.run(wf, "task")
+    assert result.status == "completed"
+    (only,) = passes
+    assert "Reviewer feedback (address this):" in only
+    assert "2 tests failing" in only and "[script gate failed: exit code 1]" in only
+
+
+def test_script_check_whose_fail_route_returns_only_through_its_pass_step_is_neutral(tmp_path):
+    """send retries from the top when delivery fails, so draft can reach has-note
+    again, but only by way of send, has-note's own pass step. The first "no" is
+    still the check's normal route: a plain exit note and neutral framing."""
+    check = 'test -f note.md || { echo "note.md not present"; exit 1; }'
+    wf = parse_workflow({"name": "t", "start": "has-note", "nodes": [
+        {"id": "has-note", "kind": "script", "command": check,
+         "on_pass": "send", "on_fail": "draft"},
+        {"id": "draft", "prompt": "draft the note", "next": "send"},
+        {"id": "send", "prompt": "delivered?", "on_pass": None, "on_fail": "has-note"},
+    ]})
+    eng = engine_for(tmp_path, ["drafted", "PASS"])
+    result = eng.run(wf, "task")
+    assert result.status == "completed"
+    draft_req = eng._node_runner.calls[0]
+    assert draft_req.node.id == "draft"
+    upstream = draft_req.upstream_output or ""
+    assert "Context from 'has-note':" in upstream
+    assert upstream.endswith("[exit code 1]")
+    assert "Reviewer feedback" not in upstream and "gate failed" not in upstream
 
 
 def test_script_cases_routing_and_needs_input(tmp_path):

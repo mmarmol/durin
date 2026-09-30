@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, TextIO
 
 from loguru import logger
 
@@ -32,24 +35,29 @@ from durin.agent.tools.mcp import (
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.paths import get_logs_dir
 
-_mcp_stderr_handle = None  # module-level shared handle
+_mcp_stderr_handles: dict[Path, TextIO] = {}  # one append handle per server stderr file
 
 _MCP_MAX_REDIRECTS = 5  # cap redirect chains on MCP HTTP transports (DoS / redirect-loop guard)
 
 
-def _mcp_stderr_log():
-    """Shared append handle for MCP-server stderr so server banners don't
-    corrupt the TUI (the SDK defaults errlog to sys.stderr). Line-buffered,
-    errors replaced; falls back to sys.stderr if the file can't be opened."""
-    global _mcp_stderr_handle
-    if _mcp_stderr_handle is not None:
-        return _mcp_stderr_handle
+def _mcp_stderr_log(server: str) -> TextIO:
+    """Append handle for one MCP server's stderr so server banners don't
+    corrupt the TUI (the SDK defaults errlog to sys.stderr).
+
+    Each server gets its own file: servers spawn at the same moment and
+    write their stderr with no prefix, so in a shared file a spawn failure
+    (e.g. a missing interpreter) could not be tied to its server.
+    Line-buffered, errors replaced; falls back to sys.stderr if the file
+    can't be opened."""
     try:
-        path = get_logs_dir() / "mcp-stderr.log"
-        _mcp_stderr_handle = open(path, "a", buffering=1, errors="replace")  # noqa: SIM115
+        path = get_logs_dir() / f"mcp-stderr-{_sanitize_name(server)}.log"
+        handle = _mcp_stderr_handles.get(path)
+        if handle is None:
+            handle = open(path, "a", buffering=1, errors="replace")  # noqa: SIM115
+            _mcp_stderr_handles[path] = handle
+        return handle
     except Exception:  # noqa: BLE001
-        _mcp_stderr_handle = sys.stderr
-    return _mcp_stderr_handle
+        return sys.stderr
 
 
 @dataclass
@@ -180,12 +188,14 @@ _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 60.0
 _MAX_INITIAL_CONNECT_RETRIES = 3
 _MAX_RECONNECT_RETRIES = 5
-# Upper bound on the initial connect. A server can hang here indefinitely —
-# most often an OAuth server whose interactive-auth abort the MCP SDK swallows,
-# leaving the HTTP request pending forever so _ready is never set. Since
-# connect_mcp_servers connects sequentially and run() awaits _connect_mcp before
-# its consume loop, an unbounded wait lets one un-authed server brick every
-# turn. Generous enough for legitimate cold starts (stdio npx, SSE handshakes).
+# Upper bound on each server's initial connect. A server can hang here
+# indefinitely — most often an OAuth server whose interactive-auth abort the MCP
+# SDK swallows, leaving the HTTP request pending forever so _ready is never set.
+# connect_mcp_servers returns only once every server has connected or failed,
+# and run() awaits _connect_mcp before its consume loop, so an unbounded wait
+# lets one un-authed server brick every turn. Servers connect concurrently, so
+# this bounds startup as a whole, not per server in sequence. Generous enough
+# for legitimate cold starts (stdio npx, SSE handshakes).
 _CONNECT_TIMEOUT = 30.0
 _KEEPALIVE_INTERVAL = 180.0
 _KEEPALIVE_TIMEOUT = 30.0
@@ -401,7 +411,12 @@ class MCPServerConnection:
         if getattr(cfg, "malware_check", True):
             from durin.agent.tools.mcp_security import check_package_for_malware
 
-            finding = check_package_for_malware(cfg.command, cfg.args)
+            # The OSV lookup is a blocking HTTP request (up to its socket
+            # timeout plus DNS); on the event loop it would stall every
+            # server connecting alongside this one and the agent loop.
+            finding = await asyncio.to_thread(
+                check_package_for_malware, cfg.command, cfg.args
+            )
             if finding:
                 raise PermissionError(
                     f"MCP server '{self.name}': {finding}"
@@ -411,9 +426,16 @@ class MCPServerConnection:
             _inject_shared_github_token(_resolve_secret_map(cfg.env)) or None,
         )
         params = StdioServerParameters(command=command, args=args, env=env)
-        errlog = _mcp_stderr_log()
+        errlog = _mcp_stderr_log(self.name)
         try:
-            errlog.write(f"\n=== MCP server '{self.name}' stdio session ===\n")
+            # The child writes its stderr straight into this file with no
+            # prefix, so the header is what dates a spawn failure (e.g. a missing
+            # interpreter) and ties it to one gateway process.
+            stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+            errlog.write(
+                f"\n=== {stamp} MCP server '{self.name}' stdio session "
+                f"(durin pid {os.getpid()}) ===\n"
+            )
             errlog.flush()
         except Exception:  # noqa: BLE001
             pass
@@ -449,26 +471,64 @@ class MCPServerConnection:
         self._transport_cm = sse_client(cfg.url, httpx_client_factory=self._sse_client_factory())
         return await self._transport_cm.__aenter__()
 
-    async def _close_transport_streams(self) -> None:
-        import contextlib
+    async def _close_transport_streams(
+        self, cancelled: asyncio.CancelledError | None = None
+    ) -> None:
+        """Exit the transport context, then close its HTTP client.
+
+        ``cancelled`` is the CancelledError ending the session, if any, and is
+        handed to the transport's exit. When a task inside the SDK transport
+        fails (a stdio server that exits at spawn breaks the pipe), the
+        transport's anyio task group cancels this task. Only an exit that
+        receives that CancelledError lets anyio withdraw its own cancellation
+        and raise the failed task's error instead, which run() then retries and
+        reports like any connect failure. Exiting without it lets the stray
+        CancelledError reach run() as if the connection had been cancelled.
+        A cancellation still requested of this task after the exit is a real
+        one (anyio withdraws its own), so a teardown error never replaces it.
+        """
         cm = getattr(self, "_transport_cm", None)
-        if cm is not None:
-            with contextlib.suppress(Exception):
-                await cm.__aexit__(None, None, None)
-            self._transport_cm = None
-        client = getattr(self, "_http_client", None)
-        if client is not None:
-            with contextlib.suppress(Exception):
-                await client.__aexit__(None, None, None)
-            self._http_client = None
+        self._transport_cm = None
+        try:
+            if cm is not None and cancelled is not None:
+                try:
+                    await cm.__aexit__(type(cancelled), cancelled, cancelled.__traceback__)
+                except Exception:
+                    task = asyncio.current_task()
+                    if task is None or not task.cancelling():
+                        raise
+            elif cm is not None:
+                with contextlib.suppress(Exception):
+                    await cm.__aexit__(None, None, None)
+        finally:
+            client = getattr(self, "_http_client", None)
+            if client is not None:
+                self._http_client = None
+                with contextlib.suppress(Exception):
+                    await client.__aexit__(None, None, None)
 
     # ----- lifecycle -----
 
     async def start(self) -> bool:
         self._task = asyncio.ensure_future(self.run())
+        ready = asyncio.ensure_future(self._ready.wait())
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=_CONNECT_TIMEOUT)
-        except asyncio.TimeoutError:
+            await asyncio.wait(
+                {ready, self._task},
+                timeout=_CONNECT_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            ready.cancel()
+        if not self._ready.is_set() and self._task.done():
+            # run() ended without reaching a terminal state (a cancellation not
+            # aimed at it escaped the transport), so _ready can never be set.
+            # Report the failure now instead of waiting out the timeout.
+            if self._error is None:
+                cause = None if self._task.cancelled() else self._task.exception()
+                self._error = cause or ConnectionError("connect ended before the session opened")
+            return False
+        if not self._ready.is_set():
             # The serve loop never reached a terminal state (success or
             # failure) within the budget — it is stuck inside the transport
             # connect (see _CONNECT_TIMEOUT). Cancel the hung task and report a
@@ -574,6 +634,10 @@ class MCPServerConnection:
                 self._reset_breaker()
                 self._ready.set()
                 await self._wait_for_lifecycle_event()
+        except asyncio.CancelledError as exc:
+            self.session = None
+            await self._close_transport_streams(exc)
+            raise
         finally:
             self.session = None
             await self._close_transport_streams()

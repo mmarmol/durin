@@ -331,7 +331,8 @@ export function RunDetail({
   // active node's live delta while one is running) alongside the typical total from
   // prior runs — both sums, so they read as a direct comparison. Either is null
   // (rendered as absent, not 0) when there is nothing to sum: an older manifest with
-  // no duration data, or a workflow with no completed-run history yet.
+  // no duration data, or a workflow with no completed-run history yet. The typical
+  // total is also absent when prior runs took different routes through the graph.
   const completedS = sumKnown(result.runs.map((r) => r.duration_s));
   const activeS = activeNodeInfo != null ? Math.max(0, now / 1000 - activeNodeInfo.started_at) : null;
   const elapsedTotalS = completedS != null || activeS != null ? (completedS ?? 0) + (activeS ?? 0) : null;

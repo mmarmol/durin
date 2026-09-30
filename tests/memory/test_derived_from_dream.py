@@ -8,6 +8,7 @@ from durin.memory.derived_from_dream import (
     reference_refs_in_session,
 )
 from durin.memory.entity_page import EntityPage
+from durin.memory.llm_invoke import LLMResponse
 from durin.memory.reference import ingest_reference
 
 
@@ -172,8 +173,10 @@ def test_link_derived_from_emits_parse_failure(tmp_path: Path, monkeypatch) -> N
                         lambda name, data: events.append((name, data)))
 
     def fake_llm(prompt: str, **_kw):
-        return "not json at all"
+        return LLMResponse(text="not json at all", finish_reason="length")
 
     link_derived_from_for_session(tmp_path, jsonl, llm_invoke=fake_llm)
     failures = [d for n, d in events if n == "memory.dream.parse_failure"]
     assert failures and failures[0]["stage"] == "derived_from"
+    # A cut answer reads apart from a malformed one.
+    assert failures[0]["finish_reason"] == "length"

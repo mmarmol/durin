@@ -19,6 +19,7 @@ sink swallows exceptions and reports via the local logger.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,11 @@ class PushSink:
     """One push destination, fed by `log(event_type, data)` calls.
 
     Construct with a URL + token; disabled when either is missing.
-    Thread-safety: not designed for concurrent callers from many
-    threads. The agent loop is single-threaded for telemetry by
-    convention.
+    Thread-safe: a run's events arrive from the event loop and from worker
+    threads at once (``memory_search`` emits its rows from the thread that
+    ran the search), so a lock guards the buffer. The POST itself runs
+    outside the lock, so a slow endpoint never holds up another thread's
+    ``log``.
     """
 
     def __init__(
@@ -49,6 +52,7 @@ class PushSink:
         self._token = token
         self._batch_size = batch_size
         self._buffer: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -61,8 +65,10 @@ class PushSink:
         """Enqueue one event. Drains when the buffer hits `batch_size`."""
         if not self.enabled:
             return
-        self._buffer.append({"type": event_type, "data": data})
-        if len(self._buffer) >= self._batch_size:
+        with self._lock:
+            self._buffer.append({"type": event_type, "data": data})
+            full = len(self._buffer) >= self._batch_size
+        if full:
             self._drain()
 
     def flush(self) -> None:
@@ -78,8 +84,13 @@ class PushSink:
 
     def _drain(self) -> None:
         """Send the current buffer; on failure, restore it for retry."""
-        batch = self._buffer[:]
-        self._buffer.clear()
+        # Take the buffer whole under the lock: each event lands in exactly
+        # one batch. Another thread that saw the same full buffer finds it
+        # already taken and sends nothing.
+        with self._lock:
+            batch, self._buffer = self._buffer, []
+        if not batch:
+            return
         payload = {"events": batch}
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -95,7 +106,8 @@ class PushSink:
                 self._url, exc, len(batch),
             )
             # Restore — preserving order — so the next drain retries.
-            self._buffer = batch + self._buffer
+            with self._lock:
+                self._buffer = batch + self._buffer
 
     def _post(self, url: str, *, json: dict, headers: dict):  # noqa: A002
         """Default HTTP transport. Override in tests + replace with

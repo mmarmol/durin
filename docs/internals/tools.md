@@ -292,8 +292,17 @@ read-only tools accept a list and fan out internally with `asyncio.gather`,
 turning N independent calls into one guaranteed-parallel call regardless of
 whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
 `web_search` (`queries`) and `read_file` (`paths`). Each takes the single form
-OR the list form (not both), caps the list, and returns one record per item in
-order with a per-item `error` field so one failure does not abort the batch.
+OR the list form, caps the list, and returns one record per item in order with
+a per-item `error` field so one failure does not abort the batch. `read_file`
+also takes both at once, since a model reading several files often names one
+in `path` and the rest in `paths`: it reads them as one batch, `path` first and
+each file once, under the same cap and shared page budget, instead of
+answering with an error that costs a round trip. `path` is read at its own
+`offset`, `limit` and `pages`, as it would be alone, so a page the model has
+not seen never comes back as the "unchanged since last read" stub of an
+earlier page; the files in `paths` are read from their start, and
+`char_offset` still needs `path` on its own. An empty `path` next to `paths`
+counts as not given, so the call reads `paths` alone. The others reject both.
 `memory_search` is parallel in a different sense — it takes one scalar `query`
 and no list parameter, and fans that query across the vector, lexical and grep
 paths inside a single call.

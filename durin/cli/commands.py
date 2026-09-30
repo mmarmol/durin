@@ -1878,6 +1878,17 @@ def _run_gateway(
     except Exception:  # noqa: BLE001
         logger.exception("embed server supervision failed to start")
 
+    # Build the shared alias index on a background thread now, so the first
+    # memory search after boot finds it ready instead of walking every entity
+    # page itself. A search arriving before it finishes waits for this build
+    # rather than starting a second one.
+    try:
+        from durin.memory.aliases_cache import refresh_alias_index_in_background
+
+        refresh_alias_index_in_background(config.workspace_path / "memory")
+    except Exception:  # noqa: BLE001
+        logger.exception("alias index warm-up failed to start")
+
     mem_dream_cfg = config.memory.dream
     if mem_dream_cfg.enabled:
         cron.register_system_job(CronJob(

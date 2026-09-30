@@ -288,8 +288,8 @@ def test_an_observation_nothing_can_land_stops_pulling_its_skill_in(tmp_path):
 
 
 def test_the_bundled_files_shown_to_the_judge_have_one_budget(tmp_path):
-    """Every selected skill may carry scripts; the prompt takes at most one
-    budget of them, the skills with open observations first."""
+    """Every selected skill may carry scripts; each prompt takes at most one
+    budget of them, and the skill with open observations is shown its own."""
     from durin.agent.skill_curation import _BUNDLES_TOTAL_CHARS
 
     ws = tmp_path / "ws"
@@ -305,9 +305,9 @@ def test_the_bundled_files_shown_to_the_judge_have_one_budget(tmp_path):
     calls = []
     curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
 
-    shown = calls[0].count("print('x')") * len("print('x')\n")
-    assert shown <= _BUNDLES_TOTAL_CHARS
-    assert "marker s11-0" in calls[0] and "marker s11-1" in calls[0]
+    for prompt in calls:
+        assert prompt.count("print('x')") * len("print('x')\n") <= _BUNDLES_TOTAL_CHARS
+    assert any("marker s11-0" in p and "marker s11-1" in p for p in calls)
 
 
 def test_an_evolve_can_fix_a_bundled_script(tmp_path):

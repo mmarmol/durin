@@ -136,8 +136,8 @@ def run_dream_worker(
     thread); non-JSON lines are logged and skipped. If the worker exits
     without emitting a ``run_finished``, one is synthesized so UI running
     indicators always stop. After the worker exits — however it exits — the
-    parent's alias-index cache for this workspace is invalidated, because
-    the child's writes bypassed in-process invalidation.
+    parent's shared alias index for this workspace is rebuilt in the
+    background, because the child's writes bypassed the in-process updates.
 
     A watchdog thread samples the worker tree's RSS and terminates the whole
     process group above the cap (``max_rss_mb``; None/0 = a fraction of total
@@ -251,14 +251,15 @@ def run_dream_worker(
         with _procs_lock:
             _running_procs.discard(proc)
         # The worker wrote entity pages this process didn't see through its
-        # own writers; drop the shared alias cache so the next lookup
-        # rebuilds from disk.
+        # own writers; rebuild the shared alias index from disk. The rebuild
+        # runs on its own thread and searches keep the previous index until
+        # it swaps in, instead of every search waiting on a cold rebuild.
         try:
-            from durin.memory.aliases_cache import invalidate_alias_index
+            from durin.memory.aliases_cache import refresh_alias_index_in_background
 
-            invalidate_alias_index(Path(workspace) / "memory")
+            refresh_alias_index_in_background(Path(workspace) / "memory")
         except Exception:
-            logger.exception("alias-cache invalidation after dream failed")
+            logger.exception("alias-index rebuild after dream failed to start")
     if not saw_finished:
         try:
             on_progress({"kind": "run_finished", "ok": code == 0})

@@ -567,7 +567,7 @@ there is no session left to credit.
 | `agents.defaults.skills_hot_tier.recent_window_hours` | 24 | Window for the recent slice. |
 | `agents.defaults.disabled_skills` | `[]` | Skill names excluded from loading entirely. |
 | `memory.dream.cron` | `"0 3 * * *"` | Schedule for the daily dream cron (all consolidation passes + skill curation). |
-| `memory.dream.max_seconds_per_run` | 600 | Hard wall-clock cap per extract pass (yields after current session; cursor resumes on next trigger). |
+| `memory.dream.max_seconds_per_run` | 3600 | Hard wall-clock cap per extract, refine and skill-review pass (extract yields after the current session and its cursor resumes on the next trigger; the skill review starts no new batch and leaves the rest unstamped for the next run). |
 | `memory.dream.skill_signals_enabled` | `true` | Run `discover_skill_signals` over post-cursor session turns during the extract pass. |
 | `memory.dream.skill_suggestions_enabled` | `true` | When on, curation proposes actions for `mode=manual` skills as suggestions on the Pending page (accept/reject) rather than applying them directly. Disable to exclude manual skills from curation entirely. |
 

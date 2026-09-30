@@ -186,6 +186,55 @@ async def test_single_concurrency_busy_raises_and_try_fire_skips(tmp_path):
     assert await rt.try_fire("a1", source="cron") is None
 
 
+async def test_fire_reports_the_run_start_before_the_workflow_finishes(tmp_path):
+    """`on_started` is called once the run is recorded as started, while the
+    workflow is still running, so a caller can stamp the start at its real
+    time instead of after the whole run."""
+    _save(tmp_path)
+    seen = []
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                            work_key=None, root_session_key=None, paced=False):
+        seen.append("workflow")
+        return WorkflowResult(status="completed", final_output="out", run_id=run_id)
+
+    ids = iter(["run0", "wf0"])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+
+    def on_started():
+        seen.append(("started", rl.read_run(tmp_path, "a1", "run0")["status"]))
+
+    await rt.fire("a1", source="channel", on_started=on_started)
+
+    assert seen == [("started", "running"), "workflow"]
+
+
+async def test_fire_does_not_report_a_start_when_busy(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])
+    await rt.fire("a1", source="manual")  # leaves an active paused run
+    started = []
+    with pytest.raises(AutomationBusyError):
+        await rt.fire("a1", source="channel", on_started=lambda: started.append(True))
+    assert started == []
+
+
+async def test_fire_survives_an_on_started_callback_that_raises(tmp_path):
+    """The callback only observes the start; its failure must not strand a
+    run that has already been recorded as running."""
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+
+    def on_started():
+        raise RuntimeError("telemetry down")
+
+    m = await rt.fire("a1", source="channel", on_started=on_started)
+
+    assert m["status"] == "completed"
+    assert len(calls["exec"]) == 1
+
+
 async def test_workflow_exec_exception_finalizes_failed_with_detail(tmp_path):
     _save(tmp_path)
 

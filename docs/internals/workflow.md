@@ -119,8 +119,27 @@ and follows an edge. A node may route in one of two shapes:
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
 line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
 the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
-`on_fail`; on a fail the node's feedback is threaded into the loop-back so the producer re-runs
-knowing what to fix. When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
+`on_fail`. How a fail's output is threaded depends on the graph: when the `on_fail` target
+can lead back to the gate without passing through the gate's `on_pass` target (the fail path
+returns on a route the pass path does not share), the fail is a loop-back and the output is
+threaded as `Reviewer feedback (address this):` so the producer re-runs knowing what to fix.
+That holds whether or not the target has run yet, so a fixer reached for the first time from a
+failing review, or a review that fails right after a resume, still frames it as feedback.
+Otherwise the fail is a forward route (a check whose "no" is a normal branch, e.g. "no note
+yet → go draft it") and the output is threaded with the same neutral `Context from '<node>':`
+framing a `cases` route uses, so the next step never reads a routine "no" as an earlier
+failure. That includes a target that comes back to the gate only by way of `on_pass`: when the
+drafting step goes on to the pass step, a retry edge or an outer loop over items that later
+re-enters the check is a cycle of the pass route, not of the fail. Only edges the walk follows
+count as paths: `next`, `on_pass`/`on_fail`, `cases` targets, and a parallel node's `next` (its
+branches, worker and list source run inside it or before it). Two shapes stay ambiguous,
+because the graph cannot tell a routine "no" from a verdict on earlier work: a check whose
+`on_fail` step leads straight back to it (check → create → check again) reads as a loop-back,
+so the creating step gets reviewer framing even on its first run (declare such a check with
+`cases` for neutral framing); and a review whose fix step goes on to the pass route instead of
+back to the review reads as a forward route, so the fix step gets the verdict under neutral
+framing (the verdict text itself still arrives). `NodeRunRequest.fail_loops_back` hands the
+node's runner the same answer (the script runner words its exit note from it, below). When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
@@ -128,8 +147,9 @@ exactly one label; the engine matches the last non-empty line of the output agai
 labels (case-insensitive, surrounding punctuation tolerated), then follows the matching edge.
 A `null` target ends the run; any other target is a node id. If the output matches no label the
 engine tries a `"default"` key — if that is also absent, the run ends as `aborted` naming the
-node and the sorted list of expected labels. Like binary fail-edges, the node's output is
-threaded as reviewer feedback before routing to a non-terminal target. The matched label is
+node and the sorted list of expected labels. Before routing to a non-terminal target, the
+node's output is threaded as neutral context (`Context from '<node>':`), since a case is a
+dispatch between normal paths rather than a verdict on earlier work. The matched label is
 recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail does not apply).
 Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
 and `next` are mutually exclusive. Routing nodes default to **explore** (read-only) mode.
@@ -180,7 +200,9 @@ read.
 **Script routing is exit-code-driven, not text-parsed.** A binary script gate
 (`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
 non-zero is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
-explicit exit-code note, so the loop-back feedback explains what failed. A multi-way
+explicit exit-code note, so the loop-back feedback explains what failed. The note follows
+the same `fail_loops_back` rule as the engine's framing: `[script gate failed: exit code N]`
+when the fail is a loop-back, a plain `[exit code N]` on a forward route. A multi-way
 script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
 agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
 a `cases` node, or on a plain linear node with no routing, is a node failure
@@ -233,7 +255,26 @@ turn 1, not appended only at this forced call, so the `tools` array — and the 
 prefix it anchors — stays identical between every work-loop round and this final call. A
 schema-valid `deliver` call made mid-loop is accepted immediately as the node's output,
 skipping the forced call entirely; an invalid one returns the validation error and lets the
-model keep working. A `route` call made before the node is done is acknowledged but not
+model keep working. A node that has a working folder (one with the file tools) also gets
+**`deliver_file(path)`**: it reads the payload from a JSON file in that folder and runs
+the same schema check into the same capture (the last valid delivery of either tool wins).
+A node that drafts and checks its output in a file delivers exactly that file instead of
+retyping it, and a rejection — which names the failing field by its path in the payload —
+is fixed by editing the file in place and calling again. It is a separate tool rather than a
+property on `deliver`, because `deliver`'s parameters ARE the output schema and an added
+property could collide with a schema field. The path is relative to the working folder or
+absolute inside it; an absolute path elsewhere, a `..` escape, or a symlink leading out is
+refused, as is a file whose top level is not a JSON object (what `deliver`'s arguments
+always are). A rejection is a plain reply, not an `Error` result: the agent loop blocks an
+identical call that failed with an error, and fixing or writing the file leaves the call
+identical. `deliver`'s description points at `deliver_file` only when the node has it.
+The end-of-turn forced call names `deliver` in `tool_choice`, but a provider may send that
+as `auto` (the Anthropic provider does with thinking on, and after a model refuses a forced
+tool), so its answer is read by tool name: a `deliver` call's arguments are the payload, a
+`deliver_file` call gets the tool's own read and schema check (no tool runs during the
+forced call, so a rejected draft is corrected through `deliver`), and a call to any other
+tool counts as no delivery — its arguments are never read as the payload.
+A `route` call made before the node is done is acknowledged but not
 authoritative — the end-of-turn forced call always decides the actual verdict. The
 forced-tool calls (route / re-entry / deliver) go through
 `chat_with_retry`, so transient transport failures retry and `max_tokens` resolves to the
@@ -244,7 +285,12 @@ object and gets misreported as a missing required field); an `error` response fa
 node immediately with the provider's message instead of burning the remaining attempts. The delivery instruction names the schema's required fields up front, so
 a required-property miss costs a retry only when the model ignores an explicit list, not
 because it had to infer the contract from the schema alone. The node's output is the validated payload as JSON, and with `output_file`
-the ENGINE writes it into the working folder (the model never types the file).
+the ENGINE writes it into the working folder (the model never types the file) once the
+step ends — on the main walk only: a parallel branch, fan-out worker or detached node's
+`output_file` is not written. The main walk passes the file on the node's request
+(`NodeRunRequest.output_file`), and both delivery replies then name it, so the model does
+not look for it right after delivering, miss it, and write it by hand only for the engine to
+overwrite it; a node dispatched any other way gets no such line.
 Alongside `output_file`, the engine stamps **artifact provenance**: `work/.provenance.json` maps each engine-written file to who produced it — a hash of the producing node's reuse-relevant definition fields (routing-only/display edits like `next`/`on_fail`/`title` are excluded via a denylist, so they never invalidate reuse; an unrecognized future field is NOT excluded by default, so it still invalidates reuse rather than being silently ignored), the resolved model/provider, a generation-params hash, a hash of the exact `(task, composed-upstream-input)` pair the node was dispatched with (`input_hash`), a hash of the artifact's own text content (`content_sha256`), and the durin version — best-effort like the `output_file` write itself, never fatal; when the stamp itself fails, the engine best-effort drops any stale entry for the same filename rather than leaving it standing over content that just changed. Run manifests carry the same producer identity at coarser grain: a top-level `spec_hash` — over every node's identity (an agent node's raw spec; a script/subworkflow/parallel node's parsed definition, since those carry no raw field) — plus `durin_version`, and `model`/`provider`/`node_hash` on a work/script node's own linear-walk record (branch, fan-out worker, subworkflow, parallel-aggregate, and detached rows carry none of the three: the aggregate rows have no single resolvable model, and a detached node's response is not yet threaded through for its record).
 A work node may declare **`reuse: "if-unchanged"`** (requires `output_file`; one without the other is a parse-time spec error). Before dispatching, the engine asks the node runner for the producer identity a run right now WOULD stamp (model, provider, params hash) and compares it, alongside the node's current `reuse_hash` and the CURRENT composed input (task + upstream/`inputs_from` text, hashed the same way as `input_hash`), against the `output_file`'s provenance entry — all must match exactly, and the file's CURRENT bytes must still hash to the entry's `content_sha256`; a `None` on either side of any single comparison (an unresolvable identity, or a work folder with no recorded provenance — e.g. a legacy folder) always means "run normally", never "reuse". A same-run revisit (this node's second or later visit within the current walk) never reuses either, regardless of what else matches — belt and suspenders, since a revisit only happens after a loop-back, which means upstream feedback exists. On a match the runner is never dispatched: the artifact's text becomes the node's output (`output_schema`, required by `output_file`, already rules out routing here), while the node's trace record gets `status: "reused"` and `origin_run_id` (the run that actually produced the file) in place of `ok`/`persist_failed`, `duration_s: 0`, and does NOT re-stamp provenance — the original entry, still accurate, stands. `reuse` is rejected at parse time on a `detached` node and on a parallel branch/worker (neither dispatch path ever checks the reuse gate), together with `context: "shared"` (a reuse hit would silently contribute no messages to the shared buffer that pass), and — for ANY node in the workflow — when a `branches_from` parallel node declares no candidate `branches` pool (with no pool every node is runtime-selectable, so the parser cannot rule out the reuse node being one of them). A reused pass still records no session for `session: "persistent"` — the original run's session remains the trace. The gate needs a SHARED working folder to ever find anything: a fresh top-level run always mints a new `run_id` and, by default, a fresh (empty) folder under it, so its `.provenance.json` starts empty and reuse never fires. Three entrances give a run a folder that already carries an earlier pass's stamp instead: (a) `WorkflowEngine.run`'s `work_key` param — a caller-supplied key (workflow tool, HTTP launch route, automations) picks a STABLE folder under `.workflow/keys/<safe workflow name>/<safe work_key>/` shared by every run with that same key (each segment is `artifacts.safe_key`'s collision-proof `<sanitized-prefix, capped 60 chars>-<sha256(the original value)[:8]>` — never the bare sanitized text alone, so two DIFFERENT names that happen to sanitize alike, e.g. `"Ticket #1"` and `"ticket_#1"`, still land in different folders); (b) an automation's re-entry (an answered `waiting_info` run) or an aborted/needs_input run's `resume_run_id` — both re-enter the SAME run_id and therefore the same folder; (c) a subworkflow, which always shares its parent run's folder. Without one of these, reuse is unreachable no matter how a node is configured. A `work_key` folder is SHARED across separate runs, so `WorkflowEngine.run` holds a cross-process lock on it for the run's full duration — two runs sharing a key SERIALIZE (the second waits for the first to finish, then typically reuses what it just stamped) rather than racing to write the same `output_file`. Unlike a per-run folder (bounded by `keep_runs`), a keyed folder has no run_id to age out by count — it is instead reaped by elapsed idle time: `artifacts.prune_runs` removes a `keys/<workflow>/<key>/` dir once its newest content is older than `KEYED_WORK_MAX_AGE_DAYS` (30) days, unless a run currently holds its lock (left untouched regardless of age) OR its `(workflow, work_key)` still names a live manifest — running, or a resumable `needs_input` (`run_log.live_work_keys`) — since a PARKED run releases this same lock the instant it parks, well before anyone answers it, so the lock check alone cannot tell a merely-idle key apart from one still awaiting a reply. The sweep itself runs at most once every `KEYED_SWEEP_MIN_INTERVAL_S` (a day), tracked by an on-disk marker (`keys/.last-sweep`) rather than every single run, since its recursive per-dir mtime walk would otherwise cost O(total keyed-folder size) on every workflow run in a workspace with many keys.
 A `work_key` folder being shared across separate runs is exactly what the reuse gate needs
@@ -442,7 +488,7 @@ flowchart TD
     F -->|binary on_pass/on_fail| I[route tool verdict\nfallback parse_verdict]
     I --> J{passed?}
     J -->|yes| K[route on_pass]
-    J -->|no| L[route on_fail / loop back\nthread reviewer feedback]
+    J -->|no| L[route on_fail\nloop-back: reviewer feedback\nforward: neutral context]
     K --> H
     L --> H
     F -->|multi-way cases| MW[route tool verdict\nfallback parse_label]
@@ -468,7 +514,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -509,9 +555,16 @@ this workflow carrying the same key instead of a fresh per-run one (`null` when 
 key was given); `typical_s` / `typical_total_s`
 — median per-node and median whole-run seconds, computed once here from the
 workflow's prior completed runs (§4g), so every reader shows the same baseline for
-the life of the run instead of recomputing it; and `spec_hash` / `durin_version` —
+the life of the run instead of recomputing it; `spec_hash` / `durin_version` —
 the workflow-definition hash and engine build this run walked with (see
-`durin/workflow/provenance.py`), carried forward unchanged on every later rewrite.
+`durin/workflow/provenance.py`), carried forward unchanged on every later rewrite;
+`resumed` — `true` when the walk re-enters an existing run (a failure-resume,
+or a reply to a pause that goes back into the engine). A resume starts `runs` empty
+again, so on a resumed run they hold only the last walk's rows, not the earlier
+attempts'; the flag is carried forward on every rewrite; and `earlier_nodes` — the
+ids of every node the earlier attempts of a resumed run walked, gathered across all
+its resumes (`[]` on a run that never resumed), so the run's route stays on record
+even though its `runs` do not; carried forward on every rewrite.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -1061,7 +1114,17 @@ estimate is the median of those. Summing the per-node medians instead would sum
 the union of the paths those runs took: a router with mutually exclusive
 branches has a median for every branch any prior run visited, while a single run
 walks one of them, and a node visited three times would contribute a single
-median rather than three passes.
+median rather than three passes. The median is only kept when those runs took the
+same route — the same set of nodes walked, so extra passes through a revision loop
+stay on one route. When they walked different sets (a router that sometimes skips,
+sometimes answers briefly, sometimes investigates in full), no single number describes
+them and `typical_total_s` is recorded as `null`, which every surface shows as absent.
+The estimate is made at `start_run`, before the new run has taken any route, so it
+cannot pick the matching route's history instead. A `resumed` run's seconds are left
+out, since its `runs` hold only the last walk's rows, but its route still counts: the
+nodes in those rows plus its `earlier_nodes`. Leaving resumed runs out altogether
+would hide a route only they take (every run through an approval that has a next
+node resumes), and runs on that route would be shown another route's median.
 
 **Node labels.** Every frame's `label` comes from `node_label`
 (`durin/workflow/spec.py`): the author's `title` if set, else the node's
@@ -1369,6 +1432,19 @@ End-to-end for a single `run_workflow` call:
     `<workspace>/workflows/scripts/` referenced by a node with that same evidence.
     The repair lane only edits single-segment filenames: a nested reference (e.g.
     `sub/tool.sh`) is left alone even when it is the one failing.
+
+  `gate_fails` counts every FAIL verdict, including a gate whose FAIL is a normal
+  forward branch (a check whose "no" is expected, e.g. "no note yet → go draft it"):
+  a forward error path, such as a send step failing into a report step, is a real
+  failure, so the count cannot tell the two apart from the edge shape. The model's
+  instructions draw the line instead: "prefer improving the producer over the gate" is
+  scoped to a gate whose FAIL sends the work back to be redone; a gate that fails on a
+  normal route is not trouble, and the right proposal is converting it to a `cases`
+  route with the same targets, never hardening the step it routes to as if a run had
+  failed. Because a script check routed by `cases` must print its label as its last
+  stdout line and exit 0, the model says in the proposal's `reason` how the command
+  changes. That conversion is outside the editable scope, so it lands as a `structural`
+  recommendation (below) for a person to apply.
 
   A script proposal on a node that **routes** (`on_pass`/`on_fail` or `cases` — a
   gate), or a `script_file` referenced by any routing node, is always `manual_only`:

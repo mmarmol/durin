@@ -20,6 +20,7 @@ import threading
 import time
 from collections import OrderedDict
 from contextvars import ContextVar, Token
+from datetime import date
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
@@ -97,10 +98,20 @@ class TelemetryLogger:
     logged and skipped — telemetry must never break the calling tool.
     """
 
-    def __init__(self, path: Path, *, session_key: str = "") -> None:
+    def __init__(
+        self, path: Path, *, session_key: str = "", day_stem: str | None = None,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._count = 0
+        self._lock = threading.Lock()
+        # With a day stem the file is ``<day_stem>_<local date>.jsonl`` in
+        # path's directory, and the date comes from each event's own
+        # timestamp. A logger that outlives midnight (the gateway's memory
+        # footprint thread binds one at startup and keeps it) then moves to
+        # the new day's file instead of writing every later day into the
+        # file of the day it was created.
+        self._day_stem = day_stem
         self._extra_sinks: list[_Sink] = []
         # Identity fields the emit_tool_event helper auto-injects into
         # every payload so dashboards can join cross-event by
@@ -139,19 +150,35 @@ class TelemetryLogger:
         self._extra_sinks.append(sink)
 
     def log(self, event_type: str, data: dict[str, Any] | None = None) -> None:
-        if self._count >= _MAX_EVENTS_PER_FILE:
-            return
-        entry = {
-            "ts": time.time(),
-            "type": event_type,
-        }
-        if data:
-            entry["data"] = data
-        _append_line(
-            self._path,
-            json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n",
-        )
-        self._count += 1
+        # One logger can be used from several threads at once: asyncio.to_thread
+        # hands the bound logger to its worker thread through the copied
+        # context. Stamping, choosing the day's file, and writing happen
+        # under one lock, so events are written in the order they were
+        # stamped: a thread stamped before midnight can neither write into
+        # the new day's file nor move the logger back to the old one, count
+        # reset, after another thread moved it on.
+        with self._lock:
+            ts = time.time()
+            if self._day_stem is not None:
+                path = self._path.with_name(f"{self._day_stem}_{_local_date(ts)}.jsonl")
+                if path != self._path:
+                    # The count is this logger's writes to its current file,
+                    # so moving to a new day's file starts it again.
+                    self._path = path
+                    self._count = 0
+            if self._count >= _MAX_EVENTS_PER_FILE:
+                return
+            entry = {
+                "ts": ts,
+                "type": event_type,
+            }
+            if data:
+                entry["data"] = data
+            _append_line(
+                self._path,
+                json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n",
+            )
+            self._count += 1
         # Fan out to extra sinks (e.g. PushSink). Isolation: each sink
         # runs in its own try/except so a failure in one (network down,
         # endpoint 5xx, etc.) never affects the JSONL write or the
@@ -193,25 +220,30 @@ class TelemetryLogger:
         })
 
 
+def _local_date(ts: float) -> str:
+    """The local calendar date of ``ts``, as telemetry file names carry it."""
+    return date.fromtimestamp(ts).isoformat()
+
+
 def get_session_logger(
     session_key: str,
     base_dir: Path | None = None,
 ) -> TelemetryLogger:
     """Get or create a telemetry logger for a session.
 
-    File naming: sanitized session key + date suffix for rotation.
+    File naming: sanitized session key + the local date of each event, so a
+    file holds one day of a session and a logger still writing after
+    midnight moves on to the next day's file.
     """
     import re
-    from datetime import date
 
     from durin.config.paths import get_telemetry_dir
 
     target_dir = base_dir or get_telemetry_dir()
     safe_key = re.sub(r"[^\w\-]", "_", session_key)[:80]
     safe_key = re.sub(r"\.{2,}", "_", safe_key)
-    today = date.today().isoformat()
-    filename = f"{safe_key}_{today}.jsonl"
-    return TelemetryLogger(target_dir / filename, session_key=session_key)
+    filename = f"{safe_key}_{_local_date(time.time())}.jsonl"
+    return TelemetryLogger(target_dir / filename, session_key=session_key, day_stem=safe_key)
 
 
 # Per-task telemetry binding. Mirrors the file_state ContextVar pattern so a

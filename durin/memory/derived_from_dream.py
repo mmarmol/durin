@@ -224,7 +224,8 @@ def link_derived_from_for_session(
         valid_entities={ref for ref, _page in pages},
     )
     if links is None:
-        emit_parse_failure("derived_from", source=jsonl_path.stem, raw=raw)
+        emit_parse_failure("derived_from", source=jsonl_path.stem, raw=raw,
+                           finish_reason=getattr(resp, "finish_reason", None))
         links = {}
     if not links:
         return {"session": jsonl_path.stem, "linked": []}

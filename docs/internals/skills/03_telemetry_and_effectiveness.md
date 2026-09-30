@@ -46,7 +46,10 @@ for later review), and
 hand, and `skill.observation_stalled` (`{skill, kind, attempts}`) marks one
 curation stopped trying after repeated attempts that landed nothing — it now
 waits for a person. `skill.curation_action` and `skill.curation_run` mark the *judgment*
-signal (what the daily judge did, item-by-item and in aggregate).
+signal (what the daily judge did, item-by-item and in aggregate), and
+`skill.curation_stalled` marks a skill whose own review keeps failing, set
+aside instead of re-paid every pass; `skill.curation_unrecovered` sums up
+once per pass what the review could not recover.
 `skill.suggestion_resolved` closes the loop for manual skills specifically —
 it records what the *user* decided about a suggestion the judge could not
 apply unilaterally.
@@ -95,6 +98,8 @@ flowchart TD
     end
     CURATE -->|per applied/attempted action| CURACTION["skill.curation_action"]
     CURATE -->|per pass, summary| CURRUN["skill.curation_run"]
+    CURATE -->|per skill set aside| CURSTALL["skill.curation_stalled"]
+    CURATE -->|per pass, when any| CURUNREC["skill.curation_unrecovered"]
 
     subgraph Resolution["Manual-skill suggestions"]
         ACCEPT["accept_suggestion / reject_suggestion\n(SkillsService)"]
@@ -113,6 +118,8 @@ flowchart TD
     SKILLEXTRACT --> DIGEST
     CURACTION --> DIGEST
     CURRUN --> DIGEST
+    CURSTALL --> DIGEST
+    CURUNREC --> DIGEST
     SUGRES --> DIGEST
     SKILLMISS --> DIGEST
 
@@ -217,27 +224,65 @@ add).
 
 ### Judge parse failures — `memory.dream.parse_failure` with `stage=curation|suggestions`
 
-When the curation judge's raw output cannot be parsed at all (unloadable JSON
-or wrong top-level type — a degraded provider, prose instead of the action
-object), the pass emits the shared `memory.dream.parse_failure` event with
-`stage=curation` (auto path) or `stage=suggestions` (manual path) and stops
-without stamping: the reviewed skills keep their stale curation marker and the
-suggestion cursor does not advance, so the same delta re-enters the next run
-instead of the review being silently consumed as a no-op. A valid response with
-empty `actions` is a completed review and stamps normally. The event surfaces
-in the webui Dream feed as a `warning` item via the shared digest mapping, and
-the run's summary carries `judge_parse_failed: true`.
+The judge reviews the selected skills in batches (see
+`02_lifecycle_and_curation.md` §4). When a batch's answer cannot be used — one
+the model did not finish (any `finish_reason` but `stop`: cut at the output
+limit, filtered, refused; never parsed, since a repaired fragment would apply
+an edit whose replacement text stops short), a provider error, or output that
+cannot be parsed at all (unloadable JSON, wrong top-level type — prose instead
+of the action object — or `actions` / `observations` that are not lists of
+objects) — the pass emits the
+shared `memory.dream.parse_failure` event with `stage=curation` (auto path) or
+`stage=suggestions` (manual path), carrying `finish_reason` and, for an
+unparseable answer, the parser's `error`. That batch stamps nothing: its skills
+keep their stale curation marker and the suggestion cursor does not advance.
+The batch is split and retried within the pass; the skills still without a
+usable answer re-enter the next run instead of the review being silently
+consumed as a no-op. A valid response with empty `actions` is a completed
+review and stamps normally. With these two stages the event stays a telemetry
+row and does not reach the webui Dream feed — a refusal the split recovers is
+routine; what the pass could not recover reaches it once per pass as
+`skill.curation_unrecovered` (below). The run's summary carries `failed` (how
+many selected skills got no usable answer) and `judge_parse_failed: true`.
+
+### `skill.curation_unrecovered` — what a pass could not recover
+
+Emitted once by a `curate_catalog` or `suggest_manual_skills` pass, and only
+when something did not recover: `{stage, failed, stalled, ended_early?,
+carried_over?}`. `stage` is `curation` or `suggestions`; `failed` counts the
+skills whose review got no usable answer even judged alone, `stalled` the
+delta skills set aside, and when the pass ended with skills still to review,
+`ended_early` says why — `model_failing` (`_FAILED_IN_A_ROW` single-skill
+reviews in a row failed) or `time_cap` (`memory.dream.max_seconds_per_run`) —
+and `carried_over` how many it did not reach. A batch whose refusal the split
+recovered is in none of these. It is a member of
+`dream_digest.DREAM_ACTIVITY_TYPES`: the Dream feed shows it as one `warning`
+line per pass.
+
+### `skill.curation_stalled` — a skill set aside
+
+Emitted when a skill's own review — judged alone, after its batch was split
+down to it — has failed `skill_curation._STALL_REVIEWS` passes in a row on the
+same body under the same curation rules. `{stage, skill, failures}`: `stage` is
+`curation` or `suggestions`. From then on the pass leaves the skill out of its
+delta (the run summary counts it as `stalled`) until its body or the rules
+change, or `skill_curation._STALL_DAYS` pass since its last failure; a retry
+that fails sets it aside again at once, and emits again.
 
 ### `skill.curation_run` — the pass summary
 
 Emitted once per `curate_catalog` invocation, whether or not the delta was
-empty. `{reviewed, applied, deferred, backfilled}`: `reviewed` is the size of
+empty. `{reviewed, applied, deferred, backfilled, failed, stalled}`: `reviewed` is the size of
 the selected (budget-capped) delta, `applied` counts the actions from
 `skill.curation_action` that succeeded, `deferred` is how much of the delta
 exceeded `skill_curation.DEFAULT_BUDGET` and rolled to a later run — a
 `deferred > 0` reading is the visible sign that curation throughput is behind
-the rate skills are changing — and `backfilled` is how many skills got a
-deterministic frontmatter repair this run. An empty-delta run still emits with
+the rate skills are changing — `backfilled` is how many skills got a
+deterministic frontmatter repair this run, `failed` how many selected skills
+got no usable judge answer, their own or because the pass ended before them
+(left unstamped for the next run), and `stalled`
+how many delta skills were set aside after repeated failed reviews. An
+empty-delta run still emits with
 all-zero counts, so a dashboard reading this event can distinguish "curation
 ran and found nothing to do" from "curation didn't run at all."
 
@@ -343,9 +388,11 @@ them — there is no separate skills-specific telemetry sink.
   *applied* action into a Dream-feed item — `kind: "retired"` for a `retire`,
   `kind: "improved"` for every other verb — deep-linked to the named skill and
   surfaced through the same `GET /api/v1/memory/dream/digest` path as the
-  `memory.dream.*` events above. The other `skill.*` events —
+  `memory.dream.*` events above. So does **`skill.curation_unrecovered`**,
+  one `warning` item per pass that left something unrecovered. The other
+  `skill.*` events —
   `skill.authored`, `skill.used`, `skill.observation_logged`,
-  `skill.curation_run`, `skill.suggestion_resolved`,
+  `skill.curation_run`, `skill.curation_stalled`, `skill.suggestion_resolved`,
   `skill.observation_resolved`, and `skill.observation_stalled` — have no
   dedicated webui reader; they exist as a queryable telemetry stream (local
   JSONL) for offline analysis of the loop's effectiveness, the same as many `memory.*`
@@ -359,7 +406,9 @@ them — there is no separate skills-specific telemetry sink.
 | `SkillUsedEvent` | `durin/telemetry/schema.py` | `{skill, op, turn, ok?, iteration?, session_key?}` (`op`: view/read/edit/run) — one skill touch. |
 | `SkillObservationLoggedEvent` | `durin/telemetry/schema.py` | `{skill, kind, dedup_bumped, count, reopened?}` — one observation append, dedup bump, or reopen. |
 | `SkillCurationActionEvent` | `durin/telemetry/schema.py` | `{action, skill?, applied}` — one curation action attempt. |
-| `SkillCurationRunEvent` | `durin/telemetry/schema.py` | `{reviewed, applied, deferred, backfilled?}` — one curation pass summary. |
+| `SkillCurationRunEvent` | `durin/telemetry/schema.py` | `{reviewed, applied, deferred, backfilled?, failed?, stalled?}` — one curation pass summary. |
+| `SkillCurationStalledEvent` | `durin/telemetry/schema.py` | `{stage, skill, failures}` — a skill whose own review keeps failing, set aside. |
+| `SkillCurationUnrecoveredEvent` | `durin/telemetry/schema.py` | `{stage, failed, stalled, ended_early?, carried_over?}` — what one skill-review pass could not recover. |
 | `SkillSuggestionResolvedEvent` | `durin/telemetry/schema.py` | `{skill, action, resolution}` — user's accept/reject of a manual-skill suggestion. |
 | `SkillObservationResolvedEvent` | `durin/telemetry/schema.py` | `{skill, kind, disposition}` — user's manual resolve/dismiss of an open observation. |
 | `SkillObservationStalledEvent` | `durin/telemetry/schema.py` | `{skill, kind, attempts}` — curation stopped trying an OPEN observation (emitted by `apply_dispositions`). |
@@ -371,7 +420,7 @@ them — there is no separate skills-specific telemetry sink.
 | `emit_skill_used` | `durin/agent/skill_usage.py` | Emits `skill.used` per call in a turn's `skill_calls`. |
 | `collect_usage_and_last_used` | `durin/agent/skill_usage.py` | Single-pass sidecar scan producing per-skill op counts and last-touched mtime; backs the webui usage line. |
 | `log_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_logged`; the single write path for the observation queue. |
-| `curate_catalog` | `durin/agent/skill_curation.py` | Emits `skill.curation_action` per action and `skill.curation_run` once per pass. |
+| `curate_catalog` | `durin/agent/skill_curation.py` | Emits `skill.curation_action` per action, `skill.curation_run` once per pass, `skill.curation_stalled` per skill set aside and `skill.curation_unrecovered` once per pass that left something unrecovered (the last two as `suggest_manual_skills` does for manual skills). |
 | `_enrich_usage` | `durin/service/skills.py` | Server-side join of usage + observation counts onto the `GET /api/v1/skills` payload. |
 | `SkillsService.accept_suggestion` / `.reject_suggestion` | `durin/service/skills.py` | Emit `skill.suggestion_resolved` on user resolution of an Inbox suggestion. |
 | `resolve_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_resolved` on the user's manual resolution of an observation. |

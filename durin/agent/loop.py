@@ -1395,7 +1395,7 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
         if self._mcp_connected:
-            self._maybe_defer_mcp_tools()
+            self._maybe_defer_mcp_tools(report=True)
 
     async def connect_mcp_server(self, name: str, cfg: Any = None) -> None:
         """Connect a single configured MCP server at runtime (idempotent).
@@ -1426,7 +1426,7 @@ class AgentLoop:
         self._mcp_connections.update(new)
         if self._mcp_connections:
             self._mcp_connected = True
-        self._maybe_defer_mcp_tools()
+        self._maybe_defer_mcp_tools(report=True)
 
     async def disconnect_mcp_server(self, name: str) -> None:
         """Disconnect a single MCP server at runtime (idempotent).
@@ -1442,10 +1442,14 @@ class AgentLoop:
         if conn is None:
             return
         await conn.aclose()
-        self._maybe_defer_mcp_tools()
+        self._maybe_defer_mcp_tools(report=True)
 
-    def _maybe_defer_mcp_tools(self) -> None:
+    def _maybe_defer_mcp_tools(self, report: bool = False) -> None:
         """Hide oversized MCP surfaces behind the bridge.
+
+        ``report`` also logs the MCP schema size and deferral state. The
+        per-registration callback leaves it off so a boot with several
+        servers logs one line with the final total, not one per server.
 
         Best-effort — a deferral failure must never block MCP usage;
         the tools just ship un-deferred as before.
@@ -1454,8 +1458,13 @@ class AgentLoop:
         if cfg is None:
             return
         try:
-            from durin.agent.tools.mcp_deferral import maybe_defer_mcp_tools
+            from durin.agent.tools.mcp_deferral import (
+                log_mcp_deferral_status,
+                maybe_defer_mcp_tools,
+            )
             maybe_defer_mcp_tools(self.tools, cfg)
+            if report:
+                log_mcp_deferral_status(self.tools, cfg)
         except Exception as e:  # noqa: BLE001
             logger.warning("MCP deferral failed (tools ship un-deferred): {}", e)
 
@@ -2385,6 +2394,11 @@ class AgentLoop:
         pending_answers.set_consumer_active(True)
         await self._replay_inbound_journal()
         logger.info("Agent loop started")
+        # The watcher's vector backfill builds the embedding provider and
+        # reads the whole vector table, so it is requested only now that the
+        # loop is serving, never while the gateway is still starting up.
+        if self._memory_file_watcher is not None:
+            self._memory_file_watcher.request_backfill()
 
         while self._running:
             try:

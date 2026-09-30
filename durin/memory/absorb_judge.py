@@ -276,6 +276,8 @@ def judge_pair(
                 source=(f"{canonical_ref or f'{canonical.type}:{canonical.name}'}|"
                         f"{absorbed_ref or f'{absorbed.type}:{absorbed.name}'}"),
                 raw=raw,
+                finish_reason=getattr(response, "finish_reason", None),
+                error=str(exc),
             )
             # Tell the model what could not be parsed instead of re-sending
             # the same prompt blind: most parse failures are format drift

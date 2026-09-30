@@ -574,11 +574,11 @@ class WorkflowRunsTool(Tool):
         """ISO dates a node visit's telemetry file could be stamped with: each
         manifest's started_at/finished_at date and today's, each ±1 day.
 
-        Telemetry filenames carry the LOCAL calendar date at write time (see
-        ``get_session_logger``'s ``date.today()``), which can land a day off
-        from a naive read of started_at/finished_at (timezone rounding), and a
-        run can itself span midnight — the buffer absorbs both without needing
-        to know which."""
+        Telemetry filenames carry the LOCAL calendar date of each event (see
+        ``TelemetryLogger.log``), which can land a day off from a naive read
+        of started_at/finished_at (timezone rounding), and a run can itself
+        span midnight, splitting even one node visit across two dated files
+        — the buffer absorbs both without needing to know which."""
         dates: set[str] = set()
         timestamps: list[float] = [time.time()]
         for m in manifests:
