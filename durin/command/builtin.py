@@ -597,6 +597,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
+    loop.consolidator.forget_session(session.key)
     # A fresh session starts without archived context: the key's summary file
     # is what the next turn would replay, so it goes; its text rides into the
     # closed-conversation record instead.
@@ -1463,6 +1464,7 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
         )
 
     session.last_consolidated = len(session.messages)
+    loop.consolidator.forget_session(session.key)
     if summary:
         loop.consolidator._merge_session_tags(session, tags)
         loop.consolidator._persist_last_summary(session, [summary], tags)

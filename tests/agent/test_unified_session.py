@@ -251,7 +251,12 @@ class TestCmdNewUnifiedSession:
             # /new reads and deletes the key's session-summary file, so the
             # double needs the real workspace a production loop always has.
             workspace=tmp_path,
-            consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
+            # /new archives the closed conversation and has the consolidator
+            # forget what it measured of it.
+            consolidator=SimpleNamespace(
+                archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []})),
+                forget_session=lambda _key: None,
+            ),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )
         loop._schedule_background = lambda coro: asyncio.ensure_future(coro)
@@ -288,7 +293,12 @@ class TestCmdNewUnifiedSession:
             # /new reads and deletes the key's session-summary file, so the
             # double needs the real workspace a production loop always has.
             workspace=tmp_path,
-            consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
+            # /new archives the closed conversation and has the consolidator
+            # forget what it measured of it.
+            consolidator=SimpleNamespace(
+                archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []})),
+                forget_session=lambda _key: None,
+            ),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )
         loop._schedule_background = lambda coro: asyncio.ensure_future(coro)

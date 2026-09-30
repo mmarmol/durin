@@ -1062,7 +1062,12 @@ such a session's prompt therefore runs past its trigger, by up to a runway,
 instead of compacting on every turn. A compaction that leaves more room
 clears the level, and so does one that ran out of rounds while still
 archiving: that is a backlog, which keeps compacting on the next turn. A
-forced compaction ignores the level.
+forced compaction ignores the level. The level is kept with the limits it
+was reached under, and forgotten when it stops describing the prompt: by a
+check under other limits (a turn on another model, another ratio or cap), by
+a check that finds that much room under the trigger again (the fixed part
+shrank: a shorter `AGENTS.md`, fewer tools), and by `/new` and `/compact`
+(`Consolidator.forget_session`, which also drops the real-usage veto state).
 
 ### After DONE (post-processing in `_dispatch`)
 

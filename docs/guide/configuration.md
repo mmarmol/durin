@@ -187,7 +187,9 @@ far) can nearly fill the trigger on its own, for example a very long
 one that leaves less than a quarter of the usual room under the trigger, the
 chat waits until the prompt has grown by the usual room before compacting
 again: its prompts run past the trigger for a while instead of compacting on
-every turn.
+every turn. It stops waiting once there is room again (a shorter
+`AGENTS.md`), after `/new` or `/compact`, and when a turn runs on a model
+with other limits.
 
 An empty `preemptive_compact_max_tokens` in the settings editor is `null`,
 and `null` means two different things: under `agents.defaults` it is no cap,

@@ -1226,6 +1226,95 @@ async def test_a_compaction_that_leaves_a_runway_under_the_trigger_is_not_rememb
     assert c.archive.await_count > archived
 
 
+async def _with_a_remembered_level(tmp_path, monkeypatch):
+    """A session whose last compaction archived all it could and ended just
+    under its trigger (140 of 150): its level is remembered, and a check at
+    160 waits for a runway past it."""
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=10)
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 10)
+    c.estimate_session_prompt_tokens = _estimates(170, 140)
+    await c.maybe_consolidate_by_tokens(session)
+    _add_turns(session, 1)
+    c._awaiting_real_usage.clear()
+    return loop, session
+
+
+def _add_turns(session, count: int) -> None:
+    for i in range(count):
+        session.messages += [{"role": "user", "content": f"u{i}"}, {"role": "assistant", "content": f"a{i}"}]
+
+
+async def _compacts_at(c, session, estimate: int, **kwargs) -> bool:
+    """Whether a check that finds *estimate* tokens compacts."""
+    before = c.archive.await_count
+    c.estimate_session_prompt_tokens = _estimates(estimate, 70)
+    await c.maybe_consolidate_by_tokens(session, **kwargs)
+    return c.archive.await_count > before
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_finds_room_again_forgets_the_level(tmp_path, monkeypatch):
+    """A prompt well under the trigger (100 of 150) has room again: its fixed
+    part shrank since the level was reached (a shorter AGENTS.md, fewer
+    tools). The next check over the trigger compacts instead of waiting."""
+    loop, session = await _with_a_remembered_level(tmp_path, monkeypatch)
+    c = loop.consolidator
+    assert not await _compacts_at(c, session, 160)
+
+    assert not await _compacts_at(c, session, 100)
+    _add_turns(session, 5)
+    assert await _compacts_at(c, session, 160)
+
+
+@pytest.mark.asyncio
+async def test_new_forgets_the_level(tmp_path, monkeypatch):
+    """/new starts the conversation over: the level measured one that is
+    gone and must not hold the next one's first compaction back."""
+    from durin.bus.events import InboundMessage
+    from durin.command.builtin import cmd_new
+    from durin.command.router import CommandContext
+
+    loop, session = await _with_a_remembered_level(tmp_path, monkeypatch)
+    msg = InboundMessage(channel="cli", sender_id="u", chat_id="test", content="/new")
+    await cmd_new(CommandContext(msg=msg, session=session, key=session.key, raw="/new", loop=loop))
+
+    _add_turns(session, 10)
+    assert await _compacts_at(loop.consolidator, session, 160)
+
+
+@pytest.mark.asyncio
+async def test_compact_forgets_the_level(tmp_path, monkeypatch):
+    """/compact archives the whole conversation: what is left is the fixed
+    part alone, and the level reached before says nothing about it."""
+    from durin.bus.events import InboundMessage
+    from durin.command.builtin import cmd_compact
+    from durin.command.router import CommandContext
+
+    loop, session = await _with_a_remembered_level(tmp_path, monkeypatch)
+    msg = InboundMessage(channel="cli", sender_id="u", chat_id="test", content="/compact")
+    await cmd_compact(CommandContext(msg=msg, session=session, key=session.key, raw="/compact", loop=loop))
+
+    _add_turns(session, 10)
+    assert await _compacts_at(loop.consolidator, session, 160)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_on_another_model_does_not_wait_on_the_level(tmp_path, monkeypatch):
+    """The level was reached under one model's limits. A turn on a model with
+    another window (trigger 225 of 300 here) is checked against its own
+    trigger, not held back by a runway measured against another."""
+    loop, session = await _with_a_remembered_level(tmp_path, monkeypatch)
+    c = loop.consolidator
+    _add_turns(session, 5)
+    assert await _compacts_at(c, session, 240, limits=c.run_limits(300, 0))
+
+
 def _estimate_sequence(*values: int):
     """An estimator reporting *values* in turn, then the last one again."""
     queue = list(values)

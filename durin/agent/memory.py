@@ -669,13 +669,16 @@ class Consolidator:
         # turn) fills the trigger there, so compacting again on the next turn
         # would archive that one turn and nothing more, turn after turn. The
         # next compaction waits until the prompt has grown by a normal
-        # cycle's runway past this level (never past the ceiling). Cleared by
-        # a compaction that makes room; in-memory and bounded like the veto
-        # state above.
-        self._compaction_floor: dict[str, int] = {}
+        # cycle's runway past this level (never past the ceiling). Kept with
+        # the limits it was reached under, since another window or cap makes
+        # it meaningless. Cleared by a compaction that makes room, a check
+        # that finds room again, and a session that starts over or is
+        # compacted by hand (``forget_session``); in-memory and bounded like
+        # the veto state above.
+        self._compaction_floor: dict[str, tuple[int, CompactionLimits]] = {}
 
     @staticmethod
-    def _bounded_put(store: dict[str, int], key: str, value: int) -> None:
+    def _bounded_put(store: dict[str, Any], key: str, value: Any) -> None:
         """Insert into a per-session tracking dict, evicting oldest first."""
         if key not in store and len(store) >= Consolidator._MAX_TRACKED_SESSIONS:
             with suppress(StopIteration):
@@ -685,6 +688,14 @@ class Consolidator:
     def _forget_session_fit(self, key: str) -> None:
         self._fit_baseline.pop(key, None)
         self._awaiting_real_usage.pop(key, None)
+
+    def forget_session(self, session_key: str) -> None:
+        """Drop what the checks remember about a session's prompt: the
+        fixed-prompt level and the real-usage veto state. For a session that
+        starts over (/new) or was compacted by hand (/compact): both measured
+        a prompt that is gone, and would hold its next compaction back."""
+        self._compaction_floor.pop(session_key, None)
+        self._forget_session_fit(session_key)
 
     def _defer_to_real_usage(
         self, session: Session, rough: int, trigger: int,
@@ -1591,6 +1602,14 @@ class Consolidator:
             ceiling = self._ceiling_for(limits)
             window = limits.context_window_tokens
             effective_ratio = self._ratio_for(limits)
+            # A compaction has made room when it leaves this much under the
+            # trigger (see _FIXED_PROMPT_MIN_ROOM).
+            min_room = (trigger - target) * self._FIXED_PROMPT_MIN_ROOM
+            remembered = self._compaction_floor.get(session.key)
+            if remembered is not None and remembered[1] != limits:
+                # Reached under another model's window or another ratio or
+                # cap: that level says nothing about this trigger.
+                self._compaction_floor.pop(session.key, None)
             new_summaries: list[str] = []
             # This call's tags, unioned across every archive round below and
             # handed to the session-summary store with the blocks.
@@ -1634,6 +1653,12 @@ class Consolidator:
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             if estimated < trigger and not force:
+                if trigger - estimated >= min_room:
+                    # Room under the trigger again: the prompt's fixed part
+                    # has shrunk since the level was reached (a shorter
+                    # AGENTS.md, fewer tools), so a compaction at the trigger
+                    # would make room now.
+                    self._compaction_floor.pop(session.key, None)
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, trigger={}, msgs={}",
@@ -1653,8 +1678,8 @@ class Consolidator:
             # an overflow has already proved it does.
             deferral = None if force else self._defer_to_real_usage(session, estimated, trigger)
             if deferral is None and not force:
-                floor = self._compaction_floor.get(session.key)
-                if floor is not None and estimated < min(floor + (trigger - target), ceiling):
+                remembered = self._compaction_floor.get(session.key)
+                if remembered is not None and estimated < min(remembered[0] + (trigger - target), ceiling):
                     deferral = "fixed_prompt"
             if deferral is not None:
                 logger.debug(
@@ -1775,9 +1800,8 @@ class Consolidator:
                 # archiving: that is a backlog, not a fixed prompt, and it
                 # goes on compacting on the next turn.
                 if exit_reason in ("target_reached", "no_boundary", "max_rounds"):
-                    min_room = (trigger - target) * self._FIXED_PROMPT_MIN_ROOM
                     if exit_reason != "max_rounds" and trigger - estimated < min_room:
-                        self._bounded_put(self._compaction_floor, session.key, estimated)
+                        self._bounded_put(self._compaction_floor, session.key, (estimated, limits))
                     else:
                         self._compaction_floor.pop(session.key, None)
                 # The real-usage park is armed in _post_compaction_hooks, which
