@@ -738,6 +738,11 @@ Each entry is an `MCPServerConfig`:
 `client_id`, `client_secret`, and `callback_port` (default `1456`) for static
 client registration. See [docs/internals/mcp.md](../internals/mcp.md) for OAuth setup.
 
+Each stdio server writes its stderr to its own file,
+`<durin_home>/logs/mcp-stderr-<server>.log`, and every spawn starts with a
+line giving the time, the server name and the gateway's PID. When a server
+fails to start, the cause is in that file.
+
 MCP server sampling (server-initiated LLM calls) is governed by `sampling` under each server entry:
 
 | Key | Default | Meaning |

@@ -619,5 +619,9 @@ myplatform = "mypkg.myplatform:MyPlatformChannel"
 The exported class must subclass `durin.channels.base.BaseChannel`. Built-in
 channels take priority over external plugins with the same name.
 
+A `channels.<name>` section that is enabled for a name durin has no channel
+for (a plugin that is not installed, or a built-in channel durin no longer
+ships) is not started; the gateway logs a warning naming the section.
+
 See [docs/internals/channels.md](../internals/channels.md) for the full
 architecture, message bus contract, and streaming protocol.

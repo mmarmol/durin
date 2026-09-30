@@ -95,8 +95,8 @@ watch a run, open a paused checkpoint, and pick up right where it stopped.
   OpenRouter and other gateways that reach hundreds of models. Switch
   mid-conversation, or run fully local with Ollama / llama.cpp / vLLM / LM Studio.
 - **Talk to it anywhere.** A CLI, a Textual TUI, a browser dashboard, and chat
-  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket, and more — all
-  reach the same agent and the same memory.
+  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket, or a channel
+  plugin — all reach the same agent and the same memory.
 - **Local-first & private.** Runs as a daemon on your own machine under
   `~/.durin/`; nothing phones home.
 - **Personas, voice, and schedules.** Per-channel personas (a SOUL + a model),
