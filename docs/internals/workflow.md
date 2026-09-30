@@ -250,7 +250,11 @@ A work node may declare a **structured output** (`output_schema`): the node runn
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
 node with the exact validation error, and fails the node after the attempt budget — no
-text fallback. `deliver` and `route` are registered in the node's own tool registry from
+text fallback. Every schema rejection (from `deliver`, `deliver_file` or the forced call)
+names the failing field by its path in the payload and why it failed, and quotes only the
+start of the value that failed: jsonschema's own message repeats the whole value, which for
+a long text field is thousands of characters the model has just written.
+`deliver` and `route` are registered in the node's own tool registry from
 turn 1, not appended only at this forced call, so the `tools` array — and the prompt-cache
 prefix it anchors — stays identical between every work-loop round and this final call. A
 schema-valid `deliver` call made mid-loop is accepted immediately as the node's output,

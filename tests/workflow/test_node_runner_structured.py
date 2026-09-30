@@ -410,6 +410,46 @@ def test_deliver_file_names_the_failing_field_and_accepts_the_fixed_file(tmp_pat
     provider.chat_with_retry.assert_not_called()
 
 
+# A question note's body must contain "?"; this one is about 8,000 characters of
+# statements, the size of the body a live rejection quoted back in full.
+_QUESTION_SCHEMA = {"type": "object", "required": ["body"],
+                    "properties": {"body": {"type": "string", "pattern": "\\?"}}}
+_LONG_BODY = "## Problem Summary\n\n" + "A statement, not a question. " * 280
+
+
+def test_a_rejection_cuts_a_long_failing_value_and_keeps_its_path(tmp_path):
+    """jsonschema quotes the whole failing value in its message. Both delivery
+    tools keep the field's path, why it failed and the start of the value, and
+    cut the rest instead of repeating the whole body back to the model."""
+    work = _work_dir(tmp_path)
+    (work / "note.json").write_text(json.dumps({"body": _LONG_BODY}), encoding="utf-8")
+
+    seen, resp, _ = _run_calls(
+        tmp_path, _file_node(schema=_QUESTION_SCHEMA), work,
+        [("deliver", {"body": _LONG_BODY}), ("deliver_file", {"path": "note.json"}),
+         ("deliver", {"body": "Is the link still valid?"})])
+    for rejection in seen["results"][:2]:
+        assert "at body: '## Problem Summary" in rejection   # the path and the value's start
+        assert "does not match" in rejection                  # why it failed
+        assert _LONG_BODY not in rejection
+        assert len(rejection) < 700
+    assert json.loads(resp.output) == {"body": "Is the link still valid?"}
+
+
+def test_a_validation_error_names_the_nested_path_and_keeps_a_short_value_whole():
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"findings": {"type": "array", "items": {
+        "type": "object", "properties": {"detail": {"type": "string", "maxLength": 20}}}}}}
+    long_error = _deliver_validation_error(
+        {"findings": [{"detail": "ok"}, {"detail": "x" * 5_000}]}, schema)
+    assert long_error.startswith("at findings/1/detail: 'xxx")
+    assert "is too long" in long_error
+    assert len(long_error) < 400
+    short_error = _deliver_validation_error({"findings": [{"detail": "y" * 21}]}, schema)
+    assert short_error == f"at findings/0/detail: '{'y' * 21}' is too long"
+
+
 def test_deliver_file_reports_a_draft_it_cannot_read(tmp_path):
     work = _work_dir(tmp_path)
     (work / "broken.json").write_text('{"queries": ["a",]}', encoding="utf-8")
