@@ -965,26 +965,30 @@ are untouched, where a high ratio would mean shipping a huge prompt every turn.
 of a 1M window fires only at 500K, so every long turn would ship up to half a
 million tokens before anything is summarized. `preemptive_compact_max_tokens`
 bounds the trigger in tokens whatever the window; `null` or `0` removes it (on
-a preset `null` inherits, so there only `0` does). It never goes under
-`PREEMPTIVE_COMPACT_MIN_TOKENS`: a cap at or under the prompt's fixed part
-(system prompt, tool schemas, summary) compacted on every turn, each
-compaction able to archive only the turn before it. The schema refuses a
-lower value on write, the loader raises a hand-edited one to the minimum
-rather than reject the whole file, and the consolidator applies the same
-floor to a loop built in code. It only
-ever lowers the trigger, so a window whose ratio trigger is already below it is
-unaffected. It applies after the small-window floor: on a window under
+a preset `null` inherits, so there only `0` does). It only ever lowers the
+trigger, so a window whose ratio trigger is already below it is unaffected. It
+applies after the small-window floor: on a window under
 `_SMALL_CTX_WINDOW_LIMIT` whose floored trigger would pass the cap, the cap
 wins. As one more term of the `min` it cannot lift the trigger past the
-ceiling, so the overflow invariant holds with it. A preset's own
-`preemptive_compact_ratio` and `preemptive_compact_max_tokens` replace the
-`agents.defaults` ones while that preset is active; a key the preset leaves
-unset takes the `agents.defaults` value, whatever the previous preset set. The
-`agents.defaults` values travel in the provider snapshot (`compaction_defaults`),
-and the snapshot's signature includes them and the preset's own, so the
-per-turn snapshot refresh applies an edit to them on the next turn. A preset's
-own values come from the loop's preset objects, which the gateway reads at
-start. The cap governs the loop's session compaction only: workflow nodes and
+ceiling, so the overflow invariant holds with it.
+
+The cap never goes under `PREEMPTIVE_COMPACT_MIN_TOKENS`: a cap at or under the
+prompt's fixed part (system prompt, tool schemas, summary) would compact on
+every turn, each compaction able to archive only the turn before it. The schema
+refuses a lower value on write, the loader raises a hand-edited one to the
+minimum rather than reject the whole file, and the consolidator applies the
+same floor to a loop built in code.
+
+A preset's own `preemptive_compact_ratio` and `preemptive_compact_max_tokens`
+replace the `agents.defaults` ones while that preset is active; a key the
+preset leaves unset takes the `agents.defaults` value, whatever the previous
+preset set. The `agents.defaults` values travel in the provider snapshot
+(`compaction_defaults`), and the snapshot's signature includes them and the
+preset's own, so the per-turn snapshot refresh applies an edit to them on the
+next turn. A preset's own values come from the loop's preset objects, which the
+gateway reads at start.
+
+The cap governs the loop's session compaction only: workflow nodes and
 subagents prune by the runner's input budget instead.
 
 Compaction runs at turn boundaries: in BUILD, in the background after SAVE,
@@ -1024,8 +1028,8 @@ count, and it says the prompt does not fit.
 **The fixed-prompt floor.** No minimum on the cap can know the prompt: a
 large system prompt, many tool schemas or a long summary can put the part
 compaction may not archive over the trigger (a low ratio on a big window is
-enough). Such a prompt cannot be compacted under the trigger; every
-compaction archived the turn before it and the next turn compacted again.
+enough). Such a prompt cannot be compacted under the trigger: each compaction
+could archive only the turn before it, and the next turn would compact again.
 When a compaction ends still over its trigger, the level it reached is
 remembered per session (in memory, bounded like the veto state), and the
 session's next compaction waits until the prompt has grown past that level

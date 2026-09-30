@@ -171,9 +171,9 @@ behaviour, tool iteration limits, and per-model capability overrides.
 
 **How the compaction settings fit together.** The chat compacts, at turn
 boundaries (before a turn is built, after it is saved, and when a turn
-overflows), once the prompt reaches its *trigger*: the window times
-`preemptive_compact_ratio`, lowered to `preemptive_compact_max_tokens` when
-that is smaller. A compaction then summarizes the oldest turns until the
+overflows), once the prompt reaches its *trigger*: the window of the model
+the turn runs on times `preemptive_compact_ratio`, lowered to
+`preemptive_compact_max_tokens` when that is smaller. A compaction then summarizes the oldest turns until the
 prompt is down to `consolidation_ratio` times the trigger. `context_block_limit`
 outranks both: when set, the trigger and the history replayed into a turn
 always stay under it, whatever the ratio and the cap say. Inside one long turn
