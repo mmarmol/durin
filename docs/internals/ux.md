@@ -621,9 +621,13 @@ and the settings editor's `POST /api/v1/config` share the helpers in
 brackets (`models["glm-5.3"]`) is literal, so a model name's dots do not split
 it. `_normalize_dotted_path` walks the config's JSON schema alongside the path:
 a field name is case-tolerant (`apiKey` → `api_key`), while a key of a typed
-map (a model, preset or header name) is kept as typed. A write goes through
-`apply_setting`, which validates the result and then reads the value back at
-the same path from the validated config; when it is not there — validation
+map (a model, preset or header name) is kept as typed, and a list index
+(`fallback_models.1` or `fallback_models[1]`) is written dotted. A write goes
+through `apply_setting`: `set_at` writes into a copy of the on-disk dict —
+creating a missing or null section, indexing a list only at an item it has,
+and refusing a path through a plain value, which it would otherwise replace
+with a section — then the result is validated and the value read back at the
+same path from the validated config; when it is not there — validation
 dropped a key that is not a field of its section — the write is refused with
 `ConfigKeyError` (the CLI exits 1, the API answers a validation error) instead
 of saving a config where the value landed nowhere or under an unrelated key.

@@ -108,6 +108,17 @@ refuses — and changes nothing — when the value would not land where the path
 says: a misspelled field, or a dotted model name written without brackets,
 which would otherwise split into unrelated keys.
 
+**List items.** An item of a list is addressed by its index, from `0`,
+dotted or in brackets — `agents.defaults.fallback_models.1.max_tokens` and
+`agents.defaults.fallback_models[1].max_tokens` are the same key. `set` writes
+only into an item the list already has and only into an item that is a
+section (a fallback given by preset name is a plain value: edit that preset
+instead); to add or remove an item, set the whole list:
+
+```
+durin config set agents.defaults.fallback_models '["judge-cold", {"model": "glm-5-turbo", "provider": "zai_coding_plan"}]'
+```
+
 ---
 
 ## Configuration sections
@@ -226,10 +237,10 @@ A catalog output limit is also held to the model's documented cap (some
 aggregator rows list far more than the model can emit), and an output cap is
 never larger than the window it runs in.
 `durin doctor` lists every configured value that differs from the real limit
-in its "model limits" check: one above warns, one below is listed so a
-forgotten cap does not go unnoticed. To go back to the model's own limit, unset
-the value (a model name with dots goes in brackets, see
-[keys that contain dots](#inspecting-and-editing-config)):
+in its "model limits" check: one above warns and comes with the exact command
+that unsets it, one below is listed so a forgotten cap does not go unnoticed.
+To go back to the model's own limit, unset the value (a model name with dots
+goes in brackets, see [keys that contain dots](#inspecting-and-editing-config)):
 
 ```
 durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' null

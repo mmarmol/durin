@@ -369,7 +369,8 @@ Check categories and representative checks:
   "model limits" lists every configured window and output cap (a
   `providers.<p>.models` entry, a named preset, an inline fallback) that differs
   from the model's catalog limits: above warns (the run caps it to the catalog
-  value), below is listed without warning (a deliberate cost cap is legitimate,
+  value) and the fix gives the `durin config set <path> null` that unsets each
+  one, below is listed without warning (a deliberate cost cap is legitimate,
   a forgotten one shrinks every run on that model). It also warns about an
   `agents.defaults` window or output cap, set to something other than the
   schema default, that the default model does not run with (its entry or real

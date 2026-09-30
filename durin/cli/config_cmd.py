@@ -163,30 +163,44 @@ def get_at(data: Any, dotted: str) -> Any:
     return cursor
 
 
+def _list_index(items: list[Any], key: str, where: str) -> int:
+    """The index *key* names in *items*, the list at *where*. Raises
+    ``ValueError`` for anything but the index of an item the list has."""
+    if key.isdigit() and int(key) < len(items):
+        return int(key)
+    span = f"items 0 to {len(items) - 1}" if items else "no items"
+    raise ValueError(
+        f"{where} is a list with {span}, so {key!r} is not one of them; "
+        "to add or remove an item, set the whole list")
+
+
 def set_at(data: dict[str, Any], dotted: str, value: Any) -> dict[str, Any]:
     """Return a deep copy of ``data`` with ``value`` written at the config
     path ``dotted``.
 
-    Intermediate dicts are created on the fly; lists are addressed by
-    integer index. Existing scalars on the path are replaced.
+    A missing or null section on the way is created as a dict; a list is
+    addressed by the index of an item it already has. Raises ``ValueError``
+    for any other index, and for a path that goes through a plain value (a
+    string, a number): writing into one would replace it with a section
+    that validation then rejects.
     """
+    segments = _parse_path(dotted)
     out = copy.deepcopy(data) if data else {}
     cursor: Any = out
-    parts = path_segments(dotted)
-    for part in parts[:-1]:
+    for depth, (key, _) in enumerate(segments):
+        where = _render_path(segments[:depth])
+        slot: Any = key
         if isinstance(cursor, list):
-            cursor = cursor[int(part)]
-            continue
-        nxt = cursor.get(part)
-        if not isinstance(nxt, dict):
-            nxt = {}
-            cursor[part] = nxt
+            slot = _list_index(cursor, key, where)
+        elif not isinstance(cursor, dict):
+            raise ValueError(f"{where} holds a plain value, not a section with keys")
+        if depth == len(segments) - 1:
+            cursor[slot] = value
+            break
+        nxt = cursor[slot] if isinstance(cursor, list) else cursor.get(slot)
+        if nxt is None:
+            nxt = cursor[slot] = {}
         cursor = nxt
-    last = parts[-1]
-    if isinstance(cursor, list):
-        cursor[int(last)] = value
-    else:
-        cursor[last] = value
     return out
 
 
@@ -517,17 +531,19 @@ def _field_name_schema() -> dict[str, Any]:
 
 def _normalize_key(
     seg: str, literal: bool, node: dict[str, Any] | None, defs: dict[str, Any],
-) -> tuple[str, dict[str, Any] | None]:
-    """The canonical form of one path key, and the schema node under it.
+) -> tuple[str, bool, dict[str, Any] | None]:
+    """The canonical form of one path key — ``(key, bracketed, schema node
+    under it)``.
 
     A field name is case-tolerant (``apiKey`` → ``api_key``). A key of a
     typed map — a model name under ``providers.<p>.models``, a preset name,
     a header name — is the user's and is kept as typed: case-normalizing it
-    turned ``MiniMax-M2`` into ``mini_max-_m2``. Outside the typed schema
-    (a free-form dict) a key keeps the plain snake_case rule.
+    turned ``MiniMax-M2`` into ``mini_max-_m2``. A list index, dotted or in
+    brackets, is written dotted. Outside the typed schema (a free-form dict)
+    a key keeps the plain snake_case rule.
     """
     if node is None:
-        return (seg if literal else _snake(seg)), None
+        return (seg if literal else _snake(seg)), literal, None
     resolved = _resolve_ref(node, defs)
     candidates = [resolved] + [_resolve_ref(s, defs) for s in resolved.get("anyOf", [])]
     names = [seg] if literal else [seg, _snake(seg)]
@@ -535,15 +551,15 @@ def _normalize_key(
         props = cand.get("properties", {})
         for name in names:
             if name in props:
-                return name, props[name]
+                return name, literal, props[name]
     for cand in candidates:
         extra = cand.get("additionalProperties")
         if isinstance(extra, dict):
-            return seg, extra
+            return seg, literal, extra
         items = cand.get("items")
         if isinstance(items, dict) and seg.isdigit():
-            return seg, items
-    return (seg if literal else _snake(seg)), None
+            return seg, False, items
+    return (seg if literal else _snake(seg)), literal, None
 
 
 def _normalize_dotted_path(dotted: str) -> str:
@@ -558,8 +574,8 @@ def _normalize_dotted_path(dotted: str) -> str:
     node: dict[str, Any] | None = schema
     out: list[tuple[str, bool]] = []
     for seg, literal in _parse_path(dotted):
-        key, node = _normalize_key(seg, literal, node, defs)
-        out.append((key, literal))
+        key, bracketed, node = _normalize_key(seg, literal, node, defs)
+        out.append((key, bracketed))
     return _render_path(out)
 
 

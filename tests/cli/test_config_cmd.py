@@ -60,6 +60,34 @@ def test_set_at_does_not_mutate_input() -> None:
     assert src == {"a": {"b": 1}}
 
 
+@pytest.mark.parametrize("path", ["xs.1.a", "xs[1].a", "xs.1"])
+def test_set_at_writes_into_a_list_item(path: str) -> None:
+    """A list is addressed by index; it used to be replaced by a dict, so
+    validation rejected the whole config ("Input should be a valid list")."""
+    src = {"xs": [{"a": 1}, {"a": 2}]}
+    out = set_at(src, path, 5)
+    expected = {"a": 5} if path.endswith(".a") else 5
+    assert out == {"xs": [{"a": 1}, expected]}
+
+
+@pytest.mark.parametrize("index", ["2", "-1", "x"])
+def test_set_at_refuses_an_index_the_list_does_not_have(index: str) -> None:
+    with pytest.raises(ValueError, match="xs"):
+        set_at({"xs": [{"a": 1}, {"a": 2}]}, f"xs.{index}.a", 5)
+
+
+def test_set_at_refuses_to_write_inside_a_plain_value() -> None:
+    """``model`` holds a string: writing ``model.foo`` used to replace it with
+    ``{"foo": ...}``, which validation then rejected with a type error."""
+    with pytest.raises(ValueError, match="agents.defaults.model"):
+        set_at({"agents": {"defaults": {"model": "glm-5.3"}}}, "agents.defaults.model.foo", "x")
+
+
+def test_set_at_still_fills_an_unset_section() -> None:
+    out = set_at({"a": {"b": None}}, "a.b.c", 1)
+    assert out == {"a": {"b": {"c": 1}}}
+
+
 def test_parse_value_decodes_json_literals() -> None:
     assert parse_value("true") is True
     assert parse_value("null") is None
@@ -442,6 +470,64 @@ def test_cli_config_set_keeps_a_model_names_case(temp_config: Path) -> None:
     assert result.exit_code == 0, result.output
     models = json.loads(temp_config.read_text())["providers"]["minimax"]["models"]
     assert models == {"MiniMax-M2": {"max_tokens": 8000}}
+
+
+@pytest.fixture
+def fallbacks_config(tmp_path: Path):
+    """A config whose default model falls back to a preset (by name) and to an
+    inline model, and the loader pointed at it."""
+    from durin.config.loader import save_config
+    from durin.config.schema import InlineFallbackConfig, ModelPresetConfig
+
+    cfg_path = tmp_path / "config.json"
+    cfg = Config()
+    cfg.model_presets["judge-cold"] = ModelPresetConfig(model="glm-5.3", provider="zai_coding_plan")
+    cfg.agents.defaults.fallback_models = [
+        "judge-cold",
+        InlineFallbackConfig(model="glm-5-turbo", provider="zai_coding_plan", max_tokens=150_000),
+    ]
+    save_config(cfg, cfg_path)
+    with patch("durin.cli.config_cmd.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path):
+        yield cfg_path
+
+
+def _fallbacks(cfg_path: Path) -> list:
+    return json.loads(cfg_path.read_text())["agents"]["defaults"]["fallback_models"]
+
+
+@pytest.mark.parametrize("path", [
+    "agents.defaults.fallback_models.1.max_tokens",
+    "agents.defaults.fallback_models[1].max_tokens",
+    "agents.defaults.fallbackModels.1.maxTokens",
+])
+def test_cli_config_set_writes_one_inline_fallback_field(fallbacks_config: Path, path: str) -> None:
+    result = runner.invoke(app, ["config", "set", path, "null"])
+    assert result.exit_code == 0, result.output
+    assert _fallbacks(fallbacks_config) == [
+        "judge-cold", {"model": "glm-5-turbo", "provider": "zai_coding_plan"},
+    ]
+
+
+@pytest.mark.parametrize("path", [
+    "agents.defaults.fallback_models.7.model",
+    "agents.defaults.fallback_models.-1.model",
+    "agents.defaults.fallback_models.0.max_tokens",
+])
+def test_cli_config_set_refuses_a_list_item_it_cannot_write(fallbacks_config: Path, path: str) -> None:
+    """Out of range, negative, or item 0 — a preset name, not a section."""
+    before = fallbacks_config.read_text()
+    result = runner.invoke(app, ["config", "set", path, "100"])
+    assert result.exit_code == 1
+    assert "does not name a config key" in result.output
+    assert "Traceback" not in result.output
+    assert fallbacks_config.read_text() == before
+
+
+def test_normalize_renders_a_list_index_as_a_dotted_key() -> None:
+    assert _normalize_dotted_path("agents.defaults.fallback_models[1].maxTokens") == (
+        "agents.defaults.fallback_models.1.max_tokens"
+    )
 
 
 def test_cli_config_get_addresses_a_model_name_with_dots(models_config: Path) -> None:

@@ -184,6 +184,41 @@ def test_an_inline_fallback_with_its_own_limits_is_checked() -> None:
     assert "fallback_models" in r.message
 
 
+def test_the_fix_gives_a_working_command_for_each_value_above() -> None:
+    """Each value above the model's limit gets the exact `durin config set`
+    that unsets it — an entry, a preset and an inline fallback alike — and
+    that command, run against this config, clears exactly that value."""
+    import re
+    import shlex
+
+    from durin.cli.config_cmd import apply_setting, get_at
+
+    cfg = _cfg()
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=231_072)
+    cfg.model_presets["big"] = ModelPresetConfig(
+        model="glm-5-turbo", provider="zai_coding_plan", context_window_tokens=500_000,
+    )
+    cfg.agents.defaults.fallback_models = [
+        InlineFallbackConfig(model="glm-5-turbo", provider="zai_coding_plan", max_tokens=150_000),
+    ]
+    r = _run(cfg)
+    commands = re.findall(r"`(durin config set [^`]+)`", r.fix or "")
+    paths = []
+    for command in commands:
+        argv = shlex.split(command)
+        assert argv[:3] == ["durin", "config", "set"] and argv[4] == "null", command
+        paths.append(argv[3])
+    assert sorted(paths) == sorted([
+        'providers.zai_coding_plan.models["glm-5-turbo"].context_window_tokens',
+        'model_presets["big"].context_window_tokens',
+        "agents.defaults.fallback_models.0.max_tokens",
+    ])
+    data = cfg.model_dump(mode="json", by_alias=False)
+    for path in paths:
+        after = apply_setting(data, path, None).model_dump(mode="json", by_alias=False)
+        assert get_at(after, path) is None
+
+
 def test_values_equal_to_the_catalog_and_uncataloged_models_are_silent() -> None:
     cfg = _cfg()
     cfg.providers.zai_coding_plan.models["glm-5.3"] = ModelEntry(context_window_tokens=1_000_000)

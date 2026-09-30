@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1127,15 +1128,16 @@ def check_model_limits() -> CheckResult:
     except Exception:  # noqa: BLE001
         return CheckResult("model limits", "warn", "Could not load config.", category="models")
     above: list[str] = []
+    unset: list[str] = []
     below: list[str] = []
     for where, provider, model, window, max_tokens in _configured_model_limits(cfg):
         try:
             real_window, real_output = cfg.model_real_limits(provider, model)
         except Exception:  # noqa: BLE001 - an unreadable catalog row compares with nothing
             continue
-        for label, value, real in (
-            ("context window", window, real_window),
-            ("output cap", max_tokens, real_output),
+        for name, label, value, real in (
+            ("context_window_tokens", "context window", window, real_window),
+            ("max_tokens", "output cap", max_tokens, real_output),
         ):
             if value is None or not real or value == real:
                 continue
@@ -1143,6 +1145,7 @@ def check_model_limits() -> CheckResult:
                 above.append(
                     f"{where}: {label} {value:,} is above {provider}/{model}'s {real:,} "
                     "(capped to it at runtime)")
+                unset.append(f"`durin config set {shlex.quote(f'{where}.{name}')} null`")
             else:
                 below.append(
                     f"{where}: {label} {value:,} is below {provider}/{model}'s {real:,} "
@@ -1154,11 +1157,10 @@ def check_model_limits() -> CheckResult:
         fixes = list(unused_fixes)
         if above:
             fixes.insert(0, (
-                "Lower each value above to the model's limit, or unset it so the model's own "
-                "applies, e.g. `durin config set "
-                "'providers.<provider>.models[\"<model>\"].context_window_tokens' null`"))
+                "Unset each value above so the model's own limit applies (or lower it to "
+                "that limit): " + ", ".join(unset)))
         return CheckResult(
-            "model limits", "warn", detail, fix="; ".join(fixes) + ".", category="models",
+            "model limits", "warn", detail, fix=". ".join(fixes) + ".", category="models",
         )
     if below:
         return CheckResult("model limits", "ok", detail, category="models")
