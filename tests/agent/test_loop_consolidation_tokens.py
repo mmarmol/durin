@@ -221,9 +221,11 @@ async def test_preflight_consolidation_receives_pending_summary(tmp_path) -> Non
     # process_direct reloads the session before processing, so we must assert
     # against the post-reload object (not the pre-call reference).
     reloaded = loop.sessions.get_or_create("cli:test")
+    # limits=None: the turn runs on the loop's own model.
     loop.consolidator.maybe_consolidate_by_tokens.assert_any_await(
         reloaded,
         replay_max_messages=loop._max_messages,
+        limits=None,
     )
 
 

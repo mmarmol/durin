@@ -325,6 +325,46 @@ def test_history_replay_stays_within_the_runners_budget(tmp_path):
     )
 
 
+def test_run_limits_size_a_check_by_the_turns_own_model(tmp_path):
+    """A turn on another model (a cron job's, a persona's) is checked against
+    that model's window, ratio and cap; what its preset leaves unset comes
+    from agents.defaults, as for the loop's own model."""
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+
+    assert c._trigger_for(c.run_limits(45_000, 8192)) == (33_750, "floor")
+    assert c._trigger_for(
+        c.run_limits(1_000_000, 8192, preemptive_compact_max_tokens=400_000),
+    ) == (400_000, "cap")
+    assert c._trigger_for(
+        c.run_limits(1_000_000, 8192, preemptive_compact_ratio=0.1),
+    ) == (100_000, "ratio")
+    # The loop's own model is untouched.
+    assert c._preemptive_trigger() == (256_000, "cap")
+
+
+@pytest.mark.asyncio
+async def test_a_check_sized_by_run_limits_reports_them(tmp_path, monkeypatch):
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=10)
+    estimates = iter([40_000, 10_000])
+    c.estimate_session_prompt_tokens = lambda _s, **_k: (next(estimates), "test")
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 5_000)
+
+    # 40,000 is nothing for the loop's 1M model, but over a 45K model's trigger.
+    await c.maybe_consolidate_by_tokens(session, limits=c.run_limits(45_000, 0))
+
+    assert c.archive.await_count == 1
+    (done,) = [e[1] for e in telemetry.events if e[0] == "compaction.completed"]
+    assert done["trigger_tokens"] == 33_750
+    assert done["trigger_bound"] == "floor"
+    assert done["context_window_tokens"] == 45_000
+
+
 def test_a_cap_above_the_window_changes_nothing():
     c = _stub_consolidator(
         window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, cap=2_000_000,

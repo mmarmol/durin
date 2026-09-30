@@ -409,9 +409,12 @@ The handlers, in order:
   reply (both tagged `_command` so they are filtered out of LLM history),
   saves the session, and returns `"shortcut"` → `DONE`. Otherwise `"dispatch"`
   → `BUILD`.
-- **`_state_build`** — runs `maybe_consolidate_by_tokens` (compacting before
-  building so the prompt fits), sets the per-tool request context, slices
-  history (`session.get_history`), then resolves the session's frozen eager
+- **`_state_build`** — resolves the active persona and the model the turn
+  runs on (a per-turn ref, else the persona's model; `ctx.run_snapshot` when
+  that is not the loop's own), then runs `maybe_consolidate_by_tokens` sized
+  by that model (compacting before building so the prompt fits), sets the
+  per-tool request context, slices history (`session.get_history`, within
+  the same model's input budget), then resolves the session's frozen eager
   memory surface (the pinned block and hot layer rendered on the session's
   first build, `memory.eager_surface`) and binds it for the turn (task-scoped,
   released in `_state_save`) before any search runs, so `memory_search`'s
@@ -435,9 +438,10 @@ The handlers, in order:
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
   is stored on the context. An overflow that aborted *before any tool ran*
-  (the consolidator's trigger ceiling is held strictly under the runner's input
-  budget, so a successful BUILD consolidation always fits — an iteration-0
-  overflow means it failed) triggers one bounded retry: force a fresh
+  (the consolidator's trigger ceiling is held strictly under the input budget
+  of the run that follows, sized by the model the turn runs on, so a
+  successful BUILD consolidation always fits — an iteration-0 overflow means
+  it failed) triggers one bounded retry: force a fresh
   consolidation, rebuild the context, re-run
   (`overflow_retry.forced_consolidation`); skipped once a tool has run, so
   side-effecting tools never re-fire. The forced consolidation skips the
@@ -463,8 +467,9 @@ The handlers, in order:
 ### The iteration core: `AgentRunner`
 
 `_run_agent_loop` is the bridge from loop to runner. It builds the hook,
-resolves the agent-mode provider, the compaction-grace probe, and any per-turn
-model override, then calls `self.runner.run(AgentRunSpec(...))`.
+resolves the agent-mode provider and the compaction-grace probe, takes the
+per-turn model BUILD resolved (resolving a ref itself only for a caller
+outside a turn), then calls `self.runner.run(AgentRunSpec(...))`.
 
 `AgentRunner` ([`durin/agent/runner.py`](../../durin/agent/runner.py)) is the
 shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
@@ -934,6 +939,14 @@ distinct:
 
 The history replayed into a turn is bounded the same way: by the window's input
 budget, and by `context_block_limit` when that is set.
+
+All of these belong to the model the turn runs on. A turn on another model
+than the loop's own (a cron job's per-job model, a persona's model) sizes its
+compaction and its history replay by that model's window and output ceiling,
+and by its preset's ratio and cap (`Consolidator.run_limits`), from BUILD to
+the compaction scheduled after SAVE. Sizing it by the loop's model would put
+the trigger above the smaller model's budget whenever the loop's model has
+the larger window.
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a

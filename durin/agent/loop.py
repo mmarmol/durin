@@ -21,7 +21,7 @@ from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, begin_turn_input, 
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
-from durin.agent.memory import Consolidator
+from durin.agent.memory import CompactionLimits, Consolidator
 from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import (
     _MAX_INJECTIONS_PER_TURN,
@@ -423,6 +423,11 @@ class TurnContext:
     # this turn sees the same SOUL body + model ref.
     active_persona_soul: str | None = None
     persona_model_ref: str | None = None
+    # The model this turn runs on when it is not the loop's own (the per-turn
+    # ref above, or the persona's model): resolved once in _state_build, then
+    # used by the run, its overflow retry, and every compaction and history
+    # replay of the turn, which must fit that model rather than the loop's.
+    run_snapshot: ProviderSnapshot | None = None
 
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
@@ -2047,22 +2052,46 @@ class AgentLoop:
             return UNIFIED_SESSION_KEY
         return msg.session_key
 
-    def _replay_token_budget(self) -> int:
-        """Derive a token budget for session history replay from the context window."""
-        if self.context_window_tokens <= 0:
+    def _replay_token_budget(self, run_snapshot: ProviderSnapshot | None = None) -> int:
+        """Derive a token budget for session history replay from the context
+        window of the model the turn runs on: *run_snapshot*'s when the turn
+        runs on another model than the loop's own, else the loop's."""
+        window = run_snapshot.context_window_tokens if run_snapshot else self.context_window_tokens
+        provider = run_snapshot.provider if run_snapshot else self.provider
+        if window <= 0:
             return 0
         from durin.agent.runner import _output_reservation
-        max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+        max_output = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
         # Cap the output reservation so a large configured ceiling does not
         # collapse the replay budget (mirrors the runner's input budgeting).
         reserved_output = _output_reservation(max_output)
-        budget = self.context_window_tokens - reserved_output - 1024
+        budget = window - reserved_output - 1024
         # A context_block_limit is the runner's whole input budget when set:
         # history beyond it could never be sent.
         limit = self.context_block_limit
         if isinstance(limit, int) and limit > 0:
             budget = min(budget, limit)
-        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+        return budget if budget > 0 else max(128, window // 2)
+
+    def _turn_model_snapshot(self, ref: str | None) -> ProviderSnapshot | None:
+        """The snapshot of the model a turn runs on when *ref* (a per-turn
+        model or a persona's) names another one than the loop's own; None
+        when the turn runs on the loop's model, or *ref* does not resolve."""
+        if ref and ref != self.model_preset:
+            return self._resolve_model_override(ref)
+        return None
+
+    def _compaction_limits(self, run_snapshot: ProviderSnapshot | None) -> CompactionLimits | None:
+        """What compaction is sized by for a turn on *run_snapshot*'s model;
+        None (the loop's own model) when the turn runs on the loop's."""
+        if run_snapshot is None:
+            return None
+        return self.consolidator.run_limits(
+            run_snapshot.context_window_tokens,
+            provider_max_output(run_snapshot.provider),
+            preemptive_compact_ratio=run_snapshot.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=run_snapshot.preemptive_compact_max_tokens,
+        )
 
     async def _run_agent_loop(
         self,
@@ -2080,8 +2109,13 @@ class AgentLoop:
         session_key: str | None = None,
         pending_queues: PendingQueues | None = None,
         model_preset: str | None = None,
+        override_snapshot: ProviderSnapshot | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
+
+        *override_snapshot*: the model this run uses when the caller already
+        resolved it (a turn resolves it once, in BUILD); otherwise
+        *model_preset* is resolved here.
 
         *on_stream*: called with each content delta during streaming.
         *on_stream_end(resuming)*: called when a streaming session finishes.
@@ -2335,9 +2369,8 @@ class AgentLoop:
         # a full provider snapshot for THIS turn only — provider + model + context
         # window — without touching global model state. Falls back to the agent
         # default if no override is given or the ref cannot be resolved.
-        override_snapshot = None
-        if model_preset and model_preset != self.model_preset:
-            override_snapshot = self._resolve_model_override(model_preset)
+        if override_snapshot is None:
+            override_snapshot = self._turn_model_snapshot(model_preset)
         if override_snapshot is not None:
             effective_provider = override_snapshot.provider
             effective_model = override_snapshot.model
@@ -3756,9 +3789,26 @@ class AgentLoop:
             await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
 
     async def _state_build(self, ctx: TurnContext) -> str:
+        # Resolve the active persona once for this turn: its SOUL body feeds the
+        # context build (here and on overflow-retry) and its model ref, unless
+        # an explicit per-turn ref overrides it, names the model this turn runs
+        # on. No persona configured → both stay None → default SOUL + default
+        # model (unchanged behavior). Resolved before anything is sized: the
+        # consolidation below and the history replay must fit the turn's own
+        # model, which a cron job or a persona may set apart from the loop's.
+        ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
+            ctx.session, ctx.persona_override,
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        )
+        # Most specific wins: an explicit per-turn ref (cron per-job model or
+        # /model) overrides the active persona's model.
+        ctx.run_snapshot = self._turn_model_snapshot(
+            ctx.model_preset_override or ctx.persona_model_ref,
+        )
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
             replay_max_messages=self._max_messages,
+            limits=self._compaction_limits(ctx.run_snapshot),
         )
         # COMPACT read the summary before this consolidation ran. When it
         # archived turns it also wrote or extended the summary, and the
@@ -3779,19 +3829,11 @@ class AgentLoop:
 
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(ctx.run_snapshot),
             "include_timestamps": True,
         }
         ctx.history = ctx.session.get_history(**_hist_kwargs)
 
-        # Resolve the active persona once for this turn: its SOUL body feeds the
-        # context build (here and on overflow-retry) and its model ref feeds the
-        # per-turn model-override path in _run_agent_loop. No persona configured
-        # → both stay None → default SOUL + default model (unchanged behavior).
-        ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
-            ctx.session, ctx.persona_override,
-            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        )
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
         if ctx.on_retry_wait is None:
@@ -3911,9 +3953,8 @@ class AgentLoop:
                 metadata=ctx.msg.metadata,
                 session_key=ctx.session_key,
                 pending_queues=ctx.pending_queues,
-                # Most specific wins: an explicit per-turn ref (cron per-job
-                # model or /model) overrides the active persona's model.
-                model_preset=ctx.model_preset_override or ctx.persona_model_ref,
+                # The model BUILD resolved for this turn (None: the loop's).
+                override_snapshot=ctx.run_snapshot,
             )
             final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
             ctx.final_content = final_content
@@ -3960,11 +4001,12 @@ class AgentLoop:
                         })
                 await self.consolidator.maybe_consolidate_by_tokens(
                     ctx.session, replay_max_messages=self._max_messages, force=True,
+                    limits=self._compaction_limits(ctx.run_snapshot),
                 )
                 ctx.pending_summary = self._format_pending_summary(ctx.session)
                 ctx.history = ctx.session.get_history(
                     max_messages=self._max_messages,
-                    max_tokens=self._replay_token_budget(),
+                    max_tokens=self._replay_token_budget(ctx.run_snapshot),
                     include_timestamps=True,
                 )
                 ctx.initial_messages = self._build_initial_messages(
@@ -4077,6 +4119,7 @@ class AgentLoop:
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
                 replay_max_messages=self._max_messages,
+                limits=self._compaction_limits(ctx.run_snapshot),
             )
         )
         return "ok"

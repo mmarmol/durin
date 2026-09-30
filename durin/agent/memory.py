@@ -8,6 +8,7 @@ import os
 import re
 import weakref
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
@@ -494,6 +495,19 @@ def extract_discovered_paths(messages: list[dict[str, Any]]) -> list[str]:
     return list(seen)[:_MAX_DISCOVERED_PATHS]
 
 
+@dataclass(frozen=True)
+class CompactionLimits:
+    """The model numbers one compaction check is sized by: the window and
+    output ceiling of the model a turn runs on, and the ratio and absolute cap
+    that apply to it (``cap`` None: no cap). The loop's context_block_limit
+    applies on top, whatever the model."""
+
+    context_window_tokens: int
+    max_completion_tokens: int
+    ratio: float
+    cap: int | None
+
+
 class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
 
@@ -723,16 +737,8 @@ class Consolidator:
         # (set_model_preset → _apply_provider_snapshot), callers supply the
         # preset's own values, which apply while it is active. A preset that
         # sets none (None) gets the default back, never the previous preset's.
-        self.preemptive_compact_ratio = (
-            self._default_preemptive_compact_ratio
-            if preemptive_compact_ratio is None
-            else preemptive_compact_ratio
-        )
-        self.preemptive_compact_max_tokens = (
-            self._default_preemptive_compact_max_tokens
-            if preemptive_compact_max_tokens is None
-            else preemptive_compact_max_tokens
-        )
+        self.preemptive_compact_ratio = self._preset_ratio(preemptive_compact_ratio)
+        self.preemptive_compact_max_tokens = self._preset_cap(preemptive_compact_max_tokens)
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -1024,15 +1030,55 @@ class Consolidator:
             self._get_tool_definitions(),
         )
 
+    def _limits(self) -> CompactionLimits:
+        """The loop's own model's numbers, as they stand now."""
+        return CompactionLimits(
+            context_window_tokens=self.context_window_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            ratio=self.preemptive_compact_ratio,
+            cap=self.preemptive_compact_max_tokens,
+        )
+
+    def _preset_ratio(self, ratio: float | None) -> float:
+        """A preset's ratio, or the default one when the preset sets none."""
+        return self._default_preemptive_compact_ratio if ratio is None else ratio
+
+    def _preset_cap(self, cap: int | None) -> int | None:
+        """A preset's cap, or the default one when the preset sets none."""
+        return self._default_preemptive_compact_max_tokens if cap is None else cap
+
+    def run_limits(
+        self,
+        context_window_tokens: int,
+        max_completion_tokens: int,
+        *,
+        preemptive_compact_ratio: float | None = None,
+        preemptive_compact_max_tokens: int | None = None,
+    ) -> CompactionLimits:
+        """Limits for a turn that runs on another model than the loop's own,
+        such as a cron job's or a persona's: that model's window and output
+        ceiling, and its preset's ratio and cap, each taken from the defaults
+        when the preset sets none, as for the loop's own model."""
+        return CompactionLimits(
+            context_window_tokens=context_window_tokens,
+            max_completion_tokens=max_completion_tokens,
+            ratio=self._preset_ratio(preemptive_compact_ratio),
+            cap=self._preset_cap(preemptive_compact_max_tokens),
+        )
+
+    def _input_budget_for(self, limits: CompactionLimits) -> int:
+        budget = limits.context_window_tokens - limits.max_completion_tokens - self._SAFETY_BUFFER
+        limit_ceiling = self._block_limit_ceiling
+        return budget if limit_ceiling is None else min(budget, limit_ceiling)
+
     @property
     def _input_token_budget(self) -> int:
-        """Available input token budget for consolidation LLM.
+        """Available input token budget for consolidation LLM, which runs on
+        the loop's own model.
 
         Never above what a run may send: under a context_block_limit, the
         summarizing call's input stays one safety buffer under it."""
-        budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
-        limit_ceiling = self._block_limit_ceiling
-        return budget if limit_ceiling is None else min(budget, limit_ceiling)
+        return self._input_budget_for(self._limits())
 
     @property
     def _block_limit_ceiling(self) -> int | None:
@@ -1043,20 +1089,22 @@ class Consolidator:
             return limit - self._SAFETY_BUFFER
         return None
 
-    @property
-    def _window_ceiling(self) -> int:
+    def _window_ceiling_for(self, limits: CompactionLimits) -> int:
         """The window's part of the trigger ceiling: the window less a capped
         output reservation and two safety buffers."""
         # ``max_completion_tokens`` of 0 means "provider default, unset"; it
         # reserves nothing, matching the budget this ceiling replaced.
         reservation = min(
-            max(0, int(self.max_completion_tokens)),
+            max(0, int(limits.max_completion_tokens)),
             self._MAX_TRIGGER_OUTPUT_RESERVATION,
         )
-        return self.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
+        return limits.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
 
     @property
-    def _preemptive_ceiling(self) -> int:
+    def _window_ceiling(self) -> int:
+        return self._window_ceiling_for(self._limits())
+
+    def _ceiling_for(self, limits: CompactionLimits) -> int:
         """Hard upper bound on the pre-emptive trigger.
 
         Reserves only a *capped* slice of the window for output, so a large
@@ -1068,28 +1116,39 @@ class Consolidator:
         a context_block_limit is set the runner's budget is that limit, so
         the ceiling is also held one buffer under it.
         """
-        ceiling = self._window_ceiling
+        ceiling = self._window_ceiling_for(limits)
         limit_ceiling = self._block_limit_ceiling
         return ceiling if limit_ceiling is None else min(ceiling, limit_ceiling)
 
     @property
-    def _effective_compact_ratio(self) -> float:
+    def _preemptive_ceiling(self) -> int:
+        return self._ceiling_for(self._limits())
+
+    def _ratio_for(self, limits: CompactionLimits) -> float:
         """Configured trigger ratio, raised to the small-window floor."""
-        ratio = self.preemptive_compact_ratio
+        ratio = limits.ratio
         if not isinstance(ratio, (int, float)) or ratio <= 0:
             return 0.0
         ratio = float(ratio)
-        if 0 < self.context_window_tokens < self._SMALL_CTX_WINDOW_LIMIT:
+        if 0 < limits.context_window_tokens < self._SMALL_CTX_WINDOW_LIMIT:
             return max(ratio, self._SMALL_CTX_MIN_RATIO)
         return ratio
 
     @property
+    def _effective_compact_ratio(self) -> float:
+        return self._ratio_for(self._limits())
+
+    @property
     def _preemptive_trigger_tokens(self) -> int:
-        """Token count at which a turn forces consolidation before the
-        LLM call."""
-        return self._preemptive_trigger()[0]
+        """Token count at which a turn on the loop's own model forces
+        consolidation before the LLM call."""
+        return self._trigger_for(self._limits())[0]
 
     def _preemptive_trigger(self) -> tuple[int, CompactionTriggerBound]:
+        """The loop's own model's trigger and the bound that set it."""
+        return self._trigger_for(self._limits())
+
+    def _trigger_for(self, limits: CompactionLimits) -> tuple[int, CompactionTriggerBound]:
         """The pre-emptive trigger in tokens, and the bound that set it.
 
         The trigger is the smallest of four bounds, named in the second
@@ -1102,24 +1161,25 @@ class Consolidator:
         overflow still triggers even if the ratio would have skipped. On a tie
         the earlier bound is named, since the later one changed nothing.
         """
-        if self.context_window_tokens <= 0:
+        window = limits.context_window_tokens
+        if window <= 0:
             return 0, "ceiling"
-        window_ceiling = self._window_ceiling
-        if self._preemptive_ceiling <= 0:
+        window_ceiling = self._window_ceiling_for(limits)
+        if self._ceiling_for(limits) <= 0:
             # Window (or block limit) smaller than the reservation: nothing
             # sane to derive.
             bound: CompactionTriggerBound = "ceiling" if window_ceiling <= 0 else "block_limit"
-            return max(1, self._input_token_budget), bound
-        ratio = self._effective_compact_ratio
+            return max(1, self._input_budget_for(limits)), bound
+        ratio = self._ratio_for(limits)
         if ratio > 0:
-            trigger = int(self.context_window_tokens * ratio)
-            bound = "floor" if ratio > self.preemptive_compact_ratio else "ratio"
+            trigger = int(window * ratio)
+            bound = "floor" if ratio > limits.ratio else "ratio"
         else:
             # 0 / negative / garbage → fall back to legacy behavior (trigger
             # only at the hard ceiling).
             trigger, bound = window_ceiling, "ceiling"
         lower_bounds: tuple[tuple[int | None, CompactionTriggerBound], ...] = (
-            (self.preemptive_compact_max_tokens, "cap"),
+            (limits.cap, "cap"),
             (window_ceiling, "ceiling"),
             (self._block_limit_ceiling, "block_limit"),
         )
@@ -1363,11 +1423,17 @@ class Consolidator:
         *,
         replay_max_messages: int | None = None,
         force: bool = False,
+        limits: CompactionLimits | None = None,
     ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer
         so the LLM request never exceeds the context window.
+
+        ``limits`` sizes the check for a turn that runs on another model than
+        the loop's own (``run_limits``); without it the loop's model is used.
+        The trigger has to sit under the budget of the run that follows,
+        which is that model's.
 
         ``force`` is for a caller holding proof that the prompt does not fit:
         the runner overflowed before its first call. The idle check and the
@@ -1377,16 +1443,19 @@ class Consolidator:
         last count says. Deferring it left the retry to overflow as well,
         and every later turn with it.
         """
-        if not session.messages or self.context_window_tokens <= 0:
+        if limits is None:
+            limits = self._limits()
+        if not session.messages or limits.context_window_tokens <= 0:
             return
         with self._bound_telemetry(session.key):
-            await self._consolidate_by_tokens(session, replay_max_messages, force)
+            await self._consolidate_by_tokens(session, replay_max_messages, force, limits)
 
     async def _consolidate_by_tokens(
         self,
         session: Session,
         replay_max_messages: int | None,
-        force: bool = False,
+        force: bool,
+        limits: CompactionLimits,
     ) -> None:
         lock = self.get_lock(session.key)
         # Tier 2 A3: bounded lock acquisition. A prior compaction that
@@ -1424,15 +1493,16 @@ class Consolidator:
             # the hard budget ceiling. ``target`` is computed off the trigger
             # so each compaction round does meaningful work (compacting down
             # by ``consolidation_ratio`` of the trigger).
-            trigger, trigger_bound = self._preemptive_trigger()
+            trigger, trigger_bound = self._trigger_for(limits)
             target = max(1, int(trigger * self.consolidation_ratio))
-            # Read with the trigger, before anything awaits: a preset switch
-            # while this call waits on the summary must not pair the trigger
-            # with another preset's numbers in the events below.
-            cap_tokens = self.preemptive_compact_max_tokens
-            ceiling = self._preemptive_ceiling
-            window = self.context_window_tokens
-            effective_ratio = self._effective_compact_ratio
+            # Read with the trigger, from the same limits, before anything
+            # awaits: a preset switch while this call waits on the summary
+            # must not pair the trigger with another preset's numbers in the
+            # events below.
+            cap_tokens = limits.cap
+            ceiling = self._ceiling_for(limits)
+            window = limits.context_window_tokens
+            effective_ratio = self._ratio_for(limits)
             new_summaries: list[str] = []
             # This call's tags, unioned across every archive round below and
             # handed to the session-summary store with the blocks.

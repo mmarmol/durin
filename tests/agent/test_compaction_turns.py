@@ -23,7 +23,9 @@ def _turn_text(i: int) -> str:
     return f"turn {i}: please remember fact number {i}. " + ("more context words " * 400)
 
 
-async def _run_turns(tmp_path, *, turns: int, window: int, **loop_kwargs: Any) -> dict[str, Any]:
+async def _run_turns(
+    tmp_path, *, turns: int, window: int, turn_model: str | None = None, **loop_kwargs: Any,
+) -> dict[str, Any]:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(max_tokens=8192)
@@ -69,7 +71,7 @@ async def _run_turns(tmp_path, *, turns: int, window: int, **loop_kwargs: Any) -
     compactions: list[int] = []
     for i in range(turns):
         before = len(archives)
-        out = await loop.process_direct(_turn_text(i), session_key="cli:sim")
+        out = await loop.process_direct(_turn_text(i), session_key="cli:sim", model_preset=turn_model)
         while background:
             await background.pop(0)
         replies.append(out.content if out is not None else None)
@@ -111,3 +113,27 @@ async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
     assert sum(result["compactions"]) >= 1
     budget = input_budget_tokens(1_000_000, 8192, 40_000)
     assert max(result["main_prompts"]) <= budget
+
+
+@pytest.mark.asyncio
+async def test_a_turn_on_a_smaller_model_compacts_by_that_models_limits(tmp_path):
+    """A cron job's or a persona's model runs the turn on its own window. On a
+    loop whose model has 1M, a turn on a 45,000-token model must compact by
+    the smaller window, not by the loop's 256,000 trigger: past its own
+    budget every turn failed, since the forced compaction aimed at half of
+    256,000."""
+    from durin.agent.runner import input_budget_tokens
+    from durin.config.schema import ModelPresetConfig
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+        "small": ModelPresetConfig(model="test-model", context_window_tokens=45_000),
+    }
+    result = await _run_turns(
+        tmp_path, turns=10, window=1_000_000, turn_model="small", model_presets=presets,
+    )
+
+    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    assert failed == [], result["replies"]
+    assert sum(result["compactions"]) >= 1
+    assert max(result["main_prompts"]) <= input_budget_tokens(45_000, 8192)

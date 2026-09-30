@@ -199,10 +199,14 @@ async def test_a_turn_after_compaction_reads_the_file_again(tmp_path: Path) -> N
     loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
     loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
 
-    async def _keep(sess: Any, *, replay_max_messages: Any = None) -> None:
+    async def _keep(
+        sess: Any, *, replay_max_messages: Any = None, force: bool = False, limits: Any = None,
+    ) -> None:
         return None
 
-    async def _archive(sess: Any, *, replay_max_messages: Any = None) -> None:
+    async def _archive(
+        sess: Any, *, replay_max_messages: Any = None, force: bool = False, limits: Any = None,
+    ) -> None:
         # What a real consolidation does: the earlier turns leave the history.
         sess.messages = []
 
