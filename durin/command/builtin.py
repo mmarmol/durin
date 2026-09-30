@@ -827,8 +827,6 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
     """Set reasoning effort level for the active model preset."""
-    from durin.config.schema import ModelPresetConfig
-
     loop = ctx.loop
     args = ctx.args.strip().lower()
     metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
@@ -854,15 +852,10 @@ async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
 
     effort_val = args or None
     variant_name = f"{active_name}:{effort_val}" if effort_val else active_name
-    loop.model_presets[variant_name] = ModelPresetConfig(
-        model=base_preset.model,
-        provider=base_preset.provider,
-        max_tokens=base_preset.max_tokens,
-        context_window_tokens=base_preset.context_window_tokens,
-        temperature=base_preset.temperature,
-        reasoning_effort=effort_val,
-        preemptive_compact_ratio=base_preset.preemptive_compact_ratio,
-        preemptive_compact_max_tokens=base_preset.preemptive_compact_max_tokens,
+    # The same preset with another effort: every other setting is kept,
+    # including any a later preset field adds.
+    loop.model_presets[variant_name] = base_preset.model_copy(
+        update={"reasoning_effort": effort_val},
     )
     loop.set_model_preset(variant_name)
 

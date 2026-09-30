@@ -1140,21 +1140,12 @@ class DurinApp(App[None]):
         if current == effort:
             return
 
-        # Create a temp preset variant with the new effort.
+        # Create a temp preset variant with the new effort: the same preset,
+        # every other setting kept, including any a later preset field adds.
         from durin.cli.tui.state import add_recent_model
-        from durin.config.schema import ModelPresetConfig
 
         variant_name = f"{active_name}:{selected}"
-        variant = ModelPresetConfig(
-            model=active_preset.model,
-            provider=active_preset.provider,
-            max_tokens=active_preset.max_tokens,
-            context_window_tokens=active_preset.context_window_tokens,
-            temperature=active_preset.temperature,
-            reasoning_effort=effort,
-            preemptive_compact_ratio=active_preset.preemptive_compact_ratio,
-            preemptive_compact_max_tokens=active_preset.preemptive_compact_max_tokens,
-        )
+        variant = active_preset.model_copy(update={"reasoning_effort": effort})
         presets[variant_name] = variant
         add_recent_model(variant_name)
         await self._publish_inbound(f"/model {variant_name}", [])

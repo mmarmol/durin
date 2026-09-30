@@ -733,7 +733,9 @@ and agent:
   a custom provider/model entry; selecting one publishes `/model <ref>`. The effort
   section lists reasoning levels (Default / Off / High / Max); selecting one
   publishes `/effort <level>`. The current effort level (if any) is extracted from
-  the active model preset's suffix (e.g. `default:high` → `high`).
+  the active model preset's suffix (e.g. `default:high` → `high`). `/effort`, and
+  the TUI's effort picker, switch to a variant of the active preset
+  (`<preset>:<level>`) that keeps every other setting of the preset.
 
 **Sending while the agent works.** A plain message sent mid-turn is deferred
 server-side: it enters the conversation when the current work finishes its
