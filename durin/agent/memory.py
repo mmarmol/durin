@@ -1327,21 +1327,31 @@ class Consolidator:
         session: Session,
         *,
         replay_max_messages: int | None = None,
+        force: bool = False,
     ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer
         so the LLM request never exceeds the context window.
+
+        ``force`` is for a caller holding proof that the prompt does not fit:
+        the runner overflowed before its first call. The idle check and the
+        real-usage vetoes exist to skip needless compactions judged on a
+        rough estimate; that proof is newer than either, so a forced call
+        compacts down to the target whatever the estimate or the provider's
+        last count says. Deferring it left the retry to overflow as well,
+        and every later turn with it.
         """
         if not session.messages or self.context_window_tokens <= 0:
             return
         with self._bound_telemetry(session.key):
-            await self._consolidate_by_tokens(session, replay_max_messages)
+            await self._consolidate_by_tokens(session, replay_max_messages, force)
 
     async def _consolidate_by_tokens(
         self,
         session: Session,
         replay_max_messages: int | None,
+        force: bool = False,
     ) -> None:
         lock = self.get_lock(session.key)
         # Tier 2 A3: bounded lock acquisition. A prior compaction that
@@ -1424,7 +1434,7 @@ class Consolidator:
                 self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
-            if estimated < trigger:
+            if estimated < trigger and not force:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, trigger={}, msgs={}",
@@ -1440,8 +1450,9 @@ class Consolidator:
                 return
             # The rough estimate is over the trigger — but it measures the raw
             # tail, not the copy the runner ships. Let the provider's own
-            # counts veto a compaction the real prompt does not need.
-            deferral = self._defer_to_real_usage(session, estimated, trigger)
+            # counts veto a compaction the real prompt does not need, unless
+            # an overflow has already proved it does.
+            deferral = None if force else self._defer_to_real_usage(session, estimated, trigger)
             if deferral is not None:
                 logger.debug(
                     "Token consolidation deferred ({}) for {}: rough={} trigger={}",
@@ -1466,8 +1477,9 @@ class Consolidator:
                 return
             # Visibility into how often the pre-emptive threshold does actual
             # work: it fires below the ceiling that would have been the only
-            # trigger under legacy (ratio-less) behavior.
-            if estimated < self._preemptive_ceiling:
+            # trigger under legacy (ratio-less) behavior. A forced run was set
+            # off by an overflow, not by this threshold.
+            if not force and estimated < self._preemptive_ceiling:
                 _logger = current_telemetry()
                 if _logger is not None:
                     with suppress(Exception):

@@ -756,6 +756,55 @@ async def test_deferral_clears_once_a_fresh_provider_count_lands(tmp_path, monke
     assert session.key not in c._awaiting_real_usage
 
 
+@pytest.mark.asyncio
+async def test_a_forced_compaction_is_not_vetoed(tmp_path, monkeypatch):
+    """The forced compaction after an iteration-0 overflow runs whatever the
+    provider's earlier count said: the overflow is newer, and proves the
+    prompt does not fit. Deferring it left the retry to overflow again."""
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    trigger = c._preemptive_trigger_tokens
+    session = _session_with_usage(loop, 10, usage=trigger - 50)
+    monkeypatch.setattr(c, "estimate_session_prompt_tokens", lambda _s, **_k: (trigger + 10, "test"))
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 10)
+
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count == 0, "an ordinary check is vetoed: provider_fit"
+
+    await c.maybe_consolidate_by_tokens(session, force=True)
+    after_first = c.archive.await_count
+    assert after_first >= 1
+
+    # The compaction just armed the post-compaction park; a second overflow
+    # before any new provider count must still compact the turns since.
+    assert session.key in c._awaiting_real_usage
+    for i in range(5):
+        session.messages.append({"role": "user", "content": f"later u{i}"})
+        session.messages.append({"role": "assistant", "content": f"later a{i}"})
+    await c.maybe_consolidate_by_tokens(session, force=True)
+    assert c.archive.await_count > after_first
+
+
+@pytest.mark.asyncio
+async def test_a_forced_compaction_runs_under_the_trigger(tmp_path, monkeypatch):
+    """The runner measured the real prompt over its budget; a rough estimate
+    under the trigger is the one that is wrong, so the forced compaction still
+    compacts down to the target."""
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    trigger = c._preemptive_trigger_tokens
+    session = _session_with_messages(loop, 10)
+    monkeypatch.setattr(c, "estimate_session_prompt_tokens", lambda _s, **_k: (trigger - 10, "test"))
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 10)
+
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count == 0
+    await c.maybe_consolidate_by_tokens(session, force=True)
+    assert c.archive.await_count >= 1
+
+
 def test_session_tracking_dicts_are_bounded():
     """Per-session veto state must not grow without bound on a long-lived gateway."""
     from durin.agent.memory import Consolidator

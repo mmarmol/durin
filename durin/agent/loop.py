@@ -3953,7 +3953,7 @@ class AgentLoop:
                             "attempt": attempt,
                         })
                 await self.consolidator.maybe_consolidate_by_tokens(
-                    ctx.session, replay_max_messages=self._max_messages,
+                    ctx.session, replay_max_messages=self._max_messages, force=True,
                 )
                 ctx.pending_summary = self._format_pending_summary(ctx.session)
                 ctx.history = ctx.session.get_history(

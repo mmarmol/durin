@@ -440,7 +440,10 @@ The handlers, in order:
   overflow means it failed) triggers one bounded retry: force a fresh
   consolidation, rebuild the context, re-run
   (`overflow_retry.forced_consolidation`); skipped once a tool has run, so
-  side-effecting tools never re-fire.
+  side-effecting tools never re-fire. The forced consolidation skips the
+  idle check and the real-usage vetoes below: the overflow is newer proof
+  than the provider's last count, and a vetoed retry would overflow again,
+  as would every later turn of the session.
 - **`_state_save`** — finalizes plan/stall/goal bookkeeping, records skill-usage
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
@@ -978,6 +981,11 @@ consolidating (`compaction.deferred` records either):
   happened since, so the newest anchor still describes the *pre*-compaction
   prompt. Without this, reading that stale anchor fires a second compaction
   against an already-shortened conversation. Parked for exactly one turn.
+
+Neither veto applies to the consolidation forced after an iteration-0
+overflow. The vetoes guard against a rough estimate that runs high; the
+overflow is the runner's own measurement, taken after the provider's last
+count, and it says the prompt does not fit.
 
 ### After DONE (post-processing in `_dispatch`)
 

@@ -69,6 +69,9 @@ async def test_iteration0_overflow_forces_consolidation_and_recovers(tmp_path, m
 
     assert loop._run_agent_loop.await_count == 2, "must retry once after forced consolidation"
     loop.consolidator.maybe_consolidate_by_tokens.assert_awaited_once()
+    # Forced: the overflow proves the prompt does not fit, so no deferral may
+    # skip this consolidation.
+    assert loop.consolidator.maybe_consolidate_by_tokens.await_args.kwargs.get("force") is True
     assert ctx.stop_reason == "completed"
     assert ctx.final_content == "Done."
     # The rebuilt prompt carries the summary the forced consolidation just
