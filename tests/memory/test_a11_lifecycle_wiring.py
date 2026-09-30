@@ -319,3 +319,60 @@ def test_watcher_start_failure_does_not_break_loop(
             loop.stop()
     finally:
         monkeypatch.setattr(MemoryFileWatcher, "start", original_start)
+
+
+async def test_the_loop_requests_the_vector_backfill_only_once_it_is_serving(
+    tmp_path: Path,
+) -> None:
+    """Building the loop starts the watcher (so edits are caught from the
+    first moment) but not its vector backfill, which builds the embedding
+    provider and reads the whole vector table. `run()` requests it after
+    its own startup steps, so it never competes with gateway boot."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from durin.agent.loop import AgentLoop
+    from durin.bus.queue import MessageBus
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    with patch("durin.agent.loop.ContextBuilder"), \
+         patch("durin.agent.loop.SessionManager"), \
+         patch("durin.agent.loop.SubagentManager"):
+        loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+
+    order: list[str] = []
+
+    async def noop(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def replay_journal() -> int:
+        order.append("startup finished")
+        return 0
+
+    class _Watcher:
+        def request_backfill(self) -> None:
+            order.append("backfill requested")
+
+        def stop(self) -> None:
+            pass
+
+    loop._connect_mcp = noop  # type: ignore[method-assign]
+    loop._warmup_memory_embedding = noop  # type: ignore[method-assign]
+    loop._replay_inbound_journal = replay_journal  # type: ignore[method-assign]
+    loop._memory_file_watcher = _Watcher()
+    assert order == []
+
+    runner = asyncio.create_task(loop.run())
+    try:
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            if len(order) >= 2:
+                break
+    finally:
+        loop._running = False
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+
+    assert order == ["startup finished", "backfill requested"]

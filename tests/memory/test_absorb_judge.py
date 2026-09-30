@@ -422,3 +422,25 @@ def test_a_parse_failure_is_reported_to_telemetry(monkeypatch) -> None:
     assert [s for s, _ in seen] == ["absorb_judge"]
     assert seen[0][1]["source"] == "person:marcelo|person:marcelo-m"
     assert seen[0][1]["raw"].startswith("Same person")
+
+
+def test_a_parse_failure_reports_why_the_envelope_was_refused(monkeypatch) -> None:
+    """A well-formed head says nothing about why an answer was refused: the
+    parser's error and the provider's finish reason go with the event."""
+    import durin.memory.llm_invoke as llm_invoke
+    seen: list[tuple[str, dict]] = []
+    monkeypatch.setattr(llm_invoke, "emit_parse_failure",
+                        lambda stage, **kw: seen.append((stage, kw)))
+    a, b = _make_pages()
+    replies = iter([
+        llm_invoke.LLMResponse(text="===VERDICT===\nrelated\n===CONFIDENCE===\n97\n",
+                               finish_reason="length"),
+        llm_invoke.LLMResponse(text="===VERDICT===\nsame\n===CONFIDENCE===\n90\n"
+                                    "===REASONING===\nSame email.\n===END===\n"),
+    ])
+    judge_pair(a, b, ["Marcelo"], llm_invoke=lambda p, *, model: next(replies),
+               max_retries=2)
+    [(stage, kw)] = seen
+    assert stage == "absorb_judge"
+    assert kw["finish_reason"] == "length"
+    assert "REASONING" in kw["error"]

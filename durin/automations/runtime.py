@@ -148,14 +148,20 @@ class AutomationsRuntime:
 
     async def fire(self, name: str, *, source: str, task: str | None = None,
                     origin: dict | None = None, run_id: str | None = None,
-                    chain_depth: int = 0) -> dict:
+                    chain_depth: int = 0,
+                    on_started: Callable[[], None] | None = None) -> dict:
+        """Start a run and await it to the end. ``on_started`` is called once
+        the run is recorded as started, before the workflow runs, so a caller
+        awaiting the whole run can still note when it began; it is never
+        called when the fire is refused as busy."""
         token = _bind_automations_telemetry(name)
         try:
             spec = load_automation(self._ws, name)
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 raise AutomationBusyError(f"automation '{name}' already has an active run")
             return await self._run(spec, source=source, task=task, origin=origin,
-                                    run_id=run_id, chain_depth=chain_depth)
+                                    run_id=run_id, chain_depth=chain_depth,
+                                    on_started=on_started)
         finally:
             if token is not None:
                 reset_telemetry(token)
@@ -552,7 +558,8 @@ class AutomationsRuntime:
 
     async def _run(self, spec: AutomationSpec, *, source: str, task: str | None,
                      origin: dict | None = None, run_id: str | None = None,
-                     chain_depth: int = 0) -> dict:
+                     chain_depth: int = 0,
+                     on_started: Callable[[], None] | None = None) -> dict:
         run_id = run_id or self._run_id()
         run_log.start_run(self._ws, spec.name, run_id,
                            cause={"kind": source, "excerpt": task or "", "trigger_index": None},
@@ -563,6 +570,13 @@ class AutomationsRuntime:
         wf_run_id = self._run_id()
         run_log.update_run(self._ws, spec.name, run_id, workflow_run_id=wf_run_id)
         emit_tool_event("automations.fired", {"automation": spec.name, "source": source, "skipped": False})
+        if on_started is not None:
+            # Only an observer of the start: its failure must not strand a
+            # run that is already recorded as running.
+            try:
+                on_started()
+            except Exception:  # noqa: BLE001
+                logger.exception("automations: on_started callback for '{}' failed", spec.name)
 
         # A channel-triggered fire's origin thread becomes work_key ONLY when
         # it is a correlate-derived claim key (matcher-minted as

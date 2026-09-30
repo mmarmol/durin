@@ -132,7 +132,8 @@ def extract_entity(
     raw = resp.text if hasattr(resp, "text") else str(resp)
     attrs = parse_attributes(raw)
     if attrs is None:
-        emit_parse_failure("extract", source=entity_ref, raw=raw)
+        emit_parse_failure("extract", source=entity_ref, raw=raw,
+                           finish_reason=getattr(resp, "finish_reason", None))
         attrs = {}
     if not attrs:
         return WriteResult(entity_ref, committed=False, retries=0)
@@ -407,7 +408,8 @@ def discover_entities(
     raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
     if proposals is None:
-        emit_parse_failure("discover", source=source_ref, raw=raw)
+        emit_parse_failure("discover", source=source_ref, raw=raw,
+                           finish_reason=getattr(resp, "finish_reason", None))
         proposals = []
     if not proposals:
         return []
@@ -574,7 +576,8 @@ def mine_learnings(
         raw = resp.text if hasattr(resp, "text") else str(resp)
         learnings = _parse_learnings(raw)
         if learnings is None:
-            emit_parse_failure("learnings", source=source_ref, raw=raw)
+            emit_parse_failure("learnings", source=source_ref, raw=raw,
+                               finish_reason=getattr(resp, "finish_reason", None))
             learnings = []
     except Exception:
         return []

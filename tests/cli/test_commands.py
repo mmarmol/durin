@@ -3335,6 +3335,23 @@ def test_gateway_migration_failure_does_not_crash_boot(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
 
 
+def test_gateway_boot_builds_the_alias_index_in_the_background(monkeypatch, tmp_path: Path) -> None:
+    """Boot starts the shared alias index build on a background thread, so the
+    first memory search after a restart finds it ready instead of walking every
+    entity page itself."""
+    config, config_file = _setup_full_boot_gateway_test(monkeypatch, tmp_path)
+    started: list[Path] = []
+    monkeypatch.setattr(
+        "durin.memory.aliases_cache.refresh_alias_index_in_background",
+        lambda memory_root: started.append(memory_root),
+    )
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert started == [config.workspace_path / "memory"]
+
+
 def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
     """Full gateway boot far enough that `channels` in `_run_gateway`'s scope
     is actually assigned to a live (fake) ChannelManager before the run stops

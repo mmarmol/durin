@@ -4,6 +4,7 @@ All OSV HTTP calls are mocked — no real network.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.error
 import urllib.request
@@ -297,7 +298,7 @@ class TestOpenStdioIntegration:
             async def __aexit__(self, *exc):
                 return False
 
-        monkeypatch.setattr(mc, "_mcp_stderr_log", lambda: io.StringIO())
+        monkeypatch.setattr(mc, "_mcp_stderr_log", lambda _server: io.StringIO())
         monkeypatch.setattr(
             "mcp.client.stdio.stdio_client", lambda *a, **k: _FakeCM()
         )
@@ -393,6 +394,39 @@ class TestOpenStdioIntegration:
         )
         result = await conn._open_stdio()
         assert result == ("r", "w")
+
+    @pytest.mark.asyncio
+    async def test_osv_query_does_not_block_the_event_loop(self, monkeypatch):
+        """The blocking OSV request runs off the event loop.
+
+        Servers connect at the same time, so a query that held the loop
+        would stall every other connect (and the agent loop) for up to its
+        socket timeout. The query here only returns once the event loop has
+        run the test's next step; on a blocked loop it gives up after 2 s.
+        """
+        import threading
+
+        self._patch_stdio(monkeypatch)
+        loop_ran = threading.Event()
+        released_by_loop: list[bool] = []
+
+        def slow_query(package, ecosystem, version=None):
+            released_by_loop.append(loop_ran.wait(timeout=2))
+            return []
+
+        monkeypatch.setattr(
+            "durin.agent.tools.mcp_security._query_osv", slow_query
+        )
+        clear_osv_cache()
+
+        conn = self._make_conn({"command": "npx", "args": ["-y", "@slow/pkg"]})
+        opening = asyncio.ensure_future(conn._open_stdio())
+        await asyncio.sleep(0.05)
+        loop_ran.set()
+        result = await opening
+
+        assert result == ("r", "w")
+        assert released_by_loop == [True]
 
 
 # ---------------------------------------------------------------------------

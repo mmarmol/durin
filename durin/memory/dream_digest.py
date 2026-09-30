@@ -32,6 +32,7 @@ DREAM_ACTIVITY_TYPES = frozenset({
     "memory.dream.vector_unavailable",
     "memory.dream.run_summary",
     "skill.curation_action",
+    "skill.curation_unrecovered",
 })
 
 # Run-boundary markers (not activity items — they set the digest's last-run time).
@@ -185,7 +186,35 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
             "at_ms": at_ms,
         }]
 
+    if event_type == "skill.curation_unrecovered":
+        # One line per skill-review pass, for what it could not recover.
+        undone: list[str] = []
+        if data.get("failed"):
+            undone.append(f"{data['failed']} skill(s) got no usable answer")
+        if data.get("stalled"):
+            undone.append(f"{data['stalled']} set aside after failing pass after pass")
+        ended = {"model_failing": "stopped early as the model kept failing",
+                 "time_cap": "stopped at its time cap"}.get(str(data.get("ended_early") or ""))
+        if ended:
+            undone.append(f"{ended}, {data.get('carried_over', 0)} skill(s) left for the next run")
+        if not undone:
+            return []
+        what = "Manual-skill suggestions" if data.get("stage") == "suggestions" else "Skill curation"
+        return [{
+            "kind": "warning",
+            "summary": f"{what}: " + "; ".join(undone),
+            "ref": None,
+            "ref_kind": None,
+            "at_ms": at_ms,
+        }]
+
     if event_type == "memory.dream.parse_failure":
+        if data.get("stage") in ("curation", "suggestions"):
+            # The skill review splits a refused batch and retries it within
+            # the pass, so one refusal says nothing about what the pass got
+            # done; what did not recover arrives once per pass as
+            # skill.curation_unrecovered.
+            return []
         # One warning per unparseable LLM response. These are rare in steady
         # state (json_repair absorbs formatting quirks); a run that produces
         # many of them means the dream model is misbehaving, and a loud feed

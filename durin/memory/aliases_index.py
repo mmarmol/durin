@@ -19,11 +19,13 @@ Shape::
 Keys are lowercase-folded so lookup is case-insensitive. Values are full entity refs (``<type>:<slug>``), where
 *slug* is the filename — the authoritative identifier.
 
-**No disk persistence**: for typical durin
-corpus, `build()` is sub-second. Persisting a
-JSON sidecar to disk introduces drift risk if a `.md` is edited
-outside the tool (vim, git merge), so callers always rebuild on boot.
-Mutations during runtime (via :meth:`add`, :meth:`remove`,
+**No disk persistence**: each process builds its own map from the
+markdown — on first use, and in the gateway on a background thread at
+startup and after each dream worker exits (``aliases_cache``). A build
+walks every entity page and entry: seconds on a workspace with thousands
+of pages. Persisting a JSON sidecar to disk would save that walk but
+introduces drift risk if a `.md` is edited outside the tool (vim, git
+merge). Mutations during runtime (via :meth:`add`, :meth:`remove`,
 :meth:`refresh_for`) update the in-memory map only.
 
 Archive subfolders (``<slug>/archive/``) are skipped — those entries
@@ -51,8 +53,10 @@ class AliasIndex:
     """In-memory alias map.
 
     Lifecycle:
-    - ``build()`` — walk ``memory/entities/``, parse every page, populate.
-      Always called at boot to rebuild from disk (no persistent sidecar).
+    - ``build()`` — walk ``memory/entities/`` and the entry classes, parse
+      every page, swap the fresh map in. Runs on first use in a process and
+      again whenever the map must be re-read from disk (no persistent
+      sidecar).
     - ``add(page, slug)`` / ``remove(entity_ref)`` — incremental updates
       in memory (callers do not persist).
     - ``lookup(query)`` — return ordered list of candidate entity refs.
@@ -69,6 +73,16 @@ class AliasIndex:
         # `refresh_for` nests `remove` + `add`, and `build` calls
         # `_populate`, each of which also takes the lock.
         self._lock = threading.RLock()
+        # One build at a time per instance: a build owns `_journal`.
+        self._build_lock = threading.Lock()
+        # While a build walks the disk, readers keep the old map and
+        # `add`/`remove` still mutate it — and also land here, so the build
+        # replays them onto the fresh map before the swap. Without it, a
+        # write whose page the walk had already read (or not yet listed)
+        # would vanish at the swap. None when no build is running.
+        # Entries are (entity_ref, identifying strings) for an add and
+        # (entity_ref, None) for a remove.
+        self._journal: list[tuple[str, list[str] | None]] | None = None
 
     # ------------------------------------------------------------------
     # build (rebuild-only — no disk persistence)
@@ -87,6 +101,31 @@ class AliasIndex:
         aliases take precedence (richer info), the episodic-derived
         aliases are append-only and only add the bare slug.
         """
+        # Build into a fresh map and swap it in atomically under the lock
+        # so concurrent readers never observe the post-clear / partially
+        # repopulated state. The disk walk (seconds on a workspace with
+        # thousands of pages) runs outside the lock; only the final swap is
+        # guarded, and it first replays the writes journaled meanwhile.
+        with self._build_lock:
+            with self._lock:
+                self._journal = []
+            try:
+                new_map = self._walk()
+            except BaseException:
+                with self._lock:
+                    self._journal = None
+                raise
+            with self._lock:
+                for entity_ref, strings in self._journal:
+                    if strings is None:
+                        self._remove_from(new_map, entity_ref)
+                    else:
+                        self._populate_into(new_map, strings, entity_ref)
+                self._journal = None
+                self._map = new_map
+
+    def _walk(self) -> dict[str, list[str]]:
+        """Read every entity page and entry from disk into a fresh map."""
         # Walk memory_root/entities/ directly. We skip any path that
         # contains an `archive/` component anywhere in its parts — that
         # covers both the spec's top-level `memory/archive/entities/...`
@@ -95,10 +134,6 @@ class AliasIndex:
         # layout that may still exist in older workspaces.
         from durin.memory.paths import MEMORY_CLASSES
 
-        # Build into a fresh map and swap it in atomically under the lock
-        # so concurrent readers never observe the post-clear / partially
-        # repopulated state. The disk walk (sub-second but not free) runs
-        # outside the lock; only the final swap is guarded.
         new_map: dict[str, list[str]] = defaultdict(list)
 
         entities_root = self.memory_root / "entities"
@@ -155,8 +190,7 @@ class AliasIndex:
                     # this slug to this ref, it's a no-op.
                     self._populate_into(new_map, [slug], entity_ref)
 
-        with self._lock:
-            self._map = new_map
+        return new_map
 
     # ------------------------------------------------------------------
     # lookup (case-insensitive, returns LIST)
@@ -206,20 +240,18 @@ class AliasIndex:
         ``remove()`` first if doing a full refresh.
         """
         entity_ref = f"{page.type}:{slug}"
+        strings = page.identifying_strings()
         with self._lock:
-            self._populate_into(self._map, page.identifying_strings(), entity_ref)
+            self._populate_into(self._map, strings, entity_ref)
+            if self._journal is not None:
+                self._journal.append((entity_ref, strings))
 
     def remove(self, entity_ref: str) -> None:
         """Drop all alias entries pointing to *entity_ref*. O(N) in keys."""
         with self._lock:
-            to_delete: list[str] = []
-            for key, refs in self._map.items():
-                if entity_ref in refs:
-                    refs[:] = [r for r in refs if r != entity_ref]
-                    if not refs:
-                        to_delete.append(key)
-            for key in to_delete:
-                del self._map[key]
+            self._remove_from(self._map, entity_ref)
+            if self._journal is not None:
+                self._journal.append((entity_ref, None))
 
     def refresh_for(self, page: EntityPage, slug: str) -> None:
         """Atomic ``remove(entity_ref) + add(page)``. Convenient for saves."""
@@ -234,6 +266,18 @@ class AliasIndex:
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _remove_from(target: dict[str, list[str]], entity_ref: str) -> None:
+        """Drop every alias entry of *target* pointing to ``entity_ref``."""
+        to_delete: list[str] = []
+        for key, refs in target.items():
+            if entity_ref in refs:
+                refs[:] = [r for r in refs if r != entity_ref]
+                if not refs:
+                    to_delete.append(key)
+        for key in to_delete:
+            del target[key]
 
     def _populate_into(
         self,

@@ -43,19 +43,20 @@ from durin.utils.file_lock import cross_process_lock
 def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None:
     """Incrementally refresh the shared AliasIndex after a successful write.
 
-    Guards: only refreshes if the index has already been built this process
-    (don't force-build on every write — the search pipeline builds lazily on
-    first use). Best-effort: a refresh failure must never fail the write.
+    Guards: only refreshes an index that is built or being built in this
+    process (don't force-build on every write — the search pipeline builds
+    lazily on first use). An index mid-build replays the refresh at its swap.
+    Best-effort: a refresh failure must never fail the write.
 
     Guards AliasIndex staleness (hazard #17).
     """
     try:
-        from durin.memory.aliases_cache import _cache, get_shared_alias_index
+        from durin.memory.aliases_cache import alias_index_for_writes
 
-        # Guard: skip if the shared index has not been built yet in this process.
-        if _cache.get(memory_root) is None:
+        idx = alias_index_for_writes(memory_root)
+        if idx is None:
             return
-        get_shared_alias_index(memory_root).refresh_for(page, slug)
+        idx.refresh_for(page, slug)
     except Exception:  # noqa: BLE001 — best-effort; never block the write
         pass
 

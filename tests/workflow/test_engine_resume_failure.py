@@ -110,3 +110,37 @@ def test_resume_upstream_is_capped(tmp_path):
     stored = _manifest(tmp_path, "r1")["resume_upstream"]
     assert len(stored) <= run_log.RESUME_UPSTREAM_MAX_CHARS + 100
     assert stored.startswith("xxx")
+
+
+def test_a_review_fail_after_resume_is_still_reviewer_feedback(tmp_path):
+    """draft ran in the attempt that aborted at judge, and the resumed walk starts
+    at judge. judge's FAIL into draft is still a revision request: draft leads back
+    to judge, so it gets the verdict as feedback to address."""
+    wf = parse_workflow({"name": "d", "start": "has-note", "max_visits": 3, "nodes": [
+        {"id": "has-note", "kind": "work", "prompt": "note there?",
+         "on_pass": "judge", "on_fail": "draft"},
+        {"id": "draft", "kind": "work", "next": "judge"},
+        {"id": "judge", "kind": "work", "prompt": "good?", "on_pass": None, "on_fail": "draft"},
+    ]})
+    judged = []
+    drafts = []
+
+    def node_runner(req):
+        if req.node.id == "has-note":
+            return NodeRunResponse(output="FAIL\nnote.json not present")
+        if req.node.id == "draft":
+            drafts.append(req.upstream_output or "")
+            return NodeRunResponse(output="note")
+        judged.append(1)
+        if len(judged) == 1:
+            raise NodeExecutionError("judge", req.iteration, None, RuntimeError("transient"))
+        return NodeRunResponse(output="FAIL\ncite the log line" if len(judged) == 2 else "PASS")
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                         workspace=str(tmp_path))
+    assert eng.run(wf, "t").status == "aborted"
+    resumed = eng.run(wf, "t", resume=build_resume_state(_manifest(tmp_path, "r1"), ""))
+    assert resumed.status == "completed"
+    first, revision = drafts
+    assert "Reviewer feedback" not in first
+    assert "Reviewer feedback (address this):\nFAIL\ncite the log line" in revision

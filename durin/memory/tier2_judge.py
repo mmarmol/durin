@@ -199,11 +199,12 @@ async def _escalate_async(
     result = await AgentRunner(provider).run(spec)
     try:
         return _parse_response(result.final_content or "")
-    except JudgeError:
+    except JudgeError as exc:
         # Running out of tool iterations leaves the runner's own text, not
         # an answer: the final step below is how that case is handled.
         if str(getattr(result, "stop_reason", "") or "") != "max_iterations":
-            emit_parse_failure("tier2_judge", source=source, raw=result.final_content or "")
+            emit_parse_failure("tier2_judge", source=source, raw=result.final_content or "",
+                               error=str(exc))
     # One more call, no tools: the agent must answer from what it has read.
     from durin.agent.tools.registry import ToolRegistry
     brief = _FINAL_BRIEF.format(
@@ -225,8 +226,9 @@ async def _escalate_async(
     final = await AgentRunner(provider).run(final_spec)
     try:
         return _parse_response(final.final_content or "")
-    except JudgeError:
-        emit_parse_failure("tier2_judge", source=source, raw=final.final_content or "")
+    except JudgeError as exc:
+        emit_parse_failure("tier2_judge", source=source, raw=final.final_content or "",
+                           error=str(exc))
         raise
 
 

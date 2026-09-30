@@ -65,8 +65,8 @@ follows `next` or **routes** on a verdict.
 | `reentry_prompt` | string | `""` | Author steering appended to each re-entry turn (e.g. "stop gathering; verify pending claims, then deliver"). Empty = generic engine steer. **Requires `max_reentries` ≥ 1.** |
 | `detached` | bool | `false` | **Launch and continue.** The walk starts this node and moves on along `next` immediately; the edge text passes through unchanged, the node's output never becomes the run result, and its failure records `node_failed` without sinking the run. For side effects (persist, notify, archive) off the critical path. Requires linear `next` (no routing, no `context: "shared"`); may not be a parallel unit or a routing target. |
 | `inputs_from` | array of strings | `[]` | **Named inputs.** The node's input becomes one labeled block `[source-id]` per named node (its LAST recorded output this run), ALWAYS followed by an `[upstream]` block with the walk's current edge text — loop-back feedback is never lost. A source that has not run composes as `(no output recorded)`. Sources must exist, not be the node itself, not be detached. |
-| `output_schema` | object \| null | none | **Structured output.** A JSON Schema (root must be an object; wrap arrays in a single-property object). The runner forces a `deliver` tool call with this schema as its parameters, validates the payload, and retries IMMEDIATELY inside the node with the exact validation error; after the attempts the node fails (failure-resume applies). `deliver` is available from the start of the node's turn, not just at the end — the model may call it as soon as its output is ready, and a schema-valid early call is accepted immediately. The node's output is the validated payload as JSON. Mutually exclusive with routing. |
-| `output_file` | string | `""` | **Engine-written file** (relative path in the working folder) holding the validated payload — the model never types the file, so it cannot be malformed. Requires `output_schema`. |
+| `output_schema` | object \| null | none | **Structured output.** A JSON Schema (root must be an object; wrap arrays in a single-property object). The runner forces a `deliver` tool call with this schema as its parameters, validates the payload, and retries IMMEDIATELY inside the node with the exact validation error; after the attempts the node fails (failure-resume applies). `deliver` is available from the start of the node's turn, not just at the end — the model may call it as soon as its output is ready, and a schema-valid early call is accepted immediately. A node with `tools: "default"` also gets `deliver_file(path)`: the same check on a JSON file in its working folder, so a drafted file is delivered without retyping and a rejection is fixed in the file. The node's output is the validated payload as JSON. Mutually exclusive with routing. |
+| `output_file` | string | `""` | **Engine-written file** (relative path in the working folder) holding the validated payload — the model never types the file, so it cannot be malformed. Written when the step ends, so the node's prompt must not ask it to write that file. Only a node on the main walk gets it written: a parallel branch, fan-out worker or `detached` node's `output_file` is not. Requires `output_schema`. |
 | `reuse` | `"if-unchanged"` \| null | none | **Skip when unchanged.** Before dispatching, the engine compares this node's current definition hash, the runner's current model/provider/params, the CURRENT composed input (task + upstream/`inputs_from` text), and the artifact's CURRENT content hash against `output_file`'s recorded producer; on an exact six-way match — and only on this node's FIRST visit this run (a same-run revisit after a loop-back never reuses, even if everything else still matches) — it skips the runner and reuses the file as this pass's output (trace record: `status: "reused"`, `origin_run_id`). Any mismatch, no recorded producer at all, or a revisit, runs normally. Requires `output_file`; rejected on a `detached` node, on a parallel `branches`/`worker` member, or combined with `context: "shared"` (a reused pass contributes no shared-context messages) — each would otherwise parse but the reuse gate would never fire (or silently degrade). A reused pass still records no session for `session: "persistent"` — the original run's session remains the trace. **This only ever fires across a SHARED working folder** — a plain top-level run mints a fresh folder every time, so there is nothing to compare against on the very first call. Give the run a `work_key` (via `run_workflow`'s param or the launch endpoint's body), rely on a loop's re-entry/resume, or nest the node in a subworkflow — otherwise the ledger is always empty and `reuse` never fires. |
 
 **Edge exclusivity — pick exactly one shape:** `next` **xor** `on_pass`/`on_fail` **xor**
@@ -77,7 +77,17 @@ follows `next` or **routes** on a verdict.
   deterministic; the node's text is parsed only as a fallback. For that fallback, a binary
   node's `PASS`/`FAIL` should be its first line and a multi-way label its last line.
 - On a fail / loop-back edge, the node's feedback is threaded into the target's next run so
-  the producer knows what to fix.
+  the producer knows what to fix. The framing depends on the target: into a step that leads
+  back to the gate without passing through its `on_pass` step, the output arrives as
+  "Reviewer feedback (address this)", even the first time that step runs; into a step that
+  never comes back to the gate, or only by way of `on_pass` (it goes on to the pass step,
+  and a retry or outer loop later re-enters the gate), it arrives as neutral context
+  ("Context from '<node>'"), the same framing a `cases` route uses.
+- **A normal branch is `cases`, not `on_fail`.** Binary routing is for a check that can
+  genuinely fail. A check whose "no" is an expected path ("does `note.json` exist yet? no →
+  go draft it") is a `cases` route with one label per outcome (`REUSE` / `DRAFT`): every
+  FAIL is recorded as a failed gate, and workflow self-improvement treats recurring ones
+  as trouble to fix.
 - **Loop awareness is automatic:** on a revisit the engine tells the node "Pass X of Y" and
   marks the last allowed pass as FINAL (deliver, don't iterate); a binary gate whose FAIL
   would exhaust the producer's budget is told its verdict is definitive. Set `max_visits` to
@@ -123,7 +133,12 @@ buffer (the buffer passes through it untouched).
 **Routing semantics (all deterministic):**
 - **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, non-zero = FAIL**; on FAIL the loop-back
   feedback is the script's output plus its stderr tail and exit code, so the producer knows
-  what to fix. `command: "run-my-tests"` as a gate is the canonical use.
+  what to fix. `command: "run-my-tests"` as a gate is the canonical use. The exit note reads
+  `[script gate failed: exit code N]` only when that framing is "Reviewer feedback" (above);
+  otherwise it is a plain `[exit code N]`.
+- A presence or "already done?" check is **multi-way**, not binary: print the label as the
+  last stdout line and exit 0 (`test -f note.json && echo REUSE || echo DRAFT`). Converting
+  a pass/fail check to `cases` changes its script the same way.
 - **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
   A non-zero exit on a `cases` node is a node failure, not a route.
 - **Linear** (`next`): exit 0 continues with stdout as the edge; **non-zero aborts the run**

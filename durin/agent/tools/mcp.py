@@ -506,6 +506,12 @@ async def connect_mcp_servers(
 
     Each server gets its own MCPServerConnection running a dedicated task that
     owns the session lifecycle (connect, discover, serve, reconnect, teardown).
+    All servers connect at the same time, each within its own connect timeout,
+    so startup waits for the slowest server instead of the sum of all of them,
+    and a server that fails or hangs never delays another one's tools.
+    Servers register their tools as they finish, which varies from boot to
+    boot, so once all are done their tools are re-registered in config order;
+    the returned dict and ``errors`` follow config order too.
     ``defer_cb`` (optional) is re-invoked after every (re)registration so the
     P3 MCP deferral stays applied across reconnects and list_changed refreshes.
     ``provider``, ``default_model``, and ``workspace`` are threaded to each
@@ -516,15 +522,8 @@ async def connect_mcp_servers(
     """
     from durin.agent.tools.mcp_connection import MCPServerConnection
 
-    connections: dict[str, Any] = {}
-    for name, cfg in mcp_servers.items():
-        sampling_runner = _build_sampling_runner(cfg, provider, default_model)
-        conn = MCPServerConnection(
-            name, cfg, registry,
-            defer_cb=defer_cb,
-            sampling_runner=sampling_runner,
-            workspace=workspace,
-        )
+    async def _start(name: str, conn: Any) -> str | None:
+        """Start one connection; return None on success, else the failure message."""
         try:
             ok = await conn.start()
         except Exception as e:  # noqa: BLE001
@@ -535,25 +534,47 @@ async def connect_mcp_servers(
                 "MCP server '{}': failed to connect: {}",
                 name, f"{e}{hint}".strip() or "connection error",
             )
-            if errors is not None:
-                errors[name] = f"{e}{hint}".strip() or "connection failed"
-            continue
+            return f"{e}{hint}".strip() or "connection failed"
         if ok:
-            connections[name] = conn
-        else:
-            # start() returned False (stored the reason on conn._error) rather
-            # than raising — there is NO active exception here, so logger.error,
-            # not logger.exception (which would log a useless "NoneType: None").
-            # Surface the real reason, not the (empty-for-OAuth) hint.
-            err = conn._error
-            hint = _stdio_pollution_hint(err) if err is not None else ""
-            logger.error(
-                "MCP server '{}': failed to connect: {}",
-                name, f"{err}{hint}".strip() if err else "connection failed",
-            )
+            return None
+        # start() returned False (stored the reason on conn._error) rather
+        # than raising — there is NO active exception here, so logger.error,
+        # not logger.exception (which would log a useless "NoneType: None").
+        # Surface the real reason, not the (empty-for-OAuth) hint.
+        err = conn._error
+        hint = _stdio_pollution_hint(err) if err is not None else ""
+        logger.error(
+            "MCP server '{}': failed to connect: {}",
+            name, f"{err}{hint}".strip() if err else "connection failed",
+        )
+        await conn.aclose()
+        return f"{err}{hint}".strip() if err else "connection failed"
+
+    pending = {
+        name: MCPServerConnection(
+            name, cfg, registry,
+            defer_cb=defer_cb,
+            sampling_runner=_build_sampling_runner(cfg, provider, default_model),
+            workspace=workspace,
+        )
+        for name, cfg in mcp_servers.items()
+    }
+    failures = await asyncio.gather(
+        *(_start(name, conn) for name, conn in pending.items())
+    )
+
+    connections: dict[str, Any] = {}
+    for (name, conn), failure in zip(pending.items(), failures):
+        if failure is not None:
             if errors is not None:
-                errors[name] = f"{err}{hint}".strip() if err else "connection failed"
-            await conn.aclose()
+                errors[name] = failure
+            continue
+        connections[name] = conn
+        for tool_name in conn._registered_names:
+            tool = registry.get(tool_name)
+            if tool is not None:
+                registry.unregister(tool_name)
+                registry.register(tool)
     return connections
 
 

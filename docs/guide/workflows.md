@@ -169,7 +169,10 @@ goes:
 - **Binary** (`on_pass` / `on_fail`): the node ends its reply with
   `PASS` or `FAIL`. A `FAIL` can loop back to an earlier node (see Loops
   below), carrying the node's own output as feedback so the step that
-  produced the work knows what to fix.
+  produced the work knows what to fix. Use it for checks that can
+  genuinely fail: a check whose "no" is a normal path ("does the note
+  exist yet? no → go draft it") belongs in `cases`, because every `FAIL`
+  counts as a failed gate when durin looks for workflows to improve.
 - **Multi-way** (`cases`): the node declares a set of named outcomes, e.g.
   `{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`, and
   ends its reply with exactly one of those labels. `null` ends the run;

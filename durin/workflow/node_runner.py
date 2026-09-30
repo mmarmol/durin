@@ -29,6 +29,7 @@ from durin.agent.tools.base import Tool
 from durin.agent.tools.context import ToolContext
 from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
+from durin.agent.tools.path_utils import is_under
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
 from durin.providers.base import LLMResponse
@@ -107,6 +108,18 @@ class _DeliverCapture:
         self.payload: dict | None = None
 
 
+def _delivered_reply(output_file: str | None) -> str:
+    """The acknowledgement of a valid delivery. The engine writes a declared
+    ``output_file`` only once the step ends, so a model that looks for the file
+    right after delivering does not find it and writes it by hand — work the
+    engine then overwrites. Saying so up front prevents that."""
+    reply = "Delivered — this step's output has been recorded."
+    if output_file:
+        reply += (f" The engine writes it to {output_file} in the working directory "
+                  "when this step ends; do not write that file yourself.")
+    return reply
+
+
 class _DeliverTool(Tool):
     """The node's structured-output tool, registered in its registry from turn 1
     (not appended only at the end) so the provider's ``tools`` array — and thus
@@ -117,9 +130,14 @@ class _DeliverTool(Tool):
 
     _plugin_discoverable = False
 
-    def __init__(self, schema: dict, capture: _DeliverCapture) -> None:
+    def __init__(self, schema: dict, capture: _DeliverCapture, *,
+                 output_file: str | None = None, file_option: bool = False) -> None:
         self._schema = schema
         self._capture = capture
+        self._output_file = output_file
+        # Whether `deliver_file` sits beside this tool, so the description can
+        # point a model with a drafted file at it instead of a retype.
+        self._file_option = file_option
 
     @property
     def name(self) -> str:
@@ -127,8 +145,12 @@ class _DeliverTool(Tool):
 
     @property
     def description(self) -> str:
-        return ("Deliver this step's final output as structured data matching "
+        text = ("Deliver this step's final output as structured data matching "
                 "the required schema.")
+        if self._file_option:
+            text += (" If the output is already drafted as a JSON file in your working "
+                     "directory, call `deliver_file` with its path instead of retyping it.")
+        return text
 
     @property
     def parameters(self) -> dict:
@@ -147,7 +169,116 @@ class _DeliverTool(Tool):
             return (f"That payload did not satisfy the output schema — {error}. "
                     "Keep working; deliver again when complete.")
         self._capture.payload = kwargs
-        return "Delivered — this step's output has been recorded."
+        return _delivered_reply(self._output_file)
+
+
+class _DeliverFileTool(Tool):
+    """The file form of ``deliver``: the payload is read from a JSON file in the
+    node's working directory and checked by the same schema validation, into the
+    same capture (the last valid delivery of either tool wins). A node that drafts
+    and checks its output in a file then delivers exactly that file instead of
+    retyping it, and a rejection — which names the failing field — is fixed by
+    editing the file in place and calling again. A separate tool rather than a
+    property on ``deliver``, whose parameters ARE the output schema: an added
+    property could collide with a schema field. Reads only inside the working
+    directory: an absolute path elsewhere, a ``..`` escape or a symlink leading
+    out is refused."""
+
+    _plugin_discoverable = False
+
+    def __init__(self, schema: dict, capture: _DeliverCapture, work_dir: str, *,
+                 output_file: str | None = None) -> None:
+        self._schema = schema
+        self._capture = capture
+        self._work_dir = Path(work_dir)
+        self._output_file = output_file
+
+    @property
+    def name(self) -> str:
+        return "deliver_file"
+
+    @property
+    def description(self) -> str:
+        return ("Deliver this step's final output from a JSON file in your working "
+                "directory, checked against the same schema as `deliver`. Use it when "
+                "you drafted the output in a file: if it is rejected, fix the file in "
+                "place and call again.")
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": ("The JSON file: relative to your working directory, "
+                                     "or an absolute path inside it.")},
+        }, "required": ["path"]}
+
+    def load(self, path: str) -> tuple[dict | None, str]:
+        """The schema-valid payload the file at *path* holds, or None and what is
+        wrong with it. Shared by this tool's own call and by a ``deliver_file``
+        answer to the end-of-turn forced delivery, which words its own feedback."""
+        root = self._work_dir
+        target = Path(path).expanduser()
+        if not target.is_absolute():
+            target = root / target
+        if not is_under(target, root):
+            return None, (f"{path} is outside your working directory {root}; "
+                          "deliver_file reads only files there")
+        try:
+            text = target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None, f"No file at {path} in your working directory {root}"
+        except (OSError, UnicodeDecodeError) as exc:
+            return None, f"could not read {path}: {exc}"
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return None, (f"{path} is not valid JSON — {exc.msg} at line {exc.lineno}, "
+                          f"column {exc.colno}")
+        # `deliver`'s arguments are always a JSON object, so a file must be one too
+        # for both tools to accept exactly the same payloads.
+        if not isinstance(payload, dict):
+            return None, f"{path} must hold a JSON object (the shape of `deliver`'s parameters)"
+        error = _deliver_validation_error(payload, self._schema)
+        if error is not None:
+            return None, f"{path} did not satisfy the output schema — {error}"
+        return payload, ""
+
+    async def execute(self, path: str, **kwargs) -> str:
+        payload, problem = self.load(path)
+        if payload is None:
+            # Never an "Error"-prefixed reply: the agent loop blocks an identical
+            # call that failed that way, and the fix here — editing or writing the
+            # file — leaves the call identical (same path).
+            return (f"{problem}. Fix that and call deliver_file again; do not retype "
+                    "the payload into `deliver`.")
+        self._capture.payload = payload
+        return _delivered_reply(self._output_file)
+
+
+def _delivery_call(resp, tools: ToolRegistry) -> tuple[str | None, Any]:
+    """The first delivery in a forced-delivery response, as ``(tool name,
+    arguments)``, or ``(None, None)`` when it holds none. The forced call names
+    ``deliver`` in ``tool_choice``, but a provider may send that as ``auto`` (the
+    Anthropic provider does with thinking on, and after a model refuses a forced
+    tool), so the answer can be any tool in the list. Only ``deliver`` — or
+    ``deliver_file`` on a node that has it — counts: another tool's arguments
+    are never read as the node's payload."""
+    for tc in (getattr(resp, "tool_calls", None) or []):
+        name = getattr(tc, "name", None)
+        if not (name == "deliver"
+                or (name == "deliver_file" and isinstance(tools.get(name), _DeliverFileTool))):
+            continue
+        args = getattr(tc, "arguments", None)
+        if args is None:
+            args = getattr(tc, "input", None) or getattr(tc, "args", None)
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = None
+        if args is not None:
+            return name, args
+    return None, None
 
 
 class _RouteCapture:
@@ -822,7 +953,19 @@ class AgentNodeRunner:
         tools_registry = self._build_tools(req.node, req.workspace_override)
         delivered = _DeliverCapture()
         if node_schema is not None:
-            tools_registry.register(_DeliverTool(node_schema, delivered))
+            # Set only where the engine will write the file, so a reply never
+            # promises a write that a parallel branch, fan-out worker or detached
+            # node does not get.
+            output_file = req.output_file
+            # The file form of delivery needs the working directory a node with the
+            # file tools is given (the same condition as its prompt block above).
+            file_option = (getattr(req.node, "tools", "none") == "default"
+                           and bool(req.output_dir))
+            tools_registry.register(_DeliverTool(
+                node_schema, delivered, output_file=output_file, file_option=file_option))
+            if file_option:
+                tools_registry.register(_DeliverFileTool(
+                    node_schema, delivered, req.output_dir, output_file=output_file))
         routed = _RouteCapture()
         if route_labels is not None:
             tools_registry.register(_RouteTool(route_labels, routed))
@@ -1148,7 +1291,10 @@ class AgentNodeRunner:
         same machinery as the ``route`` verdict), on ``tools``' full rendered list
         — identical to what the work loop just sent, ``deliver`` included — so the
         provider's cached prompt prefix survives into the turn's last request;
-        only ``tool_choice`` pins the verdict. Providers don't reliably enforce
+        only ``tool_choice`` names the tool. A provider may not honor that name,
+        so the answer is read by tool name (see ``_delivery_call``): a
+        ``deliver_file`` answer gets the tool's own read and check, any other
+        tool counts as no delivery. Providers don't reliably enforce
         JSON Schema, so every payload is validated server-side; an invalid one is
         retried immediately with the exact validation error as feedback. A
         ``length`` finish_reason is named as truncation and the retry is steered
@@ -1186,19 +1332,15 @@ class AgentNodeRunner:
                 raise RuntimeError(
                     "structured output delivery failed on a provider error: "
                     + ((getattr(resp, "content", None) or "unknown error")[:300]))
-            args = None
-            for tc in (getattr(resp, "tool_calls", None) or []):
-                args = getattr(tc, "arguments", None)
-                if args is None:
-                    args = getattr(tc, "input", None) or getattr(tc, "args", None)
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = None
-                if args is not None:
-                    break
-            if args is not None:
+            name, args = _delivery_call(resp, tools)
+            if name == "deliver_file":
+                # A drafted file answering the forced call: the same confinement,
+                # read and schema check as the tool's own call.
+                payload, last_error = tools.get("deliver_file").load(
+                    str((args.get("path") if isinstance(args, dict) else None) or ""))
+                if payload is not None:
+                    return payload
+            elif args is not None:
                 error = _deliver_validation_error(args, schema)
                 if error is None:
                     # Complete and valid — accept it even if flagged "length":
@@ -1228,8 +1370,13 @@ class AgentNodeRunner:
                 last_error = "the model made no deliver tool call"
             convo.append({
                 "role": "user",
-                "content": (f"That payload did not satisfy the output schema — {last_error}. "
-                            "Call `deliver` again with a corrected payload."),
+                # No tool runs during this forced call, so a rejected draft cannot be
+                # fixed in its file any more: the corrected payload goes to `deliver`.
+                "content": ((f"{last_error}. No file can be changed at this point: call "
+                             "`deliver` with the corrected payload.")
+                            if name == "deliver_file" else
+                            (f"That payload did not satisfy the output schema — {last_error}. "
+                             "Call `deliver` again with a corrected payload.")),
             })
         raise RuntimeError(
             f"structured output failed after "

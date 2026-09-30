@@ -589,6 +589,171 @@ async def test_connect_mcp_servers_one_failure_does_not_block_others(
         await conn.aclose()
 
 
+def _route_sessions_by_command(
+    monkeypatch: pytest.MonkeyPatch, sessions: dict[str, object], stdio_client
+) -> None:
+    """Give each server its own fake session, keyed by its ``command``.
+
+    ``stdio_client`` yields the command as the read stream, so the fake
+    ClientSession can pick the session that belongs to that server.
+    """
+
+    class _PerServerClientSession:
+        def __init__(self, read: object, _write: object, **_kwargs: object) -> None:
+            self._session = sessions[read]
+
+        async def __aenter__(self) -> object:
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    monkeypatch.setattr(sys.modules["mcp"], "ClientSession", _PerServerClientSession)
+    monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", stdio_client)
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_connects_servers_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'first' can only finish connecting once 'second' has started.
+
+    Connected one after another, 'first' waits out its whole connect budget
+    and fails before 'second' ever starts; connected together, both come up.
+    """
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 1.0)
+    second_started = asyncio.Event()
+
+    @asynccontextmanager
+    async def _stdio_client(params: object, errlog=None):
+        if params.command == "first":
+            await second_started.wait()
+        else:
+            second_started.set()
+        yield params.command, object()
+
+    _route_sessions_by_command(
+        monkeypatch,
+        {"first": _make_fake_session(["a"]), "second": _make_fake_session(["b"])},
+        _stdio_client,
+    )
+
+    registry = ToolRegistry()
+    stacks = await asyncio.wait_for(
+        connect_mcp_servers(
+            {
+                "first": MCPServerConfig(command="first"),
+                "second": MCPServerConfig(command="second"),
+            },
+            registry,
+        ),
+        timeout=5.0,
+    )
+    try:
+        assert set(stacks) == {"first", "second"}
+    finally:
+        for conn in stacks.values():
+            await conn.aclose()
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_keeps_config_order_when_servers_finish_out_of_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'second' registers before 'first' finishes, yet listings follow config order."""
+    sessions = {"first": _make_fake_session(["a", "b"]), "second": _make_fake_session(["c"])}
+    second_registered = asyncio.Event()
+    list_prompts = sessions["second"].list_prompts
+
+    async def _list_prompts_then_signal() -> SimpleNamespace:
+        # The last await of a server's registration: once it returns,
+        # 'second' finishes registering without yielding.
+        result = await list_prompts()
+        second_registered.set()
+        return result
+
+    sessions["second"].list_prompts = _list_prompts_then_signal
+
+    @asynccontextmanager
+    async def _stdio_client(params: object, errlog=None):
+        if params.command == "first":
+            await second_registered.wait()
+        yield params.command, object()
+
+    _route_sessions_by_command(monkeypatch, sessions, _stdio_client)
+
+    registry = ToolRegistry()
+    stacks = await asyncio.wait_for(
+        connect_mcp_servers(
+            {
+                "first": MCPServerConfig(command="first"),
+                "second": MCPServerConfig(command="second"),
+            },
+            registry,
+        ),
+        timeout=5.0,
+    )
+    try:
+        assert list(stacks) == ["first", "second"]
+        assert registry.tool_names == ["mcp_first_a", "mcp_first_b", "mcp_second_c"]
+    finally:
+        for conn in stacks.values():
+            await conn.aclose()
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_hanging_servers_time_out_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each server has its own connect budget, and the budgets run side by side.
+
+    Three hanging servers cost one connect timeout, not three, and the server
+    that answers is connected and listed while they hang.
+    """
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 0.4)
+
+    @asynccontextmanager
+    async def _stdio_client(params: object, errlog=None):
+        if params.command.startswith("hang"):
+            await asyncio.sleep(3600)
+        yield params.command, object()
+
+    _route_sessions_by_command(monkeypatch, {"good": _make_fake_session(["demo"])}, _stdio_client)
+
+    registry = ToolRegistry()
+    errors: dict[str, str] = {}
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    stacks = await asyncio.wait_for(
+        connect_mcp_servers(
+            {
+                "hang1": MCPServerConfig(command="hang1"),
+                "good": MCPServerConfig(command="good"),
+                "hang2": MCPServerConfig(command="hang2"),
+                "hang3": MCPServerConfig(command="hang3"),
+            },
+            registry,
+            errors=errors,
+        ),
+        timeout=5.0,
+    )
+    elapsed = loop.time() - started
+    try:
+        assert list(stacks) == ["good"]
+        assert registry.tool_names == ["mcp_good_demo"]
+        assert list(errors) == ["hang1", "hang2", "hang3"]
+        assert all("timed out" in message for message in errors.values())
+        # One after another, three 0.4 s budgets take at least 1.2 s.
+        assert elapsed < 1.0
+    finally:
+        for conn in stacks.values():
+            await conn.aclose()
+
+
 @pytest.mark.asyncio
 async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
     fake_mcp_runtime: dict[str, object | None],

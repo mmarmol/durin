@@ -182,9 +182,12 @@ def resolve_pinned_refs(
         return frozenset()
     if ttl_s > 0:
         now = time.monotonic()
+        # Searches call this from worker threads, so another thread may
+        # remove an entry between the snapshot and the delete: `pop` with a
+        # default, never `del`, which would raise KeyError.
         for key, (inserted_at, _) in list(_pinned_refs_cache.items()):
             if now - inserted_at >= ttl_s:
-                del _pinned_refs_cache[key]
+                _pinned_refs_cache.pop(key, None)
         _pinned_refs_cache[cache_key] = (now, refs)
         while len(_pinned_refs_cache) > _PINNED_REFS_CACHE_MAX:
             # Snapshot with `list(...)` before scanning — iterating the
@@ -194,7 +197,7 @@ def resolve_pinned_refs(
             oldest_key = min(
                 list(_pinned_refs_cache.items()), key=lambda kv: kv[1][0],
             )[0]
-            del _pinned_refs_cache[oldest_key]
+            _pinned_refs_cache.pop(oldest_key, None)
     return refs
 
 

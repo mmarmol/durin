@@ -170,8 +170,11 @@ that thread's first check waits `_HEALTH_CHECK_FIRST_TICK_DELAY_S`: the first
 check scans the whole memory store at once, and in the gateway `run()` starts
 alongside the channels, uvicorn and the embedding warm-up, which the scan
 would slow down. A loop that never runs `run()` (a one-shot `process_direct`
-call) runs no health checks. For each message it decides the routing in
-order:
+call) runs no health checks. At the same point it asks the memory file watcher
+for its vector backfill, which builds the embedding provider and reads the
+whole vector table, so that work never competes with gateway startup (see
+[memory/02_indexing.md](memory/02_indexing.md)). For each message it decides
+the routing in order:
 
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched
