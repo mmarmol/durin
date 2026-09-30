@@ -180,6 +180,15 @@ always stay under it, whatever the ratio and the cap say. Inside one long turn
 of tool calls, the run trims old tool results by its own budget instead, so
 the cap bounds what each turn starts from, not what a single turn may reach.
 
+The part of the prompt a compaction cannot summarize (the system prompt with
+`AGENTS.md` and the other workspace files, the tool schemas, the summary so
+far) can nearly fill the trigger on its own, for example a very long
+`AGENTS.md` under a low cap. A compaction then frees almost nothing, so after
+one that leaves less than a quarter of the usual room under the trigger, the
+chat waits until the prompt has grown by the usual room before compacting
+again: its prompts run past the trigger for a while instead of compacting on
+every turn.
+
 An empty `preemptive_compact_max_tokens` in the settings editor is `null`,
 and `null` means two different things: under `agents.defaults` it is no cap,
 while on a preset it is the `agents.defaults` cap. To turn the cap off for

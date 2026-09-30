@@ -1040,15 +1040,20 @@ count, and it says the prompt does not fit.
 
 **The fixed-prompt floor.** No minimum on the cap can know the prompt: a
 large system prompt, many tool schemas or a long summary can put the part
-compaction may not archive over the trigger (a low ratio on a big window is
-enough). Such a prompt cannot be compacted under the trigger: each compaction
-could archive only the turn before it, and the next turn would compact again.
-When a compaction ends still over its trigger, the level it reached is
-remembered per session (in memory, bounded like the veto state), and the
-session's next compaction waits until the prompt has grown past that level
-by a normal cycle's runway (trigger − target), or reaches the ceiling
-(`compaction.deferred` with reason `fixed_prompt`). A compaction that does
-get under the trigger clears it, and a forced one ignores it.
+compaction may not archive over the trigger, or just under it (a low ratio on
+a big window is enough). Such a prompt cannot be compacted far enough under
+the trigger: each compaction could archive only the turn before it, and the
+next turn would compact again. When a compaction ends over its trigger, or
+under it by less than a quarter of a normal cycle's runway (trigger −
+target), the level it reached is remembered per session (in memory, bounded
+like the veto state), and the session's next compaction waits until the
+prompt has grown past that level by that runway, or reaches the ceiling
+(`compaction.deferred` with reason `fixed_prompt`). Between two compactions
+such a session's prompt therefore runs past its trigger, by up to a runway,
+instead of compacting on every turn. A compaction that leaves more room
+clears the level, and so does one that ran out of rounds while still
+archiving: that is a backlog, which keeps compacting on the next turn. A
+forced compaction ignores the level.
 
 ### After DONE (post-processing in `_dispatch`)
 

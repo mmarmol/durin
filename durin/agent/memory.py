@@ -546,6 +546,12 @@ class Consolidator:
     _FIT_GROWTH_RATIO = 0.05
     _FIT_GROWTH_FLOOR = 4096
 
+    # The share of a normal compaction cycle's runway (trigger − target) a
+    # compaction has to leave under the trigger to have made room. With less,
+    # the prompt's fixed part fills the trigger, just over it or just under
+    # it, and the next turn or two would compact again for as little.
+    _FIXED_PROMPT_MIN_ROOM = 0.25
+
     # Tier 2 A3: aggregate timeout for acquiring the per-session compaction
     # lock. If a prior compaction hung (e.g. provider call stuck
     # mid-summarize), waiting on the lock indefinitely starves the session
@@ -656,15 +662,16 @@ class Consolidator:
         # extra compaction, so it is not worth persisting.
         self._fit_baseline: dict[str, int] = {}
         self._awaiting_real_usage: dict[str, int] = {}
-        # Per session, where the last compaction that could not get the
-        # prompt under its trigger left it: the part compaction may not
-        # archive (system prompt, tool schemas, summary, the current turn) is
-        # at or over the trigger there, so compacting again on the next turn
+        # Per session, where the last compaction that could not make room
+        # left it: over its trigger, or under it by less than
+        # ``_FIXED_PROMPT_MIN_ROOM`` of a normal runway. The part compaction
+        # may not archive (system prompt, tool schemas, summary, the last
+        # turn) fills the trigger there, so compacting again on the next turn
         # would archive that one turn and nothing more, turn after turn. The
         # next compaction waits until the prompt has grown by a normal
         # cycle's runway past this level (never past the ceiling). Cleared by
-        # a compaction that does get under the trigger; in-memory and
-        # bounded like the veto state above.
+        # a compaction that makes room; in-memory and bounded like the veto
+        # state above.
         self._compaction_floor: dict[str, int] = {}
 
     @staticmethod
@@ -1711,11 +1718,15 @@ class Consolidator:
 
             if rounds_run:
                 # The estimate is only fresh after a round that ran to its
-                # re-measure: over the trigger there, compaction cannot get
-                # this prompt under it, and the next one waits for a runway;
-                # under it, the prompt's fixed part fits after all.
+                # re-measure. A compaction that left less than a meaningful
+                # part of a normal runway under the trigger, or none, could
+                # not make room, and the next one waits for a runway past the
+                # level it reached. One that ran out of rounds was still
+                # archiving: that is a backlog, not a fixed prompt, and it
+                # goes on compacting on the next turn.
                 if exit_reason in ("target_reached", "no_boundary", "max_rounds"):
-                    if estimated >= trigger:
+                    min_room = (trigger - target) * self._FIXED_PROMPT_MIN_ROOM
+                    if exit_reason != "max_rounds" and trigger - estimated < min_room:
                         self._bounded_put(self._compaction_floor, session.key, estimated)
                     else:
                         self._compaction_floor.pop(session.key, None)

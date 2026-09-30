@@ -290,6 +290,37 @@ async def test_a_trigger_under_the_fixed_prompt_does_not_compact_every_turn(tmp_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("words", [35_000, 36_000, 37_000])
+async def test_a_fixed_prompt_just_under_the_trigger_does_not_compact_every_turn(tmp_path, words):
+    """An AGENTS.md of 35,000 to 37,000 words under a 64,000 cap puts the
+    fixed part just under the trigger: each compaction archived all it could
+    and still left less than a turn of room, so 5 to 11 of 12 turns compacted
+    (up to 45 provider calls) and the session never waited, since only a
+    compaction ending over the trigger was remembered. One that leaves less
+    than a quarter of a normal runway under the trigger is remembered too."""
+    result = await _run_turns(
+        tmp_path, turns=12, window=1_000_000, agents_md="guidance " * words,
+        preemptive_compact_max_tokens=64_000,
+    )
+
+    assert sum(1 for count in result["compactions"] if count) <= 2, result["compactions"]
+    assert result["provider_calls"] <= 20, result["provider_calls"]
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_small_window_filled_by_its_fixed_prompt_compacts_on_a_runway(tmp_path):
+    """A 64,000-token window compacts at 48,000 (the small-window floor); a
+    20,000-word AGENTS.md leaves each compaction about a turn of room under
+    that, and 12 of 14 turns compacted. The next compaction now waits for a
+    normal runway, which the window's ceiling cuts short here."""
+    result = await _run_turns(tmp_path, turns=14, window=64_000, agents_md="guidance " * 20_000)
+
+    assert sum(1 for count in result["compactions"] if count) <= 4, result["compactions"]
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
 async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
     """context_block_limit is the runner's whole budget: on a 1M window with a
     40,000 limit the session must compact before it reaches the limit, not

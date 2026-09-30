@@ -1180,6 +1180,91 @@ async def test_the_fixed_prompt_floor_yields_to_an_overflow_and_to_a_working_com
     assert c.archive.await_count > archived
 
 
+@pytest.mark.asyncio
+async def test_a_compaction_that_leaves_less_than_a_turn_under_the_trigger_is_not_repeated(
+    tmp_path, monkeypatch,
+):
+    """Archiving all it can and ending just under the trigger (140 of 150,
+    with a runway of 75) leaves the next turn over it again. Such a
+    compaction is remembered like one that ends over the trigger: the next
+    one waits for a normal runway past the level reached, or the ceiling."""
+    telemetry, c, session = _ineffective_compaction_setup(tmp_path, monkeypatch)
+    c.estimate_session_prompt_tokens = _estimates(170, 140)
+    await c.maybe_consolidate_by_tokens(session)
+    archived = c.archive.await_count
+    assert archived >= 1
+
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c._awaiting_real_usage.clear()
+    c.estimate_session_prompt_tokens = _estimates(160, 160)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count == archived
+    deferrals = [e[1] for e in telemetry.events if e[0] == "compaction.deferred"]
+    assert deferrals[-1]["reason"] == "fixed_prompt"
+
+    c.estimate_session_prompt_tokens = _estimates(200, 140)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count > archived
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_that_leaves_a_runway_under_the_trigger_is_not_remembered(
+    tmp_path, monkeypatch,
+):
+    """Ending under the trigger by more than a quarter of a normal runway
+    (120 of 150) leaves the next compaction something to do: out of history
+    to archive or not, the next check over the trigger compacts."""
+    _telemetry, c, session = _ineffective_compaction_setup(tmp_path, monkeypatch)
+    c.estimate_session_prompt_tokens = _estimates(170, 120)
+    await c.maybe_consolidate_by_tokens(session)
+    archived = c.archive.await_count
+
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c._awaiting_real_usage.clear()
+    c.estimate_session_prompt_tokens = _estimates(160, 120)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count > archived
+
+
+def _estimate_sequence(*values: int):
+    """An estimator reporting *values* in turn, then the last one again."""
+    queue = list(values)
+
+    def _estimate(_session, **_kwargs):
+        return (queue.pop(0) if len(queue) > 1 else queue[0]), "test"
+
+    return _estimate
+
+
+@pytest.mark.asyncio
+async def test_a_backlog_cut_short_by_the_round_limit_keeps_compacting(tmp_path, monkeypatch):
+    """Five rounds that each archived a chunk and still left the prompt over
+    the trigger ran out of rounds, not of history: the next check over the
+    trigger must compact again, not wait for a runway as if what is left were
+    the prompt's fixed part."""
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+    c.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=20)
+    # Every turn is large enough that each round finds the boundary it asks for.
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 250_000)
+    c.estimate_session_prompt_tokens = _estimate_sequence(
+        600_000, 580_000, 560_000, 540_000, 520_000, 500_000,
+    )
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count == c._MAX_CONSOLIDATION_ROUNDS
+    (done,) = [e[1] for e in telemetry.events if e[0] == "compaction.completed"]
+    assert done["exit_reason"] == "max_rounds"
+
+    session.messages += [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+    c._awaiting_real_usage.clear()
+    c.estimate_session_prompt_tokens = _estimate_sequence(510_000, 300_000)
+    await c.maybe_consolidate_by_tokens(session)
+    assert c.archive.await_count > c._MAX_CONSOLIDATION_ROUNDS
+
+
 def test_session_tracking_dicts_are_bounded():
     """Per-session veto state must not grow without bound on a long-lived gateway."""
     from durin.agent.memory import Consolidator
