@@ -323,11 +323,12 @@ class _Model(LLMProvider):
         return "test-model"
 
     async def chat(self, messages, tools=None, tool_choice=None, **kwargs):
+        # Copies: the runner goes on appending to the list it sent.
         if isinstance(tool_choice, dict):
-            self.forced_requests.append(messages)
+            self.forced_requests.append(list(messages))
             return LLMResponse(content=None, finish_reason="tool_calls", tool_calls=[
                 ToolCallRequest(id="forced", name="route", arguments={"label": self.forced_label})])
-        self.loop_requests.append(messages)
+        self.loop_requests.append(list(messages))
         return self.replies.pop(0)
 
 
@@ -384,6 +385,54 @@ def test_a_route_call_without_text_gives_its_reason_as_the_output(tmp_path):
     resp = _run_gate(tmp_path, WorkNode(id="g", prompt="Judge.", on_pass=None, on_fail="g"), model)
     assert resp.route_label == "FAIL"
     assert resp.output == "The expiry date is wrong."
+
+
+def test_a_route_call_after_the_assessment_keeps_that_text_as_the_output(tmp_path):
+    """The assessment came in an earlier reply of the turn and the verdict alone
+    after it: the node's output is that assessment, not an empty reply."""
+    model = _Model([
+        LLMResponse(content="Row 3 is wrong: recompute it from the CSV.", finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="t1", name="no_such_tool", arguments={})]),
+        _route("FAIL", None, call_id="r2"),
+    ])
+    resp = _run_gate(tmp_path, WorkNode(id="g", prompt="Judge.", on_pass=None, on_fail="g"), model)
+    assert resp.route_label == "FAIL"
+    assert resp.output == "Row 3 is wrong: recompute it from the CSV."
+    assert len(model.loop_requests) == 2 and model.forced_requests == []
+
+
+def test_a_route_call_with_nothing_said_does_not_end_the_turn(tmp_path):
+    """No text in the turn and no reason: ending there would hand the next step
+    an empty verdict, so the model is asked again — and told to write it."""
+    model = _Model([
+        _route("FAIL", None),
+        LLMResponse(content="The expiry date is wrong: 14 days, not 30.", tool_calls=[]),
+    ])
+    resp = _run_gate(tmp_path, WorkNode(id="g", prompt="Judge.", on_pass=None, on_fail="g"), model)
+    assert len(model.loop_requests) == 2 and model.forced_requests == []
+    ack = model.loop_requests[1][-1]
+    assert ack["role"] == "tool" and "write" in ack["content"].lower()
+    assert resp.route_label == "FAIL"
+    assert resp.output == "The expiry date is wrong: 14 days, not 30."
+
+
+def test_a_needs_input_route_carries_the_questions_written_before_it(tmp_path):
+    wf = parse_workflow({"name": "ask", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "work", "prompt": "GATE",
+         "cases": {"READY": None, "NEED_INFO": "__needs_input__"}},
+    ]})
+    model = _Model([
+        LLMResponse(content="Which environment: staging or production?", finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="t1", name="no_such_tool", arguments={})]),
+        _route("NEED_INFO", None, call_id="r2"),
+    ])
+    engine = WorkflowEngine(
+        node_runner=AgentNodeRunner(AgentRunner(model), SessionManager(workspace=tmp_path),
+                                    default_model="test-model"),
+        run_id_factory=lambda: "r1")
+    result = engine.run(wf, "deploy it")
+    assert result.status == "needs_input"
+    assert result.final_output == "Which environment: staging or production?"
 
 
 def test_an_invalid_label_keeps_the_turn_going_and_the_forced_call_decides(tmp_path):

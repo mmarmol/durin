@@ -77,7 +77,8 @@ follows `next` or **routes** on a verdict.
   deterministic. The runner appends the instruction itself — finish the answer, end the text
   with the verdict alone on its last line, and call `route` in that same reply — so a prompt
   need only say what PASS/FAIL (or each label) means. A valid call ends the node's turn and
-  the text sent with it is the node's output: for a FAIL, the feedback the next step gets. A
+  the text sent with it (else the turn's latest text) is the node's output: for a FAIL, the
+  feedback the next step gets; a call made before anything is written does not end the turn. A
   turn that ends without one gets a forced `route` call; the text is parsed only as a last
   fallback, and a binary gate then passes only when every line that states a verdict says
   PASS (checklists, code and quotes are not read as verdicts).

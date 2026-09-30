@@ -468,9 +468,10 @@ shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
 default): call the LLM → if the response has tool calls, execute them (with
 topological batching) and loop; otherwise finalize the content and stop. A
 caller whose tool call concludes the work (a workflow node's `route` verdict)
-sets `AgentRunSpec.end_turn_after_tools`: when it returns true after a round of
-tool calls, the turn ends there with the text sent alongside those calls as
-its final content, and no further request is made. Around
+sets `AgentRunSpec.end_turn_after_tools`: called after each round of tool calls
+with the run's messages so far, when it returns true the turn ends there with
+the text sent alongside those calls as its final content (or, when that reply
+has none, the latest text of the turn), and no further request is made. Around
 that core it layers guards and context governance — loop detection on repeated
 failed calls, an unknown-tool breaker, an idle-timeout breaker, message
 sanitization (dropping orphan tool results, backfilling missing ones),

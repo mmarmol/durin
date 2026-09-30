@@ -425,12 +425,14 @@ class AgentRunSpec:
     # Leave as ``None`` to skip this layer (tests / non-loop callers don't
     # need it).
     post_compaction_guard: Any | None = None
-    # Checked after each round of tool calls: True ends the turn there, with
-    # the text the model sent alongside those calls as the final content and
-    # no further request. For a tool whose call concludes the work — a
-    # workflow node's `route` verdict — so the model is not asked again after
-    # it and the text that came with the call stays the answer.
-    end_turn_after_tools: Any | None = None  # Callable[[], bool]
+    # Checked after each round of tool calls with this run's messages so far
+    # (the turn): True ends the turn there, with the text the model sent
+    # alongside those calls as the final content — or, when that reply has
+    # none, the latest text of the turn — and no further request. For a tool
+    # whose call concludes the work — a workflow node's `route` verdict — so
+    # the model is not asked again after it and the text that came with the
+    # call stays the answer.
+    end_turn_after_tools: Any | None = None  # Callable[[list[dict]], bool]
     # Per-turn provider snapshot. The gateway runs a single shared AgentRunner;
     # _apply_provider_snapshot in loop.py mutates self.provider on every
     # concurrent session's /model swap. Carrying the provider here lets run()
@@ -774,6 +776,9 @@ class AgentRunner:
         # The initial messages' usage stamps measured another run's requests
         # (possibly pruned ones), so none of them is trusted.
         prune_state = _PruneState(trusted_from=len(messages))
+        # Where this run's own messages begin: what a caller's end-of-turn
+        # check sees as the turn so far.
+        turn_start = len(messages)
 
         # Unknown-tool loop guard. Counter per hallucinated tool name
         # across this turn. Trips when any name's count exceeds
@@ -1172,13 +1177,22 @@ class AgentRunner:
                         "pending_tool_calls": [],
                     },
                 )
-                if spec.end_turn_after_tools is not None and spec.end_turn_after_tools():
+                if (spec.end_turn_after_tools is not None
+                        and spec.end_turn_after_tools(messages[turn_start:])):
                     # A call in this round concluded the turn: the text sent
-                    # alongside the calls is the answer, and no request follows.
-                    # The stream was left open for a next request; close it.
+                    # alongside the calls is the answer — or, when that reply
+                    # has none, the last thing the model wrote this turn — and
+                    # no request follows. The stream was left open for a next
+                    # request; close it.
                     if hook.wants_streaming():
                         await hook.on_stream_end(context, resuming=False)
                     final_content = hook.finalize_content(context, response.content)
+                    if is_blank_text(final_content):
+                        final_content = next(
+                            (text for text in (_message_text(m).strip()
+                                               for m in reversed(messages[turn_start:])
+                                               if m.get("role") == "assistant") if text),
+                            final_content)
                     context.final_content = final_content
                     context.stop_reason = stop_reason
                     await hook.after_iteration(context)

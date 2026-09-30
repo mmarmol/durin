@@ -307,20 +307,37 @@ class _RouteCapture:
         self.label: str | None = None
         self.reason: str | None = None
 
-    def decided(self) -> bool:
-        return self.label is not None
+    def decided(self, turn: list[dict]) -> bool:
+        """Whether the node's turn can end on the valid call made so far: only
+        when there is something to be the node's output — the call's reason, or
+        text the model wrote this *turn* — since that output is what a FAIL passes
+        on as feedback and a needs-input route asks the caller. With neither, the
+        model is asked again (the call's acknowledgement tells it to write)."""
+        if self.label is None:
+            return False
+        return self.reason is not None or any(
+            message.get("role") == "assistant" and _has_text(message) for message in turn)
+
+
+def _has_text(message: dict) -> bool:
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and str(block.get("text") or "").strip() for block in content)
 
 
 class _RouteTool(Tool):
     """The node's routing-verdict tool, registered from turn 1 for the same
     cache-prefix reason as ``_DeliverTool``. A VALID call decides the verdict and
     ends the node's turn once that round of tool calls finishes (the runner's
-    ``end_turn_after_tools``): the text sent alongside the call is the node's
-    output — a FAIL's feedback — and the forced end-of-turn call is skipped. An
-    INVALID label (not one of this node's labels) is neither captured nor
-    acknowledged as decided — it gets a specific, actionable message, the turn
-    goes on, and the forced call remains authoritative, exactly as when nothing
-    was ever captured."""
+    ``end_turn_after_tools``), as long as there is an output to end it with (see
+    ``_RouteCapture.decided``): the text sent alongside the call, else the turn's
+    latest text, else the call's reason, is the node's output — a FAIL's
+    feedback — and the forced end-of-turn call is skipped. An INVALID label (not
+    one of this node's labels) is neither captured nor acknowledged as decided —
+    it gets a specific, actionable message, the turn goes on, and the forced call
+    remains authoritative, exactly as when nothing was ever captured."""
 
     _plugin_discoverable = False
 
@@ -360,7 +377,13 @@ class _RouteTool(Tool):
         self._capture.label = label
         reason = kwargs.get("reason")
         self._capture.reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
-        return "Route recorded — this step's verdict has been recorded."
+        ack = "Route recorded — this step's verdict has been recorded."
+        if self._capture.reason is None:
+            # The model reads this only when the turn goes on, which it does
+            # only when nothing has been written this turn (see decided()).
+            ack += (" This step's output is your text: if you have not written your "
+                    "assessment yet, write it now as your reply.")
+        return ack
 
 
 def _verdict_instruction(labels: list[str], *, binary: bool) -> str:

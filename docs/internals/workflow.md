@@ -760,9 +760,11 @@ alone on its last line, and in that same reply call `route` with it — the call
 - **A valid `route` call decides the verdict and ends the turn.** Once that round of tool
   calls finishes, the agent loop stops (`AgentRunSpec.end_turn_after_tools`) and makes no
   further request; the text sent alongside the call is the node's output — the feedback a
-  FAIL threads onward — or, when the call came with no text, its one-line `reason`. An
-  invalid label (not one of the node's) is answered with the allowed labels and the turn goes
-  on.
+  FAIL threads onward, the questions a `__needs_input__` route asks — or, when that reply
+  has no text, the latest text the model wrote in the turn, else the call's one-line
+  `reason`. A call with none of these does not end the turn: its acknowledgement asks the
+  model to write its assessment, and the verdict it recorded stands. An invalid label (not
+  one of the node's) is answered with the allowed labels and the turn goes on.
 - **A turn that ends without a valid call gets one forced `route` call** — same tools array
   as the work loop, `tool_choice` pinned to `{"type": "function", "function": {"name":
   "route"}}`. It runs as a separate `provider.chat` (the runner reaches the provider via

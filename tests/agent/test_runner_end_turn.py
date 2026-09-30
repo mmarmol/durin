@@ -59,18 +59,24 @@ def _decide(label: str, content: str | None, call_id: str = "c1") -> LLMResponse
         ToolCallRequest(id=call_id, name="decide", arguments={"label": label})])
 
 
-async def _run(replies: list[LLMResponse], *, max_iterations: int = 5):
+async def _run(replies: list[LLMResponse], *, max_iterations: int = 5, seen: list | None = None):
     decided: dict = {}
     tools = ToolRegistry()
     tools.register(_Decide(decided))
     provider, requests = _provider(replies)
+
+    def concluded(turn: list[dict]) -> bool:
+        if seen is not None:
+            seen.append(list(turn))
+        return "label" in decided
+
     result = await AgentRunner(provider).run(AgentRunSpec(
         initial_messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "judge it"}],
         tools=tools,
         model="m",
         max_iterations=max_iterations,
         max_tool_result_chars=16_000,
-        end_turn_after_tools=lambda: "label" in decided,
+        end_turn_after_tools=concluded,
     ))
     return result, requests, decided
 
@@ -84,6 +90,28 @@ async def test_a_concluding_call_ends_the_turn_with_the_text_sent_alongside() ->
     assert result.final_content == "The totals do not add up: recompute row 3."
     assert result.stop_reason == "completed"
     assert [m["role"] for m in result.messages[-2:]] == ["assistant", "tool"]
+
+
+@pytest.mark.asyncio
+async def test_the_check_is_given_the_turn_so_far() -> None:
+    seen: list = []
+    await _run([_decide("PASS", "All criteria met.")], seen=seen)
+    turn = seen[-1]
+    assert [m["role"] for m in turn] == ["assistant", "tool"]     # not the initial messages
+    assert turn[0]["content"] == "All criteria met."
+
+
+@pytest.mark.asyncio
+async def test_a_concluding_call_without_text_ends_with_the_turns_latest_text() -> None:
+    """The assessment came with an earlier call and the verdict alone after it: the
+    turn's answer is the last thing the model wrote, not an empty reply."""
+    result, requests, decided = await _run([
+        _decide("MAYBE", "Row 3 is wrong: recompute it from the CSV.", call_id="c1"),
+        _decide("FAIL", None, call_id="c2"),
+    ])
+    assert len(requests) == 2
+    assert decided == {"label": "FAIL"}
+    assert result.final_content == "Row 3 is wrong: recompute it from the CSV."
 
 
 @pytest.mark.asyncio
@@ -124,7 +152,7 @@ async def test_a_concluding_call_closes_the_stream_it_left_open() -> None:
     result = await AgentRunner(provider).run(AgentRunSpec(
         initial_messages=[{"role": "user", "content": "judge it"}],
         tools=tools, model="m", max_iterations=5, max_tool_result_chars=16_000,
-        hook=_Streaming(), end_turn_after_tools=lambda: "label" in decided,
+        hook=_Streaming(), end_turn_after_tools=lambda turn: "label" in decided,
     ))
     assert result.final_content == "All criteria met."
     assert ends == [True, False]
