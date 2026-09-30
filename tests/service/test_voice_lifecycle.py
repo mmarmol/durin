@@ -46,6 +46,32 @@ async def test_predownload_builds_once_then_marker_short_circuits(tmp_path, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("service", ["stt", "tts"])
+async def test_predownload_asks_for_a_trim_after_releasing_the_engine(
+        tmp_path, monkeypatch, service):
+    """The engine a first boot builds to fetch its model goes back to glibc's
+    arenas when released, where it stays resident until trimmed: the malloc
+    janitor is asked to trim at once. A boot that finds the marker builds
+    and releases nothing, so it asks for nothing."""
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    requests: list[int] = []
+    monkeypatch.setattr(
+        "durin.service.wiring.request_malloc_trim", lambda: requests.append(1))
+    if service == "stt":
+        svc = TranscriptionService(
+            provider_factory=_FakeTts, enabled=True, provider_name="local")
+    else:
+        svc = SpeechSynthesisService(_FakeTts, enabled=True, provider_name="local")
+
+    await svc.predownload()
+    assert svc._provider is None
+    assert requests == [1]
+
+    await svc.predownload()                # marker short-circuits
+    assert requests == [1]
+
+
+@pytest.mark.asyncio
 async def test_first_use_loads_lazily_and_idle_unloads(tmp_path, monkeypatch):
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     svc = SpeechSynthesisService(lambda: _FakeTts(), enabled=True)

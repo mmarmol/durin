@@ -66,6 +66,45 @@ dream child, not the serving process; hard kills are safe because memory writes
 are short flock+CAS critical sections and the per-session cursors resume the
 remainder on the next trigger.)
 
+**Long jobs get a thread of their own; the default executor is for short
+hops.** `asyncio.to_thread` borrows a thread from the event loop's default
+executor, which every short blocking hop shares and which is sized from the
+CPU count (`min(32, cpus + 4)` — six threads on a two-CPU host). A job that
+would hold such a thread for minutes or hours shrinks that pool for its whole
+run, and a few at once would leave every other hop queued behind them.
+Supervising a cron dream (`on_cron_job`) goes through
+`durin/utils/dedicated_thread.py::run_in_dedicated_thread` instead: one named
+thread per job (`dream-supervisor`), awaited like `to_thread` (context
+variables copied in; cancelling the awaiting task does not stop the job,
+whose late result is dropped). The cron scheduler's job slots already pace
+it. Workflow runs (`WorkflowsService.execute`, the `run_workflow` tool) go
+through `durin/workflow/run_threads.py::run_on_workflow_thread`, which splits
+them by what paces them. A *paced* run's caller holds a slot of a capped lane
+for the whole run: a turn waiting on its foreground `run_workflow` call (a chat
+turn holds an interactive-lane slot, a scheduled turn its cron job) or a cron
+job firing a scheduled automation (`try_fire(..., paced=True)` →
+`execute(..., paced=True)`). That cap already bounds how many exist, and
+queueing one would hold its slot idle, stalling every chat or cron job waiting
+for the lane, so a paced run starts at once on a thread of its own. The
+OpenAI-compatible endpoint's turns run outside the lanes; their foreground
+runs take a thread of their own as well, one per open request. Every other run
+is *unpaced* — API launches and resumes, background `run_workflow` calls, and
+automations fired by a channel, a chain, a chat or by hand start as fast as
+they arrive — so a thread per run would turn a burst into a burst of threads.
+Unpaced runs share a pool of their own of `MAX_CONCURRENT_RUNS` threads. No
+upstream cap gives that number: it equals what the paced side can hold at its
+default caps (four interactive turns plus four cron jobs). An unpaced run past
+the bound waits its turn in launch order, holding no thread, and logs that it
+waits; one cancelled while it waits never starts, and one cancelled after it
+started runs to the end, like `to_thread`. Paced runs never take a pool thread,
+so they never wait behind unpaced ones. The running thread is named
+`workflow-run-<run_id>` either way. A paused run (waiting on a person) has
+returned from the engine and holds no thread. None of these
+threads is a daemon, so, like the default executor's workers, an interpreter
+exit waits for them; a restart re-execs without waiting. Reactive dreams run
+on a daemon thread they start themselves (`dream-<trigger>`), outside the
+pool as well.
+
 Three per-request hot paths honor the invariant by *avoiding* the disk rather
 than by hopping threads — a `to_thread` hop per request would just trade loop
 stalls for executor contention:
@@ -469,6 +508,8 @@ without a restart (see [loop](loop.md)).
 |---|---|---|
 | `cross_process_lock` | `durin/utils/file_lock.py` | Reentrant cross-process advisory `flock` on `<target>.lock`; in-process `threading.Lock` fallback where `fcntl`/`msvcrt` are unavailable. |
 | `_held_set` (thread-local) | `durin/utils/file_lock.py` | Per-thread set of held lock paths enabling same-thread reentrancy; does **not** cross `asyncio.to_thread`, which is why the turn lease and save lock use separate files. |
+| `run_in_dedicated_thread` | `durin/utils/dedicated_thread.py` | Awaits a long blocking job (cron dream supervision, a paced workflow run) on a named thread of its own instead of a default-executor thread; same contract as `asyncio.to_thread`. |
+| `run_on_workflow_thread` | `durin/workflow/run_threads.py` | Awaits a workflow run's engine walk off the default executor. A paced run (`paced=True`: a foreground `run_workflow` call, a scheduled automation) starts on a thread of its own; unpaced runs share a pool of `MAX_CONCURRENT_RUNS` threads, and those past the bound wait their turn without a thread. Same contract as `asyncio.to_thread`. |
 | `session_turn_lease` | `durin/session/turn_lease.py` | Async context manager holding `<key>.turn.lock` for a whole turn (600 s acquire timeout) via `asyncio.to_thread`; wraps interactive turns and all out-of-turn savers. |
 | `SessionManager.reload` / `.save` | `durin/session/manager.py` | `reload` drops the cache and re-reads (load-per-turn); `save` does the atomic `.jsonl`/`.meta.json`/`.md` + FTS write under `cross_process_lock(<key>.jsonl)`. |
 | `save_config` / `mutate_config` | `durin/config/loader.py` | `save_config` wraps the split-layout write in the config lock; `mutate_config` is the lost-update-safe read-modify-write entry point. |

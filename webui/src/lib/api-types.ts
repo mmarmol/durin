@@ -4447,10 +4447,20 @@ export interface components {
              */
             malloc_in_use_mb: number;
             /**
+             * Malloc Resident Mb
+             * @default 0
+             */
+            malloc_resident_mb: number;
+            /**
              * Malloc System Mb
              * @default 0
              */
             malloc_system_mb: number;
+            /**
+             * Non Malloc Mb
+             * @default 0
+             */
+            non_malloc_mb: number;
             /** Rss Mb */
             rss_mb: number;
             /** Threads */

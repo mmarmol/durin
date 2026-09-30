@@ -37,7 +37,8 @@ def _wr(status, **kw):
 
 
 def _runtime(ws, results):
-    async def workflow_exec(name, task, *, run_id=None, work_key=None, root_session_key=None, resume_run_id=None):
+    async def workflow_exec(name, task, *, run_id=None, work_key=None, root_session_key=None,
+                            resume_run_id=None, paced=False):
         return results.pop(0)
 
     ids = iter([f"ar{i}" for i in range(100)])

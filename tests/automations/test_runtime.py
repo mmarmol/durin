@@ -73,10 +73,10 @@ def _mk_runtime(tmp_path, results, *, on_help_ask=None, on_counterpart_ask=None,
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         calls["exec"].append({"name": name, "task": task, "resume_run_id": resume_run_id,
                               "run_id": run_id, "work_key": work_key,
-                              "root_session_key": root_session_key})
+                              "root_session_key": root_session_key, "paced": paced})
         return results.pop(0)
 
     ids = iter([f"r{i}" for i in range(200)])
@@ -114,7 +114,7 @@ async def test_workflow_run_id_persisted_before_launch(tmp_path):
     seen = {}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         seen["mid_flight"] = rl.read_run(tmp_path, "a1", "run0").get("workflow_run_id")
         seen["run_id"] = run_id
         seen["root_session_key"] = root_session_key
@@ -165,6 +165,18 @@ async def test_try_fire_with_no_task_still_defaults_to_none(tmp_path):
     assert calls["exec"][0]["task"] is None
 
 
+async def test_only_a_fire_its_caller_paces_runs_its_workflow_paced(tmp_path):
+    """The cron dispatch holds its job slot for the whole fire, so it passes
+    paced=True and the workflow starts without queueing behind unpaced runs.
+    Every other fire — by hand, by chat, a chain, a channel — is unpaced."""
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed"), _wr("completed"), _wr("completed")])
+    await rt.try_fire("a1", source="schedule", paced=True)
+    await rt.try_fire("a1", source="schedule")
+    await rt.fire("a1", source="manual")
+    assert [c["paced"] for c in calls["exec"]] == [True, False, False]
+
+
 async def test_single_concurrency_busy_raises_and_try_fire_skips(tmp_path):
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])
@@ -182,7 +194,7 @@ async def test_fire_reports_the_run_start_before_the_workflow_finishes(tmp_path)
     seen = []
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         seen.append("workflow")
         return WorkflowResult(status="completed", final_output="out", run_id=run_id)
 
@@ -227,7 +239,7 @@ async def test_workflow_exec_exception_finalizes_failed_with_detail(tmp_path):
     _save(tmp_path)
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         raise RuntimeError("boom")
 
     ids = iter([f"r{i}" for i in range(10)])
@@ -703,7 +715,7 @@ async def test_answer_nowait_records_approval_even_when_the_resume_then_fails(tm
     _save(tmp_path)
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         if resume_run_id is None:
             return _wr("needs_input", out="proceed?", ask_kind="approval")
         raise RuntimeError("boom")
@@ -786,7 +798,7 @@ async def test_stop_running_run_requests_cancel_and_stamps_the_request(tmp_path)
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)
@@ -821,7 +833,7 @@ async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)
@@ -1033,7 +1045,7 @@ async def test_chain_uses_failure_summary_when_there_is_no_final_output(tmp_path
     calls = []
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         calls.append((name, task))
         if name == "w1":
             raise RuntimeError("boom")

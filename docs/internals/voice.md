@@ -89,7 +89,18 @@ the engine lazily; a channel-manager sweep unloads it again after
 ``tts.idle_unload_s`` / ``transcription.idle_unload_s`` seconds without use
 (default 900; ``0`` keeps it resident — the right setting for a box where
 voice latency matters more than memory). Deleting the marker or the model
-cache is harmless: the next first-use downloads lazily.
+cache is harmless: the next first-use downloads lazily. A released engine's
+memory goes back to glibc's arenas, which keep it resident until trimmed, so
+both releases — ``predownload`` letting go of the engine it built and the
+sweep unloading an idle one — wake the malloc janitor for an immediate trim
+(see [observability.md](observability.md)) instead of leaving the engine's
+footprint in RSS until the janitor's next periodic pass.
+
+A local transcription does all of its heavy work on worker threads: the
+engine build, the audio decode (PyAV demuxes and resamples the container to
+16 kHz mono — seconds of CPU for a long voice note on a small host), and the
+recognition itself. Only the hand-offs run on the event loop, so a long clip
+never stalls the other sessions the gateway is serving.
 
 ### Spoken rendition
 

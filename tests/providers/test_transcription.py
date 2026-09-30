@@ -381,3 +381,34 @@ async def test_sensevoice_uses_sense_voice(tmp_path, fake_sherpa, monkeypatch):
     assert text == "hola mundo"
     assert "from_sense_voice" in fake_sherpa
     assert fake_sherpa["from_sense_voice"]["use_itn"] is True
+
+
+@pytest.mark.asyncio
+async def test_audio_decode_runs_off_the_event_loop(tmp_path, fake_sherpa, monkeypatch):
+    """Decoding the audio container is CPU work proportional to the clip
+    (a 120 s Opus clip took seconds on a small host): it must run on a worker
+    thread, never on the event loop that serves every other session."""
+    import threading
+
+    monkeypatch.setattr(
+        "durin.providers.transcription.ensure_model",
+        lambda engine, cache_dir, on_status=None: {
+            "encoder": tmp_path / "e",
+            "decoder": tmp_path / "d",
+            "joiner": tmp_path / "j",
+            "tokens": tmp_path / "t",
+        },
+    )
+    decoded_on: list[int] = []
+
+    def _decode(path):
+        decoded_on.append(threading.get_ident())
+        return np.zeros(16000, dtype=np.float32), 16000
+
+    monkeypatch.setattr("durin.providers.audio_decode.decode_to_mono_16k", _decode)
+    audio = tmp_path / "a.webm"
+    audio.write_bytes(b"x")
+    prov = LocalSttProvider(engine="parakeet", cache_dir=tmp_path)
+
+    assert await prov.transcribe(audio) == "hola mundo"
+    assert decoded_on and decoded_on[0] != threading.get_ident()

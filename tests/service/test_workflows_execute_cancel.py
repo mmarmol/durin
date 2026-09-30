@@ -181,6 +181,121 @@ async def test_clear_cancel_runs_in_the_same_thread_as_engine_run(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_execute_runs_the_engine_on_a_dedicated_thread(tmp_path, monkeypatch):
+    """A workflow run can take an hour: it gets a thread of its own instead
+    of holding one of the event loop's few shared default-executor threads,
+    which every short blocking hop in the gateway needs."""
+    import threading
+
+    from durin.workflow.engine import WorkflowEngine
+
+    names: list[str] = []
+    real_run = WorkflowEngine.run
+
+    def spy_run(self, *a, **kw):
+        names.append(threading.current_thread().name)
+        return real_run(self, *a, **kw)
+
+    monkeypatch.setattr(WorkflowEngine, "run", spy_run)
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        result = await svc.execute("quick", "task")
+
+    assert result.status == "completed"
+    assert names == [f"workflow-run-{result.run_id}"]
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_runs_executes_at_most_the_run_bound_at_once(tmp_path, monkeypatch):
+    """Each run holds a thread for its whole walk. A burst of launches (API
+    calls, background tool runs, overlapping automations) must not start a
+    thread per run: runs past the bound wait their turn, and all complete."""
+    import threading
+
+    from durin.workflow.engine import WorkflowEngine
+    from durin.workflow.result import WorkflowResult
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS
+
+    gate = threading.Event()
+    lock = threading.Lock()
+    counts = {"running": 0, "peak": 0}
+
+    def gated_run(self, *_a, **_kw):
+        with lock:
+            counts["running"] += 1
+            counts["peak"] = max(counts["peak"], counts["running"])
+        try:
+            gate.wait(10.0)
+            return WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r")
+        finally:
+            with lock:
+                counts["running"] -= 1
+
+    monkeypatch.setattr(WorkflowEngine, "run", gated_run)
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        runs = [asyncio.create_task(svc.execute("quick", "task"))
+                for _ in range(MAX_CONCURRENT_RUNS + 2)]
+        try:
+            assert await _wait_for(lambda: counts["running"] >= MAX_CONCURRENT_RUNS)
+            # Give any run that was not held back the time to start too.
+            await asyncio.sleep(0.3)
+            peak = counts["peak"]
+        finally:
+            gate.set()
+        results = await asyncio.wait_for(asyncio.gather(*runs), timeout=10.0)
+
+    assert peak == MAX_CONCURRENT_RUNS
+    assert [r.status for r in results] == ["completed"] * (MAX_CONCURRENT_RUNS + 2)
+
+
+@pytest.mark.asyncio
+async def test_a_paced_run_starts_while_unpaced_runs_fill_the_pool(tmp_path):
+    """A scheduled automation runs inside its cron job and keeps that job's
+    slot until the run ends: it must not queue behind unpaced runs."""
+    import threading
+
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+    gate = threading.Event()
+    holders = [asyncio.create_task(run_on_workflow_thread(f"h{i}", gate.wait, 10.0))
+               for i in range(MAX_CONCURRENT_RUNS)]
+    try:
+        await asyncio.sleep(0.05)
+        with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+                get_default_model=lambda: "m")):
+            result = await asyncio.wait_for(svc.execute("quick", "task", paced=True), timeout=5.0)
+    finally:
+        gate.set()
+    await asyncio.wait_for(asyncio.gather(*holders), timeout=10.0)
+
+    assert result.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_normal_completion_leaves_no_cancel_flag(tmp_path):
     """A run that completes without ever being cancelled must not leave a
     stale flag behind either."""

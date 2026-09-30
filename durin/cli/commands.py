@@ -1398,6 +1398,7 @@ def _run_gateway(
 
             from durin.channels.websocket import publish_dream_progress
             from durin.memory.dream_supervisor import run_dream_worker
+            from durin.utils.dedicated_thread import run_in_dedicated_thread
 
             workspace = config.workspace_path
             _dream_loop = _asyncio.get_running_loop()
@@ -1412,7 +1413,11 @@ def _run_gateway(
             code = 0
             _stderr_tail = ""
             try:
-                code, _stderr_tail = await _asyncio.to_thread(
+                # Supervision lasts the whole dream (over an hour for a
+                # nightly pass): a thread of its own, not one of the default
+                # executor's few shared threads.
+                code, _stderr_tail = await run_in_dedicated_thread(
+                    "dream-supervisor",
                     run_dream_worker,
                     workspace=workspace,
                     mode="full",
@@ -1468,9 +1473,12 @@ def _run_gateway(
             # it, so its outcome belongs to the automation's declared destination.
             # task comes from the CronPayload this job was synced from
             # (durin.automations.cron_sync's message=trig.task) — without it the
-            # workflow's prompt is None, not merely empty.
+            # workflow's prompt is None, not merely empty. Paced: this job keeps
+            # its cron slot until the fire returns, so its workflow must not
+            # queue behind unpaced runs while every other cron job waits too.
             await automations_runtime.try_fire(
-                job.payload.automation, source="schedule", task=job.payload.message or None)
+                job.payload.automation, source="schedule", task=job.payload.message or None,
+                paced=True)
             return None
 
         from durin.cron.outcome import CronTurnFailedError, turn_failed
@@ -1566,7 +1574,7 @@ def _run_gateway(
 
     # Marshals a service-path run's progress frames onto the runs:feed
     # websocket key. The engine walk that calls this runs on a worker thread
-    # (WorkflowsService.execute's asyncio.to_thread), so publishing to the bus
+    # (WorkflowsService.execute's workflow-run thread), so publishing to the bus
     # must hop back onto the gateway's own event loop via
     # run_coroutine_threadsafe — exactly like run_workflow.py's identical
     # per-chat progress publisher. That loop isn't running yet at this point

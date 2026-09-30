@@ -67,8 +67,8 @@ def _fake_provider():
 async def test_background_is_the_default(tmp_path):
     bus = _Bus()
     tool = _make_tool(tmp_path, bus=bus)
-    # Patch WorkflowEngine.run with a plain synchronous MagicMock so asyncio.to_thread
-    # drives it correctly in a worker thread — no AsyncMock, no leaked coroutine.
+    # Patch WorkflowEngine.run with a plain synchronous MagicMock so the run's worker
+    # thread drives it correctly — no AsyncMock, no leaked coroutine.
     # The patch must remain active through the background task's execution (not just the
     # execute() call), so it wraps both the launch and the sleep.
     canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
@@ -92,3 +92,127 @@ async def test_foreground_is_opt_in(tmp_path):
                ))):
         out = await tool.execute(name="noop", task="hi", background=False)
     assert "Workflow run" in out and "completed" in out
+
+
+def _engine_run_recording_thread(names: list[str]):
+    """A WorkflowEngine.run stand-in that records the thread it ran on."""
+    import threading
+
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
+
+    def _run(*_args, **_kwargs):
+        names.append(threading.current_thread().name)
+        return canned
+
+    return _run
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [True, False])
+async def test_the_engine_runs_on_a_dedicated_thread(tmp_path, background):
+    """A workflow run can take an hour: it gets a thread of its own instead
+    of holding one of the event loop's few shared default-executor threads,
+    which every short blocking hop in the gateway needs."""
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    names: list[str] = []
+    with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
+         patch("durin.workflow.engine.WorkflowEngine.run",
+               _engine_run_recording_thread(names)):
+        await tool.execute(name="noop", task="hi", background=background)
+        # A background run reports back through the bus once it is over.
+        for _ in range(200):
+            if bus.injected or not background:
+                break
+            await asyncio.sleep(0.01)
+    assert len(names) == 1
+    assert names[0].startswith("workflow-run-"), names[0]
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_background_runs_executes_at_most_the_run_bound_at_once(tmp_path):
+    """Background launches return at once, so nothing paces them: runs past
+    the bound wait their turn instead of each starting a thread, and every
+    one still reports back."""
+    import threading
+
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS
+
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    gate = threading.Event()
+    lock = threading.Lock()
+    counts = {"running": 0, "peak": 0}
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
+
+    def _gated_run(*_args, **_kwargs):
+        with lock:
+            counts["running"] += 1
+            counts["peak"] = max(counts["peak"], counts["running"])
+        try:
+            gate.wait(10.0)
+            return canned
+        finally:
+            with lock:
+                counts["running"] -= 1
+
+    burst = MAX_CONCURRENT_RUNS + 2
+    with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
+         patch("durin.workflow.engine.WorkflowEngine.run", _gated_run):
+        try:
+            for _ in range(burst):
+                await tool.execute(name="noop", task="hi", background=True)
+            for _ in range(500):
+                if counts["running"] >= MAX_CONCURRENT_RUNS:
+                    break
+                await asyncio.sleep(0.01)
+            # Give any run that was not held back the time to start too.
+            await asyncio.sleep(0.3)
+            peak = counts["peak"]
+        finally:
+            gate.set()
+        for _ in range(1000):
+            if len(bus.injected) == burst:
+                break
+            await asyncio.sleep(0.01)
+
+    assert peak == MAX_CONCURRENT_RUNS
+    assert len(bus.injected) == burst
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_run_starts_while_background_runs_fill_the_pool(tmp_path):
+    """The turn waiting on a foreground run holds its lane slot until the run
+    ends; queueing it behind background runs would stall that turn and every
+    chat waiting for the lane."""
+    import threading
+
+    from durin.workflow.run_threads import MAX_CONCURRENT_RUNS
+
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    gate = threading.Event()
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
+
+    def _run(self, workflow, task, **_kwargs):
+        if task.startswith("bg"):
+            gate.wait(10.0)
+        return canned
+
+    with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
+         patch("durin.workflow.engine.WorkflowEngine.run", _run):
+        try:
+            for i in range(MAX_CONCURRENT_RUNS):
+                await tool.execute(name="noop", task=f"bg{i}", background=True)
+            await asyncio.sleep(0.1)
+            out = await asyncio.wait_for(
+                tool.execute(name="noop", task="fg", background=False), timeout=2.0)
+        finally:
+            gate.set()
+        for _ in range(1000):
+            if len(bus.injected) == MAX_CONCURRENT_RUNS:
+                break
+            await asyncio.sleep(0.01)
+
+    assert "completed" in out
+    assert len(bus.injected) == MAX_CONCURRENT_RUNS

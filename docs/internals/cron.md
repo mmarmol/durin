@@ -139,7 +139,9 @@ When an `automation_trigger` job fires, the gateway's `on_job` callback
 dispatches straight to the automations runtime's `try_fire` instead of
 building an `agent_turn` prompt: the automations runtime classifies the
 workflow's own result and owns its own run bookkeeping (see
-`durin/automations/runtime.py`).
+`durin/automations/runtime.py`). The job holds its slot until the fire
+returns, so it fires with `paced=True`: the workflow starts at once instead
+of queueing behind unpaced workflow runs (see [concurrency](concurrency.md)).
 
 **`loop_trigger` jobs.** `CronPayload` parses `payload.kind ==
 "loop_trigger"` and its `loop` field (`durin/cron/types.py`) so an

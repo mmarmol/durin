@@ -632,7 +632,7 @@ async def test_real_runtime_records_the_match_before_the_run_finishes(tmp_path, 
     _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None):
+                            work_key=None, root_session_key=None, paced=False):
         return WorkflowResult(status="completed", final_output="out", run_id=run_id)
 
     rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20)
@@ -871,7 +871,7 @@ async def test_counterpart_wake_answer_failure_after_exec_finalizes_failed(tmp_p
     ]
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         return results.pop(0)
 
     ids = iter([f"wake-fail-{i}" for i in range(10)])

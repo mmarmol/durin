@@ -21,7 +21,7 @@ def _cron(tmp_path) -> CronService:
 
 def _runtime(tmp_path, results, **kw):
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         return results.pop(0)
 
     ids = iter([f"ar{i}" for i in range(100)])
@@ -329,7 +329,7 @@ async def test_fire_returns_before_the_workflow_finishes(tmp_path):
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         await released.wait()
         return _wr("completed", run_id=run_id)
 
@@ -375,7 +375,7 @@ async def test_a_chat_fire_that_loses_the_race_is_retracted_to_the_session(tmp_p
     outcomes = []
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None):
+                             work_key=None, root_session_key=None, paced=False):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)

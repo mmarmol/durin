@@ -364,7 +364,9 @@ rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
 their intake step. `resume_run_id` also retries a run that ended `aborted` at
 a named node: the failed node re-runs with its exact input, in the same
-folder.
+folder. A resume that can't get going — a script the workflow names has gone
+missing, say — leaves the run paused as it was, so you can answer it again
+once that's fixed.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
@@ -401,7 +403,14 @@ clean up.
   per-node trace (status, verdict, and the session each node produced). A
   run started by a subworkflow node records its caller's run id, so the
   dashboard can mark it as a sub-run of the parent. The web dashboard's
-  Workflows pane reads these to show run history.
+  Workflows pane reads these to show run history. The manifest appears when
+  the run starts executing: durin executes a bounded number of runs at once,
+  so in a burst (many API launches or background runs together) the extra
+  ones wait their turn and start, in launch order, as others finish; the
+  gateway log notes each run that has to wait. A run a chat is waiting on
+  (run in the foreground) and a scheduled automation don't count against
+  that bound and never wait: each starts at once. Neither does a run paused
+  on your input.
 - **Node sessions:** every node's conversation is a normal, searchable
   durin session (`workflow:<run_id>:<node_id>:...`), so a node's reasoning
   is navigable after the fact the same way a sub-agent's is.

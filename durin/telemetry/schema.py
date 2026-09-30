@@ -1633,23 +1633,37 @@ class GatewayMemoryEvent(TypedDict):
     gc_counts: list[int]
     # glibc allocator view (0.0 = not glibc/unknown): rss far above
     # malloc_in_use_mb means the allocator retains freed pages — allocator
-    # retention, not object growth.
+    # retention, not object growth. malloc_system_mb and malloc_free_mb keep
+    # counting pages a trim returned; malloc_resident_mb is the part of
+    # malloc_system_mb in RAM, so malloc_resident_mb - malloc_in_use_mb is
+    # the freed memory still resident (0.0 = residency unreadable).
     malloc_system_mb: float
     malloc_in_use_mb: float
     malloc_free_mb: float
+    malloc_resident_mb: float
+    # Resident memory outside glibc malloc (rss minus malloc_resident_mb;
+    # 0.0 = unknown): CPython object arenas, native libraries' own mappings,
+    # thread stacks, code. Growth here is out of the janitor's reach.
+    non_malloc_mb: float
     total_mb: float
     available_mb: float
 
 
 class GatewayMemoryTrimEvent(TypedDict):
-    """The malloc janitor found glibc arenas retaining more freed memory
-    than the trim threshold and called malloc_trim(0). ``released`` is
-    glibc's own report of whether any pages went back to the OS; the rss
-    before/after pair is the observed effect."""
+    """The malloc janitor called malloc_trim(0): the freed memory glibc
+    arenas keep resident grew, since the last trim, to its share of the live
+    heap, or a trim was requested right after a voice engine unload
+    (``forced``). ``retained_mb`` is the arenas' freed total as mallinfo2
+    books it (pages already returned included), ``grown_mb`` the resident
+    freed memory that piled up since the last trim. The rss before/after pair
+    is the observed effect; ``released`` is glibc's own flag, which stays
+    true even when the pages it touched were already returned."""
 
     rss_before_mb: float
     rss_after_mb: float
     retained_mb: float
+    grown_mb: float
+    forced: bool
     released: bool
 
 

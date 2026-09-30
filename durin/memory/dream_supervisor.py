@@ -6,7 +6,7 @@ calls, dulwich commits, and embedding batches burn a child's CPU/RAM — an
 OOM kill or runaway pass takes down the dream, not the serving loop.
 
 Everything here is deliberately synchronous and thread-friendly: the cron
-path calls :func:`run_dream_worker` through ``asyncio.to_thread``; the
+path calls :func:`run_dream_worker` on a dedicated thread; the
 reactive triggers call it from their own daemon thread (they fire from
 contexts where no event loop is guaranteed). Progress lines the worker
 prints (JSONL, one payload per line) are forwarded to ``on_progress`` on
