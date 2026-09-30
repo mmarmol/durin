@@ -1255,6 +1255,7 @@ class AgentLoop:
             presets=self.model_presets,
             provider=self.provider,
             loader=self._preset_snapshot_loader,
+            config=self.app_config,
         )
 
     def set_model_preset(self, name: str | None, *, publish_update: bool = True) -> None:

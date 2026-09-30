@@ -53,7 +53,9 @@ def test_resolve_via_preset(tmp_path, monkeypatch):
     provider, model, window = result
     assert provider is sentinel_provider
     assert model == "cheap-model"
-    assert window == ModelPresetConfig(model="x").context_window_tokens
+    # The preset names no window and the catalog does not know the model, so
+    # the window comes from agents.defaults, as any preset's would.
+    assert window == cfg.agents.defaults.context_window_tokens
     # resolved through the preset, not an inline ModelPresetConfig
     _, kwargs = m.call_args
     assert kwargs["preset"].model == "cheap-model"

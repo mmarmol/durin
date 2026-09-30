@@ -107,8 +107,8 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `provider` | `auto` | Provider name or `"auto"` for auto-detection |
 | `model_preset` | `null` | Named preset from `model_presets`; takes precedence over `model` + `provider` |
 | `persona` | `null` | Default persona name for interactive chats; `null` = the workspace SOUL + default model |
-| `max_tokens` | `8192` | Maximum output tokens per turn |
-| `context_window_tokens` | `65536` | Context window size hint (tokens) |
+| `max_tokens` | `8192` | Output token cap for a model whose limit nothing else declares — the last step of the [model limits](#model-limits) chain |
+| `context_window_tokens` | `65536` | Context window (tokens) for a model whose window nothing else declares — the last step of the [model limits](#model-limits) chain |
 | `temperature` | `0.4` | Generation temperature |
 | `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default |
 | `max_tool_iterations` | `200` | Tool call iterations cap per turn |
@@ -117,7 +117,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `concurrency_ceiling` | `12` | Global ceiling on total in-flight turns + subagents across all lanes; keep `>=` the interactive cap |
 | `max_tool_result_chars` | unset | Largest tool result kept whole in the model's context; a larger one is saved to a file the agent reads in pages (`read_file` and `grep` size their pages under this cap). Unset, it follows the model's context window: `16000` below 100k tokens, `32000` from 100k, `64000` from 200k, never more than 30% of the input budget (the window minus what is held for the answer). A number here applies to every model |
 | `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
-| `fallback_models` | `[]` | Ordered list of preset names or inline model specs to try on provider failure |
+| `fallback_models` | `[]` | Ordered list of preset names or inline model specs (`{model, provider, max_tokens?, context_window_tokens?, temperature?, reasoning_effort?}`) to try on provider failure. Each fallback runs with its own model's limits (see [model limits](#model-limits)), and the run's window is the smallest of the primary's and every fallback's, so a failover fits the same prompt |
 | `timezone` | `UTC` | IANA timezone for date-aware tools (e.g. `America/New_York`) |
 | `bot_name` | `durin` | Display name shown in CLI prompts |
 | `bot_icon` | `⚒️` | Icon shown next to the bot name in CLI; `""` to omit |
@@ -155,8 +155,8 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 |---|---|---|
 | `model` | (required) | Model identifier |
 | `provider` | `auto` | Provider or `"auto"` |
-| `max_tokens` | `8192` | Output token cap |
-| `context_window_tokens` | `65536` | Context window hint |
+| `max_tokens` | unset | Output token cap; unset takes the model's own (see [model limits](#model-limits)) |
+| `context_window_tokens` | unset | Context window; unset takes the model's own (see [model limits](#model-limits)) |
 | `temperature` | `0.1` | Temperature |
 | `reasoning_effort` | `null` | Thinking effort hint |
 | `request_timeout_s` | `null` | HTTP timeout in seconds for an OpenAI-compatible provider; overrides `DURIN_OPENAI_COMPAT_TIMEOUT_S` |
@@ -164,6 +164,30 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 | `top_k` | `null` | Top-k sampling; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `repeat_penalty` | `null` | Repetition penalty; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `preemptive_compact_ratio` | `null` | Per-preset compaction trigger; `null` inherits from `agents.defaults` |
+
+#### Model limits
+
+Every model run — the chat, a named preset, a `/model provider model` pick, a
+workflow node, a subagent, an aux model, a fallback — uses the context window
+and output cap of the model it runs on. A value set where the run is chosen (a
+preset's `context_window_tokens` / `max_tokens`, an inline fallback's) wins;
+whatever is left unset comes from:
+
+1. the model's entry under `providers.<provider>.models.<model>`,
+2. the model catalog (the window and output limit the provider publishes),
+3. `agents.defaults.context_window_tokens` / `agents.defaults.max_tokens`.
+
+A preset whose `provider` is `"auto"` has no provider to look the model up
+under, so it goes straight to `agents.defaults`, like the default model does
+with `provider: "auto"`. A preset that sets only `model`, `provider` and a
+`temperature` therefore runs with the model's real limits.
+
+A configured value **above** what the model really accepts (the catalog's) is
+capped to the catalog value when the run starts, and one warning names the
+provider, the model, the configured and the real value: a window larger than
+the real one lets a prompt grow past what the provider accepts, and it is
+rejected instead of being compacted first. A value **below** the catalog's is
+kept — a smaller window or output cap is a legitimate way to bound cost.
 
 **`model_capabilities`** — user-declared capability overrides keyed by model name
 (bare or `provider/model`). Provider-qualified keys win over bare names. Any field
@@ -588,7 +612,7 @@ Each provider entry (`anthropic`, `openai`, `openrouter`, etc.) is a `ProviderCo
 | `api_base` | `null` | Custom base URL (local models, proxies, corporate endpoints) |
 | `extra_headers` | `null` | Custom request headers (e.g. `APP-Code` for AiHubMix) |
 | `extra_body` | `null` | Extra fields merged into every request body |
-| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort, request_timeout_s, top_p, top_k, repeat_penalty}` |
+| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort, request_timeout_s, top_p, top_k, repeat_penalty}`. An unset `max_tokens` / `context_window_tokens` takes the catalog's, and a value above the catalog's is capped to it (see [model limits](#model-limits)) |
 
 Supported providers (all use `ProviderConfig` unless noted):
 

@@ -362,7 +362,10 @@ providers are cached per run (per node) so repeated nodes on the same ref don't 
 A node's agent turn runs under the context window of the model it resolved to, taken from the
 same preset as its provider (the default preset, a named preset, a pair or a plain model name)
 and capped by the fallback models' windows, as the chat's is
-(`AgentNodeRunner._node_context_window`). That gives it the runner's input budget: the mid-turn
+(`AgentNodeRunner._node_context_window`). A preset that sets no window or output cap gets its
+model's own — the provider's `models` entry, then the catalog, then `agents.defaults` — for
+both the window and the `max_tokens` its provider sends (see
+[providers.md](providers.md#41-preset-resolution)). That gives it the runner's input budget: the mid-turn
 precheck, the pruning of old tool results near the limit, and a per-result cap that follows the
 window. A node with the file tools (`tools: default`) also carries its workspace (its private copy
 when writing in parallel) and session key, so an oversized or pruned result is saved where its own

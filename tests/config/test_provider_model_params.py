@@ -30,15 +30,16 @@ def test_default_preset_falls_back_to_catalog(monkeypatch):
 def test_default_preset_entry_wins_over_catalog(monkeypatch):
     monkeypatch.setattr(
         pc, "_load_index",
-        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2", max_input_tokens=500_000)]},
+        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2", max_input_tokens=1_000_000)]},
     )
     cfg = Config()
     cfg.agents.defaults.model = "glm-5.2"
     cfg.agents.defaults.provider = "zai_coding_plan"
     cfg.providers.zai_coding_plan.models = {
-        "glm-5.2": ModelEntry(context_window_tokens=1_000_000)
+        "glm-5.2": ModelEntry(context_window_tokens=500_000)
     }
-    assert cfg.resolve_default_preset().context_window_tokens == 1_000_000  # entry > catalog
+    # entry > catalog (an entry ABOVE the catalog is capped to it instead)
+    assert cfg.resolve_default_preset().context_window_tokens == 500_000
 
 
 def test_default_preset_uses_agents_defaults_when_no_override(monkeypatch):

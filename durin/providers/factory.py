@@ -48,7 +48,12 @@ def _resolve_model_preset(
     preset_name: str | None = None,
     preset: ModelPresetConfig | None = None,
 ) -> ModelPresetConfig:
-    return preset if preset is not None else config.resolve_preset(preset_name)
+    """The preset a provider is built from, with concrete limits: *preset*
+    when one is given (whatever it leaves unset takes its model's own
+    limits), else the named or the active preset."""
+    if preset is not None:
+        return config.resolve_preset_limits(preset)
+    return config.resolve_preset(preset_name)
 
 
 def _make_provider_core(
@@ -60,6 +65,16 @@ def _make_provider_core(
 ) -> LLMProvider:
     """Create a plain LLM provider without failover wrapping."""
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    return _build_provider(config, resolved, model=model)
+
+
+def _build_provider(
+    config: Config,
+    resolved: ModelPresetConfig,
+    *,
+    model: str | None = None,
+) -> LLMProvider:
+    """Create a plain LLM provider from a preset whose limits are resolved."""
     model = model or resolved.model
     provider_name = config.get_provider_name(model, preset=resolved)
     p = config.get_provider(model, preset=resolved)
@@ -140,32 +155,32 @@ def _make_provider_core(
 
 
 def _inline_fallback_preset(
+    config: Config,
     primary: ModelPresetConfig,
     fallback: InlineFallbackConfig,
 ) -> ModelPresetConfig:
-    return ModelPresetConfig(
+    """An inline fallback as a preset. Its limits are its own model's (the
+    same chain as any preset), never the primary's: a failover to a model
+    with a smaller window must not be sized by the primary's."""
+    return config.resolve_preset_limits(ModelPresetConfig(
         model=fallback.model,
         provider=fallback.provider,
-        max_tokens=fallback.max_tokens if fallback.max_tokens is not None else primary.max_tokens,
-        context_window_tokens=(
-            fallback.context_window_tokens
-            if fallback.context_window_tokens is not None
-            else primary.context_window_tokens
-        ),
+        max_tokens=fallback.max_tokens,
+        context_window_tokens=fallback.context_window_tokens,
         temperature=(
             fallback.temperature if fallback.temperature is not None else primary.temperature
         ),
         reasoning_effort=fallback.reasoning_effort,
-    )
+    ))
 
 
 def _resolve_fallback_presets(config: Config, primary: ModelPresetConfig) -> list[ModelPresetConfig]:
     presets: list[ModelPresetConfig] = []
     for fallback in config.agents.defaults.fallback_models:
         if isinstance(fallback, str):
-            presets.append(config.model_presets[fallback])
+            presets.append(config.resolve_preset(fallback))
         else:
-            presets.append(_inline_fallback_preset(primary, fallback))
+            presets.append(_inline_fallback_preset(config, primary, fallback))
     return presets
 
 
@@ -182,16 +197,14 @@ def make_provider(
     the failover path to create providers for fallback models.
     """
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
-    provider = _make_provider_core(config, preset_name=preset_name, preset=preset, model=model)
+    provider = _build_provider(config, resolved, model=model)
     fallback_presets = _resolve_fallback_presets(config, resolved)
 
     if fallback_presets:
         provider = FallbackProvider(
             primary=provider,
             fallback_presets=fallback_presets,
-            provider_factory=lambda fb: _make_provider_core(
-                config, preset_name=preset_name, preset=fb
-            ),
+            provider_factory=lambda fb: _build_provider(config, fb),
         )
 
     return provider
@@ -205,8 +218,15 @@ def provider_signature(
 ) -> tuple[object, ...]:
     """Return the config fields that affect the active provider chain."""
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    return _signature(config, resolved, _resolve_fallback_presets(config, resolved))
+
+
+def _signature(
+    config: Config,
+    resolved: ModelPresetConfig,
+    fallback_presets: list[ModelPresetConfig],
+) -> tuple[object, ...]:
     p = config.get_provider(resolved.model, preset=resolved)
-    fallback_presets = _resolve_fallback_presets(config, resolved)
 
     def _fallback_signature(fallback: ModelPresetConfig) -> tuple[object, ...]:
         fp = config.get_provider(fallback.model, preset=fallback)
@@ -245,13 +265,18 @@ def provider_signature(
 
 
 def preset_context_window(config: Config, preset: ModelPresetConfig) -> int:
-    """The context window a run on *preset* gets: the preset's own, capped by
-    every fallback model's, since a failover must fit the same prompt."""
-    fallback_windows = [
-        fallback.context_window_tokens
-        for fallback in _resolve_fallback_presets(config, preset)
-    ]
-    return min([preset.context_window_tokens, *fallback_windows])
+    """The context window a run on *preset* gets: the preset's own (its
+    model's when the preset sets none), capped by every fallback model's,
+    since a failover must fit the same prompt."""
+    resolved = config.resolve_preset_limits(preset)
+    return _capped_window(resolved, _resolve_fallback_presets(config, resolved))
+
+
+def _capped_window(resolved: ModelPresetConfig, fallback_presets: list[ModelPresetConfig]) -> int:
+    return min([
+        resolved.context_window_tokens,
+        *(fallback.context_window_tokens for fallback in fallback_presets),
+    ])
 
 
 def build_provider_snapshot(
@@ -261,11 +286,12 @@ def build_provider_snapshot(
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    fallback_presets = _resolve_fallback_presets(config, resolved)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
-        context_window_tokens=preset_context_window(config, resolved),
-        signature=provider_signature(config, preset=resolved),
+        context_window_tokens=_capped_window(resolved, fallback_presets),
+        signature=_signature(config, resolved, fallback_presets),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
     )
 

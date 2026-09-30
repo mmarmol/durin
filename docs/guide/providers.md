@@ -88,7 +88,12 @@ for any unset field:
 The `ModelEntry` class (see `durin/config/schema.py`) accepts `max_tokens`,
 `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
 `top_p`, `top_k`, and `repeat_penalty`. Any field left `null` falls back to the
-catalog, then to `agents.defaults`.
+catalog, then to `agents.defaults`. A `context_window_tokens` or `max_tokens`
+above the catalog's value for that model is capped to the catalog's, with a
+warning in the log; a smaller value is kept as a deliberate cap. Every run on
+the model — a preset, a `/model` pick, a workflow node, a subagent, a fallback
+— reads these values; see
+[model limits](configuration.md#model-limits).
 
 ## API keys and the secret store
 
@@ -167,20 +172,24 @@ Define a preset:
   "fast": {
     "provider": "openai",
     "model": "gpt-4o-mini",
-    "max_tokens": 4096,
-    "context_window_tokens": 128000,
     "temperature": 0.1
   },
   "reasoning": {
     "provider": "anthropic",
     "model": "claude-opus-4-5",
     "max_tokens": 16384,
-    "context_window_tokens": 200000,
     "temperature": 0.4,
     "reasoning_effort": "high"
   }
 }
 ```
+
+`max_tokens` and `context_window_tokens` are optional. Left out, they take the
+model's own limits — its `providers.<provider>.models` entry, then the catalog,
+then `agents.defaults` — so `fast` above runs with `gpt-4o-mini`'s real window
+and output limit. Set one only to cap it lower (as `reasoning` caps its output);
+a value above the model's real limit is capped to it. See
+[model limits](configuration.md#model-limits).
 
 Activate a preset for all sessions:
 

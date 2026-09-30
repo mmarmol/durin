@@ -661,29 +661,19 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
     """Build an ad-hoc ``ModelPresetConfig`` for a ``provider model`` ref (the
     picker form). Shared by the ``/model`` command and the per-turn cron model
     override so both resolve a picker ref identically. Params resolve: the
-    user's per-model config override -> the catalog caps -> the schema default.
+    user's per-model config override -> the catalog caps -> ``agents.defaults``
+    (the window and output cap, exactly like any other preset's; the schema
+    defaults stand in for ``agents.defaults`` when there is no config).
     """
-    from durin.config.schema import ModelPresetConfig
-    from durin.providers.provider_catalog import catalog_model_caps
+    from durin.config.schema import Config, ModelPresetConfig
 
     entry = None
     if config is not None and provider and provider != "auto":
         pc = getattr(config.providers, provider, None)
         entry = (getattr(pc, "models", None) or {}).get(model)
-    caps = catalog_model_caps(provider, model)
-    return ModelPresetConfig(
+    preset = ModelPresetConfig(
         model=model,
         provider=provider,
-        context_window_tokens=(
-            entry.context_window_tokens
-            if entry and entry.context_window_tokens is not None
-            else (caps.max_input_tokens if caps and caps.max_input_tokens else 65_536)
-        ),
-        max_tokens=(
-            entry.max_tokens
-            if entry and entry.max_tokens is not None
-            else (caps.max_output_tokens if caps and caps.max_output_tokens else 8192)
-        ),
         temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
         reasoning_effort=(
             entry.reasoning_effort if entry and entry.reasoning_effort is not None else None
@@ -694,6 +684,7 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
             entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
         ),
     )
+    return (config if config is not None else Config()).resolve_preset_limits(preset)
 
 
 def resolve_preset_ref(loop: Any, ref: str) -> str:

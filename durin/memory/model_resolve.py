@@ -47,17 +47,26 @@ def _place_model(app_config: Any, default: Any, model: str, provider: str | None
     Explicit provider wins. Otherwise the provider is auto-detected from the
     model name among configured providers; no match → the untouched default
     preset (specific-or-default), with a loud log naming the dropped model.
+    The copy's window and output cap are the placed model's own limits, not
+    the default model's, which would size a different model's requests.
     """
     model = str(model)
+
+    def _placed(provider_name: str):
+        return app_config.resolve_preset_limits(default.model_copy(update={
+            "model": model, "provider": provider_name,
+            "context_window_tokens": None, "max_tokens": None,
+        }))
+
     if provider and provider != "auto":
-        return default.model_copy(update={"model": model, "provider": str(provider)})
+        return _placed(str(provider))
     spec_name = None
     try:
         _pconf, spec_name = app_config.match_provider_by_name(model)
     except Exception:  # noqa: BLE001 - detection is best-effort; fall through to default
         spec_name = None
     if spec_name:
-        return default.model_copy(update={"model": model, "provider": spec_name})
+        return _placed(spec_name)
     logger.warning(
         "aux model %r (purpose=%s) is not served by any configured provider; "
         "using the default preset %s/%s instead",

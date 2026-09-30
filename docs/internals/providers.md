@@ -137,18 +137,46 @@ not by accident during keyword walk.
 ### 4.1 Preset resolution
 
 Every turn starts with `config.resolve_preset(name)` (`durin/config/schema.py`). If
-`agents.defaults.model_preset` is set, that named entry in `model_presets` is returned.
-Otherwise `resolve_default_preset()` constructs an implicit preset from `agents.defaults`
-fields, layering in any per-model parameter overrides declared under the active provider's
-`models` dict and cross-referencing the capability snapshot for token bounds. The result
-is a `ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
+`agents.defaults.model_preset` is set, that named entry in `model_presets` is returned
+with its limits resolved (below). Otherwise `resolve_default_preset()` constructs an
+implicit preset from `agents.defaults` fields, layering in any per-model parameter
+overrides declared under the active provider's `models` dict. The result is a
+`ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
 `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
-`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`. The
-per-(provider, model) catalog lookup
-(`catalog_model_caps`, `durin/providers/provider_catalog.py`) supplies the token
-bounds when no explicit override exists; `openai_codex` is not in the catalog, so
-each codex slug inherits the matching `openai` entry's caps (window / output
-limit).
+`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`.
+
+**Model limits.** `context_window_tokens` and `max_tokens` are optional on a
+`ModelPresetConfig` (and on an `InlineFallbackConfig`); `None` means "the model's
+own". `Config.resolve_preset_limits(preset)` fills them the same way for every kind
+of preset, through `Config._model_limits`: a value the preset sets wins, then the
+`ModelEntry` under `providers.<provider>.models.<model>`, then the catalog
+(`catalog_model_caps`, `durin/providers/provider_catalog.py`: `max_input_tokens`
+for the window, `max_output_tokens` for the output cap), then `agents.defaults`.
+`openai_codex` is not in the catalog, so each codex slug inherits the matching
+`openai` entry's caps. A preset whose provider is `"auto"` has no entry or catalog
+row to read and goes to `agents.defaults` — the default preset's own behaviour
+with an `"auto"` provider. `resolve_preset_limits` returns a copy (or the preset
+itself when nothing changed) and never modifies the stored preset, so a resolved
+value is never saved back to the config file.
+
+Resolution happens where a preset becomes a run, so the in-memory presets keep
+"unset" and pick up a later change to the provider's `models` entry:
+`resolve_preset(name)`, the factory's `_resolve_model_preset` (every `make_provider`,
+`provider_signature` and `build_provider_snapshot` call, including a preset object
+handed in by the loop's snapshot loader), `preset_context_window`, each fallback
+preset, `adhoc_preset_config` (a `/model provider model` pick, a cron or workflow
+model ref, an inline `aux_models.subagents` pair), the placed model of
+`resolve_aux_preset` (judge, dream, automations — never the default model's
+limits), and `build_static_preset_snapshot` for a loop wired without a loader.
+
+A configured value above the catalog's is capped to it by `_capped_limit`
+(`durin/config/schema.py`): a window above the real one lets the runner's input
+budget admit prompts the provider rejects, and an output cap above the model's
+maximum is rejected outright. The first time each distinct
+`(provider, model, field, configured, real)` is capped, the process logs one
+warning naming them; later resolutions stay silent. A value below the catalog's
+is kept (a deliberate cost cap). Nothing is capped for a model the catalog does
+not know.
 
 ### 4.2 Provider matching
 
@@ -451,11 +479,12 @@ Provider rules the serialization honors:
 | `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |
 | `ProvidersConfig` | `durin/config/schema.py` | Container with one `ProviderConfig` field per provider name |
-| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
+| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens` (both `None` = the model's own limits), `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
 | `AuxModelConfig` | `durin/config/schema.py` | Aux bridge config: `preset` (named preset ref) or inline `model` + `provider` |
 | `AuxModelsConfig` | `durin/config/schema.py` | Container: `vision`, `audio`, `memory`, `subagents`, `automations`, and legacy `loops` (each an optional `AuxModelConfig`) |
 | `Config._match_provider` | `durin/config/schema.py` | Ordered provider walk returning `(ProviderConfig, spec_name)` |
-| `Config.resolve_preset` | `durin/config/schema.py` | Return `ModelPresetConfig` from named preset or implicit default |
+| `Config.resolve_preset` | `durin/config/schema.py` | Return `ModelPresetConfig` from named preset (limits resolved) or implicit default |
+| `Config.resolve_preset_limits` | `durin/config/schema.py` | Fill a preset's unset window / output cap from its model (entry → catalog → `agents.defaults`) and cap configured values at the catalog's |
 | `resolve_aux_preset` | `durin/memory/model_resolve.py` | Resolve purpose-specific preset for out-of-loop calls; returns `None` only for an unset `automations` (or legacy `loops`) override |
 
 ---
@@ -471,8 +500,8 @@ Provider rules the serialization honors:
 | `agents.defaults.model` | `anthropic/claude-opus-4-5` | Active model ID |
 | `agents.defaults.provider` | `auto` | `auto` (detect by model name) or an explicit provider name |
 | `agents.defaults.model_preset` | `null` | When set, overrides `model`/`provider`/generation fields with the named preset |
-| `agents.defaults.max_tokens` | `8192` | Max output tokens (inherited by default preset) |
-| `agents.defaults.context_window_tokens` | `65536` | Context window used for compaction budgeting |
+| `agents.defaults.max_tokens` | `8192` | Output cap for a model with no entry or catalog value (last step of the limits chain, for every preset) |
+| `agents.defaults.context_window_tokens` | `65536` | Context window for a model with no entry or catalog value (last step of the limits chain, for every preset) |
 | `agents.defaults.temperature` | `0.4` | Sampling temperature |
 | `agents.defaults.reasoning_effort` | `null` | Thinking effort: `low`/`medium`/`high`/`adaptive`/`none` |
 | `agents.defaults.fallback_models` | `[]` | Ordered list of preset names or inline `{model, provider}` configs |
@@ -485,8 +514,8 @@ model_presets:
   fast:
     model: deepseek/deepseek-chat
     provider: deepseek
-    max_tokens: 4096
-    context_window_tokens: 65536
+    max_tokens: 4096              # optional: unset takes the model's own
+    context_window_tokens: 65536  # optional: unset takes the model's own
     temperature: 0.1
     reasoning_effort: null
     preemptive_compact_ratio: 0.5
@@ -512,7 +541,9 @@ providers:
 Per-model entries (`ModelEntry`) hold `max_tokens`, `context_window_tokens`,
 `temperature`, `reasoning_effort`, `request_timeout_s`, and the sampling params
 `top_p` / `top_k` / `repeat_penalty` — each `null` inherits the catalog value,
-then `agents.defaults`. `request_timeout_s` overrides the per-request LLM timeout
+then `agents.defaults`. The entry's `max_tokens` / `context_window_tokens` serve
+every preset on that model that leaves its own unset, and a value above the
+catalog's is capped to it (see §4.1). `request_timeout_s` overrides the per-request LLM timeout
 for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`, 300s); raise it for slow
 local models (a large-context ollama/LM Studio model can take minutes to first
 token). `top_p` is a standard param; `top_k` and `repeat_penalty` are non-standard

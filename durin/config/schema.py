@@ -51,8 +51,8 @@ class InlineFallbackConfig(Base):
 
     model: str = Field(description="Model identifier to fall back to")
     provider: str = Field(description="Provider name for the fallback model")
-    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None inherits agents.defaults")
-    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None inherits agents.defaults")
+    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
     temperature: float | None = Field(default=None, description="Generation temperature; None inherits agents.defaults")
     reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
 
@@ -936,8 +936,8 @@ class ModelPresetConfig(Base):
 
     model: str = Field(description="Model identifier")
     provider: str = Field(default="auto", description='Provider name or "auto" for auto-detection')
-    max_tokens: int = Field(default=8192, description="Max output tokens per turn")
-    context_window_tokens: int = Field(default=65_536, description="Context window size hint in tokens")
+    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
     temperature: float = Field(default=0.1, description="Generation temperature")
     reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
     request_timeout_s: float | None = Field(default=None, description="Per-model HTTP timeout in seconds; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S")
@@ -1566,6 +1566,34 @@ class McpCatalogRefreshConfig(Base):
     )
 
 
+# Limits already reported as capped, keyed by (provider, model, field,
+# configured, real). Presets resolve on every turn and every node, so each
+# distinct misconfiguration is logged once per process, not on every resolve.
+_LIMIT_CAP_WARNED: set[tuple[str, str, str, int, int]] = set()
+
+
+def _capped_limit(value: int, real: int | None, *, field: str, provider: str, model: str) -> int:
+    """*value*, or the model's real limit (*real*, from the catalog) when
+    *value* is above it.
+
+    A configured window above what the provider accepts sends prompts the
+    budget says still fit, and the provider rejects them instead of durin
+    compacting first; an output cap above the model's maximum is rejected
+    the same way. The real limit wins, and the misconfiguration is logged
+    once. A value below it is a legitimate cost cap and is kept.
+    """
+    if not real or value <= real:
+        return value
+    key = (provider, model, field, value, real)
+    if key not in _LIMIT_CAP_WARNED:
+        _LIMIT_CAP_WARNED.add(key)
+        logger.warning(
+            "config: %s %s for %s/%s is above the model's real %s (catalog); using %s",
+            field, f"{value:,}", provider, model, f"{real:,}", f"{real:,}",
+        )
+    return real
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -1677,20 +1705,69 @@ class Config(BaseSettings):
                 caps = None
         return entry, caps
 
+    def _model_limits(
+        self,
+        provider: str,
+        model: str,
+        entry: ModelEntry | None,
+        caps: Any,
+        *,
+        context_window_tokens: int | None = None,
+        max_tokens: int | None = None,
+    ) -> tuple[int, int]:
+        """``(context_window_tokens, max_tokens)`` for a run of *model* on
+        *provider*, given its ``(entry, caps)`` from ``_resolve_model_params``.
+
+        A value passed in (a preset's own) wins; an unset one comes from the
+        user's ``providers.<provider>.models`` entry, then the catalog, then
+        ``agents.defaults``. A value above the catalog's is capped to it
+        (``_capped_limit``). A provider of ``"auto"`` has no entry or catalog
+        to read, so an unset value comes from ``agents.defaults``.
+        """
+        d = self.agents.defaults
+        real_ctx = caps.max_input_tokens if caps and caps.max_input_tokens else None
+        real_out = caps.max_output_tokens if caps and caps.max_output_tokens else None
+        ctx = next(v for v in (
+            context_window_tokens,
+            entry.context_window_tokens if entry else None,
+            real_ctx,
+            d.context_window_tokens,
+        ) if v is not None)
+        mt = next(v for v in (
+            max_tokens,
+            entry.max_tokens if entry else None,
+            real_out,
+            d.max_tokens,
+        ) if v is not None)
+        return (
+            _capped_limit(ctx, real_ctx, field="context_window_tokens", provider=provider, model=model),
+            _capped_limit(mt, real_out, field="max_tokens", provider=provider, model=model),
+        )
+
+    def resolve_preset_limits(self, preset: ModelPresetConfig) -> ModelPresetConfig:
+        """*preset* with concrete ``context_window_tokens`` / ``max_tokens``,
+        resolved like the default preset's (see ``_model_limits``): whatever
+        the preset leaves unset takes its model's own limits.
+
+        Returns *preset* itself when nothing changes, else a copy — a stored
+        preset is never modified, so a resolved value is never written back
+        to the config file.
+        """
+        entry, caps = self._resolve_model_params(preset.provider, preset.model)
+        ctx, mt = self._model_limits(
+            preset.provider, preset.model, entry, caps,
+            context_window_tokens=preset.context_window_tokens,
+            max_tokens=preset.max_tokens,
+        )
+        if ctx == preset.context_window_tokens and mt == preset.max_tokens:
+            return preset
+        return preset.model_copy(update={"context_window_tokens": ctx, "max_tokens": mt})
+
     def resolve_default_preset(self) -> ModelPresetConfig:
         """The implicit `default` preset: provider.models → catalog → defaults."""
         d = self.agents.defaults
         entry, caps = self._resolve_model_params(d.provider, d.model)
-        ctx = (
-            entry.context_window_tokens
-            if entry and entry.context_window_tokens is not None
-            else (caps.max_input_tokens if caps and caps.max_input_tokens else d.context_window_tokens)
-        )
-        mt = (
-            entry.max_tokens
-            if entry and entry.max_tokens is not None
-            else (caps.max_output_tokens if caps and caps.max_output_tokens else d.max_tokens)
-        )
+        ctx, mt = self._model_limits(d.provider, d.model, entry, caps)
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None
@@ -1711,7 +1788,7 @@ class Config(BaseSettings):
             return self.resolve_default_preset()
         if name not in self.model_presets:
             raise KeyError(f"model_preset {name!r} not found in model_presets")
-        return self.model_presets[name]
+        return self.resolve_preset_limits(self.model_presets[name])
 
     def resolve_persona(self, name: str | None = None) -> "PersonaConfig | None":
         """Resolve a persona by name from user config. ``None`` when the name is

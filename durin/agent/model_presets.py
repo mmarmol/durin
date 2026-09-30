@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from durin.config.schema import ModelPresetConfig
+from durin.config.schema import Config, ModelPresetConfig
 from durin.providers.base import LLMProvider
 from durin.providers.factory import ProviderSnapshot, build_provider_snapshot
 
@@ -41,7 +41,13 @@ def build_static_preset_snapshot(
     provider: LLMProvider,
     name: str,
     preset: ModelPresetConfig,
+    config: Any = None,
 ) -> ProviderSnapshot:
+    """Apply *preset* to *provider* in place. The limits the preset leaves
+    unset resolve like any preset's, against *config* — or, without a
+    config, against the catalog and the schema defaults."""
+    resolver = config if isinstance(config, Config) else Config()
+    preset = resolver.resolve_preset_limits(preset)
     provider.generation = preset.to_generation_settings()
     return ProviderSnapshot(
         provider=provider,
@@ -58,10 +64,11 @@ def build_runtime_preset_snapshot(
     presets: dict[str, ModelPresetConfig],
     provider: LLMProvider,
     loader: PresetSnapshotLoader | None,
+    config: Any = None,
 ) -> ProviderSnapshot:
     if loader is not None:
         return loader(name, preset=presets.get(name))
-    return build_static_preset_snapshot(provider, name, presets[name])
+    return build_static_preset_snapshot(provider, name, presets[name], config)
 
 
 def normalize_preset_name(name: str | None, presets: dict[str, ModelPresetConfig]) -> str:

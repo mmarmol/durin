@@ -63,6 +63,33 @@ def test_model_preset_setter_updates_state(tmp_path) -> None:
     assert loop.consolidator.max_completion_tokens == 4096
 
 
+def test_a_preset_that_names_no_limits_runs_on_concrete_ones_without_a_loader(tmp_path) -> None:
+    """With no snapshot loader the preset is applied in place; the limits it
+    leaves unset still resolve (here: no config, an unknown model, so the
+    schema defaults), never None."""
+    from durin.config.schema import AgentDefaults
+
+    loop = _make_loop(tmp_path, presets={"fast": ModelPresetConfig(model="openai/gpt-4.1")})
+    loop.set_model_preset("fast")
+
+    defaults = AgentDefaults()
+    assert loop.context_window_tokens == defaults.context_window_tokens
+    assert loop.provider.generation.max_tokens == defaults.max_tokens
+
+
+def test_a_static_preset_snapshot_resolves_unset_limits_against_the_config() -> None:
+    from durin.agent.model_presets import build_static_preset_snapshot
+    from durin.config.schema import Config
+
+    cfg = Config()
+    cfg.agents.defaults.context_window_tokens = 48_000
+    cfg.agents.defaults.max_tokens = 3000
+    provider = _provider("base-model")
+    snapshot = build_static_preset_snapshot(provider, "fast", ModelPresetConfig(model="some-model"), cfg)
+    assert snapshot.context_window_tokens == 48_000
+    assert provider.generation.max_tokens == 3000
+
+
 def test_model_preset_setter_calls_runtime_model_publisher(tmp_path) -> None:
     published: list[tuple[str, str | None]] = []
     loop = AgentLoop(
