@@ -262,7 +262,8 @@ class LLMProvider(ABC):
 
     def emit_call_telemetry(self, *, model: Any, response: LLMResponse,
                             duration_ms: float, purpose: str | None = None,
-                            max_tokens: int | None = None) -> None:
+                            max_tokens: int | None = None,
+                            provider: str | None = None) -> None:
         """Log one ``provider.call`` event for a completed round-trip.
 
         Sink resolution: the ContextVar-bound session logger wins (bound per
@@ -270,10 +271,11 @@ class LLMProvider(ABC):
         ``set_telemetry()``. No sink → the event is dropped. ``purpose`` names
         what the call was for; a caller that knows better passes it, otherwise
         the purpose bound to the current task is used, and ``unknown`` says no
-        one named it. ``max_tokens`` is the output cap the request sent; the
-        context window and input budget of the run the call belongs to come
-        from the limits bound to the current task, when a run bound them.
-        Telemetry must never break the call, so everything is
+        one named it. ``max_tokens`` is the output cap the request sent;
+        ``provider`` names the provider that answered when it is not this one
+        (a failover). The context window and input budget of the run the call
+        belongs to come from the limits bound to the current task, when a run
+        bound them. Telemetry must never break the call, so everything is
         exception-suppressed."""
         with suppress(Exception):
             from durin.telemetry.logger import (
@@ -290,7 +292,7 @@ class LLMProvider(ABC):
                 resolved_model = self.get_default_model()
             usage = getattr(response, "usage", None) or {}
             event: dict[str, Any] = {
-                "provider": self.provider_key or type(self).__name__,
+                "provider": provider or self.provider_key or type(self).__name__,
                 "model": str(resolved_model or ""),
                 "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
                 "cached_tokens": int(usage.get("cached_tokens", 0) or 0),

@@ -534,6 +534,49 @@ class TestFallbackModelParameter:
 
         assert fallback.chat_calls[0]["max_tokens"] == 131_072
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("wrapper", ["chat_with_retry", "chat_stream_with_retry"])
+    async def test_failover_through_the_retry_wrappers_sends_the_fallbacks_own_cap(self, wrapper: str) -> None:
+        """Every caller goes through the retry wrappers, and they fill a
+        max_tokens the caller did not name from the primary's generation. That
+        is the primary's default, not a request for less output: the fallback
+        still sends its own cap (it used to send the primary's 8,192)."""
+        from durin.providers.base import GenerationSettings
+
+        primary = _FakeProvider("primary", _error_response())
+        primary.generation = GenerationSettings(max_tokens=8192)
+        fallback = _FakeProvider("fallback", _make_response("ok"))
+        fb = FallbackProvider(
+            primary=primary,
+            fallback_presets=[_fallback("fallback-model", max_tokens=131_072)],
+            provider_factory=MagicMock(return_value=fallback),
+        )
+
+        response = await getattr(fb, wrapper)(
+            messages=[{"role": "user", "content": "hi"}], model="primary-model",
+        )
+
+        assert response.content == "ok"
+        assert primary.chat_stream_calls[0]["max_tokens"] == 8192
+        assert fallback.chat_stream_calls[0]["max_tokens"] == 131_072
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested, sent", [(3000, 3000), (300_000, 131_072)])
+    async def test_failover_through_the_retry_wrappers_keeps_a_named_cap(self, requested: int, sent: int) -> None:
+        primary = _FakeProvider("primary", _error_response())
+        fallback = _FakeProvider("fallback", _make_response("ok"))
+        fb = FallbackProvider(
+            primary=primary,
+            fallback_presets=[_fallback("fallback-model", max_tokens=131_072)],
+            provider_factory=MagicMock(return_value=fallback),
+        )
+
+        await fb.chat_with_retry(
+            messages=[{"role": "user", "content": "hi"}], model="primary-model", max_tokens=requested,
+        )
+
+        assert fallback.chat_stream_calls[0]["max_tokens"] == sent
+
 
 class TestNoFallbackWhenEmptyList:
     @pytest.mark.asyncio

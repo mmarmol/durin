@@ -282,7 +282,13 @@ smaller. `preset_window_cap` returns the window with the fallback that sets it
 temperature and reasoning effort, and as `max_tokens` the fallback's own output cap or
 the request's, whichever is smaller: the runner sized the request's cap to the room its
 prompt leaves in that shared window, and a fallback with a larger output limit must not
-undo it.
+undo it. Only a cap the caller named counts as the request's: the retry wrappers fill
+an unnamed `max_tokens` in from the primary's generation before the request reaches
+the failover, so `FallbackProvider` overrides `chat_with_retry` /
+`chat_stream_with_retry` to note whether the caller named one (`_CALLER_MAX_TOKENS`),
+and a request that named none gets the fallback's own cap, not the primary's default.
+The call's `provider.call` row names the fallback's provider, model and the cap it was
+sent when a fallback produced the response (`FallbackProvider.emit_call_telemetry`).
 
 ### 4.5 One transport: every completion streams
 

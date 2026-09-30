@@ -111,6 +111,57 @@ def test_the_bound_limits_tag_the_call_and_reset_restores_them(tmp_path) -> None
     assert "context_window_tokens" not in second
 
 
+class _Keyed(LLMProvider):
+    """A provider under a registry name that answers with a fixed response."""
+
+    def __init__(self, key: str, response: LLMResponse, max_tokens: int = 4096) -> None:
+        super().__init__(api_key="k", api_base="http://unit.test")
+        self.provider_key = key
+        self.generation = GenerationSettings(max_tokens=max_tokens)
+        self._response = response
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:  # noqa: ANN001
+        return self._response
+
+    def get_default_model(self) -> str:
+        return "default"
+
+
+def _failover(primary_response: LLMResponse):
+    from durin.config.schema import ModelPresetConfig
+    from durin.providers.fallback_provider import FallbackProvider
+
+    fallback = _Keyed("openrouter", LLMResponse(content="ok", finish_reason="stop", usage={"prompt_tokens": 5}))
+    return FallbackProvider(
+        primary=_Keyed("zai_coding_plan", primary_response, max_tokens=8192),
+        fallback_presets=[ModelPresetConfig(
+            model="z-ai/glm-5-turbo", provider="openrouter", max_tokens=131_072, context_window_tokens=200_000,
+        )],
+        provider_factory=lambda _preset: fallback,
+    )
+
+
+def test_a_failover_records_the_provider_model_and_cap_the_fallback_was_sent(tmp_path) -> None:
+    """The row used to name the primary, its model and its cap for a
+    response the fallback produced."""
+    overloaded = LLMResponse(content="overloaded", finish_reason="error", error_status_code=529)
+    wrapper = _failover(overloaded)
+    rows = _logged(tmp_path, lambda: asyncio.run(wrapper.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="glm-5.3",
+    )))
+    [row] = rows
+    assert (row["provider"], row["model"], row["max_tokens"]) == ("openrouter", "z-ai/glm-5-turbo", 131_072)
+    assert row["finish_reason"] == "stop"
+
+
+def test_a_call_the_primary_answers_records_the_primary(tmp_path) -> None:
+    wrapper = _failover(LLMResponse(content="fine", finish_reason="stop"))
+    [row] = _logged(tmp_path, lambda: asyncio.run(wrapper.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="glm-5.3",
+    )))
+    assert (row["provider"], row["model"], row["max_tokens"]) == ("zai_coding_plan", "glm-5.3", 8192)
+
+
 def test_an_explicit_emit_records_the_max_tokens_it_names(tmp_path) -> None:
     """The vision / audio bridges call chat() directly and emit their own row."""
     p = _StubProvider()

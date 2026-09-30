@@ -132,7 +132,10 @@ the retry wrappers. The event carries the provider's
 config-registry name (stamped as `provider_key` by the factory), the model,
 prompt/cached/completion token counts, `duration_ms`, the final
 `finish_reason`, and `purpose` — the universal "who spent the tokens" record;
-`cache.usage` remains the agent-loop-only cache-ratio view. Sink resolution:
+`cache.usage` remains the agent-loop-only cache-ratio view. When a fallback
+model produced the response, the row names the fallback's provider and model
+and the `max_tokens` it was sent, not the primary's the request started with.
+Sink resolution:
 the ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
 
