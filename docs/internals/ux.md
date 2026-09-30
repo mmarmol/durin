@@ -615,6 +615,21 @@ filter is a webui-only presentation choice, not a config-model change.
 to the split directory. `mutate_config()` performs an atomic
 load-modify-save under `cross_process_lock` so concurrent processes serialize.
 
+A single key is addressed by a config path — `durin config get/set/show/schema`
+and the settings editor's `POST /api/v1/config` share the helpers in
+`durin/cli/config_cmd.py`. Keys are separated by dots; a key written in quoted
+brackets (`models["glm-5.3"]`) is literal, so a model name's dots do not split
+it. `_normalize_dotted_path` walks the config's JSON schema alongside the path:
+a field name is case-tolerant (`apiKey` → `api_key`), while a key of a typed
+map (a model, preset or header name) is kept as typed. A write goes through
+`apply_setting`, which validates the result and then reads the value back at
+the same path from the validated config; when it is not there — validation
+dropped a key that is not a field of its section — the write is refused with
+`ConfigKeyError` (the CLI exits 1, the API answers a validation error) instead
+of saving a config where the value landed nowhere or under an unrelated key.
+`ConfigSettings.tsx` builds its row paths the same way, bracketing any key
+that contains a dot, bracket or quote.
+
 ### Secrets flow
 
 `SecretStore` loads and persists `~/.durin/secrets.json` (mode 0600) under

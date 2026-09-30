@@ -14,12 +14,14 @@ import os
 import shutil
 import subprocess
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import pydantic
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.syntax import Syntax
 
 from durin.config.loader import get_config_path, save_config
@@ -58,10 +60,92 @@ def parse_value(raw: str) -> Any:
         return raw
 
 
+def _parse_path(path: str) -> list[tuple[str, bool]]:
+    """``(key, literal)`` pairs of a config path.
+
+    Keys are separated by dots. A key written in brackets — ``["glm-5.3"]``,
+    ``['glm-5.3']`` or ``[glm-5.3]`` — is *literal*: it may contain dots and
+    is never case-normalized, which is how a map key such as a model name is
+    addressed (model names routinely contain dots). Raises ``ValueError`` for
+    a malformed path: an empty key, an unclosed bracket or quote, or text
+    right after a closing bracket.
+    """
+    segments: list[tuple[str, bool]] = []
+    buf = ""
+    after_bracket = False
+    i, n = 0, len(path)
+    while i < n:
+        ch = path[i]
+        if ch == ".":
+            if buf:
+                segments.append((buf, False))
+                buf = ""
+            elif not after_bracket:
+                raise ValueError(f"empty key in config path {path!r}")
+            after_bracket = False
+            i += 1
+            if i == n:
+                raise ValueError(f"config path {path!r} ends with a dot")
+            continue
+        if ch == "[":
+            if buf:
+                segments.append((buf, False))
+                buf = ""
+            i += 1
+            if i < n and path[i] in "\"'":
+                quote = path[i]
+                end = path.find(quote, i + 1)
+                if end == -1 or end + 1 >= n or path[end + 1] != "]":
+                    raise ValueError(f"unclosed quoted key in config path {path!r}")
+                key, i = path[i + 1:end], end + 2
+            else:
+                end = path.find("]", i)
+                if end == -1:
+                    raise ValueError(f"unclosed '[' in config path {path!r}")
+                key, i = path[i:end].strip(), end + 1
+            if not key:
+                raise ValueError(f"empty key in config path {path!r}")
+            segments.append((key, True))
+            after_bracket = True
+            if i < n and path[i] not in ".[":
+                raise ValueError(f"unexpected text after ']' in config path {path!r}")
+            continue
+        if ch == "]":
+            raise ValueError(f"unbalanced ']' in config path {path!r}")
+        buf += ch
+        i += 1
+    if buf:
+        segments.append((buf, False))
+    if not segments:
+        raise ValueError("empty config path")
+    return segments
+
+
+def path_segments(path: str) -> list[str]:
+    """The keys of a config path, in order (see ``_parse_path`` for the
+    bracket form of a key that contains dots). Raises ``ValueError``."""
+    return [key for key, _ in _parse_path(path)]
+
+
+def _render_path(segments: list[tuple[str, bool]]) -> str:
+    """A path string for *segments*: dotted, with a key that was written in
+    brackets — or that could not be read back from a dotted form — kept in
+    brackets."""
+    out = ""
+    for key, literal in segments:
+        if literal or any(c in key for c in ".[]\"'"):
+            quote = "'" if '"' in key else '"'
+            out += f"[{quote}{key}{quote}]"
+        else:
+            out += f".{key}" if out else key
+    return out
+
+
 def get_at(data: Any, dotted: str) -> Any:
-    """Walk a dotted path through nested dicts and lists. Raises KeyError."""
+    """Walk a config path through nested dicts and lists. Raises KeyError
+    (or ValueError for a malformed path)."""
     cursor: Any = data
-    for part in dotted.split("."):
+    for part in path_segments(dotted):
         if isinstance(cursor, dict):
             if part not in cursor:
                 raise KeyError(dotted)
@@ -80,14 +164,15 @@ def get_at(data: Any, dotted: str) -> Any:
 
 
 def set_at(data: dict[str, Any], dotted: str, value: Any) -> dict[str, Any]:
-    """Return a deep copy of ``data`` with ``value`` written at ``dotted``.
+    """Return a deep copy of ``data`` with ``value`` written at the config
+    path ``dotted``.
 
     Intermediate dicts are created on the fly; lists are addressed by
     integer index. Existing scalars on the path are replaced.
     """
     out = copy.deepcopy(data) if data else {}
     cursor: Any = out
-    parts = dotted.split(".")
+    parts = path_segments(dotted)
     for part in parts[:-1]:
         if isinstance(cursor, list):
             cursor = cursor[int(part)]
@@ -143,6 +228,41 @@ def validate_dict(data: dict[str, Any]) -> Config:
     return Config.model_validate(data)
 
 
+class ConfigKeyError(ValueError):
+    """A config path that does not name a place in the config."""
+
+
+_DOTTED_KEY_HINT = (
+    "A key that contains dots, such as a model name, goes in brackets: "
+    'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens'
+)
+
+
+def apply_setting(data: dict[str, Any], path: str, value: Any) -> Config:
+    """*data* with *value* written at the config path *path*, validated.
+
+    Raises ``pydantic.ValidationError`` when the result is not a valid
+    config, and ``ConfigKeyError`` when *path* is malformed or the validated
+    config does not hold the value where *path* says. Validation silently
+    drops a key that is not a field of its section, so without this check a
+    mistyped field — or a model name whose dots split it into several keys
+    (``models.glm-5.3.x`` wrote ``x`` under ``models["glm-5"]["3"]`` and
+    validation threw the ``"3"`` away) — was written nowhere, or somewhere
+    unrelated, while the command reported success.
+    """
+    try:
+        normalized = _normalize_dotted_path(path)
+        new_data = set_at(data, normalized, value)
+    except (ValueError, IndexError) as exc:
+        raise ConfigKeyError(f"{path} does not name a config key: {exc}") from None
+    config = validate_dict(new_data)
+    try:
+        get_at(config.model_dump(mode="json", by_alias=False), normalized)
+    except KeyError:
+        raise ConfigKeyError(f"{path} does not name a config key. {_DOTTED_KEY_HINT}") from None
+    return config
+
+
 # ---------------------------------------------------------------------------
 # Typer wiring
 # ---------------------------------------------------------------------------
@@ -175,8 +295,8 @@ def cmd_show(
     if section:
         try:
             payload = get_at(data, _normalize_dotted_path(section))
-        except KeyError:
-            console.print(f"[red]No such key: {section}[/red]")
+        except (KeyError, ValueError):
+            console.print(f"[red]No such key: {escape(section)}[/red]")
             raise typer.Exit(1) from None
     if not raw:
         payload = mask_secrets(payload)
@@ -216,8 +336,8 @@ def cmd_get(
         data = load_raw_config(path)
     try:
         value = get_at(data, _normalize_dotted_path(key))
-    except KeyError:
-        console.print(f"[red]No such key: {key}[/red]")
+    except (KeyError, ValueError):
+        console.print(f"[red]No such key: {escape(key)}[/red]")
         raise typer.Exit(1) from None
     if isinstance(value, (dict, list)):
         console.print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
@@ -302,16 +422,20 @@ def cmd_schema(
         console.print("[dim]Use `durin config schema <dotted.key>` for one key.[/dim]")
         return
 
-    normalized = _normalize_dotted_path(key)
+    try:
+        normalized = _normalize_dotted_path(key)
+    except ValueError:
+        console.print(f"[red]No such config key: {escape(key)}[/red]")
+        raise typer.Exit(1) from None
     node: dict[str, Any] = schema
-    for seg in normalized.split("."):
+    for seg in path_segments(normalized):
         child = _child_schema(node, seg, defs)
         if child is None:
-            console.print(f"[red]No such config key: {key}[/red]")
+            console.print(f"[red]No such config key: {escape(key)}[/red]")
             raise typer.Exit(1)
         node = child
 
-    console.print(f"[bold]{normalized}[/bold]")
+    console.print(f"[bold]{escape(normalized)}[/bold]")
     console.print(f"  type: {_type_str(node, defs)}")
     try:
         default = get_at(Config().model_dump(mode="json", by_alias=False), normalized)
@@ -356,9 +480,12 @@ def cmd_set(
         console.print("[red]On-disk config is invalid; refusing to edit.[/red]")
         console.print(str(e))
         raise typer.Exit(1) from None
-    new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(value))
     try:
-        config = validate_dict(new_data)
+        config = apply_setting(canonical, key, parse_value(value))
+    except ConfigKeyError as e:
+        console.print(f"[red]{escape(str(e))}[/red]")
+        console.print("Config not modified.")
+        raise typer.Exit(1) from None
     except pydantic.ValidationError as e:
         console.print("[red]Validation failed; config not modified.[/red]")
         console.print(str(e))
@@ -366,26 +493,74 @@ def cmd_set(
     save_config(config, path)
     if bootstrapped:
         console.print(f"[green]✓[/green] Created config at {path}")
-    console.print(f"[green]✓[/green] {key} updated.")
+    console.print(f"[green]✓[/green] {escape(key)} updated.")
+
+
+def _snake(seg: str) -> str:
+    """camelCase → snake_case for one key; numeric keys (list indices) and
+    keys that already contain an underscore pass through."""
+    if seg.isdigit() or "_" in seg:
+        return seg
+    out: list[str] = []
+    for i, ch in enumerate(seg):
+        if ch.isupper() and i > 0:
+            out.append("_")
+        out.append(ch.lower())
+    return "".join(out)
+
+
+@lru_cache(maxsize=1)
+def _field_name_schema() -> dict[str, Any]:
+    """The config's JSON schema with properties under their field names."""
+    return Config.model_json_schema(by_alias=False)
+
+
+def _normalize_key(
+    seg: str, literal: bool, node: dict[str, Any] | None, defs: dict[str, Any],
+) -> tuple[str, dict[str, Any] | None]:
+    """The canonical form of one path key, and the schema node under it.
+
+    A field name is case-tolerant (``apiKey`` → ``api_key``). A key of a
+    typed map — a model name under ``providers.<p>.models``, a preset name,
+    a header name — is the user's and is kept as typed: case-normalizing it
+    turned ``MiniMax-M2`` into ``mini_max-_m2``. Outside the typed schema
+    (a free-form dict) a key keeps the plain snake_case rule.
+    """
+    if node is None:
+        return (seg if literal else _snake(seg)), None
+    resolved = _resolve_ref(node, defs)
+    candidates = [resolved] + [_resolve_ref(s, defs) for s in resolved.get("anyOf", [])]
+    names = [seg] if literal else [seg, _snake(seg)]
+    for cand in candidates:
+        props = cand.get("properties", {})
+        for name in names:
+            if name in props:
+                return name, props[name]
+    for cand in candidates:
+        extra = cand.get("additionalProperties")
+        if isinstance(extra, dict):
+            return seg, extra
+        items = cand.get("items")
+        if isinstance(items, dict) and seg.isdigit():
+            return seg, items
+    return (seg if literal else _snake(seg)), None
 
 
 def _normalize_dotted_path(dotted: str) -> str:
-    """Normalize each segment of a dotted path to snake_case (the canonical
-    config form). Input is case-tolerant: a user typing
-    ``providers.zhipu.apiKey`` resolves the same as ``providers.zhipu.api_key``.
-    Numeric segments (list indices) are passed through.
+    """The canonical form of a config path: field names in snake_case (input
+    is case-tolerant, so ``providers.zhipu.apiKey`` resolves the same as
+    ``providers.zhipu.api_key``), map keys and list indices as typed, and a
+    key that contains dots in brackets. Raises ``ValueError`` for a
+    malformed path.
     """
-    def _snake(seg: str) -> str:
-        if seg.isdigit() or "_" in seg:
-            return seg
-        out: list[str] = []
-        for i, ch in enumerate(seg):
-            if ch.isupper() and i > 0:
-                out.append("_")
-            out.append(ch.lower())
-        return "".join(out)
-
-    return ".".join(_snake(s) for s in dotted.split("."))
+    schema = _field_name_schema()
+    defs = schema.get("$defs", {})
+    node: dict[str, Any] | None = schema
+    out: list[tuple[str, bool]] = []
+    for seg, literal in _parse_path(dotted):
+        key, node = _normalize_key(seg, literal, node, defs)
+        out.append((key, literal))
+    return _render_path(out)
 
 
 @config_app.command("import")

@@ -88,6 +88,25 @@ the HTTP/WS API, and the webui all use `snake_case` (matching the Python field
 names). Input is case-tolerant: `set`/`get` and the loader accept both
 `snake_case` and `camelCase`, so a legacy camelCase config still loads and is
 rewritten to `snake_case` on the next save. Output is always `snake_case`.
+Case tolerance applies to field names only: a key you choose — a model name
+under `providers.<provider>.models`, a preset name, a header name — is kept
+exactly as typed.
+
+**Keys that contain dots.** A path is split on dots, so a key with a dot in
+it — most model names: `glm-5.3`, `gpt-4.1`, `MiniMax-M2.5` — goes in
+brackets, quoted with `"` or `'`:
+
+```
+durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' null
+durin config get 'providers.zai_coding_plan.models["glm-5.3"]'
+durin config set "model_capabilities['zai_coding_plan/glm-5.3'].supports_vision" false
+```
+
+Quote the whole path for the shell, as above. A key without dots can be
+written either way (`models.glm-5-turbo` or `models["glm-5-turbo"]`). `set`
+refuses — and changes nothing — when the value would not land where the path
+says: a misspelled field, or a dotted model name written without brackets,
+which would otherwise split into unrelated keys.
 
 ---
 

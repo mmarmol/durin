@@ -370,11 +370,12 @@ class ConfigService:
     async def set(self, cmd: ConfigSetCommand, principal: Principal) -> ConfigSetResult:
         principal.require(Scope.CONFIG_WRITE)
         from durin.cli.config_cmd import (
+            ConfigKeyError,
             _normalize_dotted_path,
+            apply_setting,
             load_raw_config,
             mask_secrets,
             parse_value,
-            set_at,
             validate_dict,
         )
         from durin.config.loader import get_config_path, save_config
@@ -387,9 +388,10 @@ class ConfigService:
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"on-disk config is invalid: {e}") from e
 
-        new_data = set_at(canonical, _normalize_dotted_path(cmd.key), parse_value(cmd.value))
         try:
-            config = validate_dict(new_data)
+            config = apply_setting(canonical, cmd.key, parse_value(cmd.value))
+        except ConfigKeyError as e:
+            raise ValidationFailedError(str(e)) from e
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"validation failed: {e}") from e
 

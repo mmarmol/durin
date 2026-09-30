@@ -87,6 +87,39 @@ async def test_config_set_rejects_invalid_value(config_path):
     assert load_config(config_path).agents.defaults.max_tokens == 8192
 
 
+async def test_config_set_addresses_a_model_name_with_dots(config_path):
+    """The dashboard's settings editor writes model entries by path; a model
+    name's dots must not split it into several keys."""
+    from durin.config.loader import load_config
+
+    await ConfigService().set(
+        ConfigSetCommand(
+            key='providers.zai_coding_plan.models["glm-5.3"].context_window_tokens',
+            value="231072",
+        ),
+        LOCAL,
+    )
+    models = load_config(config_path).providers.zai_coding_plan.models
+    assert models["glm-5.3"].context_window_tokens == 231_072
+    assert "glm-5" not in models
+
+
+async def test_config_set_rejects_a_path_that_lands_nowhere(config_path):
+    from durin.config.loader import load_config
+
+    before = config_path.read_text()
+    with pytest.raises(ValidationFailedError, match="does not name a config key"):
+        await ConfigService().set(
+            ConfigSetCommand(
+                key="providers.zai_coding_plan.models.glm-5.3.context_window_tokens",
+                value="231072",
+            ),
+            LOCAL,
+        )
+    assert config_path.read_text() == before
+    assert load_config(config_path).providers.zai_coding_plan.models == {}
+
+
 async def test_config_set_requires_write_scope():
     principal = Principal.remote("t", frozenset({Scope.CONFIG_READ.value}))
     with pytest.raises(ForbiddenError):

@@ -33,13 +33,22 @@ function parseSecretRef(value: Json): string | null {
   return m ? m[1] : null;
 }
 
+/** The API path of `key` under `path`. A key that contains a dot (a model
+ *  name such as `glm-5.3`), a bracket or a quote goes in brackets, since the
+ *  dots of a plain dotted path would split it into several keys. */
+function childPath(path: string, key: string): string {
+  if (!/[.[\]"']/.test(key)) return `${path}.${key}`;
+  const quote = key.includes('"') ? "'" : '"';
+  return `${path}[${quote}${key}${quote}]`;
+}
+
 /** Walk a config subtree into editable leaves. Plain objects recurse so
  *  every scalar gets its own row; arrays and null stay whole (read-only). */
 function flatten(value: Json, path: string, display: string, out: Leaf[]): void {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const entries = Object.entries(value as Record<string, Json>);
     for (const [key, child] of entries) {
-      flatten(child, `${path}.${key}`, display ? `${display}.${key}` : key, out);
+      flatten(child, childPath(path, key), display ? `${display}.${key}` : key, out);
     }
     return;
   }
