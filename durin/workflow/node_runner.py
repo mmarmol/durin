@@ -33,7 +33,7 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.path_utils import is_under
 from durin.agent.tools.registry import ToolRegistry
-from durin.config.schema import ToolsConfig
+from durin.config.schema import ModelPresetConfig, ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
@@ -496,13 +496,12 @@ class AgentNodeRunner:
             else:
                 return make_provider(config, preset=preset), preset.model
 
-        # A plain model name, not a registered preset: the pre-existing
-        # workflow behavior sends it straight to the default provider. Only
-        # build a dedicated client when the model's OWN config entry declares
-        # generation params that differ from what the default provider
-        # already runs with — the common case (no such entry) reuses the
-        # default client instead of paying for a new one just to serve the
-        # same params.
+        # A plain model name, not a registered preset: it runs on the default
+        # provider. Build a dedicated client only when the model's own
+        # generation — its output cap, and whatever its config entry declares
+        # — differs from what the default client already runs with; the
+        # common case (same cap, no entry) reuses the default client instead
+        # of paying for a new one just to serve the same params.
         try:
             default_provider = self.runner.provider
             default_provider_key = getattr(default_provider, "provider_key", None)
@@ -513,38 +512,55 @@ class AgentNodeRunner:
             override = None
         if override is None:
             return default_provider, ref
-        preset = adhoc_preset_config(config, default_provider_key or "auto", ref)
-        return make_provider(config, preset=preset), preset.model
+        preset = adhoc_preset_config(config, default_provider_key or "auto", ref).model_copy(update={
+            "temperature": override.temperature,
+            "max_tokens": override.max_tokens,
+            "reasoning_effort": override.reasoning_effort,
+            "top_p": override.top_p,
+            "top_k": override.top_k,
+            "repeat_penalty": override.repeat_penalty,
+        })
+        try:
+            return make_provider(config, preset=preset), preset.model
+        except Exception:  # noqa: BLE001 - the name still runs, on the client that serves the default
+            logger.warning(
+                "workflow: could not build a client for model {!r}; running it on the "
+                "default provider's client and generation", ref,
+            )
+            return default_provider, ref
 
     def _model_entry_override(self, config, provider_key: str | None, model: str):
-        """The ``GenerationSettings`` *model*'s per-model ``ModelEntry`` under
-        *provider_key* would produce, or ``None`` when there is no config, no
-        provider_key, no entry, or the entry's declared fields already match
-        the default provider's CURRENT generation (nothing to override) —
-        the signal for whether a plain model name needs its own provider
-        instance. Unset entry fields fall back to the default provider's own
-        generation (not the config's generic defaults), so an entry that only
-        declares e.g. temperature doesn't spuriously look "different" on the
-        fields it left unset."""
+        """The ``GenerationSettings`` a plain model name runs with under
+        *provider_key*, or ``None`` when there is no config or provider_key,
+        or when it equals the default provider's CURRENT generation — the
+        signal for whether the name needs its own provider instance.
+
+        ``max_tokens`` is always the model's own output cap (its entry, its
+        real limits, ``agents.defaults``): the default client's is its own
+        model's, which a model that accepts less rejects. The other params
+        are what the model's ``ModelEntry`` declares, and the default
+        provider's own generation (not the config's generic defaults) where
+        it declares nothing, so an entry that only declares e.g. temperature
+        doesn't spuriously look "different" on the fields it left unset."""
         if config is None or not provider_key:
             return None
         provider_cfg = getattr(config.providers, provider_key, None)
         entry = (getattr(provider_cfg, "models", None) or {}).get(model)
-        if entry is None:
-            return None
         base = self.runner.provider.generation
-        overrides = {
-            field: value
-            for field, value in (
-                ("temperature", entry.temperature),
-                ("max_tokens", entry.max_tokens),
-                ("reasoning_effort", entry.reasoning_effort),
-                ("top_p", entry.top_p),
-                ("top_k", entry.top_k),
-                ("repeat_penalty", entry.repeat_penalty),
-            )
-            if value is not None
-        }
+        own = config.resolve_preset_limits(ModelPresetConfig(model=model, provider=provider_key))
+        overrides = {"max_tokens": own.max_tokens}
+        if entry is not None:
+            overrides.update({
+                field: value
+                for field, value in (
+                    ("temperature", entry.temperature),
+                    ("reasoning_effort", entry.reasoning_effort),
+                    ("top_p", entry.top_p),
+                    ("top_k", entry.top_k),
+                    ("repeat_penalty", entry.repeat_penalty),
+                )
+                if value is not None
+            })
         candidate = dataclasses.replace(base, **overrides)
         return candidate if candidate != base else None
 

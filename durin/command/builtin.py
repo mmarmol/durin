@@ -660,12 +660,14 @@ def _model_command_status(loop) -> str:
 def adhoc_preset_config(config: Any, provider: str, model: str):
     """Build an ad-hoc ``ModelPresetConfig`` for a ``provider model`` ref (the
     picker form). Shared by the ``/model`` command and the per-turn cron model
-    override so both resolve a picker ref identically. Params resolve: the
-    user's per-model config override -> the catalog caps -> ``agents.defaults``
-    (the window and output cap, exactly like any other preset's; the schema
-    defaults stand in for ``agents.defaults`` when there is no config).
+    override so both resolve a picker ref identically. Sampling params come
+    from the user's per-model entry. The window and output cap are left
+    unset, like any preset's that names none: they resolve — entry, the
+    model's real limits, ``agents.defaults`` — wherever the preset becomes a
+    run, so a pick cached in the loop's presets follows a later edit of the
+    model's entry instead of keeping the limits it had when it was made.
     """
-    from durin.config.schema import Config, ModelPresetConfig
+    from durin.config.schema import ModelPresetConfig
 
     entry = None
     if config is not None:
@@ -674,7 +676,7 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
         routed = config.routed_provider(provider, model)
         pc = getattr(config.providers, routed, None) if routed and routed != "auto" else None
         entry = (getattr(pc, "models", None) or {}).get(model)
-    preset = ModelPresetConfig(
+    return ModelPresetConfig(
         model=model,
         provider=provider,
         temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
@@ -687,7 +689,6 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
             entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
         ),
     )
-    return (config if config is not None else Config()).resolve_preset_limits(preset)
 
 
 def resolve_preset_ref(loop: Any, ref: str) -> str:

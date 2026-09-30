@@ -221,13 +221,34 @@ def test_an_uncataloged_model_is_never_capped(warnings_logged) -> None:
 # --- the other preset-like paths -----------------------------------------------------
 
 
+def test_a_cached_model_pick_follows_a_later_entry_edit() -> None:
+    """`/model provider model` caches its preset in the loop's presets. With
+    the limits resolved into it, a later edit of the model's entry never
+    reached the pick; left unset, every snapshot built from it resolves them
+    again."""
+    from unittest.mock import MagicMock
+
+    from durin.agent.model_presets import build_static_preset_snapshot
+    from durin.command.builtin import adhoc_preset_config
+
+    cfg = _config()
+    cached = adhoc_preset_config(cfg, "zai_coding_plan", "glm-5-turbo")
+    assert (cached.context_window_tokens, cached.max_tokens) == (None, None)
+    provider = MagicMock()
+    assert build_static_preset_snapshot(provider, "glm-5-turbo", cached, cfg).context_window_tokens == 200_000
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=50_000, max_tokens=4_000)
+    snapshot = build_static_preset_snapshot(provider, "glm-5-turbo", cached, cfg)
+    assert snapshot.context_window_tokens == 50_000
+    assert provider.generation.max_tokens == 4_000
+
+
 def test_an_adhoc_pick_of_an_uncataloged_model_falls_back_to_agents_defaults() -> None:
     from durin.command.builtin import adhoc_preset_config
 
     cfg = _config()
     cfg.agents.defaults.context_window_tokens = 48_000
     cfg.agents.defaults.max_tokens = 6000
-    preset = adhoc_preset_config(cfg, "zai_coding_plan", "my-local-model")
+    preset = cfg.resolve_preset_limits(adhoc_preset_config(cfg, "zai_coding_plan", "my-local-model"))
     assert (preset.context_window_tokens, preset.max_tokens) == (48_000, 6000)
 
 
@@ -236,18 +257,29 @@ def test_an_adhoc_pick_is_capped_like_any_configured_value(warnings_logged) -> N
 
     cfg = _config()
     cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(context_window_tokens=231_072)
-    assert adhoc_preset_config(cfg, "zai_coding_plan", "glm-5-turbo").context_window_tokens == 200_000
+    pick = adhoc_preset_config(cfg, "zai_coding_plan", "glm-5-turbo")
+    assert cfg.resolve_preset_limits(pick).context_window_tokens == 200_000
     assert len(warnings_logged) == 1
 
 
 def test_an_adhoc_pick_without_a_config_uses_the_catalog_then_the_schema_defaults() -> None:
+    """A loop wired without a config resolves a pick's limits against the
+    catalog and the schema defaults when it builds the pick's snapshot."""
+    from unittest.mock import MagicMock
+
+    from durin.agent.model_presets import build_static_preset_snapshot
     from durin.command.builtin import adhoc_preset_config
 
-    cataloged = adhoc_preset_config(None, "zai_coding_plan", "glm-5.3")
-    assert (cataloged.context_window_tokens, cataloged.max_tokens) == (1_000_000, 131_072)
-    unknown = adhoc_preset_config(None, "zai_coding_plan", "my-local-model")
+    provider = MagicMock()
+    cataloged = build_static_preset_snapshot(
+        provider, "glm-5.3", adhoc_preset_config(None, "zai_coding_plan", "glm-5.3"),
+    )
+    assert (cataloged.context_window_tokens, provider.generation.max_tokens) == (1_000_000, 131_072)
+    unknown = build_static_preset_snapshot(
+        provider, "my-local-model", adhoc_preset_config(None, "zai_coding_plan", "my-local-model"),
+    )
     defaults = AgentDefaults()
-    assert (unknown.context_window_tokens, unknown.max_tokens) == (
+    assert (unknown.context_window_tokens, provider.generation.max_tokens) == (
         defaults.context_window_tokens, defaults.max_tokens,
     )
 

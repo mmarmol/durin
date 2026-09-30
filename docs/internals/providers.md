@@ -189,10 +189,16 @@ Resolution happens where a preset becomes a run, so the in-memory presets keep
 `resolve_preset(name)`, the factory's `_resolve_model_preset` (every `make_provider`,
 `provider_signature` and `build_provider_snapshot` call, including a preset object
 handed in by the loop's snapshot loader), `preset_context_window`, each fallback
-preset, `adhoc_preset_config` (a `/model provider model` pick, a cron or workflow
-model ref, an inline `aux_models.subagents` pair), the placed model of
-`resolve_aux_preset` (judge, dream, automations — never the default model's
-limits), and `build_static_preset_snapshot` for a loop wired without a loader.
+preset, the placed model of `resolve_aux_preset` (judge, dream, automations —
+never the default model's limits), and `build_static_preset_snapshot` for a loop
+wired without a loader. `adhoc_preset_config` — a `/model provider model` pick, a
+cron or workflow model ref, an inline `aux_models.subagents` pair — builds its
+preset with the limits unset, so a pick the loop caches in its presets resolves
+them again on every snapshot and follows a later edit of the model's entry. A
+workflow node that names a plain model (neither a preset nor a pair) runs on the
+default provider with the model's own output cap; it shares the default client
+only when that cap and its entry's params equal the default client's generation
+(`AgentNodeRunner._model_entry_override`, `durin/workflow/node_runner.py`).
 
 A configured value above the model's real limit is capped to it by
 `_capped_limit` (`durin/config/schema.py`): a window above the real one lets the
