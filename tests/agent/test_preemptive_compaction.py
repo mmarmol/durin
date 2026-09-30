@@ -309,20 +309,46 @@ def test_the_loop_hands_its_block_limit_to_the_consolidator(tmp_path):
     assert trigger < runner_budget
 
 
-def test_history_replay_stays_within_the_runners_budget(tmp_path):
-    from durin.agent.runner import input_budget_tokens, provider_max_output
+async def _replayed_history_tokens(tmp_path, **loop_kwargs) -> int:
+    """Tokens of the history a real turn hands the runner, on a session of
+    about 120,000 tokens that compaction is kept from shrinking."""
+    from durin.utils.helpers import estimate_prompt_tokens
 
-    limited = _make_loop(tmp_path, context_window_tokens=1_000_000, context_block_limit=100_000)
-    runner_budget = input_budget_tokens(
-        limited.context_window_tokens, provider_max_output(limited.provider), limited.context_block_limit,
-    )
-    assert limited._replay_token_budget() <= runner_budget
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000, **loop_kwargs)
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+    session = loop.sessions.get_or_create("cli:replay")
+    session.messages = []
+    for i in range(40):
+        session.add_message("user", f"question {i} " + "long words " * 1500)
+        session.add_message("assistant", f"answer {i}")
+    loop.sessions.save(session)
+    prompts: list[list[dict]] = []
+    real_run = loop.runner.run
 
-    # Unset, the replay budget is the window's input budget, as before.
-    unlimited = _make_loop(tmp_path, context_window_tokens=1_000_000)
-    assert unlimited._replay_token_budget() == input_budget_tokens(
-        1_000_000, provider_max_output(unlimited.provider),
-    )
+    async def _run(spec):
+        prompts.append(list(spec.initial_messages))
+        return await real_run(spec)
+
+    loop.runner.run = _run  # type: ignore[method-assign]
+    await loop.process_direct("next", session_key="cli:replay")
+    # Between the system prompt and the current message.
+    return estimate_prompt_tokens(prompts[0][1:-1])
+
+
+@pytest.mark.asyncio
+async def test_history_replay_stays_within_the_runners_budget(tmp_path):
+    """context_block_limit is all a run may send, so the history a turn
+    replays never exceeds it, whatever the session holds: here three times
+    the limit is on file, and without the limit most of it is replayed. The
+    replay bounds the history alone; fitting the whole prompt is the job of
+    compaction, and of the overflow retry's forced compaction when it did
+    not."""
+    from durin.agent.runner import input_budget_tokens
+
+    runner_budget = input_budget_tokens(1_000_000, 0, 40_000)
+    assert await _replayed_history_tokens(tmp_path / "limited", context_block_limit=40_000) <= runner_budget
+    assert await _replayed_history_tokens(tmp_path / "unlimited") > runner_budget
 
 
 def test_run_limits_size_a_check_by_the_turns_own_model(tmp_path):
