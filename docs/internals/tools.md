@@ -184,7 +184,10 @@ is missing — e.g. the vision bridge without `ctx.aux_providers["vision"]`).
 The subagent manager and the workflow node runner build their contexts with
 `aux_providers` and `app_config` populated, so subagent-scoped tools register
 there exactly as they do in the main loop (see `durin/agent/aux_bridges.py`
-for how the bridge handles are built).
+for how the bridge handles are built). The node runner also sets `work_dir`,
+the node's working folder: the tools that take a path resolve a relative one
+there instead of in a session's work area, with the same exception for a
+managed top-level area, which resolves from the workspace root.
 
 The `subagent` scope is the *background-safe* set: files (notebooks
 included), exec, search, web, memory search and memory writes,
