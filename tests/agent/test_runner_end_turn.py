@@ -98,6 +98,39 @@ async def test_a_call_that_does_not_conclude_lets_the_turn_go_on() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_concluding_call_closes_the_stream_it_left_open() -> None:
+    """Before running tools the loop ends the stream as resuming, expecting a
+    next request; when the turn ends there instead, the stream is closed."""
+    from durin.agent.hook import AgentHook
+
+    ends: list[bool] = []
+
+    class _Streaming(AgentHook):
+        def wants_streaming(self) -> bool:
+            return True
+
+        async def on_stream_end(self, context, *, resuming: bool) -> None:
+            ends.append(resuming)
+
+    decided: dict = {}
+    tools = ToolRegistry()
+    tools.register(_Decide(decided))
+    provider = MagicMock()
+
+    async def chat_stream_with_retry(**kwargs: Any) -> LLMResponse:
+        return _decide("PASS", "All criteria met.")
+
+    provider.chat_stream_with_retry = chat_stream_with_retry
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "judge it"}],
+        tools=tools, model="m", max_iterations=5, max_tool_result_chars=16_000,
+        hook=_Streaming(), end_turn_after_tools=lambda: "label" in decided,
+    ))
+    assert result.final_content == "All criteria met."
+    assert ends == [True, False]
+
+
+@pytest.mark.asyncio
 async def test_a_concluding_call_on_the_last_round_completes_the_turn() -> None:
     result, requests, _ = await _run(
         [_decide("PASS", "All criteria met.")], max_iterations=1)

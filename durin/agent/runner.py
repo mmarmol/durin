@@ -1164,6 +1164,9 @@ class AgentRunner:
                 if spec.end_turn_after_tools is not None and spec.end_turn_after_tools():
                     # A call in this round concluded the turn: the text sent
                     # alongside the calls is the answer, and no request follows.
+                    # The stream was left open for a next request; close it.
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=False)
                     final_content = hook.finalize_content(context, response.content)
                     context.final_content = final_content
                     context.stop_reason = stop_reason
