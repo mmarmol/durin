@@ -36,6 +36,7 @@ from durin.utils.prompt_templates import render_template
 if TYPE_CHECKING:
     from durin.memory.eager_surface import EagerSnapshot
     from durin.providers.base import LLMProvider
+    from durin.providers.factory import CompactionDefaults
     from durin.session.manager import SessionManager
 
 
@@ -739,11 +740,17 @@ class Consolidator:
         *,
         preemptive_compact_ratio: float | None = None,
         preemptive_compact_max_tokens: int | None = None,
+        compaction_defaults: CompactionDefaults | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = provider.generation.max_tokens
+        # agents.defaults' ratio and cap as the snapshot read them: an edit
+        # made while the gateway runs reaches every later turn this way.
+        if compaction_defaults is not None:
+            self._default_preemptive_compact_ratio = compaction_defaults.ratio
+            self._default_preemptive_compact_max_tokens = compaction_defaults.max_tokens
         # Per-preset ratio and cap (Tier 2 A1). When the model preset changes
         # (set_model_preset → _apply_provider_snapshot), callers supply the
         # preset's own values, which apply while it is active. A preset that

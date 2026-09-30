@@ -858,6 +858,46 @@ def test_provider_snapshots_carry_the_presets_cap():
     assert static.preemptive_compact_max_tokens == 450_000
 
 
+def test_an_edit_to_the_default_ratio_or_cap_applies_from_the_next_turn(tmp_path):
+    """The gateway re-reads its provider snapshot at the start of every turn;
+    an edit to agents.defaults' ratio or cap must reach the consolidator
+    through it, without a restart."""
+    from durin.config.schema import Config
+    from durin.providers.factory import build_provider_snapshot
+
+    cfg = Config()
+    cfg.agents.defaults.model = "gpt-4.1"
+    cfg.agents.defaults.provider = "openai"
+    cfg.providers.openai.api_key = "sk-test"
+
+    def loader(config_path=None, *, preset_name=None, preset=None):
+        # Stands in for the gateway's loader, which re-reads the config file.
+        return build_provider_snapshot(cfg, preset_name=preset_name, preset=preset)
+
+    first = loader()
+    loop = AgentLoop(
+        bus=MessageBus(), provider=first.provider, workspace=tmp_path, model=first.model,
+        context_window_tokens=first.context_window_tokens,
+        provider_snapshot_loader=loader, provider_signature=first.signature, app_config=cfg,
+    )
+    c = loop.consolidator
+    window = c.context_window_tokens
+    assert c._preemptive_trigger() == (256_000, "cap")
+
+    cfg.agents.defaults.preemptive_compact_max_tokens = 400_000
+    loop._refresh_provider_snapshot()
+    assert c._preemptive_trigger() == (400_000, "cap")
+
+    cfg.agents.defaults.preemptive_compact_ratio = 0.1
+    loop._refresh_provider_snapshot()
+    assert c._preemptive_trigger() == (int(window * 0.1), "ratio")
+
+    cfg.agents.defaults.preemptive_compact_max_tokens = None
+    cfg.agents.defaults.preemptive_compact_ratio = 0.5
+    loop._refresh_provider_snapshot()
+    assert c._preemptive_trigger() == (int(window * 0.5), "ratio")
+
+
 def test_from_config_threads_the_cap_to_the_consolidator(tmp_path):
     from types import SimpleNamespace
     from unittest.mock import patch

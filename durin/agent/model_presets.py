@@ -7,7 +7,7 @@ from typing import Any
 
 from durin.config.schema import Config, ModelPresetConfig
 from durin.providers.base import LLMProvider
-from durin.providers.factory import ProviderSnapshot, build_provider_snapshot
+from durin.providers.factory import CompactionDefaults, ProviderSnapshot, build_provider_snapshot
 
 # Loaders receive the preset name and the in-memory preset object (when one is
 # known). Forwarding the object lets a runtime-injected preset — one the loader
@@ -56,6 +56,7 @@ def build_static_preset_snapshot(
         signature=("model_preset", name, preset.model_dump_json()),
         preemptive_compact_ratio=preset.preemptive_compact_ratio,
         preemptive_compact_max_tokens=preset.preemptive_compact_max_tokens,
+        compaction_defaults=CompactionDefaults.of(config) if isinstance(config, Config) else None,
     )
 
 

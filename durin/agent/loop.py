@@ -1212,6 +1212,7 @@ class AgentLoop:
             context_window_tokens,
             preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
             preemptive_compact_max_tokens=snapshot.preemptive_compact_max_tokens,
+            compaction_defaults=snapshot.compaction_defaults,
         )
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:

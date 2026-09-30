@@ -980,8 +980,12 @@ ceiling, so the overflow invariant holds with it. A preset's own
 `preemptive_compact_ratio` and `preemptive_compact_max_tokens` replace the
 `agents.defaults` ones while that preset is active; a key the preset leaves
 unset takes the `agents.defaults` value, whatever the previous preset set. The
-cap governs the loop's session compaction only: workflow nodes and subagents
-prune by the runner's input budget instead.
+`agents.defaults` values travel in the provider snapshot (`compaction_defaults`),
+and the snapshot's signature includes them and the preset's own, so the
+per-turn snapshot refresh applies an edit to them on the next turn. A preset's
+own values come from the loop's preset objects, which the gateway reads at
+start. The cap governs the loop's session compaction only: workflow nodes and
+subagents prune by the runner's input budget instead.
 
 Compaction runs at turn boundaries: in BUILD, in the background after SAVE,
 and on the overflow retry. Inside one long agentic turn the prompt grows with

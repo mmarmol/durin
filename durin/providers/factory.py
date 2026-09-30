@@ -30,6 +30,20 @@ def _resolve_secret_refs(obj: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class CompactionDefaults:
+    """agents.defaults' compaction ratio and cap as a snapshot read them:
+    what a preset that sets none of its own compacts by."""
+
+    ratio: float
+    max_tokens: int | None
+
+    @classmethod
+    def of(cls, config: Config) -> CompactionDefaults:
+        defaults = config.agents.defaults
+        return cls(defaults.preemptive_compact_ratio, defaults.preemptive_compact_max_tokens)
+
+
+@dataclass(frozen=True)
 class ProviderSnapshot:
     provider: LLMProvider
     model: str
@@ -43,6 +57,10 @@ class ProviderSnapshot:
     # The preset's absolute compaction cap in tokens, carried the same way.
     # ``None`` means the preset sets none: the agents.defaults cap applies.
     preemptive_compact_max_tokens: int | None = None
+    # agents.defaults' ratio and cap when the snapshot was built, so an edit
+    # to them reaches the running loop with the next snapshot refresh; None
+    # when it was built without a config, and the loop keeps what it has.
+    compaction_defaults: CompactionDefaults | None = None
 
 
 def _resolve_model_preset(
@@ -284,6 +302,12 @@ def _signature(
         resolved.temperature,
         resolved.reasoning_effort,
         resolved.context_window_tokens,
+        # Compaction sizing: a change here re-applies the snapshot too, so an
+        # edit takes effect on the next turn without a restart.
+        resolved.preemptive_compact_ratio,
+        resolved.preemptive_compact_max_tokens,
+        config.agents.defaults.preemptive_compact_ratio,
+        config.agents.defaults.preemptive_compact_max_tokens,
         tuple(_fallback_signature(fallback) for fallback in fallback_presets),
     )
 
@@ -339,6 +363,7 @@ def build_provider_snapshot(
         signature=_signature(config, resolved, [fallback.preset for fallback in fallbacks]),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
         preemptive_compact_max_tokens=resolved.preemptive_compact_max_tokens,
+        compaction_defaults=CompactionDefaults.of(config),
     )
 
 

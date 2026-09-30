@@ -185,6 +185,11 @@ and `null` means two different things: under `agents.defaults` it is no cap,
 while on a preset it is the `agents.defaults` cap. To turn the cap off for
 one preset, set that preset's value to `0`.
 
+A running gateway applies an edit to `agents.defaults.preemptive_compact_ratio`
+or `preemptive_compact_max_tokens` from the next turn. A preset's own ratio
+and cap, like the preset's other settings, apply once the gateway restarts
+(`durin gateway restart`).
+
 **`agents.aux_models`** — optional auxiliary model bridges (used only when the primary model lacks the modality):
 
 | Key | Default | Meaning |
