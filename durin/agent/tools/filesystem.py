@@ -43,10 +43,14 @@ class _FsTool(Tool, ContextAware):
         file_states: FileStates | None = None,
         post_edit_config: Any = None,
         guard_registry_dirs: bool = True,
+        work_dir: Path | None = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
+        # A fixed base for relative paths (a workflow node's working folder);
+        # without one the base is the session work area of the request context.
+        self._fixed_work_dir = work_dir
         # PostEditCheckConfig | None — only Write/Edit consume it.
         self._post_edit_config = post_edit_config
         # Whether _resolve_write() refuses writes under the registry dirs that
@@ -70,13 +74,17 @@ class _FsTool(Tool, ContextAware):
         self._ctx.set(ctx)
 
     def _work_dir(self) -> Path | None:
-        """Return the per-session work directory path, or None when no session is set.
+        """Return the directory relative paths resolve in: the fixed one this
+        tool was built with (a workflow node's working folder), else the
+        per-session work directory, or None when there is neither.
 
         Pure path computation — does NOT create the directory. The directory is
         created lazily by the write utilities (atomic_write_text/bytes call
         parent.mkdir before writing), so read-only sessions never litter the
         workspace with empty work/<session>/ directories.
         """
+        if self._fixed_work_dir is not None:
+            return self._fixed_work_dir
         ctx = self._ctx.get()
         sk = ctx.session_key if ctx else None
         if not sk or self._workspace is None:
@@ -94,12 +102,14 @@ class _FsTool(Tool, ContextAware):
         )
         allowed_dir = Path(ctx.workspace) if restrict else None
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+        work_dir = getattr(ctx, "work_dir", None)
         return cls(
             workspace=Path(ctx.workspace),
             allowed_dir=allowed_dir,
             extra_allowed_dirs=extra_read,
             file_states=ctx.file_state_store,
             post_edit_config=getattr(ctx.config, "post_edit_check", None),
+            work_dir=Path(work_dir) if work_dir else None,
         )
 
     @property
@@ -109,12 +119,14 @@ class _FsTool(Tool, ContextAware):
         return current_file_states(self._fallback_file_states)
 
     def _resolve(self, path: str) -> Path:
+        """Resolve a path the tool reads (see ``resolve_workspace_path``'s ``read``)."""
         return resolve_workspace_path(
             path,
             self._workspace,
             self._allowed_dir,
             self._extra_allowed_dirs,
             work_dir=self._work_dir(),
+            read=True,
         )
 
     def _resolve_write(self, path: str) -> Path:
@@ -165,6 +177,23 @@ class _FsTool(Tool, ContextAware):
             denied_subdirs=denied,
             deny_durin_stores=True,
         )
+
+    def _display_bases(self) -> tuple[Path | None, Path | None]:
+        """The workspace and the relative-path base, resolved the way a found
+        file's path is, so a path under either is recognized as such."""
+        work_dir = self._work_dir()
+        return (self._workspace.resolve() if self._workspace else None,
+                work_dir.resolve() if work_dir else None)
+
+    def _readback_path(self, fp: Path) -> str:
+        """*fp* named so that this tool resolves the name back to it: relative to
+        the folder relative paths resolve in when it lies there, from the
+        workspace root in a managed area, absolute elsewhere."""
+        from durin.agent.tools.work_area import display_path
+
+        if self._workspace is None:
+            return str(fp)
+        return display_path(fp, *self._display_bases())
 
     def _display_path(self, fp: Path) -> str:
         """Workspace-relative path for telemetry; falls back to absolute."""

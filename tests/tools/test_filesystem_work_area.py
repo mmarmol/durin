@@ -72,3 +72,30 @@ async def test_read_does_not_create_work_dir(tmp_path):
     assert "data" in result
     # The work directory must not have been created by the read.
     assert not (tmp_path / "work").exists()
+
+
+@pytest.mark.asyncio
+async def test_grep_in_a_session_prints_paths_that_read_back(tmp_path):
+    """A path grep prints must lead read_file back to the file it found. In a
+    session a relative path resolves in the session's work area, so a file in
+    the area is printed relative to it, one in a managed area from the
+    workspace root, and any other file in full."""
+    from durin.agent.tools.search import GrepTool
+
+    ws = tmp_path.resolve()
+    (ws / "repos").mkdir()
+    (ws / "repos" / "a.py").write_text("MARKER = 1\n")
+    (ws / "memory").mkdir()
+    (ws / "memory" / "m.md").write_text("MARKER\n")
+    area = ws / "work" / "telegram_7"
+    area.mkdir(parents=True)
+    (area / "notes.md").write_text("MARKER\n")
+    grep, read = GrepTool(workspace=ws, allowed_dir=ws), ReadFileTool(workspace=ws, allowed_dir=ws)
+    grep.set_context(_ctx())
+    read.set_context(_ctx())
+
+    out = await grep.execute(pattern="MARKER", path=str(ws))
+    printed = [line for line in out.splitlines() if line and not line.startswith("(")]
+    assert set(printed) == {"notes.md", "memory/m.md", str(ws / "repos" / "a.py")}
+    for path in printed:
+        assert "MARKER" in await read.execute(path=path)

@@ -131,3 +131,9 @@ class ToolContext:
     # the main loop (TUI, contract generation, tests that build a bare
     # ``ToolContext``).
     mcp_runtime: Any | None = None
+    # The folder a relative path resolves in for the tools that take paths, in
+    # place of the per-session work area the chat derives from the request
+    # context: a workflow node's working folder. A path under a managed
+    # top-level name (``workflows/``, ``memory/``, ...) still resolves from the
+    # workspace root. None: the session work area, else the workspace root.
+    work_dir: str | None = None

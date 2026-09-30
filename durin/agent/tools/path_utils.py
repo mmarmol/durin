@@ -179,13 +179,16 @@ def resolve_workspace_path(
     work_dir: Path | None = None,
     denied_subdirs: list[Path] | None = None,
     deny_durin_stores: bool = False,
+    read: bool = False,
 ) -> Path:
     """Resolve path against workspace (or the session work dir) and enforce
     allowed-directory containment.
 
     Relative paths anchor to ``work_dir`` unless their first segment is a
     managed prefix (then to ``workspace``). With ``work_dir=None`` the original
-    workspace-relative behavior is preserved.
+    workspace-relative behavior is preserved. A ``read`` also reads a path the
+    work dir does not have from a folder at the workspace root (see
+    ``work_area.read_base``); a write never does.
 
     ``denied_subdirs`` is a second, narrower gate checked after the
     allowed-directory containment: even a path inside the allowed directory
@@ -201,12 +204,14 @@ def resolve_workspace_path(
     own config/secrets with no check at all. Write-only (the write tools pass
     this; reads do not), so the agent can still read config.json for diagnosis.
     """
-    from durin.agent.tools.work_area import anchored_base
+    from durin.agent.tools.work_area import anchored_base, read_base
 
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
-        first = p.parts[0] if p.parts else ""
-        base = anchored_base(first, workspace, work_dir)
+        if read:
+            base = read_base(p, workspace, work_dir)
+        else:
+            base = anchored_base(p.parts[0] if p.parts else "", workspace, work_dir)
         p = base / p
     resolved = p.resolve()
     if deny_durin_stores:

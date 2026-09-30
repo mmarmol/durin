@@ -203,7 +203,8 @@ class RepoOverviewTool(_FsTool):
 
             out: list[str] = []
             display = self._display_path(target) or "."
-            out.append(f"# Repository overview: {display}")
+            # The header names the folder so a read of that name leads back to it.
+            out.append(f"# Repository overview: {self._readback_path(target)}")
             out.append("")
             if ecos:
                 out.append(f"Ecosystems: {', '.join(ecos)}")

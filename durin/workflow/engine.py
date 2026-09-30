@@ -5,7 +5,7 @@ the injected ``node_runner`` and its output passes along the edge to the next no
 a 'shared'-context node also reads/extends a running shared-context buffer, while an
 'own'-context node is isolated (it sees only the upstream output). A routing node
 derives a verdict from its own output and follows the matching edge: a binary node
-(on_pass/on_fail) routes on a PASS/FAIL verdict (first-line parse_verdict); a multi-way
+(on_pass/on_fail) routes on a PASS/FAIL verdict (its verdict lines, parse_verdict); a multi-way
 node (cases) routes on which declared label the agent emits (parse_label) — to that
 label's target, to "default", or aborting if neither. A per-node visit cap guards
 against infinite loop-backs. The run returns a typed WorkflowResult.
@@ -1100,8 +1100,8 @@ class WorkflowEngine:
                                                 node_input=node_input, iteration=iteration)
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched
-                # case label; for binary routing it is PASS/FAIL from the first non-empty
-                # line; for a linear node there is no verdict.
+                # case label; for binary routing it is PASS/FAIL (the node's `route`
+                # label, else its verdict lines); for a linear node there is no verdict.
                 node_t0 = time.monotonic()
                 if reuse_hit is not None:
                     reused_output, reuse_entry = reuse_hit
@@ -1289,7 +1289,7 @@ class WorkflowEngine:
                         upstream_output = f"{prior}\n\n{header}\n{output}"
                     current = node.on_pass if passed else node.on_fail
                     if current is None:
-                        residue = strip_verdict_line(output)
+                        residue = strip_verdict_line(output, bool(passed))
                         if residue:
                             final_output = residue
                             final_output_node = node.id

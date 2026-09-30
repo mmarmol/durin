@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, TypeVar
 
+from durin.agent.tools import work_area
 from durin.agent.tools.context import current_result_char_cap
 from durin.agent.tools.filesystem import ListDirTool, _FsTool
 
@@ -100,11 +101,17 @@ def _matches_type(name: str, file_type: str | None) -> bool:
 class _SearchTool(_FsTool):
     _IGNORE_DIRS = set(ListDirTool._IGNORE_DIRS)
 
-    def _display_path(self, target: Path, root: Path) -> str:
-        if self._workspace:
-            with suppress(ValueError):
-                return target.relative_to(self._workspace).as_posix()
-        return target.relative_to(root).as_posix()
+    def _display_path(self, target: Path, root: Path,
+                      bases: tuple[Path | None, Path | None] = (None, None)) -> str:
+        """The path printed for *target*: one read_file resolves back to it —
+        relative to the working folder or session work area inside it, from
+        the workspace root for a managed area, absolute elsewhere
+        (``work_area.display_path``). Without a workspace, relative to the
+        search root."""
+        workspace, work_dir = bases
+        if workspace is None:
+            return target.relative_to(root).as_posix()
+        return work_area.display_path(target, workspace, work_dir)
 
     def _iter_files(self, root: Path) -> Iterable[Path]:
         if root.is_file():
@@ -396,6 +403,7 @@ class GrepTool(_SearchTool):
             counts: dict[str, int] = {}
             file_mtimes: dict[str, float] = {}
             root = target if target.is_dir() else target.parent
+            bases = self._display_bases()
 
             candidates = await self._rg_candidates(
                 target,
@@ -429,7 +437,7 @@ class GrepTool(_SearchTool):
                     continue
 
                 lines = content.splitlines()
-                display_path = self._display_path(file_path, root)
+                display_path = self._display_path(file_path, root, bases)
                 file_had_match = False
                 for idx, line in enumerate(lines, start=1):
                     if not regex.search(line):
