@@ -34,10 +34,12 @@ When ``save_config`` runs, only **non-default** fields are persisted
 """
 
 import json
+import math
 import os
 import re
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -604,21 +606,31 @@ _COMPACT_CAP_KEYS = ("preemptive_compact_max_tokens", "preemptiveCompactMaxToken
 
 
 def _scrub_compact_cap(block: dict, where: str) -> None:
-    """Make a hand-edited compaction cap loadable: a count under the minimum
-    is raised to it, a fractional one rounded down, and a value that is no
-    number at all dropped (the default, or for a preset agents.defaults'
-    cap). 0 or less is left for the schema, which reads it as no cap."""
+    """Make a hand-edited compaction cap loadable: a number written as a
+    string is read as that number, a count under the minimum is raised to
+    it, a fractional one rounded down, and a value that is no finite number
+    at all (NaN and the infinities JSON accepts, or an exponent too large
+    for a float) dropped: the default, or for a preset agents.defaults' cap.
+    0 or less is left for the schema, which reads it as no cap."""
     for key in _COMPACT_CAP_KEYS:
         if key not in block:
             continue
         value = block[key]
         if value is None:
             continue
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        number = value
+        if isinstance(value, str):
+            with suppress(ValueError):
+                number = float(value.strip())
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, (int, float))
+            or (isinstance(number, float) and not math.isfinite(number))
+        ):
             del block[key]
             logger.warning("config: {}.{} is {!r}, not a token count; treating it as unset", where, key, value)
             continue
-        count = int(value)
+        count = int(number)
         if 0 < count < PREEMPTIVE_COMPACT_MIN_TOKENS:
             logger.warning(
                 "config: {}.{} is {}, under the {} minimum; raising it to the minimum",

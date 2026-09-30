@@ -999,7 +999,11 @@ prompt's fixed part (system prompt, tool schemas, summary) would compact on
 every turn, each compaction able to archive only the turn before it. The schema
 refuses a lower value on write, the loader raises a hand-edited one to the
 minimum rather than reject the whole file, and the consolidator applies the
-same floor to a loop built in code.
+same floor to a loop built in code. No hand-edited value of the key can cost
+the rest of the file or fail the load: the loader reads a number written as a
+string as that number and drops anything that is no finite number (NaN, the
+infinities JSON accepts, an exponent too large for a float), which then
+takes the default.
 
 A preset's own `preemptive_compact_ratio` and `preemptive_compact_max_tokens`
 replace the `agents.defaults` ones while that preset is active; a key the

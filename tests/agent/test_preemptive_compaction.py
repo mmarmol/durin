@@ -762,6 +762,57 @@ def test_a_hand_edited_preset_cap_never_costs_the_rest_of_the_config(tmp_path, v
     assert cfg.model_presets["roomy"].preemptive_compact_max_tokens == expected
 
 
+def _write_raw_cap(tmp_path, raw: str, *, on_preset: bool):
+    """A config file whose cap is the JSON text *raw*, as a hand edit would
+    leave it (NaN, Infinity and 1e999 are no values json.dumps writes)."""
+    cap = '"preemptiveCompactMaxTokens": ' + raw
+    if on_preset:
+        agents = '"agents": {"defaults": {"model": "openai/gpt-4.1"}}, '
+        presets = '"modelPresets": {"roomy": {"model": "gpt-4.1", "provider": "openai", ' + cap + '}}, '
+    else:
+        agents = '"agents": {"defaults": {"model": "openai/gpt-4.1", ' + cap + '}}, '
+        presets = ""
+    path = tmp_path / "config.json"
+    path.write_text(
+        "{" + agents + presets + '"providers": {"openai": {"apiKey": "sk-test-not-real"}}}',
+        encoding="utf-8",
+    )
+    return path
+
+
+_RAW_CAPS = ["NaN", "Infinity", "-Infinity", "1e999", '"300000"', '" 300000 "', '"0"', '"-1"', '"20000"']
+
+
+@pytest.mark.parametrize("raw, expected", zip(
+    _RAW_CAPS, [256_000, 256_000, 256_000, 256_000, 300_000, 300_000, None, None, 64_000],
+))
+def test_no_hand_edited_cap_costs_the_rest_of_the_config_or_crashes_the_load(tmp_path, raw, expected):
+    """NaN made the loader fall back to the default config, providers and
+    presets gone, and Infinity, -Infinity or an overflowing 1e999 raised out
+    of load_config. A count written as a string was dropped: "300000" loaded
+    as 256,000 and "0" left the cap on. A value that is no finite number is
+    dropped, and a number written as a string is read as that number."""
+    from durin.config.loader import load_config
+
+    cfg = load_config(_write_raw_cap(tmp_path, raw, on_preset=False))
+    assert cfg.providers.openai.api_key == "sk-test-not-real"
+    assert cfg.agents.defaults.model == "openai/gpt-4.1"
+    assert cfg.agents.defaults.preemptive_compact_max_tokens == expected
+
+
+@pytest.mark.parametrize("raw, expected", zip(
+    _RAW_CAPS, [None, None, None, None, 300_000, 300_000, 0, 0, 64_000],
+))
+def test_no_hand_edited_preset_cap_costs_the_rest_of_the_config_or_crashes_the_load(
+    tmp_path, raw, expected,
+):
+    from durin.config.loader import load_config
+
+    cfg = load_config(_write_raw_cap(tmp_path, raw, on_preset=True))
+    assert cfg.providers.openai.api_key == "sk-test-not-real"
+    assert cfg.model_presets["roomy"].preemptive_compact_max_tokens == expected
+
+
 def test_a_cap_under_the_minimum_is_raised_to_it_at_run_time():
     """A loop or consolidator built directly (the SDK, a test) is not
     validated: the trigger still never goes under the minimum."""
