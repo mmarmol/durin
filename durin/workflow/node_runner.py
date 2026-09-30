@@ -21,7 +21,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -33,6 +33,7 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.path_utils import is_under
 from durin.agent.tools.registry import ToolRegistry
+from durin.agent.tools.work_area import anchored_base
 from durin.config.schema import ModelPresetConfig, ToolsConfig
 from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
@@ -87,11 +88,21 @@ class _CrossLoopTool(Tool):
         return await _asyncio.wrap_future(fut)
 
 
+# How much of a failing value a schema rejection quotes back. jsonschema's message
+# quotes the whole value, so a rejected note body came back as thousands of
+# characters the model had just written; its start is enough to recognize it.
+_QUOTED_VALUE_CHARS = 200
+
+
 def _deliver_validation_error(payload: dict, schema: dict) -> str | None:
     """Validate a structured-output payload against the node's declared schema.
     Returns the formatted error (jsonschema's failing path + message), or None
-    when the payload is valid. Shared by the early in-loop ``deliver`` call and
-    the forced end-of-turn retry loop so both report failures identically."""
+    when the payload is valid. A failing value the message quotes is cut: a
+    string to its first ``_QUOTED_VALUE_CHARS`` characters, shown as a whole
+    quoted string with the count of characters left out; any other value's
+    printed form to about as many characters, never ending inside an escape.
+    Shared by ``deliver``, ``deliver_file`` and the forced end-of-turn retry
+    loop so all three report failures identically."""
     import jsonschema
 
     try:
@@ -99,7 +110,21 @@ def _deliver_validation_error(payload: dict, schema: dict) -> str | None:
         return None
     except jsonschema.ValidationError as ve:
         path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
-        return f"at {path}: {ve.message}"
+        message = ve.message
+        # jsonschema writes the failing value into its messages as repr().
+        value, quoted = ve.instance, repr(ve.instance)
+        if quoted in message:
+            if isinstance(value, str) and len(value) > _QUOTED_VALUE_CHARS:
+                cut = len(value) - _QUOTED_VALUE_CHARS
+                message = message.replace(
+                    quoted, f"{value[:_QUOTED_VALUE_CHARS]!r}… [{cut:,} more characters]")
+            elif not isinstance(value, str) and len(quoted) > _QUOTED_VALUE_CHARS:
+                head = quoted[:_QUOTED_VALUE_CHARS]
+                if (len(head) - len(head.rstrip("\\"))) % 2:
+                    head = head[:-1]   # a lone backslash would start a broken escape
+                message = message.replace(
+                    quoted, f"{head}… [{len(quoted) - len(head):,} more characters]")
+        return f"at {path}: {message}"
 
 
 class _DeliverCapture:
@@ -190,10 +215,11 @@ class _DeliverFileTool(Tool):
     _plugin_discoverable = False
 
     def __init__(self, schema: dict, capture: _DeliverCapture, work_dir: str, *,
-                 output_file: str | None = None) -> None:
+                 workspace: Path, output_file: str | None = None) -> None:
         self._schema = schema
         self._capture = capture
         self._work_dir = Path(work_dir)
+        self._workspace = workspace
         self._output_file = output_file
 
     @property
@@ -222,7 +248,11 @@ class _DeliverFileTool(Tool):
         root = self._work_dir
         target = Path(path).expanduser()
         if not target.is_absolute():
-            target = root / target
+            # The node's file tools' rule, so a path names the file write_file
+            # wrote: one under a managed area (memory/, workflows/, ...) is the
+            # workspace's, and is refused below as outside the working folder.
+            first = target.parts[0] if target.parts else ""
+            target = anchored_base(first, self._workspace, root) / target
         if not is_under(target, root):
             return None, (f"{path} is outside your working directory {root}; "
                           "deliver_file reads only files there")
@@ -285,27 +315,47 @@ def _delivery_call(resp, tools: ToolRegistry) -> tuple[str | None, Any]:
 
 
 class _RouteCapture:
-    """Holds the label from the most recent VALID `route` tool call in one node
-    execution, so the derive step can use it directly instead of paying for the
-    forced end-of-turn call — mirrors ``_DeliverCapture`` exactly. Overwritten on
-    every valid call (not just the first), so the LAST one wins, same as
-    ``_DeliverTool``'s "last valid deliver wins" semantics."""
+    """Holds the label (and its optional one-line reason) from the most recent
+    VALID `route` tool call in one node execution, so the derive step can use it
+    directly instead of paying for the forced end-of-turn call — mirrors
+    ``_DeliverCapture``. Overwritten on every valid call (not just the first), so
+    the LAST one wins, same as ``_DeliverTool``'s "last valid deliver wins"."""
 
     def __init__(self) -> None:
         self.label: str | None = None
+        self.reason: str | None = None
+
+    def decided(self, turn: list[dict]) -> bool:
+        """Whether the node's turn can end on the valid call made so far: only
+        when there is something to be the node's output — the call's reason, or
+        text the model wrote this *turn* — since that output is what a FAIL passes
+        on as feedback and a needs-input route asks the caller. With neither, the
+        model is asked again (the call's acknowledgement tells it to write)."""
+        if self.label is None:
+            return False
+        return self.reason is not None or any(
+            message.get("role") == "assistant" and _has_text(message) for message in turn)
+
+
+def _has_text(message: dict) -> bool:
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and str(block.get("text") or "").strip() for block in content)
 
 
 class _RouteTool(Tool):
     """The node's routing-verdict tool, registered from turn 1 for the same
-    cache-prefix reason as ``_DeliverTool``. A VALID call decides the verdict
-    immediately and unconditionally — exactly symmetric with how a valid early
-    `deliver` call ends a schema'd node's turn (see ``_DeliverTool`` /
-    ``_derive_structured_output``): the derive step uses the captured label
-    directly and the forced end-of-turn call is skipped, regardless of where in
-    the turn the call happened. An INVALID label (not one of this node's cases)
-    is neither captured nor acknowledged as decided — it gets a specific,
-    actionable message and the forced call remains authoritative, exactly as
-    when nothing was ever captured."""
+    cache-prefix reason as ``_DeliverTool``. A VALID call decides the verdict and
+    ends the node's turn once that round of tool calls finishes (the runner's
+    ``end_turn_after_tools``), as long as there is an output to end it with (see
+    ``_RouteCapture.decided``): the text sent alongside the call, else the turn's
+    latest text, else the call's reason, is the node's output — a FAIL's
+    feedback — and the forced end-of-turn call is skipped. An INVALID label (not
+    one of this node's labels) is neither captured nor acknowledged as decided —
+    it gets a specific, actionable message, the turn goes on, and the forced call
+    remains authoritative, exactly as when nothing was ever captured."""
 
     _plugin_discoverable = False
 
@@ -319,7 +369,8 @@ class _RouteTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Record your final routing verdict for this step."
+        return ("Record this step's verdict. Call it last, in the same reply as your "
+                "finished answer: the call ends your turn.")
 
     @property
     def parameters(self) -> dict:
@@ -342,11 +393,35 @@ class _RouteTool(Tool):
                     f"{', '.join(self._labels)}. Continue your work; call "
                     "route again with a valid label when you decide.")
         self._capture.label = label
-        return "Route recorded — this step's verdict has been recorded."
+        reason = kwargs.get("reason")
+        self._capture.reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
+        ack = "Route recorded — this step's verdict has been recorded."
+        if self._capture.reason is None:
+            # The model reads this only when the turn goes on, which it does
+            # only when nothing has been written this turn (see decided()).
+            ack += (" This step's output is your text: if you have not written your "
+                    "assessment yet, write it now as your reply.")
+        return ack
 
 
-_VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
-            "'PASS' if the work meets the criteria, or 'FAIL' followed by what to fix.")
+def _verdict_instruction(labels: list[str], *, binary: bool) -> str:
+    """The routing instruction appended to a routing node's system prompt, from
+    the node's own labels. The node ends by calling `route`, which ends its turn;
+    the same verdict alone on the text's last line keeps the text fallback
+    (``parse_verdict`` / ``parse_label``) working when no call arrives. A binary
+    gate is also told its text is the feedback the next step works from, since
+    that is what a FAIL passes on."""
+    finish = ("In that same reply, call the `route` tool with {what}. The call ends "
+              "your turn, so make it your last action.")
+    if binary:
+        return ("\n\nWhen your assessment is complete, write it out — for a FAIL, say "
+                "exactly what to fix, since that text is what the next step works "
+                "from — and end it with the verdict alone on its last line: PASS if the "
+                "work meets the criteria, FAIL if it does not. "
+                + finish.format(what="that verdict"))
+    return ("\n\nWhen you are done, end your reply with exactly one of these labels "
+            "alone on its last line: " + ", ".join(labels) + ". "
+            + finish.format(what="that label"))
 
 _FINAL_REVIEW = (
     "\n\nThis is the final review round: the producing step has no passes left, so a "
@@ -734,11 +809,15 @@ class AgentNodeRunner:
             raise outcome["error"]
         return outcome["result"]
 
-    def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
+    def _build_tools(self, node, workspace_override: str | None = None,
+                     work_dir: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
         'default'→the standard subagent tool set) plus a scoped subset of the
         already-connected MCP servers the node selected. ``workspace_override`` points
-        the file tools at a private branch copy (writing-in-parallel)."""
+        the file tools at a private branch copy (writing-in-parallel). ``work_dir``
+        (the node's working folder) is where the tools that take a path resolve a
+        relative one, the folder the node's prompt calls its working directory;
+        ``exec`` still starts in the workspace root."""
         registry = ToolRegistry()
         if getattr(node, "tools", "none") == "default":
             ctx = ToolContext(
@@ -748,6 +827,7 @@ class AgentNodeRunner:
                 scope="subagent",
                 aux_providers=self._get_aux_providers(),
                 app_config=self._app_config,
+                work_dir=work_dir,
             )
             ToolLoader().load(ctx, registry, scope="subagent")
         self._add_mcp_tools(registry, getattr(node, "mcps", ()))
@@ -850,8 +930,14 @@ class AgentNodeRunner:
         suffix = get_mode(getattr(req.node, "mode", "build")).prompt_suffix
         if suffix:
             system = f"{system}{suffix}" if system else suffix.lstrip()
-        if getattr(req.node, "routes", False):
-            system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
+        node_cases = getattr(req.node, "cases", None)
+        route_labels = (
+            list(node_cases.keys()) if node_cases
+            else (["PASS", "FAIL"] if getattr(req.node, "routes", False) else None)
+        )
+        if route_labels is not None:
+            verdict = _verdict_instruction(route_labels, binary=not node_cases)
+            system = f"{system}{verdict}" if system else verdict.lstrip()
         if getattr(req, "fail_would_exhaust", False):
             system = f"{system}{_FINAL_REVIEW}"
         messages: list[dict] = [{"role": "system", "content": system}]
@@ -859,13 +945,28 @@ class AgentNodeRunner:
         user = req.task
         if req.upstream_output:
             user = f"{req.task}\n\n--- Output of the previous step ---\n{req.upstream_output}"
+        # The workspace the node's file tools resolve against (a writing branch's
+        # private copy of the working folder, or the workspace itself).
+        tools_workspace = req.workspace_override or str(self.sessions.workspace.resolve())
+        tools_registry = self._build_tools(req.node, req.workspace_override, req.output_dir)
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             user = (
                 f"{user}\n\n--- Working directory ---\n"
                 f"Your working directory for this run is: {req.output_dir}\n"
+                f"The workspace root is: {tools_workspace}\n"
                 "Earlier steps' files are here; create and edit files here so the steps "
-                "after you see them."
+                "after you see them. A relative path in the file tools resolves here, "
+                "except that one under a durin area (workflows/, memory/, skills/, ...) "
+                "resolves from the workspace root, and one into another folder of the "
+                "workspace root (a repository kept there) is read from there when this "
+                "folder does not have it."
             )
+            # exec keeps its own start: the workspace root, where a workflow's
+            # scripts are run as `python3 workflows/scripts/...`.
+            exec_cwd = getattr(tools_registry.get("exec"), "working_dir", None)
+            if exec_cwd and Path(exec_cwd).resolve() != Path(req.output_dir).resolve():
+                user += ("\nShell commands start in the workspace root, not here: cd here "
+                         "first or give full paths.")
         user = f"{user}{self._pass_note(req)}"
         prior_messages: list[dict] | None = None
         if self._is_persistent(req) and req.iteration > 1:
@@ -964,12 +1065,6 @@ class AgentNodeRunner:
         # re-entries) so an early `deliver`/`route` call is captured no matter which
         # pass it happens in.
         node_schema = getattr(req.node, "output_schema", None)
-        node_cases = getattr(req.node, "cases", None)
-        route_labels = (
-            list(node_cases.keys()) if node_cases
-            else (["PASS", "FAIL"] if getattr(req.node, "routes", False) else None)
-        )
-        tools_registry = self._build_tools(req.node, req.workspace_override)
         delivered = _DeliverCapture()
         if node_schema is not None:
             # Set only where the engine will write the file, so a reply never
@@ -984,10 +1079,36 @@ class AgentNodeRunner:
                 node_schema, delivered, output_file=output_file, file_option=file_option))
             if file_option:
                 tools_registry.register(_DeliverFileTool(
-                    node_schema, delivered, req.output_dir, output_file=output_file))
+                    node_schema, delivered, req.output_dir,
+                    workspace=Path(tools_workspace), output_file=output_file))
         routed = _RouteCapture()
+        # A valid `route` call ends the work loop once its round of tool calls is
+        # done (the runner's end_turn_after_tools), keeping the text sent with it.
+        route_decided = None
         if route_labels is not None:
             tools_registry.register(_RouteTool(route_labels, routed))
+            route_decided = routed.decided
+        # The forced calls below (re-entry assessment, `route`, `deliver`) are sent
+        # from a work-loop run's messages the way that run would send its next
+        # request — what it pruned stays pruned, the request fits its input
+        # budget, and its output cap is clamped to the room left in the window
+        # (see AgentRunner.request_view) — rather than the whole unpruned history
+        # with the model's full output cap, which together can exceed the window.
+        view_spec = AgentRunSpec(
+            initial_messages=[],
+            tools=tools_registry,
+            model=model,
+            provider=node_provider,
+            max_iterations=1,
+            max_tool_result_chars=self.max_tool_result_chars,
+            context_window_tokens=node_window,
+            workspace=node_workspace,
+            session_key=node_session_key,
+        )
+
+        def forced_view(run) -> Callable[[list[dict]], tuple[list[dict], int | None]]:
+            prune_state = run.prune_state
+            return lambda messages: self.runner.request_view(view_spec, messages, prune_state)
 
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
@@ -1010,6 +1131,7 @@ class AgentNodeRunner:
                 # subagents; the runner keeps mutations serial.
                 concurrent_tools=True,
                 hook=hook,
+                end_turn_after_tools=route_decided,
             ), req.cancel_check)
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             # `messages` is the pre-turn snapshot built above. AgentRunner.run()
@@ -1046,7 +1168,8 @@ class AgentNodeRunner:
             with self._node_call_limits(node_window, node_provider):
                 wants_reentry = self._wants_reentry(
                     result.messages, model, tools_registry,
-                    provider=node_provider, temperature=persona_temperature)
+                    provider=node_provider, temperature=persona_temperature,
+                    view=forced_view(result))
             if not wants_reentry:
                 break
             reentries_left -= 1
@@ -1075,6 +1198,9 @@ class AgentNodeRunner:
                     session_key=node_session_key,
                     concurrent_tools=True,
                     hook=hook,
+                    end_turn_after_tools=route_decided,
+                    # Continue what the previous run pruned, keeping its prefix.
+                    prune_state=result.prune_state,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist + re-raise, same as the first run
                 checkpointed = checkpoint_hook.last_persisted
@@ -1128,6 +1254,8 @@ class AgentNodeRunner:
                     context_window_tokens=node_window,
                     workspace=node_workspace,
                     session_key=node_session_key,
+                    # Continue what the work loop pruned, keeping its prefix.
+                    prune_state=result.prune_state,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
                 raise self._on_failure(req, list(result.messages), exc) from exc
@@ -1135,10 +1263,12 @@ class AgentNodeRunner:
             all_messages = synthesis_result.messages
             final_output = synthesis_result.final_content or ""
             final_stop_reason = synthesis_result.stop_reason
+            last_run = synthesis_result
         else:
             all_messages = list(result.messages)
             final_output = result.final_content or ""
             final_stop_reason = result.stop_reason
+            last_run = result
 
         # A provider that exhausts its retries returns stop_reason="error" with a
         # placeholder string instead of raising. Without this guard the node would be
@@ -1150,21 +1280,25 @@ class AgentNodeRunner:
                 req, all_messages,
                 RuntimeError(f"model error: {(final_output or 'no response').strip()[:200]}"))
 
-        # A routing node's verdict comes from a forced `route` tool call (deterministic: the
+        # A routing node's verdict comes from its `route` tool call (deterministic: the
         # model must pick one label from this node's own enum), not from parsing free text.
-        # On any failure this is None and the engine falls back to text-parse + default.
-        # A valid `route` call captured anywhere during the work loop above (`_RouteTool`
-        # lives in `tools_registry` from turn 1) is used directly — exactly symmetric with
-        # `_derive_structured_output`'s early-`deliver` reuse — paying no extra LLM call.
+        # A valid call made in the work loop above ended the turn and is used directly,
+        # paying no extra LLM call; otherwise a forced `route` call asks for it. On any
+        # failure this is None and the engine falls back to text-parse + default.
         route_label = None
         if route_labels is not None:
             if routed.label is not None:
                 route_label = routed.label
+                if not final_output.strip() and routed.reason:
+                    # The call came with no text: its one-line reason is all the
+                    # model said, and a FAIL passes it on as the step's feedback.
+                    final_output = routed.reason
             else:
                 with self._node_call_limits(node_window, node_provider):
                     route_label = self._derive_route_label(
                         all_messages, route_labels, model, tools_registry,
-                        provider=node_provider, temperature=persona_temperature)
+                        provider=node_provider, temperature=persona_temperature,
+                        view=forced_view(last_run))
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact
@@ -1179,7 +1313,8 @@ class AgentNodeRunner:
                 with self._node_call_limits(node_window, node_provider):
                     payload = self._derive_structured_output(
                         all_messages, node_schema, model, tools_registry, delivered,
-                        provider=node_provider, temperature=persona_temperature)
+                        provider=node_provider, temperature=persona_temperature,
+                        view=forced_view(last_run))
             except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
                 raise self._on_failure(req, all_messages, exc)
             final_output = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1206,7 +1341,7 @@ class AgentNodeRunner:
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
-                            tools: ToolRegistry, *, provider=None,
+                            tools: ToolRegistry, *, view, provider=None,
                             temperature: float | None = None) -> str | None:
         """Deterministic routing verdict via a forced `route` tool call: the model picks exactly
         one label from this node's enum. Returns the chosen label, or None on any failure (the
@@ -1214,19 +1349,20 @@ class AgentNodeRunner:
         the work loop just rendered — `route` is already in it from turn 1 (see `_RouteTool`) —
         so this call's tools array is identical to the loop's and the provider's cached prompt
         prefix survives into the turn's last request; only `tool_choice` pins the verdict.
-        `provider`/`temperature` are the node's resolved call identity (see
-        `_resolve_node_provider` / `_execute`) — None defaults to the runner's own provider
-        and generation temperature, exactly as before this parameter existed."""
-        route_messages = list(messages) + [{
+        `view` maps the request's messages to what is sent and its output cap: the loop's
+        pruned view, fitted to its input budget. `provider`/`temperature` are the node's
+        resolved call identity (see `_resolve_node_provider` / `_execute`) — None defaults
+        to the runner's own provider and generation temperature."""
+        route_messages, max_tokens = view(list(messages) + [{
             "role": "user",
             "content": ("Record your verdict for this step now by calling the `route` tool with "
                         "exactly one of: " + ", ".join(labels) + "."),
-        }]
+        }])
         try:
             resp = self._chat(
                 messages=route_messages, tools=tools.get_definitions(),
                 tool_choice={"type": "function", "function": {"name": "route"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -1260,9 +1396,11 @@ class AgentNodeRunner:
         """One provider round-trip for the forced-tool verdict/delivery calls
         (route / re-entry / deliver), via ``chat_with_retry``: transient
         transport failures retry instead of failing the call, ``max_tokens``
-        resolves to the model's configured output cap (a bare ``chat()``
-        silently used the 4096 signature default — a reasoning model plus a
-        large deliver payload overflowed it, truncating the tool arguments),
+        is the cap the caller passes — the model's output cap clamped to the
+        room the prompt leaves in the node's window — or, when None, the
+        model's configured output cap (a bare ``chat()`` silently used the
+        4096 signature default — a reasoning model plus a large deliver
+        payload overflowed it, truncating the tool arguments),
         long generations ride the streaming transport, and the round-trip
         lands in telemetry as ``provider.call`` from the retry wrapper.
         ``provider`` (the node's resolved call identity — see
@@ -1272,7 +1410,7 @@ class AgentNodeRunner:
         return asyncio.run(target.chat_with_retry(**kwargs))
 
     def _wants_reentry(self, messages: list[dict], model: str | None,
-                       tools: ToolRegistry, *, provider=None,
+                       tools: ToolRegistry, *, view, provider=None,
                        temperature: float | None = None) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
         essential work is still missing (re-enter) or it can already produce its
@@ -1285,7 +1423,10 @@ class AgentNodeRunner:
         round. Instead this appends it to `tools`' full rendered list for just
         this one call: the shared prefix (everything but the appended tail) is
         still identical to what the work loop just sent, which is what the
-        provider's prompt cache keys on."""
+        provider's prompt cache keys on. `view` maps the request's messages to
+        what is sent and its output cap: the loop's pruned view, fitted to its
+        input budget (the appended tool is small next to the cap's safety
+        margin)."""
         tool = {"type": "function", "function": {
             "name": "assess",
             "description": "Report whether you can produce your complete final "
@@ -1293,18 +1434,18 @@ class AgentNodeRunner:
                            "work is still missing.",
             "parameters": {"type": "object", "required": ["verdict"], "properties": {
                 "verdict": {"enum": ["deliver", "continue"]}}}}}
-        convo = list(messages) + [{
+        convo, max_tokens = view(list(messages) + [{
             "role": "user",
             "content": ("You have used all your tool rounds. Call `assess`: verdict "
                         "'deliver' if you can produce your complete final output "
                         "from what you gathered, 'continue' if essential work is "
                         "still missing and you need more tool rounds."),
-        }]
+        }])
         try:
             resp = self._chat(
                 messages=convo, tools=tools.get_definitions() + [tool],
                 tool_choice={"type": "function", "function": {"name": "assess"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -1321,7 +1462,7 @@ class AgentNodeRunner:
     _STRUCTURED_OUTPUT_ATTEMPTS = 3
 
     def _derive_structured_output(self, messages: list[dict], schema: dict, model: str | None,
-                                  tools: ToolRegistry, captured: _DeliverCapture, *,
+                                  tools: ToolRegistry, captured: _DeliverCapture, *, view,
                                   provider=None, temperature: float | None = None) -> dict:
         """The node's validated payload. If the model already delivered a valid
         payload earlier in the turn — ``_DeliverTool`` is registered in ``tools``
@@ -1340,8 +1481,10 @@ class AgentNodeRunner:
         ``length`` finish_reason is named as truncation and the retry is steered
         toward a smaller payload; an ``error`` finish_reason raises immediately
         with the provider's message — neither is misreported as a schema failure.
-        Raises after the attempt budget — a schema'd node with no valid payload
-        has failed, there is no text fallback."""
+        Each attempt sends ``view`` of the conversation so far: the loop's pruned
+        view, fitted to its input budget, with its output cap. Raises after the
+        attempt budget — a schema'd node with no valid payload has failed, there
+        is no text fallback."""
         if captured.payload is not None:
             return captured.payload
 
@@ -1358,10 +1501,11 @@ class AgentNodeRunner:
         }]
         last_error = "the model made no deliver tool call"
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
+            sent, max_tokens = view(convo)
             resp = self._chat(
-                messages=convo, tools=full_tools,
+                messages=sent, tools=full_tools,
                 tool_choice={"type": "function", "function": {"name": "deliver"}}, model=model,
-                provider=provider, temperature=temperature)
+                provider=provider, temperature=temperature, max_tokens=max_tokens)
             finish_reason = getattr(resp, "finish_reason", None)
             if finish_reason == "error":
                 # The retry wrapper already exhausted transport retries — this

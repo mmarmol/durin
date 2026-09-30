@@ -180,12 +180,18 @@ goes:
   `default` catches a reply that matches no label; without one, the run
   aborts.
 
-The verdict is elicited from the model as a **forced tool call**
-(not just hoped for in free text), so a routing node's output is
-reliable — a pass/fail or label that cannot be derailed by a stray sentence.
-If the forced call is unavailable, a text-parse fallback applies: a binary
-gate reads its verdict from the **first non-empty line** (PASS/FAIL), and a
-multi-way node from the **last line that equals one of its case labels**.
+The verdict is elicited from the model as a **tool call** (not just hoped
+for in free text), so a routing node's output is reliable — a pass/fail or
+label that cannot be derailed by a stray sentence. durin tells the node to
+finish its answer and call its `route` tool with the verdict in the same
+reply; that call ends the node's turn, and the text sent with it is the
+node's output — for a `FAIL`, the feedback the next step works from. If the
+node finishes without calling it, durin asks for the verdict with one more,
+forced call. If no call arrives at all, a text-parse fallback applies: a
+binary gate passes only when **every line that states a verdict says
+`PASS`** (a `FAIL` anywhere wins; checklists, code and quotes don't count),
+and a multi-way node takes the **last line that equals one of its case
+labels**.
 
 One special multi-way target is reserved: `__needs_input__`. Routing there
 ends the run with status `needs_input` and the node's own output (its
@@ -271,7 +277,13 @@ across iterations as the node refines its work in response to loop feedback.
 - **The shared working folder.** Any node with `tools: "default"` reads
   and writes files in one folder shared by the whole run — so a "write the
   code" step, a "write the test" step, and a "fix the bug" step all see
-  each other's files without you wiring that up explicitly. This is what
+  each other's files without you wiring that up explicitly. A relative path
+  in a node's file tools (`read_file("ticket.json")`) resolves in that
+  folder; a path into another folder at the workspace root, such as a
+  repository checked out there, is read from the root when the working
+  folder doesn't have it. Shell commands start in the workspace root, so a
+  command that works on the folder's files changes into it first or uses
+  full paths. This is what
   lets `execute-plan` and `debug` collaborate on an evolving fileset across
   steps (and across a loop's revisits) instead of handing copies down a
   chain. That folder is normally fresh every run; passing a `work_key` (a

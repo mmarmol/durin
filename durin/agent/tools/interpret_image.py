@@ -57,10 +57,11 @@ _DEFAULT_QUESTION = "Describe this image in detail, including any text visible i
     tool_parameters_schema(
         image_path=StringSchema(
             description=(
-                "Path to the image file. Either workspace-relative "
-                "(e.g. ``screenshots/error.png``) or absolute. The "
-                "supported formats are PNG, JPEG, GIF, and WEBP; "
-                "format is detected by magic bytes, not extension."
+                "Path to the image file, relative (e.g. "
+                "``screenshots/error.png``; in a workflow step it resolves "
+                "in the step's working folder, elsewhere in the workspace) "
+                "or absolute. The supported formats are PNG, JPEG, GIF, "
+                "and WEBP; format is detected by magic bytes, not extension."
             ),
             min_length=1,
             max_length=2000,
@@ -86,15 +87,19 @@ class InterpretImageTool(Tool):
 
     _scopes = {"core", "subagent"}
 
-    def __init__(self, aux: AuxProviderHandle, workspace: str | None) -> None:
+    def __init__(self, aux: AuxProviderHandle, workspace: str | None,
+                 work_dir: str | None = None) -> None:
         self._aux = aux
         self._workspace = Path(workspace).expanduser() if workspace else None
+        # A workflow node's working folder: relative paths resolve there.
+        self._work_dir = Path(work_dir) if work_dir else None
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         aux = (ctx.aux_providers or {}).get("vision")
         assert aux is not None  # guarded by enabled()
-        return cls(aux=aux, workspace=getattr(ctx, "workspace", None))
+        return cls(aux=aux, workspace=getattr(ctx, "workspace", None),
+                   work_dir=getattr(ctx, "work_dir", None))
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -129,7 +134,7 @@ class InterpretImageTool(Tool):
 
         try:
             resolved = resolve_workspace_path(
-                str(image_path), workspace=self._workspace,
+                str(image_path), workspace=self._workspace, work_dir=self._work_dir, read=True,
             )
         except PermissionError as e:
             return f"Error: {e}"

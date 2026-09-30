@@ -12,7 +12,7 @@ from pathlib import Path
 
 from durin.session.manager import SessionManager
 
-__all__ = ["MANAGED_PREFIXES", "session_work_dir", "anchored_base"]
+__all__ = ["MANAGED_PREFIXES", "session_work_dir", "anchored_base", "read_base", "display_path"]
 
 # Top-level names that resolve against the workspace root rather than the
 # session work dir. These are durin-managed surfaces the agent reads by name
@@ -43,3 +43,45 @@ def anchored_base(rel_first_segment: str, workspace: Path, work_dir: Path | None
     if work_dir is None or rel_first_segment in MANAGED_PREFIXES:
         return workspace
     return work_dir
+
+
+def read_base(rel: Path, workspace: Path, work_dir: Path | None) -> Path:
+    """The base the relative path *rel* resolves against for a read: as
+    ``anchored_base``, except that a path the work dir does not have, into a
+    folder at the workspace root (a repository or data folder kept there), is
+    read from the root. A file at the root itself never is — a stray file left
+    there by another run must not stand in for one missing here — and a write
+    never falls back: it lands in the work dir."""
+    first = rel.parts[0] if rel.parts else ""
+    base = anchored_base(first, workspace, work_dir)
+    if (base != workspace and first not in ("", ".", "..")
+            and not (base / rel).exists() and (workspace / first).is_dir()):
+        return workspace
+    return base
+
+
+def display_path(path: Path, workspace: Path | None, work_dir: Path | None) -> str:
+    """The way to print *path* so that resolving it by the rule above leads
+    back to it: "." for the folder relative paths resolve in, relative to the
+    work dir when it lies there, relative to the workspace when it lies there
+    and would anchor to the workspace root, and absolute otherwise. All three
+    paths are compared as given, so pass them resolved alike."""
+    if path == (work_dir if work_dir is not None else workspace):
+        return "."
+    if work_dir is not None:
+        try:
+            rel = path.relative_to(work_dir)
+        except ValueError:
+            pass
+        else:
+            if rel.parts[0] not in MANAGED_PREFIXES:
+                return rel.as_posix()
+    if workspace is not None:
+        try:
+            rel = path.relative_to(workspace)
+        except ValueError:
+            pass
+        else:
+            if rel.parts and anchored_base(rel.parts[0], workspace, work_dir) == workspace:
+                return rel.as_posix()
+    return str(path)

@@ -426,6 +426,20 @@ class AgentRunSpec:
     # Leave as ``None`` to skip this layer (tests / non-loop callers don't
     # need it).
     post_compaction_guard: Any | None = None
+    # Checked after each round of tool calls with this run's messages so far
+    # (the turn): True ends the turn there, with the text the model sent
+    # alongside those calls as the final content — or, when that reply has
+    # none, the latest text of the turn — and no further request. For a tool
+    # whose call concludes the work — a workflow node's `route` verdict — so
+    # the model is not asked again after it and the text that came with the
+    # call stays the answer.
+    end_turn_after_tools: Any | None = None  # Callable[[list[dict]], bool]
+    # A previous run's pruning to carry on (its AgentRunResult.prune_state), for
+    # a run that continues that run's messages — a workflow node's re-entry or
+    # synthesis: what it pruned stays pruned, placeholders byte for byte, so the
+    # new run's requests keep the prefix the previous run's had instead of
+    # pruning afresh. Sizes are still counted from scratch, as for any new run.
+    prune_state: Any | None = None
     # Per-turn provider snapshot. The gateway runs a single shared AgentRunner;
     # _apply_provider_snapshot in loop.py mutates self.provider on every
     # concurrent session's /model swap. Carrying the provider here lets run()
@@ -451,6 +465,10 @@ class AgentRunResult:
     # iterations of this run. The loop subtracts this (and tool durations)
     # from the turn wall-clock to attribute "local processing" time.
     llm_ms: float = 0.0
+    # What the run pruned from its requests (a _PruneState), so a request
+    # made after it from these messages can be sent as the loop would send
+    # its next one (AgentRunner.request_view).
+    prune_state: Any = None
 
 
 class AgentRunner:
@@ -597,16 +615,21 @@ class AgentRunner:
             injected_messages = injected_messages[:_MAX_INJECTIONS_PER_TURN]
         return injected_messages
 
+    def _with_result_cap(self, spec: AgentRunSpec) -> AgentRunSpec:
+        """*spec* with its per-result cap resolved from the window when unset."""
+        if spec.max_tool_result_chars is not None:
+            return spec
+        return dataclasses.replace(
+            spec,
+            max_tool_result_chars=result_char_cap(
+                None,
+                spec.context_window_tokens,
+                self._input_budget(spec, spec.provider or self.provider),
+            ),
+        )
+
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
-        if spec.max_tool_result_chars is None:
-            spec = dataclasses.replace(
-                spec,
-                max_tool_result_chars=result_char_cap(
-                    None,
-                    spec.context_window_tokens,
-                    self._input_budget(spec, spec.provider or self.provider),
-                ),
-            )
+        spec = self._with_result_cap(spec)
         # Tools that page their own output (read_file, grep) size a page
         # under this run's per-result cap, so the page arrives whole instead
         # of being replaced by a preview that drops its "continue" footer.
@@ -616,6 +639,106 @@ class AgentRunner:
             return await self._run(spec)
         finally:
             reset_result_char_cap(cap_token)
+
+    def request_view(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        prune_state: Any = None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """*messages* as the run that kept *prune_state* would send them on its
+        next request, with the output cap that request would carry.
+
+        The messages get the same context governance (results it pruned stay
+        pruned, placeholders byte for byte, and a new batch fires if the size
+        calls for one) and the same fit under the run's input budget, trimming
+        oversized results when the view is still over it. The cap is chosen as
+        the loop chooses it: with a known window, the output ceiling clamped to
+        the room the messages leave in it, so prompt and output together never
+        ask for more than the window; without one, None leaves the provider's
+        own. For a request made outside the loop from a finished run's
+        messages — a caller's forced tool call — so it costs no more than the
+        loop's own requests and keeps their cached prefix. Without
+        *prune_state* the view starts fresh. Never raises: on a governance
+        failure the messages get the loop's minimal repair."""
+        spec = self._with_result_cap(spec)
+        provider = spec.provider or self.provider
+        state = prune_state if prune_state is not None else _PruneState(trusted_from=len(messages))
+        view = self._govern_messages(spec, messages, provider, state, None)
+        max_tokens_override = None
+        decision = self._estimate_and_budget(spec, view, provider)
+        if decision is not None:
+            estimate, budget = decision
+            if estimate > budget:
+                view, _fit, trimmed = self._emergency_trim_for_budget(spec, view, budget, provider)
+                if trimmed is not None:
+                    estimate = trimmed
+            max_tokens_override = self._effective_max_tokens(spec, estimate, provider)
+        return view, self._request_max_tokens(spec, max_tokens_override)
+
+    def _govern_messages(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None,
+        prune_state: _PruneState,
+        iteration: int | None,
+    ) -> list[dict[str, Any]]:
+        """The view of *messages* a request sends: repaired tool pairs, old
+        media and tool results pruned (``prune_state`` carries what earlier
+        requests pruned), results over the cap saved, and history snipped to
+        the input budget. The persisted conversation is never modified: these
+        edits must not shift the append boundary a caller later saves from."""
+        try:
+            view = self._drop_orphan_tool_results(
+                self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
+            )
+            view = self._backfill_missing_tool_results(view)
+            # Prune images/audio from completed turns older than the
+            # preservation window so accumulated media doesn't ride along
+            # forever. Runs BEFORE microcompact / snip so those steps see the
+            # reduced size. Stats are collected via an out-dict so telemetry is
+            # emitted only when the pruner actually removed something.
+            _prune_stats: dict[str, int] = {}
+            view = prune_processed_history_images(view, stats=_prune_stats)
+            if _prune_stats.get("image_blocks_removed", 0) > 0 or _prune_stats.get("audio_blocks_removed", 0) > 0:
+                _prune_logger = current_telemetry()
+                if _prune_logger is not None:
+                    with suppress(Exception):
+                        _prune_logger.log("history_media.pruned", {
+                            "image_blocks_removed": _prune_stats.get("image_blocks_removed", 0),
+                            "audio_blocks_removed": _prune_stats.get("audio_blocks_removed", 0),
+                            "preserve_turns": _prune_stats.get("preserve_turns", 0),
+                            "iteration": iteration,
+                            "session_key": spec.session_key,
+                        })
+            batches_before = prune_state.batches
+            view = self._microcompact(
+                spec, view, provider, state=prune_state, iteration=iteration,
+            )
+            if prune_state.batches != batches_before:
+                # Every stamp so far measured a prompt that still held the
+                # results just pruned; the reply to this request is the
+                # first one stamped with the pruned size.
+                prune_state.trusted_from = len(messages)
+            view = self._apply_tool_result_budget(spec, view)
+            view = self._snip_history(spec, view, provider)
+            # Snipping may have created new orphans; clean them up.
+            view = self._drop_orphan_tool_results(view)
+            return self._backfill_missing_tool_results(view)
+        except Exception:
+            logger.exception(
+                "Context governance failed on turn {} for {}; applying minimal repair",
+                iteration,
+                spec.session_key or "default",
+            )
+            try:
+                view = self._drop_orphan_tool_results(
+                    self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
+                )
+                return self._backfill_missing_tool_results(view)
+            except Exception:
+                return messages
 
     async def _run(self, spec: AgentRunSpec) -> AgentRunResult:
         # Resolve the per-turn provider snapshot once. A concurrent session's
@@ -656,10 +779,18 @@ class AgentRunner:
         seen_failed_calls: set[str] = set()
 
         # Old tool results this run replaced by pointers; kept for the whole
-        # run so later requests carry the same placeholders (see _microcompact).
-        # The initial messages' usage stamps measured another run's requests
-        # (possibly pruned ones), so none of them is trusted.
-        prune_state = _PruneState(trusted_from=len(messages))
+        # run so later requests carry the same placeholders (see _microcompact),
+        # and carried on from a previous run when this one continues it. The
+        # initial messages' usage stamps measured another run's requests
+        # (possibly pruned ones, or with other tools), so none of them is trusted.
+        if spec.prune_state is not None:
+            prune_state = spec.prune_state
+            prune_state.trusted_from = len(messages)
+        else:
+            prune_state = _PruneState(trusted_from=len(messages))
+        # Where this run's own messages begin: what a caller's end-of-turn
+        # check sees as the turn so far.
+        turn_start = len(messages)
 
         # Unknown-tool loop guard. Counter per hallucinated tool name
         # across this turn. Trips when any name's count exceeds
@@ -685,63 +816,9 @@ class AgentRunner:
                         })
 
         for iteration in range(spec.max_iterations):
-            try:
-                # Keep the persisted conversation untouched. Context governance
-                # may repair or compact historical messages for the model, but
-                # those synthetic edits must not shift the append boundary used
-                # later when the caller saves only the new turn.
-                messages_for_model = self._drop_orphan_tool_results(
-                    self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
-                )
-                messages_for_model = self._backfill_missing_tool_results(messages_for_model)
-                # Prune images/audio from completed turns older than the
-                # preservation window so accumulated media doesn't ride
-                # along forever. Runs BEFORE microcompact / snip so those
-                # steps see the reduced size. Stats are collected via an
-                # out-dict so we can emit telemetry only when the pruner
-                # actually removed something.
-                _prune_stats: dict[str, int] = {}
-                messages_for_model = prune_processed_history_images(
-                    messages_for_model, stats=_prune_stats,
-                )
-                if _prune_stats.get("image_blocks_removed", 0) > 0 or _prune_stats.get("audio_blocks_removed", 0) > 0:
-                    _prune_logger = current_telemetry()
-                    if _prune_logger is not None:
-                        with suppress(Exception):
-                            _prune_logger.log("history_media.pruned", {
-                                "image_blocks_removed": _prune_stats.get("image_blocks_removed", 0),
-                                "audio_blocks_removed": _prune_stats.get("audio_blocks_removed", 0),
-                                "preserve_turns": _prune_stats.get("preserve_turns", 0),
-                                "iteration": iteration,
-                                "session_key": spec.session_key,
-                            })
-                batches_before = prune_state.batches
-                messages_for_model = self._microcompact(
-                    spec, messages_for_model, provider, state=prune_state, iteration=iteration,
-                )
-                if prune_state.batches != batches_before:
-                    # Every stamp so far measured a prompt that still held the
-                    # results just pruned; the reply to this request is the
-                    # first one stamped with the pruned size.
-                    prune_state.trusted_from = len(messages)
-                messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                messages_for_model = self._snip_history(spec, messages_for_model, provider)
-                # Snipping may have created new orphans; clean them up.
-                messages_for_model = self._drop_orphan_tool_results(messages_for_model)
-                messages_for_model = self._backfill_missing_tool_results(messages_for_model)
-            except Exception:
-                logger.exception(
-                    "Context governance failed on turn {} for {}; applying minimal repair",
-                    iteration,
-                    spec.session_key or "default",
-                )
-                try:
-                    messages_for_model = self._drop_orphan_tool_results(
-                        self._drop_stale_usage_stamps(messages, prune_state.trusted_from)
-                    )
-                    messages_for_model = self._backfill_missing_tool_results(messages_for_model)
-                except Exception:
-                    messages_for_model = messages
+            messages_for_model = self._govern_messages(
+                spec, messages, provider, prune_state, iteration,
+            )
 
             # Mid-turn precheck (OpenClaw-inspired Tier 2 A2). After the
             # sanitize pipeline ran, estimate whether the prompt we're about
@@ -1113,6 +1190,26 @@ class AgentRunner:
                         "pending_tool_calls": [],
                     },
                 )
+                if (spec.end_turn_after_tools is not None
+                        and spec.end_turn_after_tools(messages[turn_start:])):
+                    # A call in this round concluded the turn: the text sent
+                    # alongside the calls is the answer — or, when that reply
+                    # has none, the last thing the model wrote this turn — and
+                    # no request follows. The stream was left open for a next
+                    # request; close it.
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=False)
+                    final_content = hook.finalize_content(context, response.content)
+                    if is_blank_text(final_content):
+                        final_content = next(
+                            (text for text in (_message_text(m).strip()
+                                               for m in reversed(messages[turn_start:])
+                                               if m.get("role") == "assistant") if text),
+                            final_content)
+                    context.final_content = final_content
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    break
                 empty_content_retries = 0
                 length_recovery_count = 0
                 # Checkpoint 1: drain injections after tools, before the next
@@ -1355,6 +1452,7 @@ class AgentRunner:
             tool_events=tool_events,
             had_injections=had_injections,
             llm_ms=total_llm_ms,
+            prune_state=prune_state,
         )
 
     @staticmethod
@@ -1604,6 +1702,26 @@ class AgentRunner:
         }])
         return updated
 
+    @staticmethod
+    def _request_max_tokens(spec: AgentRunSpec, max_tokens_override: int | None) -> int | None:
+        """The output cap a request sends, or None to leave the provider's own."""
+        if max_tokens_override is not None:
+            # Dynamic output budget reused from the precheck estimate: fills
+            # the room the prompt actually left, up to the ceiling. Applied
+            # even when ``spec.max_tokens`` is unset (the main-loop case),
+            # overriding the provider's generation default so a capped input
+            # reservation can't let input+output overflow the window.
+            return max_tokens_override
+        if spec.context_window_tokens:
+            # No estimate available (finalization-retry / direct callers) but
+            # a window is known: send a conservative window-safe cap. Input
+            # already fits under ``window - reservation - buffer``, so
+            # ``_MAX_OUTPUT_RESERVATION`` of output can never overflow.
+            ceiling = spec.max_tokens if isinstance(spec.max_tokens, int) else _MAX_OUTPUT_RESERVATION
+            return min(ceiling, _MAX_OUTPUT_RESERVATION)
+        # No window to protect — honour the configured ceiling verbatim.
+        return spec.max_tokens
+
     def _build_request_kwargs(
         self,
         spec: AgentRunSpec,
@@ -1659,23 +1777,9 @@ class AgentRunner:
         }
         if spec.temperature is not None:
             kwargs["temperature"] = spec.temperature
-        if max_tokens_override is not None:
-            # Dynamic output budget reused from the precheck estimate: fills
-            # the room the prompt actually left, up to the ceiling. Applied
-            # even when ``spec.max_tokens`` is unset (the main-loop case),
-            # overriding the provider's generation default so a capped input
-            # reservation can't let input+output overflow the window.
-            kwargs["max_tokens"] = max_tokens_override
-        elif spec.context_window_tokens:
-            # No estimate available (finalization-retry / direct callers) but
-            # a window is known: send a conservative window-safe cap. Input
-            # already fits under ``window - reservation - buffer``, so
-            # ``_MAX_OUTPUT_RESERVATION`` of output can never overflow.
-            ceiling = spec.max_tokens if isinstance(spec.max_tokens, int) else _MAX_OUTPUT_RESERVATION
-            kwargs["max_tokens"] = min(ceiling, _MAX_OUTPUT_RESERVATION)
-        elif spec.max_tokens is not None:
-            # No window to protect — honour the configured ceiling verbatim.
-            kwargs["max_tokens"] = spec.max_tokens
+        max_tokens = self._request_max_tokens(spec, max_tokens_override)
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         if spec.reasoning_effort is not None:
             kwargs["reasoning_effort"] = spec.reasoning_effort
         # Sampling params. top_p is a standard OpenAI param; top_k and
@@ -2722,7 +2826,7 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         provider: LLMProvider | None = None,
         state: _PruneState | None = None,
-        iteration: int = 0,
+        iteration: int | None = 0,
     ) -> list[dict[str, Any]]:
         """Replace old compactable tool results by a pointer to their saved file, in rare batches.
 

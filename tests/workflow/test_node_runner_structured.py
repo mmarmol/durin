@@ -388,6 +388,24 @@ def test_deliver_file_refuses_paths_outside_the_working_folder(tmp_path):
     provider.chat_with_retry.assert_awaited_once()
 
 
+def test_deliver_file_resolves_a_managed_path_where_write_file_writes_it(tmp_path):
+    """write_file puts memory/x.json in the workspace's memory/, not the working
+    folder: deliver_file names the same file by that path — and refuses it, as it
+    lies outside the working folder — instead of reading a different one."""
+    work = _work_dir(tmp_path)
+    ws_draft = tmp_path / "ws" / "memory" / "draft.json"
+    ws_draft.parent.mkdir(parents=True)
+    ws_draft.write_text(json.dumps({"queries": ["workspace"]}), encoding="utf-8")
+    (work / "memory").mkdir()
+    (work / "memory" / "draft.json").write_text(json.dumps({"queries": ["folder"]}), encoding="utf-8")
+
+    seen, resp, provider = _run_calls(
+        tmp_path, _file_node(), work, [("deliver_file", {"path": "memory/draft.json"})],
+        chat_responses=[_forced({"queries": ["forced"]})])
+    assert "outside your working directory" in seen["results"][0]
+    assert json.loads(resp.output) == {"queries": ["forced"]}
+
+
 def test_deliver_file_names_the_failing_field_and_accepts_the_fixed_file(tmp_path):
     """A schema rejection names the field, so the model edits the draft in place and
     calls again — the payload is never retyped."""
@@ -408,6 +426,71 @@ def test_deliver_file_names_the_failing_field_and_accepts_the_fixed_file(tmp_pat
     assert "draft.json" in rejection and "deliver_file again" in rejection
     assert json.loads(resp.output) == {"queries": ["fixed"]}
     provider.chat_with_retry.assert_not_called()
+
+
+# A question note's body must contain "?"; this one is about 8,000 characters of
+# statements, the size of the body a live rejection quoted back in full.
+_QUESTION_SCHEMA = {"type": "object", "required": ["body"],
+                    "properties": {"body": {"type": "string", "pattern": "\\?"}}}
+_LONG_BODY = "## Problem Summary\n\n" + "A statement, not a question. " * 280
+
+
+def test_a_rejection_cuts_a_long_failing_value_and_keeps_its_path(tmp_path):
+    """jsonschema quotes the whole failing value in its message. Both delivery
+    tools keep the field's path, why it failed and the start of the value, and
+    cut the rest instead of repeating the whole body back to the model."""
+    work = _work_dir(tmp_path)
+    (work / "note.json").write_text(json.dumps({"body": _LONG_BODY}), encoding="utf-8")
+
+    seen, resp, _ = _run_calls(
+        tmp_path, _file_node(schema=_QUESTION_SCHEMA), work,
+        [("deliver", {"body": _LONG_BODY}), ("deliver_file", {"path": "note.json"}),
+         ("deliver", {"body": "Is the link still valid?"})])
+    for rejection in seen["results"][:2]:
+        assert "at body: '## Problem Summary" in rejection   # the path and the value's start
+        assert "does not match" in rejection                  # why it failed
+        assert _LONG_BODY not in rejection
+        assert len(rejection) < 700
+    assert json.loads(resp.output) == {"body": "Is the link still valid?"}
+
+
+def test_a_validation_error_names_the_nested_path_and_keeps_a_short_value_whole():
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"findings": {"type": "array", "items": {
+        "type": "object", "properties": {"detail": {"type": "string", "maxLength": 20}}}}}}
+    long_error = _deliver_validation_error(
+        {"findings": [{"detail": "ok"}, {"detail": "x" * 5_000}]}, schema)
+    assert long_error.startswith("at findings/1/detail: 'xxx")
+    assert "is too long" in long_error
+    assert len(long_error) < 400
+    short_error = _deliver_validation_error({"findings": [{"detail": "y" * 21}]}, schema)
+    assert short_error == f"at findings/0/detail: '{'y' * 21}' is too long"
+
+
+def test_a_long_string_is_cut_on_its_own_characters():
+    """The cut counts and cuts the value itself, not its printed form: the count
+    is the characters left out, and the part shown is a whole quoted string."""
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"body": {"type": "string", "pattern": "\\?"}}}
+    body = "line one\n" * 1000                       # 9,000 characters, more once escaped
+    error = _deliver_validation_error({"body": body}, schema)
+    assert "[8,800 more characters]" in error
+    shown = error.split("at body: ", 1)[1].split("… [", 1)[0]
+    assert shown == repr(body[:200])
+    ja = "本文には質問がありません。" * 700
+    assert "[8,900 more characters]" in _deliver_validation_error({"body": ja}, schema)
+
+
+def test_a_cut_never_ends_inside_an_escape():
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"blob": {"type": "integer"}}}
+    for pad in range(4):
+        error = _deliver_validation_error({"blob": {"k" * pad: "\\" * 500}}, schema)
+        head = error.split("at blob: ", 1)[1].split("… [", 1)[0]
+        assert (len(head) - len(head.rstrip("\\"))) % 2 == 0, head[-12:]
 
 
 def test_deliver_file_reports_a_draft_it_cannot_read(tmp_path):

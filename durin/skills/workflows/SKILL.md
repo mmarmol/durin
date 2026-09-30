@@ -87,9 +87,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the result, and its failure never sinks the run (side effects: persist, notify, archive).
 - **Routing** is opt-in on a `work` or `script` node, never a separate node type: **binary**
   (`on_pass`/`on_fail`) or **multi-way** (`cases` — a map of labels to targets; a `null`
-  target ends the run). The node ends with its verdict and the engine follows the matching
-  edge. A fail / loop-back edge threads the node's feedback into the producer's next run so
-  it knows what to fix; `max_visits` caps loops. Any case may route to the reserved
+  target ends the run). The node ends its turn by calling `route` with its verdict (the
+  runner tells it how) and the engine follows the matching edge. A fail / loop-back edge
+  threads the node's feedback — the text it sent with the verdict — into the producer's
+  next run so it knows what to fix; `max_visits` caps loops. Any case may route to the reserved
   **`__needs_input__`** terminal, which ends the run asking the caller for more information.
   **A script node routes deterministically**: exit code 0 = PASS / non-zero = FAIL (its
   stderr becomes the loop-back feedback), or its last stdout line as the case label — the
@@ -121,7 +122,12 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   folder per run, so file-producing steps build on each other (a plan's code accumulates; a
   debug loop's reproduction, fix, and test live together) instead of copying a fileset down
   a chain. A `subworkflow` runs in its **parent's** folder, so files flow through composition;
-  parallel writing branches fork the folder and their writes reconcile back.
+  parallel writing branches fork the folder and their writes reconcile back. A node's file
+  tools resolve a relative path in the folder (one under `workflows/`, `memory/` or `skills/`
+  resolves from the workspace root, and a read into another root folder — a repository kept
+  there — falls back to the root when the folder lacks the path); `exec` starts in the
+  workspace root, so a prompt whose commands work on the folder's files should `cd` there or
+  use full paths.
 - **Input / Output** — optional descriptors (text and/or files, plus a free-text contract).
   A per-call `output_format` overrides the delivery shape for one run. A file-producing
   workflow can also **declare its artifacts** (`output.artifacts`: the paths it promises to

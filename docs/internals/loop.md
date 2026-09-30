@@ -466,7 +466,12 @@ model override, then calls `self.runner.run(AgentRunSpec(...))`.
 `AgentRunner` ([`durin/agent/runner.py`](../../durin/agent/runner.py)) is the
 shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
 default): call the LLM → if the response has tool calls, execute them (with
-topological batching) and loop; otherwise finalize the content and stop. Around
+topological batching) and loop; otherwise finalize the content and stop. A
+caller whose tool call concludes the work (a workflow node's `route` verdict)
+sets `AgentRunSpec.end_turn_after_tools`: called after each round of tool calls
+with the run's messages so far, when it returns true the turn ends there with
+the text sent alongside those calls as its final content (or, when that reply
+has none, the latest text of the turn), and no further request is made. Around
 that core it layers guards and context governance — loop detection on repeated
 failed calls, an unknown-tool breaker, an idle-timeout breaker, message
 sanitization (dropping orphan tool results, backfilling missing ones),
@@ -522,7 +527,10 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   previous one plus new messages, which keeps the provider's prompt cache and
   the usage-anchored size estimate valid; a result never reappears after it
   was pruned. A new run starts with nothing pruned, so it prunes again only
-  if it is over the threshold.
+  if it is over the threshold — unless it continues a previous run's messages
+  and is given that run's state (`AgentRunSpec.prune_state`, from its
+  `AgentRunResult.prune_state`): a workflow node's re-entry and synthesis runs
+  keep what the work loop pruned, so their requests share its prefix.
 - **Which usage stamps to trust.** Size estimates anchor on the latest usage
   stamp, but a run trusts only the stamps it produced after its last batch.
   The stamps on the messages it starts from measured another run's requests
@@ -548,6 +556,17 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   with the "unchanged since last read" stub, which would point at content the
   model no longer has. A tool call entry that is not well formed is skipped,
   and a failure here is logged without stopping the run.
+- **A request after the run.** A caller that sends one more request from a
+  finished run's messages — a workflow node's forced `route`, re-entry
+  assessment or `deliver` call — builds it with
+  `AgentRunner.request_view(spec, messages, result.prune_state)`: the governance
+  and budget fit the run's next request would get, from the run's own prune
+  state (`AgentRunResult.prune_state`), so what the run pruned stays pruned byte
+  for byte and the request fits the run's input budget instead of carrying the
+  whole unpruned history. It also returns the output cap that request would
+  carry, chosen as the loop chooses it (`_request_max_tokens`): with a known
+  window, the ceiling clamped to the room the messages leave in it; without
+  one, the provider's own.
 
 The placeholder is informative rather than opaque:
 - it names the tool;

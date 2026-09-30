@@ -1097,6 +1097,31 @@ def test_terminal_gate_with_bare_verdict_keeps_producer_output():
     assert result.final_output_node == "make"      # residue empty — stays the producer's id
 
 
+def test_a_terminal_gate_decided_by_route_keeps_its_content():
+    """The verdict came from the node's `route` call: its review, checklist bullets
+    included, is the run's output; only a bare closing verdict that agrees with
+    the call is dropped, and a review without one is kept whole."""
+    wf = parse_workflow({
+        "name": "d", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": "make", "on_fail": None},
+        ],
+    })
+    review = ("## Final review\n\n- PASS: citations resolve\n- FAIL: the expiry date is wrong "
+              "(says 30 days, contract says 14)\n\nThe note cannot go out as written.")
+
+    for gate_output in (review, f"{review}\n\nFAIL"):
+        def node_runner(req: NodeRunRequest, gate_output=gate_output) -> NodeRunResponse:
+            if req.node.id == "make":
+                return NodeRunResponse(output="the draft")
+            return NodeRunResponse(output=gate_output, route_label="FAIL")
+
+        result = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1").run(wf, "t")
+        assert result.final_route_label == "FAIL"
+        assert result.final_output == review
+
+
 def test_terminal_cases_node_contributes_its_output():
     wf = parse_workflow({
         "name": "d", "start": "synth",
