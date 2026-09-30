@@ -102,8 +102,9 @@ durin config get 'providers.zai_coding_plan.models["glm-5.3"]'
 durin config set "model_capabilities['zai_coding_plan/glm-5.3'].supports_vision" false
 ```
 
-Quote the whole path for the shell, as above. A key without dots can be
-written either way (`models.glm-5-turbo` or `models["glm-5-turbo"]`). `set`
+Quote the whole path for the shell, as above. A key without dots, field
+names included, can be written either way (`models.glm-5-turbo` or
+`models["glm-5-turbo"]`, `.max_tokens` or `["maxTokens"]`). `set`
 refuses — and changes nothing — when the value would not land where the path
 says: a misspelled field, or a dotted model name written without brackets,
 which would otherwise split into unrelated keys.

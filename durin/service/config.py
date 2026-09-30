@@ -380,6 +380,7 @@ class ConfigService:
             load_raw_config,
             mask_secrets,
             parse_value,
+            path_segments,
             validate_dict,
         )
         from durin.config.loader import get_config_path, save_config
@@ -400,17 +401,21 @@ class ConfigService:
             raise ValidationFailedError(f"validation failed: {e}") from e
 
         save_config(config, path)
-        normalized = _normalize_dotted_path(cmd.key)
-        if self._on_config_changed is not None and normalized in CONCURRENCY_CAP_KEYS:
+        # Compare keys, not path strings: the same setting can be written
+        # with brackets (`channels["slack"].x`), and a map key with a dot
+        # stays bracketed in the canonical form.
+        segments = path_segments(_normalize_dotted_path(cmd.key))
+        if self._on_config_changed is not None and ".".join(segments) in CONCURRENCY_CAP_KEYS:
             self._on_config_changed()
-        await self._reapply_channel_config(normalized, config)
+        await self._reapply_channel_config(segments, config)
         return ConfigSetResult(
             ok=True,
             config=mask_secrets(config.model_dump(mode="json", by_alias=False)),
         )
 
-    async def _reapply_channel_config(self, key: str, config: Any) -> None:
-        """Cycle the live channel *key* belongs to, so the edit takes effect.
+    async def _reapply_channel_config(self, parts: list[str], config: Any) -> None:
+        """Cycle the live channel the config key *parts* belongs to, so the
+        edit takes effect.
 
         A running channel holds the config it was constructed with — the
         manager only re-reads config when a channel starts. Cycling is a
@@ -423,7 +428,6 @@ class ConfigService:
         """
         if self._channel_manager is None:
             return
-        parts = key.split(".")
         # `channels.<name>.<field>`; `channels.<global_field>` is not a channel.
         if len(parts) < 3 or parts[0] != "channels":
             return

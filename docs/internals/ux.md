@@ -620,9 +620,13 @@ and the settings editor's `POST /api/v1/config` share the helpers in
 `durin/cli/config_cmd.py`. Keys are separated by dots; a key written in quoted
 brackets (`models["glm-5.3"]`) is literal, so a model name's dots do not split
 it. `_normalize_dotted_path` walks the config's JSON schema alongside the path:
-a field name is case-tolerant (`apiKey` → `api_key`), while a key of a typed
-map (a model, preset or header name) is kept as typed, and a list index
-(`fallback_models.1` or `fallback_models[1]`) is written dotted. A write goes
+a field name is case-tolerant (`apiKey` → `api_key`) and written dotted
+whether or not it came in brackets, while a key of a typed map (a model,
+preset or header name) is kept as typed, and a list index
+(`fallback_models.1` or `fallback_models[1]`) is written dotted. After a
+write, `POST /api/v1/config` picks its follow-ups — reloading the concurrency
+caps, restarting the running channel whose section changed — from the
+normalized path's keys, so every spelling of a key triggers them. A write goes
 through `apply_setting`: `set_at` writes into a copy of the on-disk dict —
 creating a missing or null section, indexing a list only at an item it has,
 and refusing a path through a plain value, which it would otherwise replace

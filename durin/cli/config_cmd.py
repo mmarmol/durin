@@ -535,23 +535,23 @@ def _normalize_key(
     """The canonical form of one path key — ``(key, bracketed, schema node
     under it)``.
 
-    A field name is case-tolerant (``apiKey`` → ``api_key``). A key of a
-    typed map — a model name under ``providers.<p>.models``, a preset name,
-    a header name — is the user's and is kept as typed: case-normalizing it
-    turned ``MiniMax-M2`` into ``mini_max-_m2``. A list index, dotted or in
-    brackets, is written dotted. Outside the typed schema (a free-form dict)
-    a key keeps the plain snake_case rule.
+    A field name is case-tolerant (``apiKey`` → ``api_key``) and written
+    dotted, in brackets or not. A key of a typed map — a model name under
+    ``providers.<p>.models``, a preset name, a header name — is the user's
+    and is kept as typed: case-normalizing it turned ``MiniMax-M2`` into
+    ``mini_max-_m2``. A list index, dotted or in brackets, is written dotted.
+    Outside the typed schema (a free-form dict) a key keeps the plain
+    snake_case rule, and a bracketed one is kept as typed.
     """
     if node is None:
         return (seg if literal else _snake(seg)), literal, None
     resolved = _resolve_ref(node, defs)
     candidates = [resolved] + [_resolve_ref(s, defs) for s in resolved.get("anyOf", [])]
-    names = [seg] if literal else [seg, _snake(seg)]
     for cand in candidates:
         props = cand.get("properties", {})
-        for name in names:
+        for name in (seg, _snake(seg)):
             if name in props:
-                return name, literal, props[name]
+                return name, False, props[name]
     for cand in candidates:
         extra = cand.get("additionalProperties")
         if isinstance(extra, dict):

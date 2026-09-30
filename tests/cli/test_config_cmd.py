@@ -524,6 +524,26 @@ def test_cli_config_set_refuses_a_list_item_it_cannot_write(fallbacks_config: Pa
     assert fallbacks_config.read_text() == before
 
 
+@pytest.mark.parametrize("path, expected", [
+    ('["agents"].defaults.max_tokens', "agents.defaults.max_tokens"),
+    ('agents["defaults"]["maxTokens"]', "agents.defaults.max_tokens"),
+    ('providers["zai_coding_plan"].models["glm-5.3"]["contextWindowTokens"]',
+     'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens'),
+])
+def test_normalize_writes_a_bracketed_field_name_as_the_field(path: str, expected: str) -> None:
+    """Brackets make a key literal so a map key keeps its dots and case; a
+    field name in brackets is still that field, in its canonical form."""
+    assert _normalize_dotted_path(path) == expected
+
+
+def test_cli_config_set_accepts_a_bracketed_camel_case_field(models_config: Path) -> None:
+    result = runner.invoke(app, [
+        "config", "set", 'providers.zai_coding_plan.models["glm-5.3"]["maxTokens"]', "32000",
+    ])
+    assert result.exit_code == 0, result.output
+    assert _models(models_config)["glm-5.3"] == {"context_window_tokens": 231_072, "max_tokens": 32_000}
+
+
 def test_normalize_renders_a_list_index_as_a_dotted_key() -> None:
     assert _normalize_dotted_path("agents.defaults.fallback_models[1].maxTokens") == (
         "agents.defaults.fallback_models.1.max_tokens"
