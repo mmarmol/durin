@@ -40,6 +40,9 @@ class ProviderSnapshot:
     # snapshot time so a preset switch propagates the new ratio into the
     # consolidator without the loop having to know about preset internals.
     preemptive_compact_ratio: float | None = None
+    # The preset's absolute compaction cap in tokens, carried the same way.
+    # ``None`` means the preset sets none: the agents.defaults cap applies.
+    preemptive_compact_max_tokens: int | None = None
 
 
 def _resolve_model_preset(
@@ -335,6 +338,7 @@ def build_provider_snapshot(
         context_window_tokens=_window_and_cap(config, resolved, fallbacks)[0],
         signature=_signature(config, resolved, [fallback.preset for fallback in fallbacks]),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
+        preemptive_compact_max_tokens=resolved.preemptive_compact_max_tokens,
     )
 
 

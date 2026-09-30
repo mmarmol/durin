@@ -467,8 +467,10 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
         model="test-model", context_window_tokens=1_000_000,
         # ratio 0.4 → trigger at 400,000 tokens. A window this large is above
         # _SMALL_CTX_WINDOW_LIMIT, so the configured ratio is authoritative
-        # (below that limit it would be raised to the small-context floor).
+        # (below that limit it would be raised to the small-context floor),
+        # once the absolute cap is off — it would otherwise fire at 256,000.
         preemptive_compact_ratio=0.4,
+        preemptive_compact_max_tokens=None,
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
     # max_completion=0 + safety=50 → ceiling = 999,900; trigger = 400,000.
@@ -500,6 +502,54 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
     assert data["trigger_tokens"] == 400_000
     assert data["ratio"] == 0.4
     assert data["budget_tokens"] == 999_900  # the trigger ceiling
+    assert data["trigger_bound"] == "ratio"
+    assert data["cap_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_capped_compaction_writes_the_bound_that_fired(e2e_telemetry, tmp_path, monkeypatch):
+    """A 1M window at the default ratio fires at the absolute cap, and the
+    telemetry file says the cap, not the ratio, set the trigger."""
+    import durin.agent.memory as memory_module
+    from durin.agent.loop import AgentLoop
+    from durin.bus.queue import MessageBus
+    from durin.providers.base import GenerationSettings
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=0)
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="summary"))
+    provider.chat_stream_with_retry = AsyncMock(return_value=LLMResponse(content="summary"))
+
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path,
+        model="test-model", context_window_tokens=1_000_000,
+    )
+    loop.tools.get_definitions = MagicMock(return_value=[])
+
+    session = loop.sessions.get_or_create("e2e-test")
+    session.messages = [
+        {"role": "user", "content": "u1"}, {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "u2"}, {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "u3"},
+    ]
+    loop.sessions.save(session)
+
+    # 300,000 is under the ratio's 500,000 but over the 256,000 cap.
+    estimates = iter([300_000, 100_000])
+    loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_: (next(estimates), "test")
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100_000)
+    loop.consolidator.archive = AsyncMock(return_value=("A summary.", {"entities": [], "topics": []}))
+
+    await loop.consolidator.maybe_consolidate_by_tokens(session)
+
+    (preempt,) = _events_of(e2e_telemetry, "compaction.preemptive_trigger")
+    assert preempt["data"]["trigger_tokens"] == 256_000
+    assert preempt["data"]["trigger_bound"] == "cap"
+    assert preempt["data"]["cap_tokens"] == 256_000
+    (done,) = _events_of(e2e_telemetry, "compaction.completed")
+    assert done["data"]["trigger_bound"] == "cap"
+    assert done["data"]["cap_tokens"] == 256_000
 
 
 # ---------------------------------------------------------------------------

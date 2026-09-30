@@ -862,6 +862,7 @@ async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
         temperature=base_preset.temperature,
         reasoning_effort=effort_val,
         preemptive_compact_ratio=base_preset.preemptive_compact_ratio,
+        preemptive_compact_max_tokens=base_preset.preemptive_compact_max_tokens,
     )
     loop.set_model_preset(variant_name)
 

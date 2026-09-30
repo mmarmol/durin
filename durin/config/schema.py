@@ -954,6 +954,13 @@ class ModelPresetConfig(Base):
         serialization_alias="preemptiveCompactRatio",
         description="Fraction of context_window_tokens above which compaction fires before the next LLM call instead of waiting for a context-overflow 400; None inherits agents.defaults.preemptive_compact_ratio",
     )
+    preemptive_compact_max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
+        serialization_alias="preemptiveCompactMaxTokens",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires for this preset, whatever the ratio; None inherits agents.defaults.preemptive_compact_max_tokens, and a value at or above the window leaves the preset on its ratio alone",
+    )
 
     def to_generation_settings(self) -> Any:
         from durin.providers.base import GenerationSettings
@@ -1088,6 +1095,17 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
         serialization_alias="preemptiveCompactRatio",
         description="Default fraction of the context window that triggers pre-emptive compaction when the active preset doesn't override it",
+    )
+    # A ratio alone stops bounding cost on the largest windows: 0.5 of a 1M
+    # window fires only at 500K, so every long turn would ship up to half a
+    # million tokens. The cap bounds the trigger in tokens instead; a window
+    # whose ratio trigger is already lower never reaches it.
+    preemptive_compact_max_tokens: int | None = Field(
+        default=256_000,
+        ge=1,
+        validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
+        serialization_alias="preemptiveCompactMaxTokens",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger when the active preset doesn't override it; null = no cap (the ratio alone)",
     )
     decision_log_enabled: bool = Field(default=True, description="Record key decisions/findings in a task-state anchor that survives compaction")
     compaction_learnings_enabled: bool = Field(default=True, description="Distil durable user learnings (preferences, corrections) at compaction time")

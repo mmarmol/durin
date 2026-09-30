@@ -74,6 +74,33 @@ def test_footer_text_with_messages(tmp_path: Path) -> None:
     assert p["context_pct"] == 0  # tiny / 200_000 → 0%
 
 
+def test_footer_pct_measures_a_large_window_against_the_capped_trigger(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A 1M window at the default ratio compacts at the 256K cap, not at
+    500K: the gauge reads against the point where compaction really fires."""
+    from unittest.mock import MagicMock
+
+    import durin.cli.footer as footer
+    from durin.agent.memory import Consolidator
+
+    loop = _fake_loop(tmp_path, context_window=1_000_000)
+    loop.consolidator = Consolidator(
+        store=MagicMock(),
+        provider=MagicMock(),
+        model="m",
+        sessions=MagicMock(),
+        context_window_tokens=1_000_000,
+        build_messages=MagicMock(),
+        get_tool_definitions=MagicMock(),
+        max_completion_tokens=8192,
+    )
+    monkeypatch.setattr(footer, "_token_estimate", lambda _session: 128_000)
+
+    p = build_footer_text(loop, "cli", "direct")
+    assert p["context_pct"] == 50
+
+
 def test_footer_text_with_display_name(tmp_path: Path) -> None:
     session = _FakeSession(display_name="my-project")
     loop = _fake_loop(tmp_path, session=session)

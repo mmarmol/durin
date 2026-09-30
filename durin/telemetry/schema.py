@@ -169,15 +169,27 @@ class SubagentRunEvent(TypedDict):
     context_window_tokens: int | None
 
 
+# Which bound set a compaction trigger, the smallest of: the window times the
+# configured ratio (``ratio``, or ``floor`` when the small-window floor raised
+# that ratio), the absolute cap (``cap``), and the ceiling that keeps the
+# resulting prompt inside the runner's budget (``ceiling``).
+CompactionTriggerBound = Literal["ratio", "floor", "cap", "ceiling"]
+
+
 class CompactionPreemptiveTriggerEvent(TypedDict):
     """Consolidation fired BEFORE the input budget ceiling because the
-    pre-emptive ratio kicked in."""
+    pre-emptive trigger kicked in. ``ratio`` is the effective ratio (after
+    the small-window floor); ``cap_tokens`` is the absolute cap in force,
+    ``None`` when there is none; ``trigger_bound`` names the bound that set
+    ``trigger_tokens``."""
     session_key: str
     estimated_tokens: int
     trigger_tokens: int
     budget_tokens: int
     context_window_tokens: int
     ratio: float
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
 
 
 class SessionArchivedEvent(TypedDict):
@@ -200,11 +212,14 @@ class CompactionDeferredEvent(TypedDict):
     ``reason`` is ``post_compaction`` (a compaction just shortened the
     conversation and no fresh provider count exists yet) or ``provider_fit``
     (the last real prompt came in under the trigger and the estimate has only
-    drifted modestly since)."""
+    drifted modestly since). ``trigger_bound`` and ``cap_tokens`` as on
+    ``compaction.preemptive_trigger``."""
     session_key: str
     reason: str
     estimated_tokens: int
     trigger_tokens: int
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
 
 
 class CompactionCompletedEvent(TypedDict):
@@ -214,7 +229,9 @@ class CompactionCompletedEvent(TypedDict):
     ``no_boundary`` (ran out of user-turn boundaries to cut on),
     ``max_rounds``, ``summary_failed``, ``already_summarized`` (the round's
     span was entirely covered by the nightly session-summary pass, so no LLM
-    call was made), ``empty_chunk`` or ``estimate_unavailable``."""
+    call was made), ``empty_chunk`` or ``estimate_unavailable``.
+    ``trigger_bound`` and ``cap_tokens`` as on
+    ``compaction.preemptive_trigger``."""
     session_key: str
     rounds: int
     exit_reason: str
@@ -222,6 +239,8 @@ class CompactionCompletedEvent(TypedDict):
     estimated_before: int
     estimated_after: int
     trigger_tokens: int
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
     target_tokens: int
     context_window_tokens: int
 

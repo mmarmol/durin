@@ -926,8 +926,8 @@ distinct:
 | Number | Formula | What it bounds |
 |---|---|---|
 | `_input_token_budget` | `window − max_completion_tokens − buffer` | Size of the text handed to the consolidation LLM. Reserves the *real* completion ceiling, because that call has to fit too. |
-| `_preemptive_ceiling` | `window − min(max_completion_tokens, cap) − 2×buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. |
-| `_preemptive_trigger_tokens` | `min(window × effective_ratio, ceiling)` | Where compaction actually fires. |
+| `_preemptive_ceiling` | `window − min(max_completion_tokens, reservation cap) − 2×buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. |
+| `_preemptive_trigger_tokens` | `min(window × effective_ratio, preemptive_compact_max_tokens, ceiling)` | Where compaction actually fires. |
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a
@@ -941,6 +941,26 @@ the whole, so a low ratio leaves almost no runway between the post-compaction
 floor and the next trigger, and the session thrashes. An explicitly configured
 higher ratio is always honoured; large-window models are untouched, where a
 high ratio would mean shipping a huge prompt every turn.
+
+**The absolute cap.** A ratio stops bounding cost on the largest windows: 0.5
+of a 1M window fires only at 500K, so every long turn would ship up to half a
+million tokens before anything is summarized. `preemptive_compact_max_tokens`
+bounds the trigger in tokens whatever the window, and `null` removes it. It only
+ever lowers the trigger, so a window whose ratio trigger is already below it is
+unaffected. It applies after the small-window floor: on a window just under
+`_SMALL_CTX_WINDOW_LIMIT`, where the floor's fraction would pass the cap, the
+cap wins. As one more term of the `min` it cannot lift the trigger past the
+ceiling, so the overflow invariant holds with it. A preset's own
+`preemptive_compact_max_tokens` replaces the default while that preset is
+active; a preset that sets none runs with the `agents.defaults` value, whatever
+the previous preset set. The cap governs the loop's session compaction only:
+workflow nodes and subagents prune by the runner's input budget instead.
+
+`compaction.preemptive_trigger`, `compaction.deferred` and
+`compaction.completed` name the bound that set the trigger in `trigger_bound`
+(`ratio`; `floor` when the small-window floor raised the ratio; `cap`;
+`ceiling`) and carry the cap in force as `cap_tokens`, `null` when there is
+none.
 
 **The real-usage veto.** `estimate_session_prompt_tokens` probes the *raw*
 unconsolidated tail — it does not apply microcompaction or the tool-result
@@ -1028,6 +1048,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `unified_session` | `false` | Collapse all channels to one shared session. |
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
+| `preemptive_compact_max_tokens` | `256000` | Absolute cap on the preemptive trigger, in tokens: compaction fires at the smaller of this and the ratio's trigger; `null` for the ratio alone — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
 | `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |

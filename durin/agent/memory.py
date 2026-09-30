@@ -552,6 +552,7 @@ class Consolidator:
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        preemptive_compact_max_tokens: int | None = 256_000,
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
@@ -579,6 +580,13 @@ class Consolidator:
         # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
         # overrides; otherwise inherits from ``AgentDefaults``.
         self.preemptive_compact_ratio = preemptive_compact_ratio
+        # Absolute bound on the same trigger, in tokens; None leaves the ratio
+        # alone. The ratio stops bounding cost on the largest windows (0.5 of
+        # 1M fires only at 500K), so the trigger is the smaller of the two. A
+        # preset may set its own; one that sets none runs with this default,
+        # kept apart so switching away from a preset's cap restores it.
+        self.preemptive_compact_max_tokens = preemptive_compact_max_tokens
+        self._default_preemptive_compact_max_tokens = preemptive_compact_max_tokens
         # Concern B (task-state anchor): caps + toggle for the auto-extracted
         # decision log written at compaction. See durin/session/decision_log.py.
         self.decision_log_enabled = decision_log_enabled
@@ -697,6 +705,7 @@ class Consolidator:
         context_window_tokens: int,
         *,
         preemptive_compact_ratio: float | None = None,
+        preemptive_compact_max_tokens: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -708,6 +717,13 @@ class Consolidator:
         # the existing ratio untouched.
         if preemptive_compact_ratio is not None:
             self.preemptive_compact_ratio = preemptive_compact_ratio
+        # Per-preset cap: the preset's own while it is active. A preset that
+        # sets none gets the default cap back, never the previous preset's.
+        self.preemptive_compact_max_tokens = (
+            self._default_preemptive_compact_max_tokens
+            if preemptive_compact_max_tokens is None
+            else preemptive_compact_max_tokens
+        )
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -1037,26 +1053,42 @@ class Consolidator:
     @property
     def _preemptive_trigger_tokens(self) -> int:
         """Token count at which a turn forces consolidation before the
-        LLM call.
+        LLM call."""
+        return self._preemptive_trigger()[0]
 
-        Bounded above by ``_preemptive_ceiling`` so a misconfigured ratio
-        (e.g. 0.99) can't push the trigger past the point where the resulting
-        prompt still fits the runner — context overflow still triggers even if
-        the ratio would have skipped.
+    def _preemptive_trigger(self) -> tuple[int, str]:
+        """The pre-emptive trigger in tokens, and the bound that set it.
+
+        The trigger is the smallest of three bounds, named in the second
+        element: the window times the configured ratio (``ratio``, or
+        ``floor`` when the small-window floor raised that ratio), the absolute
+        cap (``cap``), and ``_preemptive_ceiling`` (``ceiling``). The ceiling
+        keeps a misconfigured ratio (e.g. 0.99) or cap from pushing the
+        trigger past the point where the resulting prompt still fits the
+        runner — context overflow still triggers even if the ratio would have
+        skipped. On a tie the earlier bound is named, since the later one
+        changed nothing.
         """
         if self.context_window_tokens <= 0:
-            return 0
+            return 0, "ceiling"
         ceiling = self._preemptive_ceiling
         if ceiling <= 0:
             # Window smaller than the reservation: nothing sane to derive.
-            return max(1, self._input_token_budget)
+            return max(1, self._input_token_budget), "ceiling"
         ratio = self._effective_compact_ratio
-        if ratio <= 0:
+        if ratio > 0:
+            trigger = int(self.context_window_tokens * ratio)
+            bound = "floor" if ratio > self.preemptive_compact_ratio else "ratio"
+        else:
             # 0 / negative / garbage → fall back to legacy behavior (trigger
             # only at the hard ceiling).
-            return max(1, ceiling)
-        threshold = int(self.context_window_tokens * ratio)
-        return max(1, min(threshold, ceiling))
+            trigger, bound = ceiling, "ceiling"
+        cap = self.preemptive_compact_max_tokens
+        if cap is not None and cap < trigger:
+            trigger, bound = cap, "cap"
+        if ceiling < trigger:
+            trigger, bound = ceiling, "ceiling"
+        return max(1, trigger), bound
 
     def _truncate_to_token_budget(self, text: str) -> str:
         """Truncate text so it fits within the consolidation LLM's token budget."""
@@ -1344,7 +1376,7 @@ class Consolidator:
             # the hard budget ceiling. ``target`` is computed off the trigger
             # so each compaction round does meaningful work (compacting down
             # by ``consolidation_ratio`` of the trigger).
-            trigger = self._preemptive_trigger_tokens
+            trigger, trigger_bound = self._preemptive_trigger()
             target = max(1, int(trigger * self.consolidation_ratio))
             new_summaries: list[str] = []
             # This call's tags, unioned across every archive round below and
@@ -1423,6 +1455,8 @@ class Consolidator:
                             "reason": deferral,
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": self.preemptive_compact_max_tokens,
                         })
                 self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
@@ -1441,6 +1475,8 @@ class Consolidator:
                             "budget_tokens": self._preemptive_ceiling,
                             "context_window_tokens": self.context_window_tokens,
                             "ratio": self._effective_compact_ratio,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": self.preemptive_compact_max_tokens,
                         })
 
             estimated_before = estimated
@@ -1528,6 +1564,8 @@ class Consolidator:
                             "estimated_before": estimated_before,
                             "estimated_after": estimated,
                             "trigger_tokens": trigger,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": self.preemptive_compact_max_tokens,
                             "target_tokens": target,
                             "context_window_tokens": self.context_window_tokens,
                         })

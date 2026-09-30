@@ -160,6 +160,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `max_messages` | `480` | Max messages replayed from session history; `0` uses default |
 | `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
 | `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and capped so the resulting prompt still fits the runner |
+| `preemptive_compact_max_tokens` | `256000` | Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger. On a 1M-window model the default ratio alone would let every long turn ship up to 500K tokens. A window whose ratio trigger is already lower is unaffected; `null` removes the cap (the ratio alone). Chat compaction only: workflow nodes and subagents trim their context to their model's window instead |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |
 | `compaction_learnings_enabled` | `true` | Distil durable user learnings (preferences, corrections) at compaction time |
 | `decision_log_max_entries` | `10` | Cap on decision-log entries re-injected each turn |
@@ -195,6 +196,7 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 | `top_k` | `null` | Top-k sampling; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `repeat_penalty` | `null` | Repetition penalty; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `preemptive_compact_ratio` | `null` | Per-preset compaction trigger; `null` inherits from `agents.defaults` |
+| `preemptive_compact_max_tokens` | `null` | Per-preset absolute compaction cap in tokens; `null` inherits from `agents.defaults`. A value at or above the model's window leaves this preset on its ratio alone |
 
 #### Model limits
 

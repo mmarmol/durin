@@ -1153,6 +1153,7 @@ class DurinApp(App[None]):
             temperature=active_preset.temperature,
             reasoning_effort=effort,
             preemptive_compact_ratio=active_preset.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=active_preset.preemptive_compact_max_tokens,
         )
         presets[variant_name] = variant
         add_recent_model(variant_name)

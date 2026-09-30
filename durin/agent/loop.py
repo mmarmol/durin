@@ -503,6 +503,7 @@ class AgentLoop:
         timezone: str | None = None,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        preemptive_compact_max_tokens: int | None = 256_000,
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
@@ -693,6 +694,7 @@ class AgentLoop:
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
+            preemptive_compact_max_tokens=preemptive_compact_max_tokens,
             decision_log_enabled=decision_log_enabled,
             decision_log_max_entries=decision_log_max_entries,
             decision_log_max_chars=decision_log_max_chars,
@@ -1160,6 +1162,7 @@ class AgentLoop:
             disabled_skills=defaults.disabled_skills,
             consolidation_ratio=defaults.consolidation_ratio,
             preemptive_compact_ratio=defaults.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=defaults.preemptive_compact_max_tokens,
             decision_log_enabled=defaults.decision_log_enabled,
             decision_log_max_entries=defaults.decision_log_max_entries,
             decision_log_max_chars=defaults.decision_log_max_chars,
@@ -1202,6 +1205,7 @@ class AgentLoop:
             model,
             context_window_tokens,
             preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=snapshot.preemptive_compact_max_tokens,
         )
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:

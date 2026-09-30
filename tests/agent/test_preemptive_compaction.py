@@ -58,6 +58,7 @@ def _make_loop(
     context_window_tokens: int,
     consolidation_ratio: float = 0.5,
     preemptive_compact_ratio: float = 0.5,
+    **loop_kwargs,
 ) -> AgentLoop:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -74,6 +75,7 @@ def _make_loop(
         context_window_tokens=context_window_tokens,
         consolidation_ratio=consolidation_ratio,
         preemptive_compact_ratio=preemptive_compact_ratio,
+        **loop_kwargs,
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.consolidator._SAFETY_BUFFER = 0
@@ -90,13 +92,19 @@ def _session_with_messages(loop: AgentLoop, count: int):
     return session
 
 
-def _stub_consolidator(*, window: int, max_completion: int, safety: int, ratio: float):
-    """Build a barebones Consolidator without the full LLM provider plumbing."""
+def _stub_consolidator(
+    *, window: int, max_completion: int, safety: int, ratio: float, cap: int | None = 256_000,
+):
+    """Build a barebones Consolidator without the full LLM provider plumbing.
+
+    ``cap`` defaults to the shipped absolute cap, so a stub triggers where a
+    real consolidator would; pass ``None`` for the ratio alone."""
     from durin.agent.memory import Consolidator
     c = Consolidator.__new__(Consolidator)
     c.context_window_tokens = window
     c.max_completion_tokens = max_completion
     c.preemptive_compact_ratio = ratio
+    c.preemptive_compact_max_tokens = cap
     # ``_SAFETY_BUFFER`` is a class constant on the real class; set as
     # instance attribute here for direct override.
     c._SAFETY_BUFFER = safety
@@ -145,12 +153,15 @@ def test_ceiling_stays_strictly_under_the_runner_input_budget():
     for window, max_completion in (
         (231_072, 131_072), (200_000, 8192), (1_000_000, 65_536), (32_000, 4096),
     ):
-        c = _stub_consolidator(
-            window=window, max_completion=max_completion, safety=1024, ratio=0.99,
-        )
-        runner_budget = window - _output_reservation(max_completion) - _SNIP_SAFETY_BUFFER
-        assert c._preemptive_ceiling < runner_budget, (window, max_completion)
-        assert c._preemptive_trigger_tokens < runner_budget, (window, max_completion)
+        # The absolute cap only lowers the trigger, so the invariant holds with
+        # it and without it — including a cap larger than the window itself.
+        for cap in (None, 256_000, 10_000_000):
+            c = _stub_consolidator(
+                window=window, max_completion=max_completion, safety=1024, ratio=0.99, cap=cap,
+            )
+            runner_budget = window - _output_reservation(max_completion) - _SNIP_SAFETY_BUFFER
+            assert c._preemptive_ceiling < runner_budget, (window, max_completion, cap)
+            assert c._preemptive_trigger_tokens < runner_budget, (window, max_completion, cap)
     assert _MAX_OUTPUT_RESERVATION == 32_768
 
 
@@ -185,6 +196,66 @@ def test_threshold_falls_back_to_ceiling_on_invalid_ratio(monkeypatch):
     c.preemptive_compact_ratio = "nonsense"  # type: ignore[assignment]
     assert c._preemptive_trigger_tokens == 600
 
+    # The absolute cap does not depend on the ratio: it still bounds the
+    # ceiling-only trigger.
+    c.preemptive_compact_max_tokens = 500
+    assert c._preemptive_trigger() == (500, "cap")
+
+
+# ===========================================================================
+# Absolute cap: the trigger is the smallest of the ratio's trigger, the cap
+# and the ceiling. With the ratio alone, the default 0.5 on a 1M window fires
+# only at 500K, so every long turn ships up to half a million tokens.
+# ===========================================================================
+
+
+def test_cap_bounds_a_million_token_window():
+    c = _stub_consolidator(window=1_000_000, max_completion=8192, safety=1024, ratio=0.5)
+    assert c._preemptive_trigger() == (256_000, "cap")
+    assert c._preemptive_trigger_tokens == 256_000
+
+
+def test_a_null_cap_leaves_the_ratio_alone():
+    c = _stub_consolidator(
+        window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, cap=None,
+    )
+    assert c._preemptive_trigger() == (500_000, "ratio")
+
+
+def test_the_cap_leaves_a_small_window_on_its_floor():
+    """0.75 of 200K is already under the cap: nothing changes there."""
+    c = _stub_consolidator(window=200_000, max_completion=8192, safety=1024, ratio=0.5)
+    assert c._preemptive_trigger() == (150_000, "floor")
+
+
+def test_the_cap_applies_after_the_small_window_floor():
+    """400K is under the small-window limit, so the floor raises 0.5 to 0.75:
+    300,000, which the cap then lowers."""
+    c = _stub_consolidator(window=400_000, max_completion=8192, safety=1024, ratio=0.5)
+    assert c._effective_compact_ratio == 0.75
+    assert c._preemptive_trigger() == (256_000, "cap")
+
+
+def test_a_configured_ratio_under_the_cap_is_kept():
+    """A 1M preset that asked for 0.15 compacts at 150K, below the cap."""
+    c = _stub_consolidator(window=1_000_000, max_completion=8192, safety=1024, ratio=0.15)
+    assert c._preemptive_trigger() == (150_000, "ratio")
+
+
+def test_the_ceiling_still_wins_when_it_is_the_smallest():
+    """260K window: ceiling 260,000 - 8,192 - 2,048 = 249,760, under both the
+    cap and 0.99 x 260,000 = 257,400."""
+    c = _stub_consolidator(window=260_000, max_completion=8192, safety=1024, ratio=0.99)
+    assert c._preemptive_ceiling == 249_760
+    assert c._preemptive_trigger() == (249_760, "ceiling")
+
+
+def test_a_cap_above_the_window_changes_nothing():
+    c = _stub_consolidator(
+        window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, cap=2_000_000,
+    )
+    assert c._preemptive_trigger() == (500_000, "ratio")
+
 
 @pytest.mark.asyncio
 async def test_preemptive_trigger_fires_below_input_budget(tmp_path, monkeypatch):
@@ -218,6 +289,9 @@ async def test_preemptive_trigger_fires_below_input_budget(tmp_path, monkeypatch
     assert payload["trigger_tokens"] == 150
     assert payload["estimated_tokens"] == 150
     assert payload["ratio"] == 0.75
+    # The floor set this trigger; the default cap was in force but far above it.
+    assert payload["trigger_bound"] == "floor"
+    assert payload["cap_tokens"] == 256_000
 
     done = [e for e in telemetry.events if e[0] == "compaction.completed"]
     assert len(done) == 1
@@ -225,6 +299,67 @@ async def test_preemptive_trigger_fires_below_input_budget(tmp_path, monkeypatch
     assert done[0][1]["exit_reason"] == "target_reached"
     assert done[0][1]["estimated_before"] == 150
     assert done[0][1]["estimated_after"] == 40
+    assert done[0][1]["trigger_bound"] == "floor"
+    assert done[0][1]["cap_tokens"] == 256_000
+
+
+@pytest.mark.asyncio
+async def test_compaction_events_name_the_cap_when_it_sets_the_trigger(tmp_path, monkeypatch):
+    """A 1M window at the default ratio: the cap, not the ratio, decides where
+    compaction fires, and every event that reports the trigger says so."""
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=10)
+
+    # 300K is under the ratio's 500K but over the cap: it must compact.
+    estimates = [300_000, 100_000]
+    loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_k: (estimates.pop(0), "test")
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100_000)
+
+    await loop.consolidator.maybe_consolidate_by_tokens(session)
+    assert loop.consolidator.archive.await_count == 1
+
+    (preempt,) = [e[1] for e in telemetry.events if e[0] == "compaction.preemptive_trigger"]
+    assert preempt["trigger_tokens"] == 256_000
+    assert preempt["trigger_bound"] == "cap"
+    assert preempt["cap_tokens"] == 256_000
+    assert preempt["ratio"] == 0.5
+    (done,) = [e[1] for e in telemetry.events if e[0] == "compaction.completed"]
+    assert done["trigger_tokens"] == 256_000
+    assert done["target_tokens"] == 128_000
+    assert done["trigger_bound"] == "cap"
+    assert done["cap_tokens"] == 256_000
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_cap_is_reported_as_null(tmp_path, monkeypatch):
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+
+    loop = _make_loop(
+        tmp_path, context_window_tokens=1_000_000, preemptive_compact_max_tokens=None,
+    )
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+    session = _session_with_messages(loop, count=10)
+
+    # Over the cap that is no longer there, under the ratio: nothing to do.
+    loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_k: (300_000, "test")
+    await loop.consolidator.maybe_consolidate_by_tokens(session)
+    assert loop.consolidator.archive.await_count == 0
+
+    estimates = [520_000, 100_000]
+    loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_k: (estimates.pop(0), "test")
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100_000)
+    await loop.consolidator.maybe_consolidate_by_tokens(session)
+    assert loop.consolidator.archive.await_count == 1
+
+    (done,) = [e[1] for e in telemetry.events if e[0] == "compaction.completed"]
+    assert done["trigger_tokens"] == 500_000
+    assert done["trigger_bound"] == "ratio"
+    assert done["cap_tokens"] is None
 
 
 @pytest.mark.asyncio
@@ -300,6 +435,175 @@ def test_set_provider_without_explicit_ratio_preserves_current(tmp_path):
     loop = _make_loop(tmp_path, context_window_tokens=200, preemptive_compact_ratio=0.3)
     loop.consolidator.set_provider(loop.provider, "x", 500)
     assert loop.consolidator.preemptive_compact_ratio == 0.3
+
+
+def test_agent_defaults_cap_is_256k_and_null_disables_it():
+    assert AgentDefaults().preemptive_compact_max_tokens == 256_000
+    assert AgentDefaults(preemptive_compact_max_tokens=None).preemptive_compact_max_tokens is None
+    assert AgentDefaults(preemptiveCompactMaxTokens=300_000).preemptive_compact_max_tokens == 300_000
+
+
+def test_the_cap_refuses_zero_and_negative_counts():
+    """0 would compact on every turn; unset is written as null, never 0."""
+    from pydantic import ValidationError
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            AgentDefaults(preemptive_compact_max_tokens=bad)
+        with pytest.raises(ValidationError):
+            ModelPresetConfig(model="m", preemptive_compact_max_tokens=bad)
+
+
+def test_a_preset_cap_is_unset_unless_given():
+    assert ModelPresetConfig(model="m").preemptive_compact_max_tokens is None
+    preset = ModelPresetConfig(model="big", preemptiveCompactMaxTokens=400_000)
+    assert preset.preemptive_compact_max_tokens == 400_000
+
+
+def test_the_shipped_default_is_the_same_on_every_construction_path():
+    """from_config passes agents.defaults' value; a loop or consolidator built
+    directly (the SDK, tests) must land on the same default."""
+    import inspect
+
+    from durin.agent.memory import Consolidator
+
+    shipped = AgentDefaults().preemptive_compact_max_tokens
+    for ctor in (AgentLoop.__init__, Consolidator.__init__):
+        param = inspect.signature(ctor).parameters["preemptive_compact_max_tokens"]
+        assert param.default == shipped, ctor
+
+
+def test_the_schema_offers_the_cap_as_a_nullable_positive_integer():
+    """The settings editor reads this schema: a nullable integer with a
+    minimum of 1 is what makes an emptied field save null and 0 be refused."""
+    from durin.config.schema import Config
+
+    schema = Config.model_json_schema(by_alias=False)
+    for model, default in (("AgentDefaults", 256_000), ("ModelPresetConfig", None)):
+        field = schema["$defs"][model]["properties"]["preemptive_compact_max_tokens"]
+        assert {"type": "integer", "minimum": 1} in field["anyOf"], model
+        assert {"type": "null"} in field["anyOf"], model
+        assert field["default"] == default, model
+
+
+def test_config_set_saves_null_and_refuses_zero(tmp_path, monkeypatch):
+    """The path the settings editor and `durin config set` write through: null
+    persists (it differs from the default, so the non-default save keeps it)
+    and 0 is refused before anything is written."""
+    from pydantic import ValidationError
+
+    from durin.cli.config_cmd import apply_setting, parse_value
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import Config
+
+    path = tmp_path / "config.json"
+    key = "agents.defaults.preemptive_compact_max_tokens"
+    canonical = Config().model_dump(mode="json", by_alias=False)
+
+    with pytest.raises(ValidationError):
+        apply_setting(canonical, key, parse_value("0"))
+
+    save_config(apply_setting(canonical, key, parse_value("null")), path)
+    assert load_config(path).agents.defaults.preemptive_compact_max_tokens is None
+
+
+def test_a_preset_cap_applies_while_active_and_a_preset_without_one_inherits(tmp_path):
+    """None on a preset means agents.defaults' cap, even right after a preset
+    that set its own: the previous preset's value must not stick."""
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+    assert c._preemptive_trigger() == (256_000, "cap")
+
+    c.set_provider(loop.provider, "big", 1_000_000, preemptive_compact_max_tokens=400_000)
+    assert c._preemptive_trigger() == (400_000, "cap")
+
+    c.set_provider(loop.provider, "other", 1_000_000)
+    assert c.preemptive_compact_max_tokens == 256_000
+    assert c._preemptive_trigger() == (256_000, "cap")
+
+
+def test_a_preset_cap_applies_even_when_agents_defaults_has_none(tmp_path):
+    loop = _make_loop(
+        tmp_path, context_window_tokens=1_000_000, preemptive_compact_max_tokens=None,
+    )
+    c = loop.consolidator
+    assert c._preemptive_trigger() == (500_000, "ratio")
+
+    c.set_provider(loop.provider, "big", 1_000_000, preemptive_compact_max_tokens=300_000)
+    assert c._preemptive_trigger() == (300_000, "cap")
+
+    c.set_provider(loop.provider, "other", 1_000_000)
+    assert c._preemptive_trigger() == (500_000, "ratio")
+
+
+def test_a_model_preset_switch_carries_the_presets_cap_to_the_consolidator(tmp_path):
+    """The real switch path: set_model_preset builds the preset's snapshot and
+    applies it."""
+    loop = _make_loop(
+        tmp_path,
+        context_window_tokens=1_000_000,
+        model_presets={
+            "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+            "roomy": ModelPresetConfig(
+                model="test-model",
+                context_window_tokens=1_000_000,
+                preemptive_compact_max_tokens=450_000,
+            ),
+        },
+    )
+    loop.set_model_preset("roomy", publish_update=False)
+    assert loop.consolidator._preemptive_trigger() == (450_000, "cap")
+
+    loop.set_model_preset("default", publish_update=False)
+    assert loop.consolidator._preemptive_trigger() == (256_000, "cap")
+
+
+def test_provider_snapshots_carry_the_presets_cap():
+    """The gateway's snapshot loader and the static path both hand the
+    preset's own cap to the loop; the default preset sets none."""
+    from durin.agent.model_presets import build_static_preset_snapshot
+    from durin.config.schema import Config
+    from durin.providers.factory import build_provider_snapshot
+
+    cfg = Config()
+    cfg.agents.defaults.model = "gpt-4.1"
+    cfg.agents.defaults.provider = "openai"
+    cfg.providers.openai.api_key = "sk-test"
+    cfg.model_presets["roomy"] = ModelPresetConfig(
+        model="gpt-4.1", provider="openai", preemptive_compact_max_tokens=450_000,
+    )
+
+    assert build_provider_snapshot(cfg, preset_name="roomy").preemptive_compact_max_tokens == 450_000
+    assert build_provider_snapshot(cfg).preemptive_compact_max_tokens is None
+    static = build_static_preset_snapshot(MagicMock(), "roomy", cfg.model_presets["roomy"], cfg)
+    assert static.preemptive_compact_max_tokens == 450_000
+
+
+def test_from_config_threads_the_cap_to_the_consolidator(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from durin.config.schema import Config
+
+    config = Config.model_validate({
+        "agents": {
+            "defaults": {
+                "model": "openai/gpt-4.1",
+                "workspace": str(tmp_path),
+                "preemptive_compact_max_tokens": 180_000,
+            }
+        },
+    })
+    fake_provider = MagicMock()
+    fake_provider.get_default_model.return_value = "openai/gpt-4.1"
+    fake_provider.generation = SimpleNamespace(
+        max_tokens=4096, temperature=0.1, reasoning_effort=None
+    )
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.loop.Consolidator") as mock_consolidator:
+        mock_consolidator.return_value = MagicMock()
+        AgentLoop.from_config(config)
+    _, kwargs = mock_consolidator.call_args
+    assert kwargs["preemptive_compact_max_tokens"] == 180_000
 
 
 # ===========================================================================
@@ -403,6 +707,8 @@ async def test_second_compaction_is_deferred_until_real_usage_arrives(tmp_path, 
 
     deferrals = [e for e in telemetry.events if e[0] == "compaction.deferred"]
     assert [d[1]["reason"] for d in deferrals] == ["post_compaction"]
+    assert deferrals[0][1]["trigger_bound"] == "floor"
+    assert deferrals[0][1]["cap_tokens"] == 256_000
 
 
 @pytest.mark.asyncio

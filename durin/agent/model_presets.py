@@ -55,6 +55,7 @@ def build_static_preset_snapshot(
         context_window_tokens=preset.context_window_tokens,
         signature=("model_preset", name, preset.model_dump_json()),
         preemptive_compact_ratio=preset.preemptive_compact_ratio,
+        preemptive_compact_max_tokens=preset.preemptive_compact_max_tokens,
     )
 
 
