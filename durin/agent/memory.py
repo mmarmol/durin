@@ -1426,6 +1426,13 @@ class Consolidator:
             # by ``consolidation_ratio`` of the trigger).
             trigger, trigger_bound = self._preemptive_trigger()
             target = max(1, int(trigger * self.consolidation_ratio))
+            # Read with the trigger, before anything awaits: a preset switch
+            # while this call waits on the summary must not pair the trigger
+            # with another preset's numbers in the events below.
+            cap_tokens = self.preemptive_compact_max_tokens
+            ceiling = self._preemptive_ceiling
+            window = self.context_window_tokens
+            effective_ratio = self._effective_compact_ratio
             new_summaries: list[str] = []
             # This call's tags, unioned across every archive round below and
             # handed to the session-summary store with the blocks.
@@ -1475,7 +1482,7 @@ class Consolidator:
                     "Token consolidation idle {}: {}/{} via {}, trigger={}, msgs={}",
                     session.key,
                     estimated,
-                    self.context_window_tokens,
+                    window,
                     source,
                     trigger,
                     unconsolidated_count,
@@ -1505,7 +1512,7 @@ class Consolidator:
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
                             "trigger_bound": trigger_bound,
-                            "cap_tokens": self.preemptive_compact_max_tokens,
+                            "cap_tokens": cap_tokens,
                         })
                 self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
@@ -1514,7 +1521,7 @@ class Consolidator:
             # work: it fires below the ceiling that would have been the only
             # trigger under legacy (ratio-less) behavior. A forced run was set
             # off by an overflow, not by this threshold.
-            if not force and estimated < self._preemptive_ceiling:
+            if not force and estimated < ceiling:
                 _logger = current_telemetry()
                 if _logger is not None:
                     with suppress(Exception):
@@ -1522,11 +1529,11 @@ class Consolidator:
                             "session_key": session.key,
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
-                            "budget_tokens": self._preemptive_ceiling,
-                            "context_window_tokens": self.context_window_tokens,
-                            "ratio": self._effective_compact_ratio,
+                            "budget_tokens": ceiling,
+                            "context_window_tokens": window,
+                            "ratio": effective_ratio,
                             "trigger_bound": trigger_bound,
-                            "cap_tokens": self.preemptive_compact_max_tokens,
+                            "cap_tokens": cap_tokens,
                         })
 
             estimated_before = estimated
@@ -1562,7 +1569,7 @@ class Consolidator:
                     round_num,
                     session.key,
                     estimated,
-                    self.context_window_tokens,
+                    window,
                     source,
                     len(chunk),
                 )
@@ -1615,9 +1622,9 @@ class Consolidator:
                             "estimated_after": estimated,
                             "trigger_tokens": trigger,
                             "trigger_bound": trigger_bound,
-                            "cap_tokens": self.preemptive_compact_max_tokens,
+                            "cap_tokens": cap_tokens,
                             "target_tokens": target,
-                            "context_window_tokens": self.context_window_tokens,
+                            "context_window_tokens": window,
                         })
 
             # Persist the last summary to session metadata so it can be injected

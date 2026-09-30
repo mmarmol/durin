@@ -410,6 +410,48 @@ async def test_compaction_events_name_the_cap_when_it_sets_the_trigger(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_compaction_events_report_the_numbers_the_trigger_came_from(tmp_path, monkeypatch):
+    """A preset switch while a compaction awaits its summary must not pair the
+    trigger with the next preset's cap, window or ceiling."""
+    import asyncio
+
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    c = loop.consolidator
+    session = _session_with_messages(loop, count=5)
+    estimates = iter([300_000, 100_000])
+    c.estimate_session_prompt_tokens = lambda _s, **_k: (next(estimates), "test")
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100_000)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def _slow_archive(_messages):
+        started.set()
+        await release.wait()
+        return "summary", {"entities": [], "topics": []}
+
+    c.archive = _slow_archive
+    task = asyncio.create_task(c.maybe_consolidate_by_tokens(session))
+    await started.wait()
+    c.set_provider(
+        loop.provider, "roomy", 2_000_000,
+        preemptive_compact_ratio=0.3, preemptive_compact_max_tokens=450_000,
+    )
+    release.set()
+    await task
+
+    (preempt,) = [e[1] for e in telemetry.events if e[0] == "compaction.preemptive_trigger"]
+    (done,) = [e[1] for e in telemetry.events if e[0] == "compaction.completed"]
+    for event in (preempt, done):
+        assert event["trigger_tokens"] == 256_000
+        assert event["trigger_bound"] == "cap"
+        assert event["cap_tokens"] == 256_000
+        assert event["context_window_tokens"] == 1_000_000
+    assert preempt["ratio"] == 0.5
+    assert preempt["budget_tokens"] == 1_000_000
+
+
+@pytest.mark.asyncio
 async def test_a_disabled_cap_is_reported_as_null(tmp_path, monkeypatch):
     telemetry = _RecordingTelemetry()
     _bind_telemetry(monkeypatch, telemetry)
