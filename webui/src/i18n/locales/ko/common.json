@@ -206,6 +206,7 @@
       "off": "꺼짐",
       "managed": "관리형 시크릿",
       "empty": "이 섹션에 설정이 없습니다.",
+      "unset": "설정 안 됨",
       "secretRotate": "값 교체",
       "secretRotateHint": "저장된 시크릿에 새 값을 씁니다. 이 이름을 참조하는 모든 config 항목에 즉시 적용됩니다.",
       "secretDisconnect": "연결 해제",

@@ -51,8 +51,8 @@ class InlineFallbackConfig(Base):
 
     model: str = Field(description="Model identifier to fall back to")
     provider: str = Field(description="Provider name for the fallback model")
-    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
-    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    max_tokens: int | None = Field(default=None, ge=1, description="Max output tokens per turn; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, ge=1, description="Context window size hint in tokens; None takes the fallback model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
     temperature: float | None = Field(default=None, description="Generation temperature; None inherits agents.defaults")
     reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
 
@@ -936,8 +936,8 @@ class ModelPresetConfig(Base):
 
     model: str = Field(description="Model identifier")
     provider: str = Field(default="auto", description='Provider name or "auto" for auto-detection')
-    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
-    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    max_tokens: int | None = Field(default=None, ge=1, description="Max output tokens per turn; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, ge=1, description="Context window size hint in tokens; None takes the model's own: its providers.<p>.models entry, then the catalog, then agents.defaults")
     temperature: float = Field(default=0.1, description="Generation temperature")
     reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
     request_timeout_s: float | None = Field(default=None, description="Per-model HTTP timeout in seconds; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S")
@@ -1033,8 +1033,8 @@ class AgentDefaults(Base):
     personas_seeded: bool = Field(default=False, description="Set once the example personas have been seeded into `personas` (managed by durin)")
     model: str = Field(default="anthropic/claude-opus-4-5", description="Active model identifier (provider/name form)")
     provider: str = Field(default="auto", description='Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection from the model name')
-    max_tokens: int = Field(default=8192, description="Max output tokens per turn")
-    context_window_tokens: int = Field(default=65_536, description="Context window size hint in tokens")
+    max_tokens: int = Field(default=8192, ge=1, description="Max output tokens per turn")
+    context_window_tokens: int = Field(default=65_536, ge=1, description="Context window size hint in tokens")
     context_block_limit: int | None = Field(default=None, description="Hard limit on context blocks; overrides the token budget when set")
     temperature: float = Field(default=0.4, description="Generation temperature")
     fallback_models: list[FallbackCandidate] = Field(default_factory=list, description="Ordered list of preset names or inline model specs to try on provider failure")
@@ -1117,8 +1117,8 @@ class ModelEntry(Base):
     (``provider_models.json``), then to ``agents.defaults`` / the schema default.
     A configured model under its provider is what a ``model_preset`` used to be."""
 
-    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None falls back to the catalog, then agents.defaults")
-    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None falls back to the catalog, then agents.defaults")
+    max_tokens: int | None = Field(default=None, ge=1, description="Max output tokens per turn; None falls back to the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, ge=1, description="Context window size hint in tokens; None falls back to the catalog, then agents.defaults")
     temperature: float | None = Field(default=None, description="Generation temperature; None falls back to agents.defaults")
     reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
     request_timeout_s: float | None = Field(default=None, description="Per-model HTTP timeout in seconds; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S")

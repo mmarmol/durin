@@ -522,6 +522,8 @@ def cmd_set(
     install can be configured purely from the command line without
     running the wizard first.
     """
+    from durin.config.loader import drop_unusable_limits
+
     path = get_config_path()
     bootstrapped = not path.exists()
     raw = load_raw_config(path)  # {} when the file is absent
@@ -529,7 +531,7 @@ def cmd_set(
     # before mutating, so set_at writes the canonical key and pydantic's
     # snake field names resolve without parallel camelCase duplicates.
     try:
-        canonical = validate_dict(raw).model_dump(mode="json", by_alias=False)
+        canonical = validate_dict(drop_unusable_limits(raw)).model_dump(mode="json", by_alias=False)
     except pydantic.ValidationError as e:
         console.print("[red]On-disk config is invalid; refusing to edit.[/red]")
         console.print(str(e))

@@ -599,6 +599,54 @@ def _env_replace(match: re.Match[str]) -> str:
     return value
 
 
+_LIMIT_KEYS = ("max_tokens", "maxTokens", "context_window_tokens", "contextWindowTokens")
+
+
+def drop_unusable_limits(data: dict) -> dict:
+    """Remove a ``max_tokens`` / ``context_window_tokens`` below 1 from every
+    place a config sets one — ``agents.defaults``, its inline fallbacks, each
+    named preset, each ``providers.<p>.models`` entry — so it reads as unset
+    (the model's own limit, or the default) instead of failing validation,
+    which would reject the whole config. The schema refuses such a value on
+    write; one saved before it did (a settings editor wrote a cleared number
+    as 0) must not stop the config from loading or being edited. Each drop is
+    logged. Mutates and returns *data*."""
+
+    def scrub(block: Any, where: str) -> None:
+        if not isinstance(block, dict):
+            return
+        for key in _LIMIT_KEYS:
+            value = block.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value < 1:
+                del block[key]
+                logger.warning(
+                    "config: {}.{} is {}, which no model accepts; treating it as unset", where, key, value,
+                )
+
+    agents = data.get("agents")
+    defaults = agents.get("defaults") if isinstance(agents, dict) else None
+    if isinstance(defaults, dict):
+        scrub(defaults, "agents.defaults")
+        for key in ("fallback_models", "fallbackModels"):
+            items = defaults.get(key)
+            if isinstance(items, list):
+                for index, item in enumerate(items):
+                    scrub(item, f"agents.defaults.{key}.{index}")
+    for key in ("model_presets", "modelPresets"):
+        presets = data.get(key)
+        if isinstance(presets, dict):
+            for name, preset in presets.items():
+                scrub(preset, f"{key}.{name}")
+    providers = data.get("providers")
+    if isinstance(providers, dict):
+        for provider, block in providers.items():
+            models = block.get("models") if isinstance(block, dict) else None
+            if isinstance(models, dict):
+                for model, entry in models.items():
+                    scrub(entry, f"providers.{provider}.models.{model}")
+    return data
+
+
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
@@ -637,4 +685,4 @@ def _migrate_config(data: dict) -> dict:
             defaults.setdefault("skillsHotTier", memory.pop(legacy))
             break
 
-    return data
+    return drop_unusable_limits(data)

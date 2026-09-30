@@ -640,7 +640,12 @@ through a field the config file never holds (`exclude=True`: the
 `openai_codex` and `github_copilot` blocks, which `durin oauth login`
 manages) and otherwise show the bracket form of a key with dots.
 `ConfigSettings.tsx` builds its row paths the same way, bracketing any key
-that contains a dot, bracket or quote.
+that contains a dot, bracket or quote. It edits a number against the JSON
+schema `GET /api/v1/config` returns with the config (`json_schema`): a field
+that may be null — an unset output cap or window — is editable while null,
+an emptied one saves `null` (never `0`, which is what `Number("")` gives),
+and a draft the field does not accept (empty where null is not allowed, not
+a whole number for an integer, below its `minimum`) cannot be saved.
 
 ### Secrets flow
 

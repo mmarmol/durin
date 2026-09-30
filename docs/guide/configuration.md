@@ -210,6 +210,11 @@ whatever is left unset comes from:
    and output limit the provider publishes),
 3. `agents.defaults.context_window_tokens` / `agents.defaults.max_tokens`.
 
+Wherever it is set, a window or output cap is at least 1: `durin config set`
+and the settings editor refuse `0` (unset the value with `null` instead), and
+a value below 1 already in the file is treated as unset when the config loads,
+with a warning in the log.
+
 The entry and the catalog are read under the provider the run actually goes
 to: a preset (or the default model) on `"auto"` uses the provider its model
 routes to, and a spelling such as `zai-coding-plan` or `zaiCodingPlan` reads

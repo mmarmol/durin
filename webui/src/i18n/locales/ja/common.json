@@ -206,6 +206,7 @@
       "off": "オフ",
       "managed": "管理対象のシークレット",
       "empty": "このセクションに設定はありません。",
+      "unset": "未設定",
       "secretRotate": "値をローテーション",
       "secretRotateHint": "保存済みのシークレットに新しい値を書き込みます。この名前を参照する config はすべてこの値を使うようになります。",
       "secretDisconnect": "切断",

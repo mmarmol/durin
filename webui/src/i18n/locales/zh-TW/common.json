@@ -206,6 +206,7 @@
       "off": "關閉",
       "managed": "受控密鑰",
       "empty": "此區塊沒有設定項目。",
+      "unset": "未設定",
       "secretRotate": "更換數值",
       "secretRotateHint": "為已儲存的密鑰寫入新值。所有指向此名稱的設定參照都會套用新值。",
       "secretDisconnect": "取消連結",

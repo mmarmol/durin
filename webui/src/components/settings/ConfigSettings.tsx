@@ -9,13 +9,82 @@ import { SettingsRow, settingsCardClass } from "./primitives";
 import { MaskedSecret } from "@/components/settings/secrets/MaskedSecret";
 
 type Json = unknown;
+type SchemaNode = Record<string, unknown>;
 
 /** One flattened, addressable config value. `path` is the full dotted
- *  key the API writes to; `display` is the path relative to its group. */
+ *  key the API writes to; `display` is the path relative to its group;
+ *  `keys` are the keys from the config root down to the value. */
 interface Leaf {
   display: string;
   path: string;
+  keys: string[];
   value: Json;
+}
+
+/** What the config schema says about a number field. */
+interface NumberSpec {
+  integer: boolean;
+  nullable: boolean;
+  minimum?: number;
+}
+
+/** `node` with its `$ref` chain followed, plus each `anyOf` branch. */
+function schemaVariants(node: SchemaNode, defs: Record<string, SchemaNode>): SchemaNode[] {
+  const resolve = (n: SchemaNode): SchemaNode => {
+    let cur = n;
+    for (let hops = 0; typeof cur.$ref === "string" && hops < 32; hops++) {
+      const next = defs[String(cur.$ref).split("/").pop() ?? ""];
+      if (!next) break;
+      cur = next;
+    }
+    return cur;
+  };
+  const resolved = resolve(node);
+  const branches = Array.isArray(resolved.anyOf) ? (resolved.anyOf as SchemaNode[]) : [];
+  return [resolved, ...branches.map(resolve)];
+}
+
+/** The number spec of the field at `keys` in the config's JSON schema, or
+ *  null when the schema does not describe it as a number. A key of a map
+ *  (a model or preset name) is matched through `additionalProperties`. */
+function numberSpecAt(schema: SchemaNode | null, keys: string[]): NumberSpec | null {
+  if (!schema) return null;
+  const defs = (schema.$defs ?? {}) as Record<string, SchemaNode>;
+  let node: SchemaNode | null = schema;
+  for (const key of keys) {
+    if (!node) return null;
+    const variants: SchemaNode[] = schemaVariants(node, defs);
+    const field = variants
+      .map((v) => (v.properties as Record<string, SchemaNode> | undefined)?.[key])
+      .find((n) => n !== undefined);
+    const entry = variants
+      .map((v) => v.additionalProperties)
+      .find((n): n is SchemaNode => typeof n === "object" && n !== null);
+    node = field ?? entry ?? null;
+  }
+  if (!node) return null;
+  const variants = schemaVariants(node, defs);
+  const numeric = variants.find((v) => v.type === "integer" || v.type === "number");
+  if (!numeric) return null;
+  return {
+    integer: numeric.type === "integer",
+    nullable: variants.some((v) => v.type === "null"),
+    minimum: typeof numeric.minimum === "number" ? numeric.minimum : undefined,
+  };
+}
+
+/** What a number field's draft saves as: null when it is empty and the
+ *  field may be null, the number when the field accepts it, otherwise
+ *  undefined — nothing to save. An empty draft never becomes 0, which is
+ *  what `Number("")` returns. */
+function parseNumberDraft(draft: string, spec: NumberSpec): number | null | undefined {
+  const text = draft.trim();
+  if (text === "") return spec.nullable ? null : undefined;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return undefined;
+  if (spec.integer && !Number.isInteger(n)) return undefined;
+  if (spec.minimum !== undefined && n < spec.minimum) return undefined;
+  return n;
 }
 
 function isMaskedSecret(value: Json): boolean {
@@ -43,48 +112,48 @@ function childPath(path: string, key: string): string {
 }
 
 /** Walk a config subtree into editable leaves. Plain objects recurse so
- *  every scalar gets its own row; arrays and null stay whole (read-only). */
-function flatten(value: Json, path: string, display: string, out: Leaf[]): void {
+ *  every scalar gets its own row; arrays and null stay whole. */
+function flatten(value: Json, path: string, display: string, out: Leaf[], keys: string[]): void {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const entries = Object.entries(value as Record<string, Json>);
     for (const [key, child] of entries) {
-      flatten(child, childPath(path, key), display ? `${display}.${key}` : key, out);
+      flatten(child, childPath(path, key), display ? `${display}.${key}` : key, out, [...keys, key]);
     }
     return;
   }
   out.push({
     display: display || path.split(".").slice(-1)[0],
     path,
+    keys,
     value,
   });
 }
 
-/** A scalar (string/number) editor row. Local draft; saves on demand. */
+/** A scalar (string/number) editor row. Local draft; saves on demand. A
+ *  number row follows its schema spec: an empty draft saves null when the
+ *  field may be null, and a draft the field does not accept is not saved. */
 function ConfigTextRow({
   leaf,
-  numeric,
+  number,
   busy,
   onSave,
 }: {
   leaf: Leaf;
-  numeric: boolean;
+  number: NumberSpec | null;
   busy: boolean;
   onSave: (path: string, value: Json) => void;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(String(leaf.value));
-  useEffect(() => setDraft(String(leaf.value)), [leaf.value]);
-  const dirty = draft !== String(leaf.value);
+  const shown = leaf.value === null ? "" : String(leaf.value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const dirty = draft !== shown;
+  const parsed = number ? parseNumberDraft(draft, number) : draft;
+  const valid = parsed !== undefined;
 
   const commit = () => {
-    if (!dirty) return;
-    if (numeric) {
-      const n = Number(draft);
-      if (!Number.isFinite(n)) return;
-      onSave(leaf.path, n);
-    } else {
-      onSave(leaf.path, draft);
-    }
+    if (!dirty || !valid) return;
+    onSave(leaf.path, parsed);
   };
 
   return (
@@ -92,17 +161,20 @@ function ConfigTextRow({
       <div className="flex items-center gap-2">
         <Input
           value={draft}
+          aria-label={leaf.display}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") commit();
           }}
-          inputMode={numeric ? "numeric" : undefined}
+          inputMode={number ? "numeric" : undefined}
+          placeholder={number?.nullable ? t("settings.config.unset") : undefined}
+          aria-invalid={dirty && !valid ? true : undefined}
           className="h-8 w-[220px] rounded-full text-[13px]"
         />
         <Button
           size="sm"
           variant="outline"
-          disabled={!dirty || busy}
+          disabled={!dirty || !valid || busy}
           onClick={commit}
           className="rounded-full"
         >
@@ -143,10 +215,12 @@ function SecretRefRow({
 /** One config leaf, picking the right control for its type. */
 function LeafRow({
   leaf,
+  schema,
   saving,
   onSave,
 }: {
   leaf: Leaf;
+  schema: SchemaNode | null;
   saving: string | null;
   onSave: (path: string, value: Json) => void;
 }) {
@@ -191,18 +265,25 @@ function LeafRow({
     );
   }
 
-  if (typeof value === "string" || typeof value === "number") {
+  // A number — or a null the schema types as a number, such as an unset
+  // output cap — is edited against its schema spec. Without one (the schema
+  // does not describe the key) a number still edits, but never saves empty.
+  const spec = numberSpecAt(schema, leaf.keys);
+  if (typeof value === "number" || (value === null && spec)) {
     return (
       <ConfigTextRow
         leaf={leaf}
-        numeric={typeof value === "number"}
+        number={spec ?? { integer: false, nullable: false }}
         busy={busy}
         onSave={onSave}
       />
     );
   }
+  if (typeof value === "string") {
+    return <ConfigTextRow leaf={leaf} number={null} busy={busy} onSave={onSave} />;
+  }
 
-  // Array or null — shown read-only; edit those with `durin config`. The value
+  // Array or other null — shown read-only; edit those with `durin config`. The value
   // MUST be inline-block: `truncate` (overflow-hidden + max-width) is inert on an
   // inline <span>, which let long arrays (e.g. the allowlist) sprawl across and
   // overlap the row title. The full value stays reachable via the tooltip.
@@ -224,11 +305,13 @@ function LeafRow({
 function ConfigGroup({
   name,
   value,
+  schema,
   saving,
   onSave,
 }: {
   name: string;
   value: Json;
+  schema: SchemaNode | null;
   saving: string | null;
   onSave: (path: string, value: Json) => void;
 }) {
@@ -236,7 +319,7 @@ function ConfigGroup({
   const [open, setOpen] = useState(false);
   const leaves = useMemo(() => {
     const out: Leaf[] = [];
-    flatten(value, name, "", out);
+    flatten(value, name, "", out, [name]);
     return out;
   }, [value, name]);
 
@@ -268,6 +351,7 @@ function ConfigGroup({
               <LeafRow
                 key={leaf.path}
                 leaf={leaf}
+                schema={schema}
                 saving={saving}
                 onSave={onSave}
               />
@@ -285,6 +369,7 @@ function ConfigGroup({
 export function ConfigSettings({ token }: { token: string }) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<Record<string, Json> | null>(null);
+  const [schema, setSchema] = useState<SchemaNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -295,6 +380,7 @@ export function ConfigSettings({ token }: { token: string }) {
     try {
       const snap = await getConfig(token);
       setConfig(snap.config as Record<string, Json>);
+      setSchema(snap.json_schema ?? null);
     } catch {
       setError(t("settings.config.loadError"));
     } finally {
@@ -357,6 +443,7 @@ export function ConfigSettings({ token }: { token: string }) {
           key={name}
           name={name}
           value={value}
+          schema={schema}
           saving={saving}
           onSave={onSave}
         />

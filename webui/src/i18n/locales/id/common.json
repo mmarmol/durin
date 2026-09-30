@@ -206,6 +206,7 @@
       "off": "Nonaktif",
       "managed": "Secret dikelola",
       "empty": "Tidak ada pengaturan di bagian ini.",
+      "unset": "tidak diatur",
       "secretRotate": "Putar nilai",
       "secretRotateHint": "Tulis nilai baru ke secret. Semua ref config ke nama ini akan menggunakannya.",
       "secretDisconnect": "Putuskan",
