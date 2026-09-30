@@ -94,10 +94,12 @@ _QUOTED_VALUE_CHARS = 200
 def _deliver_validation_error(payload: dict, schema: dict) -> str | None:
     """Validate a structured-output payload against the node's declared schema.
     Returns the formatted error (jsonschema's failing path + message), or None
-    when the payload is valid. A failing value the message quotes is cut to its
-    first ``_QUOTED_VALUE_CHARS`` characters. Shared by ``deliver``,
-    ``deliver_file`` and the forced end-of-turn retry loop so all three report
-    failures identically."""
+    when the payload is valid. A failing value the message quotes is cut: a
+    string to its first ``_QUOTED_VALUE_CHARS`` characters, shown as a whole
+    quoted string with the count of characters left out; any other value's
+    printed form to about as many characters, never ending inside an escape.
+    Shared by ``deliver``, ``deliver_file`` and the forced end-of-turn retry
+    loop so all three report failures identically."""
     import jsonschema
 
     try:
@@ -107,11 +109,18 @@ def _deliver_validation_error(payload: dict, schema: dict) -> str | None:
         path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
         message = ve.message
         # jsonschema writes the failing value into its messages as repr().
-        quoted = repr(ve.instance)
-        if len(quoted) > _QUOTED_VALUE_CHARS and quoted in message:
-            cut = len(quoted) - _QUOTED_VALUE_CHARS
-            message = message.replace(
-                quoted, f"{quoted[:_QUOTED_VALUE_CHARS]}… [{cut:,} more characters]")
+        value, quoted = ve.instance, repr(ve.instance)
+        if quoted in message:
+            if isinstance(value, str) and len(value) > _QUOTED_VALUE_CHARS:
+                cut = len(value) - _QUOTED_VALUE_CHARS
+                message = message.replace(
+                    quoted, f"{value[:_QUOTED_VALUE_CHARS]!r}… [{cut:,} more characters]")
+            elif not isinstance(value, str) and len(quoted) > _QUOTED_VALUE_CHARS:
+                head = quoted[:_QUOTED_VALUE_CHARS]
+                if (len(head) - len(head.rstrip("\\"))) % 2:
+                    head = head[:-1]   # a lone backslash would start a broken escape
+                message = message.replace(
+                    quoted, f"{head}… [{len(quoted) - len(head):,} more characters]")
         return f"at {path}: {message}"
 
 

@@ -468,6 +468,31 @@ def test_a_validation_error_names_the_nested_path_and_keeps_a_short_value_whole(
     assert short_error == f"at findings/0/detail: '{'y' * 21}' is too long"
 
 
+def test_a_long_string_is_cut_on_its_own_characters():
+    """The cut counts and cuts the value itself, not its printed form: the count
+    is the characters left out, and the part shown is a whole quoted string."""
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"body": {"type": "string", "pattern": "\\?"}}}
+    body = "line one\n" * 1000                       # 9,000 characters, more once escaped
+    error = _deliver_validation_error({"body": body}, schema)
+    assert "[8,800 more characters]" in error
+    shown = error.split("at body: ", 1)[1].split("… [", 1)[0]
+    assert shown == repr(body[:200])
+    ja = "本文には質問がありません。" * 700
+    assert "[8,900 more characters]" in _deliver_validation_error({"body": ja}, schema)
+
+
+def test_a_cut_never_ends_inside_an_escape():
+    from durin.workflow.node_runner import _deliver_validation_error
+
+    schema = {"type": "object", "properties": {"blob": {"type": "integer"}}}
+    for pad in range(4):
+        error = _deliver_validation_error({"blob": {"k" * pad: "\\" * 500}}, schema)
+        head = error.split("at blob: ", 1)[1].split("… [", 1)[0]
+        assert (len(head) - len(head.rstrip("\\"))) % 2 == 0, head[-12:]
+
+
 def test_deliver_file_reports_a_draft_it_cannot_read(tmp_path):
     work = _work_dir(tmp_path)
     (work / "broken.json").write_text('{"queries": ["a",]}', encoding="utf-8")
