@@ -13,7 +13,7 @@ vi.mock("@/lib/api", () => ({
         max_text_chars: 200000,
       },
     },
-    schema: {},
+    json_schema: {},
   })),
   setConfigValue: vi.fn(async () => ({
     documents: {
@@ -150,7 +150,7 @@ describe("DocumentsSettings", () => {
           max_text_chars: 200000,
         },
       },
-      schema: {},
+      json_schema: {},
     });
     renderCard();
     const select = await screen.findByRole("combobox", {

@@ -338,7 +338,7 @@ export interface SecretEntry {
  *  schema-driven settings form. */
 export interface ConfigSnapshot {
   config: Record<string, unknown>;
-  schema: Record<string, unknown>;
+  json_schema: Record<string, unknown>;
 }
 
 export interface SlashCommand {

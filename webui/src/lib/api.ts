@@ -2015,7 +2015,11 @@ export async function removeProviderModel(
 
 export interface ModelCapabilities {
   model: string;
+  /** The model's own input limit (its catalog capability). */
   max_input_tokens: number | null;
+  /** The window a run on this provider + model gets: its per-model setting,
+   *  else the catalog, else the defaults, capped by the fallback models'. */
+  context_window_tokens?: number | null;
   supports_vision: boolean;
   supports_audio_input: boolean;
   supports_function_calling: boolean;

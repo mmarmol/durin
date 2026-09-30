@@ -105,6 +105,54 @@ def test_persona_pair_ref_builds_provider_once_and_reuses_it(monkeypatch, tmp_pa
     assert len(build_calls) == 1
 
 
+# ── plain node.model: the model's own output cap ─────────────────────────────
+
+
+def _catalog(monkeypatch):
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+        ModelInfo(id="glm-small", max_input_tokens=128_000, max_output_tokens=8_192),
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+
+
+def test_plain_model_asks_for_its_own_output_cap_not_the_default_clients(monkeypatch, tmp_path):
+    """A plain model name under the default provider used to share the default
+    client, and so ask for the default model's output cap — 131,072 here, which
+    a model that accepts 8,192 rejects. It runs with its own cap, and the
+    default client's other params."""
+    _catalog(monkeypatch)
+    cfg = _config_with_api_key("zai_coding_plan")
+    default_provider = _default_provider(provider_key="zai_coding_plan", temperature=0.7, max_tokens=131_072)
+    ar = AgentRunner(default_provider)
+    ar.run = AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))
+    nr = AgentNodeRunner(ar, SessionManager(workspace=tmp_path),
+                         default_model="glm-5.3", app_config=cfg)
+
+    nr(_req(WorkNode(id="a", model="glm-small", next=None)))
+    spec = ar.run.call_args.args[0]
+    assert spec.model == "glm-small"
+    assert spec.provider is not default_provider
+    assert spec.provider.generation.max_tokens == 8_192
+    assert spec.provider.generation.temperature == 0.7
+
+
+def test_plain_model_with_the_default_clients_output_cap_shares_it(monkeypatch, tmp_path):
+    _catalog(monkeypatch)
+    cfg = _config_with_api_key("zai_coding_plan")
+    default_provider = _default_provider(provider_key="zai_coding_plan", temperature=0.7, max_tokens=131_072)
+    ar = AgentRunner(default_provider)
+    ar.run = AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))
+    nr = AgentNodeRunner(ar, SessionManager(workspace=tmp_path),
+                         default_model="glm-5.3", app_config=cfg)
+
+    nr(_req(WorkNode(id="a", model="glm-5-turbo", next=None)))
+    assert ar.run.call_args.args[0].provider is default_provider
+
+
 # ── plain node.model with a per-model config override ────────────────────────
 
 
@@ -153,10 +201,13 @@ def test_plain_model_with_top_p_entry_reaches_the_dedicated_provider(tmp_path):
 
 
 def test_plain_model_with_no_config_entry_reuses_the_default_client(tmp_path):
-    # The common case: a bare model name with nothing configured for it must
-    # NOT pay for a dedicated provider build.
+    # The common case: a bare model name with nothing configured for it, whose
+    # own output cap (here agents.defaults', the model being uncataloged) is
+    # the default client's, must NOT pay for a dedicated provider build.
     cfg = Config()
-    default_provider = _default_provider(provider_key="zai_coding_plan")
+    default_provider = _default_provider(
+        provider_key="zai_coding_plan", max_tokens=cfg.agents.defaults.max_tokens,
+    )
     ar = AgentRunner(default_provider)
     ar.run = AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))
     nr = AgentNodeRunner(ar, SessionManager(workspace=tmp_path),
@@ -189,7 +240,8 @@ def test_persona_temperature_overrides_entry_and_changes_params_hash(monkeypatch
     # The entry's resolved generation (temperature=0, everything else falls
     # back through adhoc_preset_config's own chain — catalog then schema
     # defaults, same as any other ad-hoc-resolved model).
-    entry_generation = adhoc_preset_config(cfg, "zai_coding_plan", "glm-mini").to_generation_settings()
+    entry_generation = cfg.resolve_preset_limits(
+        adhoc_preset_config(cfg, "zai_coding_plan", "glm-mini")).to_generation_settings()
 
     # No persona: node.model alone carries the entry's temperature=0.
     plain_identity = nr.reuse_identity(WorkNode(id="a", model="glm-mini", next=None))

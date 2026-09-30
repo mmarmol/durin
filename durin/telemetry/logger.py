@@ -287,6 +287,44 @@ def reset_call_purpose(token: Token[str | None]) -> None:
     _call_purpose.reset(token)
 
 
+# The limits of the run a provider call is made for: the context window and
+# the input budget the run sized its prompt to. ``provider.call`` rows carry
+# them, so a call's tokens can be read against the window it ran in. Bound
+# by the agent runner around each of its own requests only (and by a
+# workflow node around its verdict / delivery calls), never around tool
+# execution: a tool that calls another model is not held to the run's limits.
+_call_limits: ContextVar[dict[str, int] | None] = ContextVar("durin_call_limits", default=None)
+
+
+def current_call_limits() -> dict[str, int] | None:
+    """The run limits bound to the current task's provider calls, or None."""
+    return _call_limits.get()
+
+
+def bind_call_limits(
+    *,
+    context_window_tokens: int | None,
+    input_budget_tokens: int | None,
+) -> Token[dict[str, int] | None]:
+    """Name the limits of the run the next provider calls are made for.
+    A value that is not a known positive size is left out; with neither
+    known, nothing is bound. ``reset_call_limits`` restores the enclosing
+    value."""
+    limits = {
+        name: value
+        for name, value in (
+            ("context_window_tokens", context_window_tokens),
+            ("input_budget_tokens", input_budget_tokens),
+        )
+        if isinstance(value, int) and value > 0
+    }
+    return _call_limits.set(limits or None)
+
+
+def reset_call_limits(token: Token[dict[str, int] | None]) -> None:
+    _call_limits.reset(token)
+
+
 class TelemetryBinding:
     """What ``bind_telemetry`` hands back when it also bound a purpose, so one
     ``reset_telemetry`` undoes both."""

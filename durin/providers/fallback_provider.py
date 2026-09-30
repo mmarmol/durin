@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -14,6 +18,27 @@ from durin.providers.base import LLMProvider, LLMResponse
 _PRIMARY_FAILURE_THRESHOLD = 3
 _PRIMARY_COOLDOWN_S = 60
 _MISSING = object()
+
+#: The ``max_tokens`` the caller of a retry wrapper named — its value, or
+#: ``None`` when it named none and the wrapper filled in the primary's
+#: generation default. ``_MISSING`` outside a wrapper: a direct
+#: ``chat()`` / ``chat_stream()`` call's ``max_tokens`` is the caller's own.
+_CALLER_MAX_TOKENS: ContextVar[Any] = ContextVar("fallback_caller_max_tokens", default=_MISSING)
+
+
+@dataclass(frozen=True, slots=True)
+class _Served:
+    """What a fallback was sent for the response it produced."""
+
+    response: LLMResponse
+    provider: str | None
+    model: str
+    max_tokens: int | None
+
+
+#: The fallback behind the latest response of a failover in this context, so
+#: the call's ``provider.call`` row names what was actually sent.
+_SERVED: ContextVar[_Served | None] = ContextVar("fallback_served", default=None)
 _FALLBACK_ERROR_KINDS = frozenset({
     "timeout",
     "connection",
@@ -53,6 +78,23 @@ _FALLBACK_ERROR_TOKENS = (
     "balance",
     "out of credits",
 )
+
+
+def _failover_max_tokens(requested: Any, ceiling: Any) -> int | None:
+    """The output cap a failover request sends: the fallback model's own
+    ceiling, but never more than the request asked for. The caller sized its
+    request to the room the prompt leaves in a window that already fits every
+    fallback, so a fallback with a larger output limit must not undo that. A
+    value the retry wrapper filled in from the primary's defaults is not a
+    request (see ``_CALLER_MAX_TOKENS``). ``None`` when neither is known (the
+    provider then uses its default)."""
+    if isinstance(requested, int) and isinstance(ceiling, int):
+        return min(requested, ceiling)
+    if isinstance(ceiling, int):
+        return ceiling
+    if isinstance(requested, int):
+        return requested
+    return None
 
 
 class FallbackProvider(LLMProvider):
@@ -116,6 +158,44 @@ class FallbackProvider(LLMProvider):
             return True
         return False
 
+    @contextmanager
+    def _wrapper_scope(self, method: Callable[..., Any], args: tuple, kwargs: dict) -> Iterator[None]:
+        """Scope of one retry-wrapper call: remember whether its caller named
+        a ``max_tokens`` (the wrapper fills an unnamed one in from the
+        primary's generation before the failover sees the request), and
+        forget the fallback that served an earlier call."""
+        named = inspect.signature(method).bind(self, *args, **kwargs).arguments.get("max_tokens")
+        explicit = named if isinstance(named, int) and not isinstance(named, bool) else None
+        caller = _CALLER_MAX_TOKENS.set(explicit)
+        served = _SERVED.set(None)
+        try:
+            yield
+        finally:
+            _SERVED.reset(served)
+            _CALLER_MAX_TOKENS.reset(caller)
+
+    async def chat_with_retry(self, *args: Any, **kwargs: Any) -> LLMResponse:
+        with self._wrapper_scope(LLMProvider.chat_with_retry, args, kwargs):
+            return await super().chat_with_retry(*args, **kwargs)
+
+    async def chat_stream_with_retry(self, *args: Any, **kwargs: Any) -> LLMResponse:
+        with self._wrapper_scope(LLMProvider.chat_stream_with_retry, args, kwargs):
+            return await super().chat_stream_with_retry(*args, **kwargs)
+
+    def emit_call_telemetry(self, *, model: Any, response: LLMResponse, duration_ms: float,
+                            purpose: str | None = None, max_tokens: int | None = None,
+                            provider: str | None = None) -> None:
+        """A response a fallback produced is recorded under the fallback's
+        provider, model and output cap — what was actually sent — not the
+        primary's the request started with."""
+        served = _SERVED.get()
+        if served is not None and served.response is response:
+            provider, model, max_tokens = served.provider, served.model, served.max_tokens
+        super().emit_call_telemetry(
+            model=model, response=response, duration_ms=duration_ms,
+            purpose=purpose, max_tokens=max_tokens, provider=provider,
+        )
+
     async def chat(self, **kwargs: Any) -> LLMResponse:
         if not self._has_fallbacks:
             return await self._primary.chat(**kwargs)
@@ -154,6 +234,7 @@ class FallbackProvider(LLMProvider):
         has_streamed: list[bool] | None,
     ) -> LLMResponse:
         primary_model = kwargs.get("model") or self._primary.get_default_model()
+        _SERVED.set(None)
 
         if self._primary_available():
             response = await call(self._primary, kwargs)
@@ -220,7 +301,13 @@ class FallbackProvider(LLMProvider):
                 for name in ("model", "max_tokens", "temperature", "reasoning_effort")
             }
             kwargs["model"] = fallback_model
-            kwargs["max_tokens"] = fallback.max_tokens
+            caller_max_tokens = _CALLER_MAX_TOKENS.get()
+            requested = original_values["max_tokens"] if caller_max_tokens is _MISSING else caller_max_tokens
+            max_tokens = _failover_max_tokens(requested, fallback.max_tokens)
+            if max_tokens is None:
+                kwargs.pop("max_tokens", None)
+            else:
+                kwargs["max_tokens"] = max_tokens
             kwargs["temperature"] = fallback.temperature
             if fallback.reasoning_effort is None:
                 kwargs.pop("reasoning_effort", None)
@@ -234,6 +321,12 @@ class FallbackProvider(LLMProvider):
                         kwargs.pop(name, None)
                     else:
                         kwargs[name] = value
+            _SERVED.set(_Served(
+                response=fallback_response,
+                provider=getattr(fallback_provider, "provider_key", None) or fallback.provider,
+                model=fallback_model,
+                max_tokens=max_tokens,
+            ))
 
             if fallback_response.finish_reason != "error":
                 logger.info(

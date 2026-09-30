@@ -87,6 +87,39 @@ async def test_config_set_rejects_invalid_value(config_path):
     assert load_config(config_path).agents.defaults.max_tokens == 8192
 
 
+async def test_config_set_addresses_a_model_name_with_dots(config_path):
+    """The dashboard's settings editor writes model entries by path; a model
+    name's dots must not split it into several keys."""
+    from durin.config.loader import load_config
+
+    await ConfigService().set(
+        ConfigSetCommand(
+            key='providers.zai_coding_plan.models["glm-5.3"].context_window_tokens',
+            value="231072",
+        ),
+        LOCAL,
+    )
+    models = load_config(config_path).providers.zai_coding_plan.models
+    assert models["glm-5.3"].context_window_tokens == 231_072
+    assert "glm-5" not in models
+
+
+async def test_config_set_rejects_a_path_that_lands_nowhere(config_path):
+    from durin.config.loader import load_config
+
+    before = config_path.read_text()
+    with pytest.raises(ValidationFailedError, match="does not name a config key"):
+        await ConfigService().set(
+            ConfigSetCommand(
+                key="providers.zai_coding_plan.models.glm-5.3.context_window_tokens",
+                value="231072",
+            ),
+            LOCAL,
+        )
+    assert config_path.read_text() == before
+    assert load_config(config_path).providers.zai_coding_plan.models == {}
+
+
 async def test_config_set_requires_write_scope():
     principal = Principal.remote("t", frozenset({Scope.CONFIG_READ.value}))
     with pytest.raises(ForbiddenError):
@@ -328,6 +361,38 @@ async def test_model_capabilities_returns_fields(config_path):
     assert result.model == "glm-5.1"
     assert isinstance(result.supports_vision, bool)
     assert isinstance(result.supports_function_calling, bool)
+
+
+async def test_model_capabilities_carry_the_window_a_run_gets(config_path, monkeypatch):
+    """The settings model line shows the window a run on that model gets —
+    its entry, then the catalog, then agents.defaults, capped by the fallback
+    models' — not the model's catalog capability."""
+    import durin.providers.provider_catalog as pc
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import ModelEntry, ModelPresetConfig
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+    service = ConfigService()
+
+    async def _window(model: str) -> int | None:
+        result = await service.model_capabilities(
+            ModelCapabilitiesQuery(model=model, provider="zai_coding_plan"), LOCAL)
+        return result.context_window_tokens
+
+    assert await _window("glm-5.3") == 1_000_000
+    cfg = load_config(config_path)
+    cfg.providers.zai_coding_plan.models["glm-5.3"] = ModelEntry(context_window_tokens=231_072)
+    save_config(cfg, config_path)
+    assert await _window("glm-5.3") == 231_072
+    assert await _window("my-local-model") == cfg.agents.defaults.context_window_tokens
+    cfg.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")
+    cfg.agents.defaults.fallback_models = ["turbo"]
+    save_config(cfg, config_path)
+    assert await _window("glm-5.3") == 200_000
 
 
 async def test_model_capabilities_requires_read_scope():

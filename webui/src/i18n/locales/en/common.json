@@ -206,6 +206,7 @@
       "off": "Off",
       "managed": "Managed secret",
       "empty": "No settings in this section.",
+      "unset": "unset",
       "secretRotate": "Rotate value",
       "secretRotateHint": "Write a new value to the stored secret. All config refs pointing to this name will use it.",
       "secretDisconnect": "Disconnect",

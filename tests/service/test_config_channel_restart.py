@@ -75,6 +75,18 @@ async def test_channel_key_cycles_a_running_channel(svc_at) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", [
+    'channels["slack"].open_channels',
+    'channels.slack["open_channels"]',
+    '["channels"].slack.openChannels',
+])
+async def test_a_bracketed_channel_key_cycles_the_channel_too(svc_at, key: str) -> None:
+    mgr = FakeChannelManager({"slack"})
+    await svc_at(mgr).set(ConfigSetCommand(key=key, value='["C0AKE2P92F7"]'), _principal())
+    assert mgr.calls == ["stop:slack", "start:slack"]
+
+
+@pytest.mark.asyncio
 async def test_channel_key_leaves_a_stopped_channel_stopped(svc_at) -> None:
     """Saving config must not start a channel the user deliberately stopped."""
     mgr = FakeChannelManager()

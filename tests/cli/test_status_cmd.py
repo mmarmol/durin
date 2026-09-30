@@ -71,6 +71,74 @@ def test_memory_line_separates_entities_docs_and_fragments(
     assert "1 fragments" in memory_line
 
 
+@pytest.fixture
+def glm_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+
+
+def _on_glm(config: Config) -> Config:
+    config.agents.defaults.provider = "zai_coding_plan"
+    config.agents.defaults.model = "glm-5.3"
+    config.providers.zai_coding_plan.api_key = "k"
+    return config
+
+
+def test_the_model_row_shows_the_window_the_chat_runs_with(
+    config: Config, fake_home: Path, glm_catalog: None,
+) -> None:
+    """Not agents.defaults.context_window_tokens (the fallback for a model
+    nothing else describes): the window of the model the chat runs on."""
+    from durin.providers.factory import build_provider_snapshot
+
+    _on_glm(config)
+    data = _status_data(config, _config_path(fake_home), None)
+    assert data["model"]["context_window_tokens"] == 1_000_000
+    assert data["model"]["context_window_tokens"] == build_provider_snapshot(config).context_window_tokens
+    row = dict(_status_sections(config, _config_path(fake_home), None))["Model"]
+    assert "1,000,000 ctx" in row
+
+
+def test_the_window_follows_the_active_preset_and_the_fallbacks(
+    config: Config, fake_home: Path, glm_catalog: None,
+) -> None:
+    from durin.config.schema import ModelEntry, ModelPresetConfig
+
+    _on_glm(config)
+    config.providers.zai_coding_plan.models["glm-5.3"] = ModelEntry(context_window_tokens=231_072)
+    assert _status_data(config, _config_path(fake_home), None)["model"]["context_window_tokens"] == 231_072
+    config.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")
+    config.agents.defaults.fallback_models = ["turbo"]
+    assert _status_data(config, _config_path(fake_home), None)["model"]["context_window_tokens"] == 200_000
+    config.model_presets["small"] = ModelPresetConfig(
+        model="glm-5.3", provider="zai_coding_plan", context_window_tokens=100_000,
+    )
+    config.agents.defaults.model_preset = "small"
+    assert _status_data(config, _config_path(fake_home), None)["model"]["context_window_tokens"] == 100_000
+
+
+def test_the_model_row_names_the_fallback_that_caps_the_window(
+    config: Config, fake_home: Path, glm_catalog: None,
+) -> None:
+    from durin.config.schema import ModelPresetConfig
+
+    _on_glm(config)
+    config.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")
+    config.agents.defaults.fallback_models = ["turbo"]
+    data = _status_data(config, _config_path(fake_home), None)
+    assert data["model"]["window_capped_by"] == "turbo (zai_coding_plan/glm-5-turbo)"
+    row = dict(_status_sections(config, _config_path(fake_home), None))["Model"]
+    assert "200,000 ctx" in row
+    assert "capped by fallback turbo (zai_coding_plan/glm-5-turbo)" in row
+    config.agents.defaults.fallback_models = []
+    assert _status_data(config, _config_path(fake_home), None)["model"]["window_capped_by"] is None
+
+
 def test_channels_overlay_runtime_state(config: Config, fake_home: Path) -> None:
     runtime = {
         "url": "http://127.0.0.1:8765/",

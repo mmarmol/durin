@@ -19,7 +19,7 @@ describe("useVoiceConfig", () => {
         voice: { enabled: true, vad_threshold: 0.6, end_of_turn_silence_ms: 800 },
         tts: { provider: "openai" },
       },
-      schema: {},
+      json_schema: {},
     });
     const { result } = renderHook(() => useVoiceConfig("tok"));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -31,7 +31,7 @@ describe("useVoiceConfig", () => {
   it("available=true when local TTS extra is installed", async () => {
     mockGetConfig.mockResolvedValue({
       config: { voice: { enabled: true }, tts: { provider: "local" } },
-      schema: {},
+      json_schema: {},
     });
     mockGetExtraStatus.mockResolvedValue({
       present: true, extra: "tts", approx_size: "~1 GB", needs_restart: false, label: "Local TTS",
@@ -44,7 +44,7 @@ describe("useVoiceConfig", () => {
   it("available=false when local TTS extra is missing (the orb stays hidden)", async () => {
     mockGetConfig.mockResolvedValue({
       config: { voice: { enabled: true }, tts: { provider: "local" } },
-      schema: {},
+      json_schema: {},
     });
     mockGetExtraStatus.mockResolvedValue({
       present: false, extra: "tts", approx_size: "~1 GB", needs_restart: false, label: "Local TTS",
@@ -57,7 +57,7 @@ describe("useVoiceConfig", () => {
   it("available=true for a cloud TTS provider without checking the extra", async () => {
     mockGetConfig.mockResolvedValue({
       config: { voice: { enabled: true }, tts: { provider: "openai" } },
-      schema: {},
+      json_schema: {},
     });
     const { result } = renderHook(() => useVoiceConfig("tok"));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -68,7 +68,7 @@ describe("useVoiceConfig", () => {
   it("available=false when voice is disabled even if TTS is usable", async () => {
     mockGetConfig.mockResolvedValue({
       config: { voice: { enabled: false }, tts: { provider: "openai" } },
-      schema: {},
+      json_schema: {},
     });
     const { result } = renderHook(() => useVoiceConfig("tok"));
     await waitFor(() => expect(result.current.loading).toBe(false));

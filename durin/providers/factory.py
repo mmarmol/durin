@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from durin.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from durin.providers.base import LLMProvider
@@ -48,7 +48,12 @@ def _resolve_model_preset(
     preset_name: str | None = None,
     preset: ModelPresetConfig | None = None,
 ) -> ModelPresetConfig:
-    return preset if preset is not None else config.resolve_preset(preset_name)
+    """The preset a provider is built from, with concrete limits: *preset*
+    when one is given (whatever it leaves unset takes its model's own
+    limits), else the named or the active preset."""
+    if preset is not None:
+        return config.resolve_preset_limits(preset)
+    return config.resolve_preset(preset_name)
 
 
 def _make_provider_core(
@@ -60,6 +65,16 @@ def _make_provider_core(
 ) -> LLMProvider:
     """Create a plain LLM provider without failover wrapping."""
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    return _build_provider(config, resolved, model=model)
+
+
+def _build_provider(
+    config: Config,
+    resolved: ModelPresetConfig,
+    *,
+    model: str | None = None,
+) -> LLMProvider:
+    """Create a plain LLM provider from a preset whose limits are resolved."""
     model = model or resolved.model
     provider_name = config.get_provider_name(model, preset=resolved)
     p = config.get_provider(model, preset=resolved)
@@ -143,15 +158,14 @@ def _inline_fallback_preset(
     primary: ModelPresetConfig,
     fallback: InlineFallbackConfig,
 ) -> ModelPresetConfig:
+    """An inline fallback as a preset. Its limits are its own model's (the
+    same chain as any preset), never the primary's: a failover to a model
+    with a smaller window must not be sized by the primary's."""
     return ModelPresetConfig(
         model=fallback.model,
         provider=fallback.provider,
-        max_tokens=fallback.max_tokens if fallback.max_tokens is not None else primary.max_tokens,
-        context_window_tokens=(
-            fallback.context_window_tokens
-            if fallback.context_window_tokens is not None
-            else primary.context_window_tokens
-        ),
+        max_tokens=fallback.max_tokens,
+        context_window_tokens=fallback.context_window_tokens,
         temperature=(
             fallback.temperature if fallback.temperature is not None else primary.temperature
         ),
@@ -159,14 +173,26 @@ def _inline_fallback_preset(
     )
 
 
-def _resolve_fallback_presets(config: Config, primary: ModelPresetConfig) -> list[ModelPresetConfig]:
-    presets: list[ModelPresetConfig] = []
-    for fallback in config.agents.defaults.fallback_models:
+class _Fallback(NamedTuple):
+    preset: ModelPresetConfig  # limits resolved
+    window_known: bool
+    label: str  # the preset name, or where the inline fallback sits
+
+
+def _resolve_fallbacks(config: Config, primary: ModelPresetConfig) -> list[_Fallback]:
+    out: list[_Fallback] = []
+    for index, fallback in enumerate(config.agents.defaults.fallback_models):
         if isinstance(fallback, str):
-            presets.append(config.model_presets[fallback])
+            resolved, known = config.resolve_limits(config.model_presets[fallback])
+            out.append(_Fallback(resolved, known, fallback))
         else:
-            presets.append(_inline_fallback_preset(primary, fallback))
-    return presets
+            resolved, known = config.resolve_limits(_inline_fallback_preset(primary, fallback))
+            out.append(_Fallback(resolved, known, f"agents.defaults.fallback_models.{index}"))
+    return out
+
+
+def _resolve_fallback_presets(config: Config, primary: ModelPresetConfig) -> list[ModelPresetConfig]:
+    return [fallback.preset for fallback in _resolve_fallbacks(config, primary)]
 
 
 def make_provider(
@@ -182,16 +208,14 @@ def make_provider(
     the failover path to create providers for fallback models.
     """
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
-    provider = _make_provider_core(config, preset_name=preset_name, preset=preset, model=model)
+    provider = _build_provider(config, resolved, model=model)
     fallback_presets = _resolve_fallback_presets(config, resolved)
 
     if fallback_presets:
         provider = FallbackProvider(
             primary=provider,
             fallback_presets=fallback_presets,
-            provider_factory=lambda fb: _make_provider_core(
-                config, preset_name=preset_name, preset=fb
-            ),
+            provider_factory=lambda fb: _build_provider(config, fb),
         )
 
     return provider
@@ -205,8 +229,25 @@ def provider_signature(
 ) -> tuple[object, ...]:
     """Return the config fields that affect the active provider chain."""
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    return _signature(config, resolved, _resolve_fallback_presets(config, resolved))
+
+
+class CappingFallback(NamedTuple):
+    """The fallback whose window is the one a run gets (smaller than the
+    run's own model's)."""
+
+    label: str  # the preset name, or agents.defaults.fallback_models.<i>
+    provider: str  # the provider it runs on
+    model: str
+    context_window_tokens: int
+
+
+def _signature(
+    config: Config,
+    resolved: ModelPresetConfig,
+    fallback_presets: list[ModelPresetConfig],
+) -> tuple[object, ...]:
     p = config.get_provider(resolved.model, preset=resolved)
-    fallback_presets = _resolve_fallback_presets(config, resolved)
 
     def _fallback_signature(fallback: ModelPresetConfig) -> tuple[object, ...]:
         fp = config.get_provider(fallback.model, preset=fallback)
@@ -245,13 +286,39 @@ def provider_signature(
 
 
 def preset_context_window(config: Config, preset: ModelPresetConfig) -> int:
-    """The context window a run on *preset* gets: the preset's own, capped by
-    every fallback model's, since a failover must fit the same prompt."""
-    fallback_windows = [
-        fallback.context_window_tokens
-        for fallback in _resolve_fallback_presets(config, preset)
-    ]
-    return min([preset.context_window_tokens, *fallback_windows])
+    """The context window a run on *preset* gets: the preset's own (its
+    model's when the preset sets none), capped by every fallback model's,
+    since a failover must fit the same prompt."""
+    return preset_window_cap(config, preset)[0]
+
+
+def preset_window_cap(
+    config: Config, preset: ModelPresetConfig,
+) -> tuple[int, CappingFallback | None]:
+    """``preset_context_window`` and the fallback that sets it, when one
+    does."""
+    resolved = config.resolve_preset_limits(preset)
+    return _window_and_cap(config, resolved, _resolve_fallbacks(config, resolved))
+
+
+def _window_and_cap(
+    config: Config, resolved: ModelPresetConfig, fallbacks: list[_Fallback],
+) -> tuple[int, CappingFallback | None]:
+    """The run's own window, lowered to any smaller fallback window that is
+    known. A fallback whose window would only be agents.defaults' guess (a
+    model no entry or catalog describes) does not lower it: that guess would
+    shrink a known window — a 1M chat to 65,536 — on no evidence."""
+    window, capping = resolved.context_window_tokens, None
+    for fallback in fallbacks:
+        if fallback.window_known and fallback.preset.context_window_tokens < window:
+            window = fallback.preset.context_window_tokens
+            capping = CappingFallback(
+                fallback.label,
+                config.routed_provider(fallback.preset.provider, fallback.preset.model),
+                fallback.preset.model,
+                window,
+            )
+    return window, capping
 
 
 def build_provider_snapshot(
@@ -261,11 +328,12 @@ def build_provider_snapshot(
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    fallbacks = _resolve_fallbacks(config, resolved)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
-        context_window_tokens=preset_context_window(config, resolved),
-        signature=provider_signature(config, preset=resolved),
+        context_window_tokens=_window_and_cap(config, resolved, fallbacks)[0],
+        signature=_signature(config, resolved, [fallback.preset for fallback in fallbacks]),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
     )
 

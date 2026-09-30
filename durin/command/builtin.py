@@ -660,30 +660,25 @@ def _model_command_status(loop) -> str:
 def adhoc_preset_config(config: Any, provider: str, model: str):
     """Build an ad-hoc ``ModelPresetConfig`` for a ``provider model`` ref (the
     picker form). Shared by the ``/model`` command and the per-turn cron model
-    override so both resolve a picker ref identically. Params resolve: the
-    user's per-model config override -> the catalog caps -> the schema default.
+    override so both resolve a picker ref identically. Sampling params come
+    from the user's per-model entry. The window and output cap are left
+    unset, like any preset's that names none: they resolve — entry, the
+    model's real limits, ``agents.defaults`` — wherever the preset becomes a
+    run, so a pick cached in the loop's presets follows a later edit of the
+    model's entry instead of keeping the limits it had when it was made.
     """
     from durin.config.schema import ModelPresetConfig
-    from durin.providers.provider_catalog import catalog_model_caps
 
     entry = None
-    if config is not None and provider and provider != "auto":
-        pc = getattr(config.providers, provider, None)
+    if config is not None:
+        # The entry of the provider the run goes to ("auto" routed, an alias
+        # spelling normalized), not of the string the ref was written with.
+        routed = config.routed_provider(provider, model)
+        pc = getattr(config.providers, routed, None) if routed and routed != "auto" else None
         entry = (getattr(pc, "models", None) or {}).get(model)
-    caps = catalog_model_caps(provider, model)
     return ModelPresetConfig(
         model=model,
         provider=provider,
-        context_window_tokens=(
-            entry.context_window_tokens
-            if entry and entry.context_window_tokens is not None
-            else (caps.max_input_tokens if caps and caps.max_input_tokens else 65_536)
-        ),
-        max_tokens=(
-            entry.max_tokens
-            if entry and entry.max_tokens is not None
-            else (caps.max_output_tokens if caps and caps.max_output_tokens else 8192)
-        ),
         temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
         reasoning_effort=(
             entry.reasoning_effort if entry and entry.reasoning_effort is not None else None

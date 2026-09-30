@@ -63,6 +63,33 @@ def test_model_preset_setter_updates_state(tmp_path) -> None:
     assert loop.consolidator.max_completion_tokens == 4096
 
 
+def test_a_preset_that_names_no_limits_runs_on_concrete_ones_without_a_loader(tmp_path) -> None:
+    """With no snapshot loader the preset is applied in place; the limits it
+    leaves unset still resolve (here: no config, an unknown model, so the
+    schema defaults), never None."""
+    from durin.config.schema import AgentDefaults
+
+    loop = _make_loop(tmp_path, presets={"fast": ModelPresetConfig(model="openai/gpt-4.1")})
+    loop.set_model_preset("fast")
+
+    defaults = AgentDefaults()
+    assert loop.context_window_tokens == defaults.context_window_tokens
+    assert loop.provider.generation.max_tokens == defaults.max_tokens
+
+
+def test_a_static_preset_snapshot_resolves_unset_limits_against_the_config() -> None:
+    from durin.agent.model_presets import build_static_preset_snapshot
+    from durin.config.schema import Config
+
+    cfg = Config()
+    cfg.agents.defaults.context_window_tokens = 48_000
+    cfg.agents.defaults.max_tokens = 3000
+    provider = _provider("base-model")
+    snapshot = build_static_preset_snapshot(provider, "fast", ModelPresetConfig(model="some-model"), cfg)
+    assert snapshot.context_window_tokens == 48_000
+    assert provider.generation.max_tokens == 3000
+
+
 def test_model_preset_setter_calls_runtime_model_publisher(tmp_path) -> None:
     published: list[tuple[str, str | None]] = []
     loop = AgentLoop(
@@ -273,6 +300,33 @@ def test_from_config_injects_default_preset(tmp_path) -> None:
     assert loop.model_preset is None
     assert "default" in loop.model_presets
     assert loop.model_presets["default"].model == "openai/gpt-4.1"
+
+
+def test_from_config_runs_under_the_window_capped_by_the_fallbacks(tmp_path, monkeypatch) -> None:
+    """The TUI and the SDK build their loop with from_config and no window of
+    their own: it must be the window the gateway's provider snapshot (and
+    `durin status`) uses — the active preset's, capped by every fallback
+    model's so a failover fits the same prompt — not the preset's alone."""
+    from unittest.mock import patch
+
+    import durin.providers.provider_catalog as pc
+    from durin.config.schema import Config
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+    config = Config.model_validate({
+        "agents": {"defaults": {
+            "model": "glm-5.3", "provider": "zai_coding_plan", "workspace": str(tmp_path),
+            "fallbackModels": ["turbo"],
+        }},
+        "modelPresets": {"turbo": {"model": "glm-5-turbo", "provider": "zai_coding_plan"}},
+    })
+    with patch("durin.providers.factory.make_provider", return_value=_provider("glm-5.3")):
+        loop = AgentLoop.from_config(config)
+    assert loop.context_window_tokens == 200_000
 
 
 def test_from_config_static_preset_loader_does_not_enable_hot_reload(tmp_path) -> None:

@@ -9,7 +9,8 @@ import inspect
 import json
 import os
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from durin.agent.hook import AgentHook, AgentHookContext
 from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from durin.telemetry.logger import current_telemetry
+from durin.telemetry.logger import bind_call_limits, current_telemetry, reset_call_limits
 from durin.utils.helpers import (
     IncrementalThinkExtractor,
     build_assistant_message,
@@ -828,10 +829,11 @@ class AgentRunner:
             )
             await hook.before_iteration(context)
             _llm_started = time.monotonic()
-            response = await self._request_model(
-                spec, messages_for_model, hook, context, provider,
-                max_tokens_override=effective_max_tokens,
-            )
+            with self._bound_call_limits(spec, provider):
+                response = await self._request_model(
+                    spec, messages_for_model, hook, context, provider,
+                    max_tokens_override=effective_max_tokens,
+                )
             total_llm_ms += (time.monotonic() - _llm_started) * 1000.0
             raw_usage = self._usage_dict(response.usage)
             context.response = response
@@ -1203,7 +1205,8 @@ class AgentRunner:
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
-                response = await self._request_finalization_retry(spec, messages_for_model, provider)
+                with self._bound_call_limits(spec, provider):
+                    response = await self._request_finalization_retry(spec, messages_for_model, provider)
                 retry_usage = self._usage_dict(response.usage)
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
@@ -1378,6 +1381,21 @@ class AgentRunner:
             self._resolve_max_output(spec, provider),
             spec.context_block_limit,
         )
+
+    @contextmanager
+    def _bound_call_limits(self, spec: AgentRunSpec, provider: LLMProvider | None) -> Iterator[None]:
+        """Tag the provider calls made inside with this run's context window
+        and input budget, so each ``provider.call`` row can be read against
+        the limits its prompt was sized to. Wraps the run's own requests only:
+        a tool that calls another model runs outside it."""
+        token = bind_call_limits(
+            context_window_tokens=spec.context_window_tokens,
+            input_budget_tokens=self._input_budget(spec, provider),
+        )
+        try:
+            yield
+        finally:
+            reset_call_limits(token)
 
     def _estimate_and_budget(
         self,

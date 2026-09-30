@@ -615,6 +615,38 @@ filter is a webui-only presentation choice, not a config-model change.
 to the split directory. `mutate_config()` performs an atomic
 load-modify-save under `cross_process_lock` so concurrent processes serialize.
 
+A single key is addressed by a config path — `durin config get/set/show/schema`
+and the settings editor's `POST /api/v1/config` share the helpers in
+`durin/cli/config_cmd.py`. Keys are separated by dots; a key written in quoted
+brackets (`models["glm-5.3"]`) is literal, so a model name's dots do not split
+it. `_normalize_dotted_path` walks the config's JSON schema alongside the path:
+a field name is case-tolerant (`apiKey` → `api_key`) and written dotted
+whether or not it came in brackets, while a key of a typed map (a model,
+preset or header name) is kept as typed, and a list index
+(`fallback_models.1` or `fallback_models[1]`) is written dotted. After a
+write, `POST /api/v1/config` picks its follow-ups — reloading the concurrency
+caps, restarting the running channel whose section changed — from the
+normalized path's keys, so every spelling of a key triggers them. A write goes
+through `apply_setting`: `set_at` writes into a copy of the on-disk dict —
+creating a missing or null section, indexing a list only at an item it has,
+and refusing a path through a plain value, which it would otherwise replace
+with a section — then the result is validated and the value read back at the
+same path from the validated config; when it is not there — validation
+dropped a key that is not a field of its section — the write is refused with
+`ConfigKeyError` (the CLI exits 1, the API answers a validation error) instead
+of saving a config where the value landed nowhere or under an unrelated key.
+That refusal, and `get`/`show`'s "No such key", say why when the path goes
+through a field the config file never holds (`exclude=True`: the
+`openai_codex` and `github_copilot` blocks, which `durin oauth login`
+manages) and otherwise show the bracket form of a key with dots.
+`ConfigSettings.tsx` builds its row paths the same way, bracketing any key
+that contains a dot, bracket or quote. It edits a number against the JSON
+schema `GET /api/v1/config` returns with the config (`json_schema`): a field
+that may be null — an unset output cap or window — is editable while null,
+an emptied one saves `null` (never `0`, which is what `Number("")` gives),
+and a draft the field does not accept (empty where null is not allowed, not
+a whole number for an integer, below its `minimum`) cannot be saved.
+
 ### Secrets flow
 
 `SecretStore` loads and persists `~/.durin/secrets.json` (mode 0600) under

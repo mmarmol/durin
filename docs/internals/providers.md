@@ -137,18 +137,85 @@ not by accident during keyword walk.
 ### 4.1 Preset resolution
 
 Every turn starts with `config.resolve_preset(name)` (`durin/config/schema.py`). If
-`agents.defaults.model_preset` is set, that named entry in `model_presets` is returned.
-Otherwise `resolve_default_preset()` constructs an implicit preset from `agents.defaults`
-fields, layering in any per-model parameter overrides declared under the active provider's
-`models` dict and cross-referencing the capability snapshot for token bounds. The result
-is a `ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
+`agents.defaults.model_preset` is set, that named entry in `model_presets` is returned
+with its limits resolved (below). Otherwise `resolve_default_preset()` constructs an
+implicit preset from `agents.defaults` fields, layering in any per-model parameter
+overrides declared under the active provider's `models` dict. The result is a
+`ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
 `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
-`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`. The
-per-(provider, model) catalog lookup
-(`catalog_model_caps`, `durin/providers/provider_catalog.py`) supplies the token
-bounds when no explicit override exists; `openai_codex` is not in the catalog, so
-each codex slug inherits the matching `openai` entry's caps (window / output
-limit).
+`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`.
+
+**Model limits.** `context_window_tokens` and `max_tokens` are optional on a
+`ModelPresetConfig` (and on an `InlineFallbackConfig`); `None` means "the model's
+own". `Config.resolve_preset_limits(preset)` fills them the same way for every kind
+of preset, through `Config._model_limits`: a value the preset sets wins, then the
+`ModelEntry` under `providers.<provider>.models.<model>`, then the model's real
+limits (`Config._real_limits`: a `model_capabilities` override of
+`max_input_tokens` / `max_output_tokens`, keyed `provider/model` before the bare
+name, else the catalog via `catalog_model_limits`,
+`durin/providers/provider_catalog.py`), then `agents.defaults`.
+The catalog lookup never makes a request: a local provider's live `/v1/models`
+list carries model ids only, so its limits come from the static index (vendored
+floor plus the refresh cache) whether its server answers or not, and resolving a
+preset or fallback on a local provider — which the gateway does at the start of
+every message — never waits on that server.
+`openai_codex` is not in the catalog, so each codex slug inherits the matching
+`openai` entry's caps. The entry, the catalog row and the cap are read under
+`Config.routed_provider(provider, model)`: the registry name the factory builds
+the client for (§4.2) — `"auto"` resolved from the model name and the configured
+providers, an alias spelling (`zai-coding-plan`, `zaiCodingPlan`) normalized —
+so the limits are those of the provider the requests actually go to, for the
+default preset and every other. Only a model no configured provider serves has
+neither an entry nor a catalog row and takes `agents.defaults`.
+`resolve_preset_limits` returns a copy (or the preset itself when nothing changed)
+and never modifies the stored preset, so a resolved value is never saved back to
+the config file.
+
+A `ModelEntry` exists only because someone set it: loading a config never
+creates or fills one. Every run on the model reads its entry before the
+catalog, so a value copied into it from elsewhere would stop being scoped to
+where it was set — a named preset's `temperature` would become the default
+model's, and a window left in `agents.defaults` would stick to whichever model
+is the default and then to the next one — and would override any later edit
+of that source for the model. A preset's values stay on the preset, and
+`agents.defaults` is read only where the chain falls back to it — so its
+window or output cap does nothing for a catalog model, and the doctor's
+"model limits" check warns when one is set (other than the schema default)
+that the default model does not run with (`_unused_default_caps`,
+`durin/cli/doctor.py`).
+
+Resolution happens where a preset becomes a run, so the in-memory presets keep
+"unset" and pick up a later change to the provider's `models` entry:
+`resolve_preset(name)`, the factory's `_resolve_model_preset` (every `make_provider`,
+`provider_signature` and `build_provider_snapshot` call, including a preset object
+handed in by the loop's snapshot loader), `preset_context_window`, each fallback
+preset, the placed model of `resolve_aux_preset` (judge, dream, automations —
+never the default model's limits), and `build_static_preset_snapshot` for a loop
+wired without a loader. `adhoc_preset_config` — a `/model provider model` pick, a
+cron or workflow model ref, an inline `aux_models.subagents` pair — builds its
+preset with the limits unset, so a pick the loop caches in its presets resolves
+them again on every snapshot and follows a later edit of the model's entry. A
+workflow node that names a plain model (neither a preset nor a pair) runs on the
+default provider with the model's own output cap; it shares the default client
+only when that cap and its entry's params equal the default client's generation
+(`AgentNodeRunner._model_entry_override`, `durin/workflow/node_runner.py`).
+
+A configured value above the model's real limit is capped to it by
+`_capped_limit` (`durin/config/schema.py`): a window above the real one lets the
+runner's input budget admit prompts the provider rejects, and an output cap above
+the model's maximum is rejected outright. The real limit is the
+`model_capabilities` override when one is declared — the user's word on a model
+the catalog has stale or wrong — else the catalog row. A catalog output limit is
+bounded twice more, since a row can carry a figure no request may ask for (an
+aggregator lists 943,717 output tokens for glm-5.3, documented at 131,072): by the
+model's documented cap in the capability snapshot (`model_capabilities.json`, keyed
+by the bare model name) and by the model's window. Whatever the source, a resolved
+`max_tokens` is never above the resolved window (`_output_within_window`). The first time each
+distinct `(provider, model, field, configured, real)` is capped, the process logs
+one warning naming them; later resolutions stay silent. A value below the real
+limit is kept (a deliberate cost cap). Nothing is capped for a model with neither
+an override nor a catalog row. `Config.model_real_limits(provider, model)` is the
+same reference for `durin doctor`.
 
 ### 4.2 Provider matching
 
@@ -202,6 +269,26 @@ the error is classified as transient (rate limit, timeout, server error, quota �
 auth or content filter errors), it tries each fallback preset in order. Failover is
 skipped when content has already started streaming. A circuit breaker trips the primary
 after three consecutive failures and gates it for 60 seconds before retrying.
+
+Each fallback preset carries its own model's limits (§4.1), and the run's window is
+the smallest of the primary's and every fallback's known window
+(`preset_context_window`), so the prompt fits whichever model serves it. A window is
+known when it is set on the fallback, on its model's entry or in the catalog; one
+that would only be `agents.defaults`' guess (a local or custom model nothing
+describes) does not lower the run's window, since that guess would cut a known
+1M window to 65,536 on no evidence — declare such a fallback's window if it is
+smaller. `preset_window_cap` returns the window with the fallback that sets it
+(`CappingFallback`), which `durin status` and `durin doctor` name. A failover request sends the fallback's model,
+temperature and reasoning effort, and as `max_tokens` the fallback's own output cap or
+the request's, whichever is smaller: the runner sized the request's cap to the room its
+prompt leaves in that shared window, and a fallback with a larger output limit must not
+undo it. Only a cap the caller named counts as the request's: the retry wrappers fill
+an unnamed `max_tokens` in from the primary's generation before the request reaches
+the failover, so `FallbackProvider` overrides `chat_with_retry` /
+`chat_stream_with_retry` to note whether the caller named one (`_CALLER_MAX_TOKENS`),
+and a request that named none gets the fallback's own cap, not the primary's default.
+The call's `provider.call` row names the fallback's provider, model and the cap it was
+sent when a fallback produced the response (`FallbackProvider.emit_call_telemetry`).
 
 ### 4.5 One transport: every completion streams
 
@@ -451,11 +538,12 @@ Provider rules the serialization honors:
 | `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |
 | `ProvidersConfig` | `durin/config/schema.py` | Container with one `ProviderConfig` field per provider name |
-| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
+| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens` (both `None` = the model's own limits), `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
 | `AuxModelConfig` | `durin/config/schema.py` | Aux bridge config: `preset` (named preset ref) or inline `model` + `provider` |
 | `AuxModelsConfig` | `durin/config/schema.py` | Container: `vision`, `audio`, `memory`, `subagents`, `automations`, and legacy `loops` (each an optional `AuxModelConfig`) |
 | `Config._match_provider` | `durin/config/schema.py` | Ordered provider walk returning `(ProviderConfig, spec_name)` |
-| `Config.resolve_preset` | `durin/config/schema.py` | Return `ModelPresetConfig` from named preset or implicit default |
+| `Config.resolve_preset` | `durin/config/schema.py` | Return `ModelPresetConfig` from named preset (limits resolved) or implicit default |
+| `Config.resolve_preset_limits` | `durin/config/schema.py` | Fill a preset's unset window / output cap from its model (entry → catalog → `agents.defaults`) and cap configured values at the catalog's |
 | `resolve_aux_preset` | `durin/memory/model_resolve.py` | Resolve purpose-specific preset for out-of-loop calls; returns `None` only for an unset `automations` (or legacy `loops`) override |
 
 ---
@@ -471,8 +559,8 @@ Provider rules the serialization honors:
 | `agents.defaults.model` | `anthropic/claude-opus-4-5` | Active model ID |
 | `agents.defaults.provider` | `auto` | `auto` (detect by model name) or an explicit provider name |
 | `agents.defaults.model_preset` | `null` | When set, overrides `model`/`provider`/generation fields with the named preset |
-| `agents.defaults.max_tokens` | `8192` | Max output tokens (inherited by default preset) |
-| `agents.defaults.context_window_tokens` | `65536` | Context window used for compaction budgeting |
+| `agents.defaults.max_tokens` | `8192` | Output cap for a model with no entry or catalog value (last step of the limits chain, for every preset) |
+| `agents.defaults.context_window_tokens` | `65536` | Context window for a model with no entry or catalog value (last step of the limits chain, for every preset) |
 | `agents.defaults.temperature` | `0.4` | Sampling temperature |
 | `agents.defaults.reasoning_effort` | `null` | Thinking effort: `low`/`medium`/`high`/`adaptive`/`none` |
 | `agents.defaults.fallback_models` | `[]` | Ordered list of preset names or inline `{model, provider}` configs |
@@ -485,8 +573,8 @@ model_presets:
   fast:
     model: deepseek/deepseek-chat
     provider: deepseek
-    max_tokens: 4096
-    context_window_tokens: 65536
+    max_tokens: 4096              # optional: unset takes the model's own
+    context_window_tokens: 65536  # optional: unset takes the model's own
     temperature: 0.1
     reasoning_effort: null
     preemptive_compact_ratio: 0.5
@@ -512,7 +600,9 @@ providers:
 Per-model entries (`ModelEntry`) hold `max_tokens`, `context_window_tokens`,
 `temperature`, `reasoning_effort`, `request_timeout_s`, and the sampling params
 `top_p` / `top_k` / `repeat_penalty` — each `null` inherits the catalog value,
-then `agents.defaults`. `request_timeout_s` overrides the per-request LLM timeout
+then `agents.defaults`. The entry's `max_tokens` / `context_window_tokens` serve
+every preset on that model that leaves its own unset, and a value above the
+catalog's is capped to it (see §4.1). `request_timeout_s` overrides the per-request LLM timeout
 for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`, 300s); raise it for slow
 local models (a large-context ollama/LM Studio model can take minutes to first
 token). `top_p` is a standard param; `top_k` and `repeat_penalty` are non-standard
@@ -571,7 +661,14 @@ agents:
 - **Settings webui**: provider-first model picker writes `(provider, model)` pair to
   config; the provider field is `"auto"` unless the user selects a specific override.
 - **`durin status`**: shows each configured provider, its credential status, and the
-  active model.
+  active model with the context window the chat runs with — the active preset's
+  model's (§4.1), capped by the fallback models' windows, the value the agent loop's
+  provider snapshot uses (`preset_context_window`), not `agents.defaults`.
+- **Settings model rows**: the default and aux model editors show the window a run on
+  that provider and model gets, from `GET /api/v1/model/capabilities`'
+  `context_window_tokens` (the same `preset_context_window`); `max_input_tokens` there
+  is the model's own limit. The pickers and the Providers catalog list each model's
+  own limit to choose from.
 - **`durin doctor`**: validates that the active provider has an API key and that the
   capability snapshot loaded.
 - **API `PATCH /api/v1/config`**: updates config fields; a preset switch takes effect

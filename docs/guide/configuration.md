@@ -88,6 +88,37 @@ the HTTP/WS API, and the webui all use `snake_case` (matching the Python field
 names). Input is case-tolerant: `set`/`get` and the loader accept both
 `snake_case` and `camelCase`, so a legacy camelCase config still loads and is
 rewritten to `snake_case` on the next save. Output is always `snake_case`.
+Case tolerance applies to field names only: a key you choose — a model name
+under `providers.<provider>.models`, a preset name, a header name — is kept
+exactly as typed.
+
+**Keys that contain dots.** A path is split on dots, so a key with a dot in
+it — most model names: `glm-5.3`, `gpt-4.1`, `MiniMax-M2.5` — goes in
+brackets, quoted with `"` or `'`:
+
+```
+durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' null
+durin config get 'providers.zai_coding_plan.models["glm-5.3"]'
+durin config set "model_capabilities['zai_coding_plan/glm-5.3'].supports_vision" false
+```
+
+Quote the whole path for the shell, as above. A key without dots, field
+names included, can be written either way (`models.glm-5-turbo` or
+`models["glm-5-turbo"]`, `.max_tokens` or `["maxTokens"]`). `set`
+refuses — and changes nothing — when the value would not land where the path
+says: a misspelled field, or a dotted model name written without brackets,
+which would otherwise split into unrelated keys.
+
+**List items.** An item of a list is addressed by its index, from `0`,
+dotted or in brackets — `agents.defaults.fallback_models.1.max_tokens` and
+`agents.defaults.fallback_models[1].max_tokens` are the same key. `set` writes
+only into an item the list already has and only into an item that is a
+section (a fallback given by preset name is a plain value: edit that preset
+instead); to add or remove an item, set the whole list:
+
+```
+durin config set agents.defaults.fallback_models '["judge-cold", {"model": "glm-5-turbo", "provider": "zai_coding_plan"}]'
+```
 
 ---
 
@@ -107,8 +138,8 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `provider` | `auto` | Provider name or `"auto"` for auto-detection |
 | `model_preset` | `null` | Named preset from `model_presets`; takes precedence over `model` + `provider` |
 | `persona` | `null` | Default persona name for interactive chats; `null` = the workspace SOUL + default model |
-| `max_tokens` | `8192` | Maximum output tokens per turn |
-| `context_window_tokens` | `65536` | Context window size hint (tokens) |
+| `max_tokens` | `8192` | Output token cap for a model whose limit nothing else declares — the last step of the [model limits](#model-limits) chain |
+| `context_window_tokens` | `65536` | Context window (tokens) for a model whose window nothing else declares — the last step of the [model limits](#model-limits) chain |
 | `temperature` | `0.4` | Generation temperature |
 | `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default |
 | `max_tool_iterations` | `200` | Tool call iterations cap per turn |
@@ -117,7 +148,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `concurrency_ceiling` | `12` | Global ceiling on total in-flight turns + subagents across all lanes; keep `>=` the interactive cap |
 | `max_tool_result_chars` | unset | Largest tool result kept whole in the model's context; a larger one is saved to a file the agent reads in pages (`read_file` and `grep` size their pages under this cap). Unset, it follows the model's context window: `16000` below 100k tokens, `32000` from 100k, `64000` from 200k, never more than 30% of the input budget (the window minus what is held for the answer). A number here applies to every model |
 | `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
-| `fallback_models` | `[]` | Ordered list of preset names or inline model specs to try on provider failure |
+| `fallback_models` | `[]` | Ordered list of preset names or inline model specs (`{model, provider, max_tokens?, context_window_tokens?, temperature?, reasoning_effort?}`) to try on provider failure. Each fallback runs with its own model's limits (see [model limits](#model-limits)), and the run's window is the smallest of the primary's and every fallback's known window, so a failover fits the same prompt. A fallback the catalog does not know (a local or custom model) lowers it only once its window is declared (its `context_window_tokens` or its model's entry); `durin status` and `durin doctor` name the fallback that caps the window |
 | `timezone` | `UTC` | IANA timezone for date-aware tools (e.g. `America/New_York`) |
 | `bot_name` | `durin` | Display name shown in CLI prompts |
 | `bot_icon` | `⚒️` | Icon shown next to the bot name in CLI; `""` to omit |
@@ -155,8 +186,8 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 |---|---|---|
 | `model` | (required) | Model identifier |
 | `provider` | `auto` | Provider or `"auto"` |
-| `max_tokens` | `8192` | Output token cap |
-| `context_window_tokens` | `65536` | Context window hint |
+| `max_tokens` | unset | Output token cap; unset takes the model's own (see [model limits](#model-limits)) |
+| `context_window_tokens` | unset | Context window; unset takes the model's own (see [model limits](#model-limits)) |
 | `temperature` | `0.1` | Temperature |
 | `reasoning_effort` | `null` | Thinking effort hint |
 | `request_timeout_s` | `null` | HTTP timeout in seconds for an OpenAI-compatible provider; overrides `DURIN_OPENAI_COMPAT_TIMEOUT_S` |
@@ -165,10 +196,69 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 | `repeat_penalty` | `null` | Repetition penalty; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `preemptive_compact_ratio` | `null` | Per-preset compaction trigger; `null` inherits from `agents.defaults` |
 
+#### Model limits
+
+Every model run — the chat, a named preset, a `/model provider model` pick, a
+workflow node, a subagent, an aux model, a fallback — uses the context window
+and output cap of the model it runs on. A value set where the run is chosen (a
+preset's `context_window_tokens` / `max_tokens`, an inline fallback's) wins;
+whatever is left unset comes from:
+
+1. the model's entry under `providers.<provider>.models.<model>`,
+2. the model's real limits: its `max_input_tokens` / `max_output_tokens` under
+   `model_capabilities` if you declared them, else the model catalog (the window
+   and output limit the provider publishes),
+3. `agents.defaults.context_window_tokens` / `agents.defaults.max_tokens`.
+
+Wherever it is set, a window or output cap is at least 1: `durin config set`
+and the settings editor refuse `0` (unset the value with `null` instead), and
+a value below 1 already in the file is treated as unset when the config loads,
+with a warning in the log.
+
+The entry and the catalog are read under the provider the run actually goes
+to: a preset (or the default model) on `"auto"` uses the provider its model
+routes to, and a spelling such as `zai-coding-plan` or `zaiCodingPlan` reads
+the `zai_coding_plan` entry. Only a model that no configured provider serves
+has neither and takes `agents.defaults`. A preset that sets only `model` and a
+`temperature` therefore runs with the model's real limits.
+
+A model's entry holds only what you put there: durin never copies a preset's
+values or `agents.defaults` into it. A preset's `temperature` or limits apply
+to runs on that preset alone, and `agents.defaults` stays the fallback of the
+last step above — so a window or output cap there never reaches a model the
+catalog knows. To cap such a model (for cost), set the value in its entry or
+on the preset that runs it. `durin doctor` warns when `agents.defaults` holds a
+window or output cap (other than the default) that the default model does not
+run with, and prints the command that sets it on the model's entry instead.
+
+A configured value **above** what the model really accepts (step 2: your
+`model_capabilities` value, else the catalog's) is capped to it when the run
+starts, and one warning names the provider, the model, the configured and the
+real value: a window larger than the real one lets a prompt grow past what the
+provider accepts, and it is rejected instead of being compacted first. A value
+**below** it is kept — a smaller window or output cap is a legitimate way to
+bound cost. When the catalog is stale or wrong for a model, declare its real
+limits under `model_capabilities` rather than raising a window past the cap.
+A catalog output limit is also held to the model's documented cap (some
+aggregator rows list far more than the model can emit), and an output cap is
+never larger than the window it runs in.
+`durin doctor` lists every configured value that differs from the real limit
+in its "model limits" check: one above warns and comes with the exact command
+that unsets it, one below is listed so a forgotten cap does not go unnoticed.
+To go back to the model's own limit, unset the value (a model name with dots
+goes in brackets, see [keys that contain dots](#inspecting-and-editing-config)):
+
+```
+durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' null
+```
+
 **`model_capabilities`** — user-declared capability overrides keyed by model name
 (bare or `provider/model`). Provider-qualified keys win over bare names. Any field
 left `null` falls through to the vendored snapshot. Useful for local fine-tunes or
-when the snapshot is wrong for your deployment.
+when the snapshot is wrong for your deployment. `max_input_tokens` and
+`max_output_tokens` set here are the model's real limits for
+[model limits](#model-limits): the value an unset window or output cap takes, and
+the ceiling a configured one is capped at.
 
 ---
 
@@ -588,7 +678,7 @@ Each provider entry (`anthropic`, `openai`, `openrouter`, etc.) is a `ProviderCo
 | `api_base` | `null` | Custom base URL (local models, proxies, corporate endpoints) |
 | `extra_headers` | `null` | Custom request headers (e.g. `APP-Code` for AiHubMix) |
 | `extra_body` | `null` | Extra fields merged into every request body |
-| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort, request_timeout_s, top_p, top_k, repeat_penalty}` |
+| `models` | `{}` | Per-model parameter overrides; each entry is `{max_tokens, context_window_tokens, temperature, reasoning_effort, request_timeout_s, top_p, top_k, repeat_penalty}`. An unset `max_tokens` / `context_window_tokens` takes the catalog's, and a value above the catalog's is capped to it (see [model limits](#model-limits)) |
 
 Supported providers (all use `ProviderConfig` unless noted):
 

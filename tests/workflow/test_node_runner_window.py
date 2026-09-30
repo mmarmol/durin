@@ -96,6 +96,45 @@ def test_a_node_on_a_named_preset_gets_that_presets_window(tmp_path, monkeypatch
     assert window == 24_000
 
 
+def test_a_node_on_a_preset_that_names_no_limits_runs_on_its_models_own(tmp_path, monkeypatch) -> None:
+    """A judge node's preset names its model and a temperature, nothing else.
+    It must run with that model's window and output cap, not 65,536 / 8,192:
+    with those the judge pruned its history twice and its verdict was cut at
+    8,192 output tokens."""
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5.3", max_input_tokens=1_000_000, max_output_tokens=131_072),
+    ]})
+    config = Config()
+    config.agents.defaults.provider = "zai_coding_plan"
+    config.agents.defaults.model = "my-local-model"
+    config.model_presets["judge-cold"] = ModelPresetConfig(
+        model="glm-5.3", provider="zai_coding_plan", temperature=0.0,
+    )
+    built: list[ModelPresetConfig] = []
+
+    def _make_provider(config, preset=None, **_):
+        built.append(preset)
+        return _FakeProvider(preset.provider, preset.model)
+
+    monkeypatch.setattr("durin.providers.factory.make_provider", _make_provider)
+    runner = AgentRunner(_FakeProvider("zai_coding_plan", "my-local-model"))
+
+    async def fake_run(spec):
+        return AgentRunResult(final_content="ok", messages=list(spec.initial_messages))
+
+    runner.run = AsyncMock(side_effect=fake_run)
+    nr = AgentNodeRunner(runner, SessionManager(workspace=tmp_path), default_model="my-local-model", app_config=config)
+    nr(_req(WorkNode(id="judge", model="judge-cold", prompt="p", next=None)))
+    spec = runner.run.call_args.args[0]
+    assert spec.model == "glm-5.3"
+    assert spec.context_window_tokens == 1_000_000
+    [node_preset] = built
+    assert (node_preset.max_tokens, node_preset.temperature) == (131_072, 0.0)
+
+
 def test_a_nodes_window_is_capped_by_the_fallback_models(tmp_path, monkeypatch) -> None:
     """A failover model must fit the same prompt, so the chat caps its window
     by every fallback's; a node gets the same cap."""

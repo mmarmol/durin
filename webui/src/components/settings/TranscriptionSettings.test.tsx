@@ -13,7 +13,7 @@ vi.mock("@/lib/api", () => ({
       tts: { enabled: true, provider: "local", local: { voice: "F4" }, language: "es" },
       voice: { enabled: true, barge_in: true, idle_timeout_s: 300, spoken_render: { mode: "model_led", long_threshold_words: 60 } },
     },
-    schema: {},
+    json_schema: {},
   })),
   setConfigValue: vi.fn(async () => ({})),
   getExtraStatus: vi.fn(async () => ({ present: true, extra: "stt", label: "stt" })),

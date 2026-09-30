@@ -206,6 +206,7 @@
       "off": "Tắt",
       "managed": "Secret được quản lý",
       "empty": "Không có cài đặt nào trong mục này.",
+      "unset": "chưa đặt",
       "secretRotate": "Làm mới giá trị",
       "secretRotateHint": "Ghi giá trị mới vào secret đã lưu. Mọi tham chiếu cấu hình trỏ đến tên này sẽ dùng giá trị đó.",
       "secretDisconnect": "Ngắt kết nối",

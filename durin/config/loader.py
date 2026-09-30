@@ -599,76 +599,51 @@ def _env_replace(match: re.Match[str]) -> str:
     return value
 
 
-def _seed_model_entry(providers: dict, provider_value: str, model: str, src: dict) -> None:
-    """Seed ``providers[<key>].models[model]`` from a legacy param source (a
-    preset or ``agents.defaults``). Additive: never clobbers an existing entry.
-
-    ``provider_value`` is the snake_case registry name (a config *value*). The
-    persisted providers dict is keyed by that same snake_case name (canonical,
-    post casing-migration); legacy configs not yet resaved may still be keyed by
-    the camelCase alias. We merge into whichever block exists and only create a
-    new block under the canonical snake_case name.
-    """
-    from pydantic.alias_generators import to_camel
-
-    def g(*keys):
-        for k in keys:
-            if k in src and src[k] is not None:
-                return src[k]
-        return None
-
-    entry: dict = {}
-    if (v := g("contextWindowTokens", "context_window_tokens")) is not None:
-        entry["context_window_tokens"] = v
-    if (v := g("maxTokens", "max_tokens")) is not None:
-        entry["max_tokens"] = v
-    if (v := g("temperature")) is not None:
-        entry["temperature"] = v
-    if (v := g("reasoningEffort", "reasoning_effort")) is not None:
-        entry["reasoning_effort"] = v
-    if not entry:
-        return
-    # Find the existing block under either casing. Creating a new block under
-    # the camelCase alias when a snake block already exists would shadow (and
-    # blank out) the real block on validation — e.g. silently dropping the
-    # default provider's api_key. So always create new blocks under snake_case.
-    snake_key = provider_value
-    camel_key = to_camel(provider_value)
-    if isinstance(providers.get(snake_key), dict):
-        block = providers[snake_key]
-    elif isinstance(providers.get(camel_key), dict):
-        block = providers[camel_key]
-    elif snake_key in providers or camel_key in providers:
-        return  # present but not a dict
-    else:
-        block = providers[snake_key] = {}
-    models = block.setdefault("models", {})
-    if not isinstance(models, dict):
-        return
-    models.setdefault(model, entry)
+_LIMIT_KEYS = ("max_tokens", "maxTokens", "context_window_tokens", "contextWindowTokens")
 
 
-def _migrate_model_config(data: dict) -> dict:
-    """Seed ``providers.<p>.models`` from legacy ``model_presets`` and
-    ``agents.defaults`` inline params so the new resolution path has data.
-    Additive + idempotent — legacy fields are left in place for back-compat."""
-    if not isinstance(data, dict):
-        return data
+def drop_unusable_limits(data: dict) -> dict:
+    """Remove a ``max_tokens`` / ``context_window_tokens`` below 1 from every
+    place a config sets one — ``agents.defaults``, its inline fallbacks, each
+    named preset, each ``providers.<p>.models`` entry — so it reads as unset
+    (the model's own limit, or the default) instead of failing validation,
+    which would reject the whole config. The schema refuses such a value on
+    write; one saved before it did (a settings editor wrote a cleared number
+    as 0) must not stop the config from loading or being edited. Each drop is
+    logged. Mutates and returns *data*."""
+
+    def scrub(block: Any, where: str) -> None:
+        if not isinstance(block, dict):
+            return
+        for key in _LIMIT_KEYS:
+            value = block.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value < 1:
+                del block[key]
+                logger.warning(
+                    "config: {}.{} is {}, which no model accepts; treating it as unset", where, key, value,
+                )
+
+    agents = data.get("agents")
+    defaults = agents.get("defaults") if isinstance(agents, dict) else None
+    if isinstance(defaults, dict):
+        scrub(defaults, "agents.defaults")
+        for key in ("fallback_models", "fallbackModels"):
+            items = defaults.get(key)
+            if isinstance(items, list):
+                for index, item in enumerate(items):
+                    scrub(item, f"agents.defaults.{key}.{index}")
+    for key in ("model_presets", "modelPresets"):
+        presets = data.get(key)
+        if isinstance(presets, dict):
+            for name, preset in presets.items():
+                scrub(preset, f"{key}.{name}")
     providers = data.get("providers")
-    if not isinstance(providers, dict):
-        providers = data["providers"] = {}
-    defaults = (data.get("agents") or {}).get("defaults") or {}
-    model, provider = defaults.get("model"), defaults.get("provider")
-    if model and provider and provider != "auto":
-        _seed_model_entry(providers, provider, model, defaults)
-    presets = data.get("modelPresets") or data.get("model_presets") or {}
-    if isinstance(presets, dict):
-        for preset in presets.values():
-            if not isinstance(preset, dict):
-                continue
-            pm, pp = preset.get("model"), preset.get("provider")
-            if pm and pp and pp != "auto":
-                _seed_model_entry(providers, pp, pm, preset)
+    if isinstance(providers, dict):
+        for provider, block in providers.items():
+            models = block.get("models") if isinstance(block, dict) else None
+            if isinstance(models, dict):
+                for model, entry in models.items():
+                    scrub(entry, f"providers.{provider}.models.{model}")
     return data
 
 
@@ -710,5 +685,4 @@ def _migrate_config(data: dict) -> dict:
             defaults.setdefault("skillsHotTier", memory.pop(legacy))
             break
 
-    data = _migrate_model_config(data)
-    return data
+    return drop_unusable_limits(data)

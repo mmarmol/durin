@@ -15,10 +15,11 @@ from durin.cli.config_cmd import (
     get_at,
     mask_secrets,
     parse_value,
+    path_segments,
     set_at,
     validate_dict,
 )
-from durin.config.schema import Config
+from durin.config.schema import Config, ModelEntry
 
 runner = CliRunner()
 
@@ -57,6 +58,34 @@ def test_set_at_does_not_mutate_input() -> None:
     src = {"a": {"b": 1}}
     set_at(src, "a.b", 2)
     assert src == {"a": {"b": 1}}
+
+
+@pytest.mark.parametrize("path", ["xs.1.a", "xs[1].a", "xs.1"])
+def test_set_at_writes_into_a_list_item(path: str) -> None:
+    """A list is addressed by index; it used to be replaced by a dict, so
+    validation rejected the whole config ("Input should be a valid list")."""
+    src = {"xs": [{"a": 1}, {"a": 2}]}
+    out = set_at(src, path, 5)
+    expected = {"a": 5} if path.endswith(".a") else 5
+    assert out == {"xs": [{"a": 1}, expected]}
+
+
+@pytest.mark.parametrize("index", ["2", "-1", "x"])
+def test_set_at_refuses_an_index_the_list_does_not_have(index: str) -> None:
+    with pytest.raises(ValueError, match="xs"):
+        set_at({"xs": [{"a": 1}, {"a": 2}]}, f"xs.{index}.a", 5)
+
+
+def test_set_at_refuses_to_write_inside_a_plain_value() -> None:
+    """``model`` holds a string: writing ``model.foo`` used to replace it with
+    ``{"foo": ...}``, which validation then rejected with a type error."""
+    with pytest.raises(ValueError, match="agents.defaults.model"):
+        set_at({"agents": {"defaults": {"model": "glm-5.3"}}}, "agents.defaults.model.foo", "x")
+
+
+def test_set_at_still_fills_an_unset_section() -> None:
+    out = set_at({"a": {"b": None}}, "a.b.c", 1)
+    assert out == {"a": {"b": {"c": 1}}}
 
 
 def test_parse_value_decodes_json_literals() -> None:
@@ -317,3 +346,267 @@ def test_cli_config_schema_rejects_unknown_key() -> None:
     result = runner.invoke(app, ["config", "schema", "agents.defaults.no_such_key"])
     assert result.exit_code == 1
     assert "No such config key" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Keys that contain dots (model names): bracket addressing, and a path that
+# does not land where it says fails loudly
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def models_config(tmp_path: Path):
+    """A config with two model entries under zai_coding_plan, one of them a
+    model name with a dot, and the loader pointed at it."""
+    from durin.config.loader import save_config
+
+    cfg_path = tmp_path / "config.json"
+    cfg = Config()
+    cfg.providers.zai_coding_plan.models = {
+        "glm-5.3": ModelEntry(context_window_tokens=231_072),
+        "glm-5-turbo": ModelEntry(context_window_tokens=231_072),
+    }
+    save_config(cfg, cfg_path)
+    with patch("durin.cli.config_cmd.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path):
+        yield cfg_path
+
+
+def _models(cfg_path: Path) -> dict:
+    return json.loads(cfg_path.read_text())["providers"]["zai_coding_plan"]["models"]
+
+
+def test_path_segments_split_on_dots_and_keep_bracketed_keys_whole() -> None:
+    assert path_segments('providers.zai_coding_plan.models["glm-5.3"].context_window_tokens') == [
+        "providers", "zai_coding_plan", "models", "glm-5.3", "context_window_tokens",
+    ]
+    assert path_segments("models['glm-5.3'].max_tokens") == ["models", "glm-5.3", "max_tokens"]
+    assert path_segments("models[glm-5.3]") == ["models", "glm-5.3"]
+    assert path_segments("agents.defaults.model") == ["agents", "defaults", "model"]
+
+
+@pytest.mark.parametrize("bad", ["", ".a", "a..b", "a.", 'a["x"', "a[x]b", "a]"])
+def test_path_segments_reject_a_malformed_path(bad: str) -> None:
+    with pytest.raises(ValueError):
+        path_segments(bad)
+
+
+def test_get_at_and_set_at_address_a_key_that_contains_dots() -> None:
+    data = {"models": {"glm-5.3": {"max_tokens": 1}}}
+    assert get_at(data, 'models["glm-5.3"].max_tokens') == 1
+    out = set_at(data, 'models["glm-5.3"].max_tokens', 2)
+    assert out == {"models": {"glm-5.3": {"max_tokens": 2}}}
+
+
+def test_normalize_keeps_a_map_key_as_typed() -> None:
+    """Field names are case-normalized; a map key (a model name, a preset name)
+    is the user's and is never rewritten."""
+    assert _normalize_dotted_path("providers.minimax.models.MiniMax-M2.maxTokens") == (
+        "providers.minimax.models.MiniMax-M2.max_tokens"
+    )
+    assert _normalize_dotted_path('providers.zaiCodingPlan.models["glm-5.3"].contextWindowTokens') == (
+        'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens'
+    )
+
+
+def test_cli_config_set_addresses_a_model_name_with_dots(models_config: Path) -> None:
+    result = runner.invoke(app, [
+        "config", "set", 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens', "null",
+    ])
+    assert result.exit_code == 0, result.output
+    models = _models(models_config)
+    assert models["glm-5.3"] == {}
+    assert models["glm-5-turbo"] == {"context_window_tokens": 231_072}
+    assert "glm-5" not in models
+
+
+def test_cli_config_set_single_quoted_brackets_work_too(models_config: Path) -> None:
+    result = runner.invoke(app, [
+        "config", "set", "providers.zai_coding_plan.models['glm-5.3'].max_tokens", "32000",
+    ])
+    assert result.exit_code == 0, result.output
+    assert _models(models_config)["glm-5.3"]["max_tokens"] == 32_000
+
+
+def test_cli_config_set_a_dotted_model_name_without_brackets_fails_loudly(models_config: Path) -> None:
+    """The dots of `glm-5.3` used to split the key: the write created an empty
+    `glm-5` entry, dropped the `3` segment and printed "updated"."""
+    before = models_config.read_text()
+    result = runner.invoke(app, [
+        "config", "set", "providers.zai_coding_plan.models.glm-5.3.context_window_tokens", "null",
+    ])
+    assert result.exit_code == 1
+    assert "updated" not in result.output
+    assert '["' in result.output  # names the bracket form to use instead
+    assert models_config.read_text() == before
+
+
+def test_cli_config_set_an_unknown_field_fails_loudly(temp_config: Path) -> None:
+    before = temp_config.read_text()
+    result = runner.invoke(app, ["config", "set", "agents.defaults.max_tokenz", "100"])
+    assert result.exit_code == 1
+    assert "updated" not in result.output
+    assert temp_config.read_text() == before
+
+
+def test_cli_config_set_a_malformed_path_fails_cleanly(temp_config: Path) -> None:
+    before = temp_config.read_text()
+    result = runner.invoke(app, [
+        "config", "set", 'providers.zai_coding_plan.models["glm-5.3".max_tokens', "1",
+    ])
+    assert result.exit_code == 1
+    assert "does not name a config key" in result.output
+    assert temp_config.read_text() == before
+
+
+def test_cli_config_set_still_creates_a_new_map_entry(temp_config: Path) -> None:
+    result = runner.invoke(app, ["config", "set", "model_presets.fast.model", "glm-5-turbo"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(temp_config.read_text())["model_presets"]["fast"]["model"] == "glm-5-turbo"
+
+
+def test_cli_config_set_keeps_a_model_names_case(temp_config: Path) -> None:
+    result = runner.invoke(app, ["config", "set", "providers.minimax.models.MiniMax-M2.max_tokens", "8000"])
+    assert result.exit_code == 0, result.output
+    models = json.loads(temp_config.read_text())["providers"]["minimax"]["models"]
+    assert models == {"MiniMax-M2": {"max_tokens": 8000}}
+
+
+@pytest.fixture
+def fallbacks_config(tmp_path: Path):
+    """A config whose default model falls back to a preset (by name) and to an
+    inline model, and the loader pointed at it."""
+    from durin.config.loader import save_config
+    from durin.config.schema import InlineFallbackConfig, ModelPresetConfig
+
+    cfg_path = tmp_path / "config.json"
+    cfg = Config()
+    cfg.model_presets["judge-cold"] = ModelPresetConfig(model="glm-5.3", provider="zai_coding_plan")
+    cfg.agents.defaults.fallback_models = [
+        "judge-cold",
+        InlineFallbackConfig(model="glm-5-turbo", provider="zai_coding_plan", max_tokens=150_000),
+    ]
+    save_config(cfg, cfg_path)
+    with patch("durin.cli.config_cmd.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path):
+        yield cfg_path
+
+
+def _fallbacks(cfg_path: Path) -> list:
+    return json.loads(cfg_path.read_text())["agents"]["defaults"]["fallback_models"]
+
+
+@pytest.mark.parametrize("path", [
+    "agents.defaults.fallback_models.1.max_tokens",
+    "agents.defaults.fallback_models[1].max_tokens",
+    "agents.defaults.fallbackModels.1.maxTokens",
+])
+def test_cli_config_set_writes_one_inline_fallback_field(fallbacks_config: Path, path: str) -> None:
+    result = runner.invoke(app, ["config", "set", path, "null"])
+    assert result.exit_code == 0, result.output
+    assert _fallbacks(fallbacks_config) == [
+        "judge-cold", {"model": "glm-5-turbo", "provider": "zai_coding_plan"},
+    ]
+
+
+@pytest.mark.parametrize("path", [
+    "agents.defaults.fallback_models.7.model",
+    "agents.defaults.fallback_models.-1.model",
+    "agents.defaults.fallback_models.0.max_tokens",
+])
+def test_cli_config_set_refuses_a_list_item_it_cannot_write(fallbacks_config: Path, path: str) -> None:
+    """Out of range, negative, or item 0 — a preset name, not a section."""
+    before = fallbacks_config.read_text()
+    result = runner.invoke(app, ["config", "set", path, "100"])
+    assert result.exit_code == 1
+    assert "does not name a config key" in result.output
+    assert "Traceback" not in result.output
+    assert fallbacks_config.read_text() == before
+
+
+@pytest.mark.parametrize("path, expected", [
+    ('["agents"].defaults.max_tokens', "agents.defaults.max_tokens"),
+    ('agents["defaults"]["maxTokens"]', "agents.defaults.max_tokens"),
+    ('providers["zai_coding_plan"].models["glm-5.3"]["contextWindowTokens"]',
+     'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens'),
+])
+def test_normalize_writes_a_bracketed_field_name_as_the_field(path: str, expected: str) -> None:
+    """Brackets make a key literal so a map key keeps its dots and case; a
+    field name in brackets is still that field, in its canonical form."""
+    assert _normalize_dotted_path(path) == expected
+
+
+def test_cli_config_set_accepts_a_bracketed_camel_case_field(models_config: Path) -> None:
+    result = runner.invoke(app, [
+        "config", "set", 'providers.zai_coding_plan.models["glm-5.3"]["maxTokens"]', "32000",
+    ])
+    assert result.exit_code == 0, result.output
+    assert _models(models_config)["glm-5.3"] == {"context_window_tokens": 231_072, "max_tokens": 32_000}
+
+
+def test_normalize_renders_a_list_index_as_a_dotted_key() -> None:
+    assert _normalize_dotted_path("agents.defaults.fallback_models[1].maxTokens") == (
+        "agents.defaults.fallback_models.1.max_tokens"
+    )
+
+
+def test_cli_config_get_addresses_a_model_name_with_dots(models_config: Path) -> None:
+    result = runner.invoke(app, [
+        "config", "get", 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens',
+    ])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "231072"
+
+
+def test_cli_config_get_a_dotted_model_name_without_brackets_names_the_bracket_form(
+    models_config: Path,
+) -> None:
+    result = runner.invoke(app, [
+        "config", "get", "providers.zai_coding_plan.models.glm-5.3.context_window_tokens",
+    ])
+    assert result.exit_code == 1
+    assert "No such key" in result.output
+    assert "goes in brackets" in " ".join(result.output.split())
+
+
+def test_setting_a_block_the_config_never_saves_says_so() -> None:
+    """An OAuth provider block is excluded from the saved config: the write
+    lands nowhere, and the refusal says why instead of suggesting brackets."""
+    from durin.cli.config_cmd import ConfigKeyError, apply_setting
+
+    data = Config().model_dump(mode="json", by_alias=False)
+    with pytest.raises(ConfigKeyError) as exc:
+        apply_setting(data, 'providers.openai_codex.models["gpt-5.5"].context_window_tokens', 200_000)
+    message = str(exc.value)
+    assert "providers.openai_codex is not kept in the config file" in message
+    assert "durin oauth login" in message
+    assert "goes in brackets" not in message
+
+
+def test_cli_config_get_a_block_the_config_never_saves_says_so(temp_config: Path) -> None:
+    result = runner.invoke(app, ["config", "get", "providers.github_copilot.api_key"])
+    assert result.exit_code == 1
+    flat = " ".join(result.output.split())
+    assert "providers.github_copilot is not kept in the config file" in flat
+    assert "goes in brackets" not in flat
+
+
+@pytest.mark.parametrize("command", ["get", "set", "show", "schema"])
+def test_cli_config_help_names_the_bracket_form(command: str) -> None:
+    result = runner.invoke(app, ["config", command, "--help"])
+    assert result.exit_code == 0, result.output
+    assert "brackets" in " ".join(result.output.split())
+
+
+def test_cli_config_show_addresses_a_model_name_with_dots(models_config: Path) -> None:
+    result = runner.invoke(app, ["config", "show", 'providers.zai_coding_plan.models["glm-5.3"]'])
+    assert result.exit_code == 0, result.output
+    assert "231072" in result.output
+
+
+def test_cli_config_schema_describes_a_field_under_a_dotted_model_name() -> None:
+    result = runner.invoke(app, [
+        "config", "schema", 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens',
+    ])
+    assert result.exit_code == 0, result.output
+    assert "type:" in result.output

@@ -15,7 +15,7 @@ vi.mock("@/lib/api", () => ({
         },
       },
     },
-    schema: {},
+    json_schema: {},
   })),
   setConfigValue: vi.fn(async () => ({
     agents: {

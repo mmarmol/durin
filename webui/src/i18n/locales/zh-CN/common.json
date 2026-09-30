@@ -206,6 +206,7 @@
       "off": "关闭",
       "managed": "受管密钥",
       "empty": "此分区没有设置项。",
+      "unset": "未设置",
       "secretRotate": "轮换值",
       "secretRotateHint": "为已存储的密钥写入新值。所有指向该名称的配置引用都会使用新值。",
       "secretDisconnect": "取消关联",

@@ -75,9 +75,13 @@ def test_resolve_model_override_unresolvable_returns_none(tmp_path):
 
 def test_adhoc_preset_config_builds_for_provider_model():
     from durin.command.builtin import adhoc_preset_config
+    from durin.config.schema import Config
 
     cfg = adhoc_preset_config(None, "gemini", "gemini-2.5-flash")
     assert cfg.provider == "gemini"
     assert cfg.model == "gemini-2.5-flash"
-    assert cfg.context_window_tokens > 0
-    assert cfg.max_tokens > 0
+    # The limits stay unset on the pick and resolve where it becomes a run.
+    assert (cfg.context_window_tokens, cfg.max_tokens) == (None, None)
+    resolved = Config().resolve_preset_limits(cfg)
+    assert resolved.context_window_tokens > 0
+    assert resolved.max_tokens > 0

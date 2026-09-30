@@ -353,16 +353,22 @@ A node's (or its persona's) `model` accepts any of the picker's forms — a `mod
 name, a `"provider model"` pair, or a plain model name — resolved through the same machinery
 as the chat loop's `/model` command (`durin/workflow/node_runner.py:AgentNodeRunner._resolve_node_provider`):
 a pair is registered as an ad-hoc preset so it is never handed to a provider as a raw
-two-word string, and a plain name picks up its `providers.<name>.models` entry (per-model
-`temperature`/`max_tokens`/etc., see the configuration guide) when one is declared, building
-a dedicated provider only when that entry's params actually differ from the run's default —
-a bare name with nothing configured for it keeps sharing the default client. A persona's own
+two-word string, and a plain name runs on the default provider with its own output cap (its
+`providers.<name>.models` entry, then the catalog, then `agents.defaults`) plus whatever else
+that entry declares (`temperature`, `top_p`, etc., see the configuration guide), the default
+client's params filling the rest. A dedicated provider is built only when that differs from
+the default client's generation — a bare name with the default's output cap and nothing
+configured for it keeps sharing the default client, and one whose client cannot be built
+runs on the default client rather than falling back to the default model. A persona's own
 `temperature`, when set, overrides whatever the resolved model would otherwise use. Resolved
 providers are cached per run (per node) so repeated nodes on the same ref don't rebuild one.
 A node's agent turn runs under the context window of the model it resolved to, taken from the
 same preset as its provider (the default preset, a named preset, a pair or a plain model name)
 and capped by the fallback models' windows, as the chat's is
-(`AgentNodeRunner._node_context_window`). That gives it the runner's input budget: the mid-turn
+(`AgentNodeRunner._node_context_window`). A preset that sets no window or output cap gets its
+model's own — the provider's `models` entry, then the catalog, then `agents.defaults` — for
+both the window and the `max_tokens` its provider sends (see
+[providers.md](providers.md#41-preset-resolution)). That gives it the runner's input budget: the mid-turn
 precheck, the pruning of old tool results near the limit, and a per-result cap that follows the
 window. A node with the file tools (`tools: default`) also carries its workspace (its private copy
 when writing in parallel) and session key, so an oversized or pruned result is saved where its own

@@ -36,8 +36,9 @@ def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str, int] 
     The window is the aux model's own (capped by its fallbacks' windows, as
     the main loop's snapshot is), so the child's budget follows the model it
     actually runs on rather than the parent's. An inline pair resolves the
-    way the picker's ``provider model`` ref does: the user's per-model entry,
-    then the catalog, then the schema default.
+    way the picker's ``provider model`` ref does, under the provider the
+    model routes to (``"auto"`` included): the user's per-model entry, then
+    the catalog, then ``agents.defaults``.
     """
     if app_config is None:
         return None

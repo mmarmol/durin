@@ -484,6 +484,7 @@
     "config": {
       "description": "Cada configuración de durin, agrupada por sección. Editar un valor lo escribe directamente al config — igual que durin config set. Las listas y secrets gestionados son de solo lectura aquí.",
       "empty": "No hay configuraciones en esta sección.",
+      "unset": "sin definir",
       "loadError": "No se pudo cargar la configuración.",
       "managed": "Secret gestionado",
       "off": "Desactivado",

@@ -132,9 +132,27 @@ the retry wrappers. The event carries the provider's
 config-registry name (stamped as `provider_key` by the factory), the model,
 prompt/cached/completion token counts, `duration_ms`, the final
 `finish_reason`, and `purpose` — the universal "who spent the tokens" record;
-`cache.usage` remains the agent-loop-only cache-ratio view. Sink resolution:
+`cache.usage` remains the agent-loop-only cache-ratio view. When a fallback
+model produced the response, the row names the fallback's provider and model
+and the `max_tokens` it was sent, not the primary's the request started with.
+Sink resolution:
 the ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
+
+The row also says what limits the call ran under, so a run squeezed by a wrong
+window or output cap is visible from telemetry alone. `max_tokens` is the output
+cap the request asked for — the agent runner's dynamic value (the model's cap
+clamped to the room the prompt leaves in the window), a caller's explicit value,
+or the provider's own default; the aux bridges pass theirs to
+`emit_call_telemetry`. `context_window_tokens` and `input_budget_tokens` are the
+window and input budget (window minus the capped output reservation and safety
+buffer, or `context_block_limit`) of the agent run the call belongs to. They come
+from a ContextVar the runner binds (`bind_call_limits`) around each of its own
+requests and nothing else — a tool that calls another model during the run, or a
+subagent it spawns, is not held to the run's limits and its rows omit them. A
+workflow node binds its run's limits the same way around its verdict, delivery
+and re-entry calls. Calls outside a run (memory, judge, compaction, the aux
+bridges, personas) carry `max_tokens` only.
 
 `purpose` says on whose behalf the call was made, so a session's spend splits
 by caller without bracketing rows between other events by timestamp. It is a
@@ -351,6 +369,17 @@ Check categories and representative checks:
 - **models** — every configured specific-model knob (`skills.security.llm_judge`,
   `memory.dream.model_override`, `agents.aux_models.*`) resolves to a servable
   `(provider, model)`; an unservable knob silently falls back to the default preset.
+  "model limits" lists every configured window and output cap (a
+  `providers.<p>.models` entry, a named preset, an inline fallback) that differs
+  from the model's catalog limits: above warns (the run caps it to the catalog
+  value) and the fix gives the `durin config set <path> null` that unsets each
+  one, below is listed without warning (a deliberate cost cap is legitimate,
+  a forgotten one shrinks every run on that model). It also warns about an
+  `agents.defaults` window or output cap, set to something other than the
+  schema default, that the default model does not run with (its entry or real
+  limits come first, so the cap does nothing), and notes the fallback that caps
+  the chat window and any fallback with no known window (it cannot lower the
+  chat window, so a failover to it may get a prompt larger than it accepts).
 - **tools** — external tool binaries durin relies on (e.g. `git`) resolve on `PATH`.
 - **channels** — channel runtime dependencies are present (e.g. the WhatsApp
   bridge binary is cached).
@@ -492,7 +521,10 @@ durin status
 ```
 
 `durin status` shows a factual snapshot (model, providers, channels, gateway,
-memory, config) without health judgement. `durin doctor` runs the full check
+memory, config) without health judgement. Its model row carries the context window
+the chat runs with — the active preset's model's, capped by the fallback models'
+known windows — the same value the agent loop uses, and names the fallback that
+caps it when one does. `durin doctor` runs the full check
 battery with exit-code semantics. The two surfaces are deliberately distinct.
 
 ### WebUI

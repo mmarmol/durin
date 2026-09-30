@@ -206,6 +206,7 @@
       "off": "Désactivé",
       "managed": "Secret géré",
       "empty": "Aucun paramètre dans cette section.",
+      "unset": "non défini",
       "secretRotate": "Changer la valeur",
       "secretRotateHint": "Écrit une nouvelle valeur dans le secret stocké. Toutes les références de config vers ce nom l’utiliseront.",
       "secretDisconnect": "Déconnecter",

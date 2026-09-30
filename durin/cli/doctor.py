@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1002,6 +1003,174 @@ def check_specific_models() -> CheckResult:
     return CheckResult("specific models", "ok", detail, category="models")
 
 
+def _configured_model_limits(cfg) -> list[tuple[str, str, str, int | None, int | None]]:
+    """Every window / output cap set in the config, as ``(where, provider,
+    model, context_window_tokens, max_tokens)``: each ``providers.<p>.models``
+    entry, each named preset and each inline fallback that sets one. ``where``
+    is the config path of the setting; ``provider`` is the registry name the
+    run goes to (``"auto"`` routed, an alias spelling normalized), since that
+    is the catalog the runtime caps against. A preset or fallback whose model
+    no configured provider serves has no catalog row to compare with and is
+    left out."""
+    from durin.cli.config_cmd import _render_path
+
+    out: list[tuple[str, str, str, int | None, int | None]] = []
+    for provider in type(cfg.providers).model_fields:
+        models = getattr(getattr(cfg.providers, provider, None), "models", None) or {}
+        for model, entry in models.items():
+            if entry.context_window_tokens is not None or entry.max_tokens is not None:
+                where = _render_path([("providers", False), (provider, False), ("models", False), (model, True)])
+                out.append((where, provider, model, entry.context_window_tokens, entry.max_tokens))
+    for name, preset in cfg.model_presets.items():
+        if preset.context_window_tokens is None and preset.max_tokens is None:
+            continue
+        provider = cfg.routed_provider(preset.provider, preset.model)
+        if provider != "auto":
+            where = _render_path([("model_presets", False), (name, True)])
+            out.append((where, provider, preset.model, preset.context_window_tokens, preset.max_tokens))
+    for index, fallback in enumerate(cfg.agents.defaults.fallback_models):
+        if isinstance(fallback, str):
+            continue
+        if fallback.context_window_tokens is None and fallback.max_tokens is None:
+            continue
+        provider = cfg.routed_provider(fallback.provider, fallback.model)
+        if provider != "auto":
+            where = f"agents.defaults.fallback_models.{index}"
+            out.append((where, provider, fallback.model, fallback.context_window_tokens, fallback.max_tokens))
+    return out
+
+
+def _chat_window_notes(cfg) -> list[str]:
+    """What sets the chat's window besides its own model: the fallback that
+    lowers it, and any fallback whose window is unknown (it cannot lower the
+    window, so a failover to it may get a prompt larger than it accepts)."""
+    from durin.providers.factory import _resolve_fallbacks, preset_window_cap
+
+    notes: list[str] = []
+    try:
+        resolved = cfg.resolve_preset_limits(cfg.resolve_preset())
+        window, capping = preset_window_cap(cfg, resolved)
+        fallbacks = _resolve_fallbacks(cfg, resolved)
+    except Exception:  # noqa: BLE001 - an unresolvable preset is reported by "default model"
+        return notes
+    if capping is not None:
+        notes.append(
+            f"chat window {window:,}: capped by fallback {capping.label} "
+            f"({capping.provider}/{capping.model}); {resolved.model}'s own is "
+            f"{resolved.context_window_tokens:,}")
+    for fallback in fallbacks:
+        if not fallback.window_known:
+            provider = cfg.routed_provider(fallback.preset.provider, fallback.preset.model)
+            notes.append(
+                f"{fallback.label}: {provider}/{fallback.preset.model} has no known window, "
+                "so it does not lower the chat window; set its context_window_tokens if it "
+                "accepts less than the chat sends")
+    return notes
+
+
+def _unused_default_caps(cfg) -> tuple[list[str], list[str]]:
+    """An ``agents.defaults`` window or output cap set on purpose that the
+    default model does not run with, as ``(lines, fixes)``.
+
+    ``agents.defaults`` only serves a model that nothing else describes; a
+    catalog model takes its entry or its real limits first. A cost cap
+    written there for such a model therefore does nothing — and one that an
+    earlier release applied (it copied ``agents.defaults`` into the default
+    model's entry on load) stops applying on upgrade. A value equal to the
+    schema default is left alone: an old full-dump config holds those
+    without anyone having chosen them."""
+    from durin.cli.config_cmd import _render_path
+    from durin.config.schema import AgentDefaults
+
+    d = cfg.agents.defaults
+    try:
+        resolved = cfg.resolve_default_preset()
+        provider = cfg.routed_provider(d.provider, d.model)
+    except Exception:  # noqa: BLE001 - an unresolvable default is reported by "default model"
+        return [], []
+    lines: list[str] = []
+    fixes: list[str] = []
+    for name, label in (("context_window_tokens", "context window"), ("max_tokens", "output cap")):
+        value = getattr(d, name)
+        if name not in d.model_fields_set or value == AgentDefaults.model_fields[name].default:
+            continue
+        used = getattr(resolved, name)
+        if used == value:
+            continue
+        lines.append(
+            f"agents.defaults.{name}: {label} {value:,} is not what {provider}/{d.model} runs "
+            f"with ({used:,}, from its entry or real limits); agents.defaults only serves "
+            "models nothing else describes")
+        entry_path = _render_path([
+            ("providers", False), (provider, False), ("models", False), (d.model, True), (name, False),
+        ])
+        fixes.append(
+            f"To cap {provider}/{d.model} at {value:,}: `durin config set '{entry_path}' {value}`; "
+            f"to drop the cap instead: `durin config set agents.defaults.{name} "
+            f"{AgentDefaults.model_fields[name].default}`")
+    return lines, fixes
+
+
+def check_model_limits() -> CheckResult:
+    """Every configured window and output cap against the model's real
+    limits — a ``model_capabilities`` override, else the catalog — the same
+    reference the runtime caps against.
+
+    A value above the real one warns: the run caps it, but the config claims
+    a window the provider does not accept (and a stale value there tends to
+    be copied to the next model). So does an ``agents.defaults`` cap the
+    default model does not run with (``_unused_default_caps``). A value
+    below is listed as information only — a smaller window or output cap is
+    a legitimate way to bound cost, but a forgotten one silently shrinks
+    every run on that model."""
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("model limits", "warn", "Could not load config.", category="models")
+    above: list[str] = []
+    unset: list[str] = []
+    below: list[str] = []
+    for where, provider, model, window, max_tokens in _configured_model_limits(cfg):
+        try:
+            real_window, real_output = cfg.model_real_limits(provider, model)
+        except Exception:  # noqa: BLE001 - an unreadable catalog row compares with nothing
+            continue
+        for name, label, value, real in (
+            ("context_window_tokens", "context window", window, real_window),
+            ("max_tokens", "output cap", max_tokens, real_output),
+        ):
+            if value is None or not real or value == real:
+                continue
+            if value > real:
+                above.append(
+                    f"{where}: {label} {value:,} is above {provider}/{model}'s {real:,} "
+                    "(capped to it at runtime)")
+                unset.append(f"`durin config set {shlex.quote(f'{where}.{name}')} null`")
+            else:
+                below.append(
+                    f"{where}: {label} {value:,} is below {provider}/{model}'s {real:,} "
+                    "(a deliberate cap?)")
+    below.extend(_chat_window_notes(cfg))
+    unused, unused_fixes = _unused_default_caps(cfg)
+    detail = "; ".join(above + unused + below)
+    if above or unused:
+        fixes = list(unused_fixes)
+        if above:
+            fixes.insert(0, (
+                "Unset each value above so the model's own limit applies (or lower it to "
+                "that limit): " + ", ".join(unset)))
+        return CheckResult(
+            "model limits", "warn", detail, fix=". ".join(fixes) + ".", category="models",
+        )
+    if below:
+        return CheckResult("model limits", "ok", detail, category="models")
+    return CheckResult(
+        "model limits", "ok",
+        "every configured window and output cap is within the catalog's",
+        category="models",
+    )
+
+
 def check_embedding_model() -> CheckResult:
     """Validate ``config.memory.embedding.model`` against fastembed's catalog.
 
@@ -1632,6 +1801,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         pass
     report.add(check_extras_drift())
     report.add(check_specific_models())
+    report.add(check_model_limits())
     report.add(check_embedding_model())
     # Smoke-test the configured models actually load + work. Goes beyond
     # `check_embedding_model` which only validates the id against the catalog.

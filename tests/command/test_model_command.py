@@ -143,7 +143,8 @@ async def test_model_command_bare_name_resolves_from_catalog(tmp_path, monkeypat
     assert "Could not switch" not in out.content
     assert "Unknown model" not in out.content
     assert captured["preset"].provider == "zai_coding_plan"  # catalog, not codex
-    assert captured["preset"].context_window_tokens == 200_000  # caps applied
+    # caps applied where the preset becomes a run (the loader resolves it)
+    assert app_config.resolve_preset_limits(captured["preset"]).context_window_tokens == 200_000
 
 
 @pytest.mark.asyncio
@@ -365,7 +366,7 @@ async def test_model_command_bare_custom_resolves_from_config(tmp_path, monkeypa
     out = await cmd_model(_ctx(loop, "/model glm-custom", args="glm-custom"))
     assert "Unknown model" not in out.content
     assert captured["preset"].provider == "zai_coding_plan"
-    assert captured["preset"].context_window_tokens == 123456
+    assert app_config.resolve_preset_limits(captured["preset"]).context_window_tokens == 123456
 
 
 def _gateway_loop(tmp_path, disk: dict) -> AgentLoop:

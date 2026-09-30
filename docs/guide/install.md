@@ -244,6 +244,13 @@ durin config set providers.zhipu.api_key sk-...
 durin config set model_presets.fast.model glm-5-turbo
 ```
 
+A key that contains dots, such as the model name `glm-5.3`, goes in quoted
+brackets so its dots do not split it:
+
+```bash
+durin config set 'providers.zai_coding_plan.models["glm-5.3"].max_tokens' 32000
+```
+
 Values that look like JSON (`true`, `false`, `null`, integers, floats,
 arrays, objects) are decoded automatically; otherwise the literal string
 is stored.

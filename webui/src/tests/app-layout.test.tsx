@@ -484,7 +484,7 @@ describe("App layout", () => {
             status: 200,
             json: async () => ({
               config: { voice: { enabled: true }, tts: { provider: "openai" } },
-              schema: {},
+              json_schema: {},
             }),
           };
         }

@@ -261,7 +261,9 @@ class LLMProvider(ABC):
         self._telemetry = telemetry
 
     def emit_call_telemetry(self, *, model: Any, response: LLMResponse,
-                            duration_ms: float, purpose: str | None = None) -> None:
+                            duration_ms: float, purpose: str | None = None,
+                            max_tokens: int | None = None,
+                            provider: str | None = None) -> None:
         """Log one ``provider.call`` event for a completed round-trip.
 
         Sink resolution: the ContextVar-bound session logger wins (bound per
@@ -269,10 +271,18 @@ class LLMProvider(ABC):
         ``set_telemetry()``. No sink → the event is dropped. ``purpose`` names
         what the call was for; a caller that knows better passes it, otherwise
         the purpose bound to the current task is used, and ``unknown`` says no
-        one named it. Telemetry must never break the call, so everything is
+        one named it. ``max_tokens`` is the output cap the request sent;
+        ``provider`` names the provider that answered when it is not this one
+        (a failover). The context window and input budget of the run the call
+        belongs to come from the limits bound to the current task, when a run
+        bound them. Telemetry must never break the call, so everything is
         exception-suppressed."""
         with suppress(Exception):
-            from durin.telemetry.logger import current_call_purpose, current_telemetry
+            from durin.telemetry.logger import (
+                current_call_limits,
+                current_call_purpose,
+                current_telemetry,
+            )
 
             sink = current_telemetry() or getattr(self, "_telemetry", None)
             if sink is None or not hasattr(sink, "log"):
@@ -281,8 +291,8 @@ class LLMProvider(ABC):
             if not resolved_model:
                 resolved_model = self.get_default_model()
             usage = getattr(response, "usage", None) or {}
-            sink.log("provider.call", {
-                "provider": self.provider_key or type(self).__name__,
+            event: dict[str, Any] = {
+                "provider": provider or self.provider_key or type(self).__name__,
                 "model": str(resolved_model or ""),
                 "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
                 "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
@@ -290,7 +300,11 @@ class LLMProvider(ABC):
                 "duration_ms": round(float(duration_ms), 1),
                 "finish_reason": getattr(response, "finish_reason", "stop"),
                 "purpose": purpose or current_call_purpose() or "unknown",
-            })
+            }
+            if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+                event["max_tokens"] = max_tokens
+            event.update(current_call_limits() or {})
+            sink.log("provider.call", event)
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -935,6 +949,7 @@ class LLMProvider(ABC):
         self.emit_call_telemetry(
             model=kw.get("model"), response=response,
             duration_ms=(time.monotonic() - started) * 1000.0,
+            max_tokens=kw.get("max_tokens"),
         )
         return response
 

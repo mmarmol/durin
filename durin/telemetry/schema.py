@@ -298,7 +298,17 @@ class ProviderCallEvent(TypedDict):
     call was for — ``chat``, ``cron``, ``automation``, ``compaction``,
     ``subagent``, ``dream``, ``judge``, ``workflow``, ``vision``, ``audio``,
     ``memory_health``, ``memory_index``, ``gateway`` — as bound by the
-    subsystem that made it, or ``unknown`` when none named itself."""
+    subsystem that made it, or ``unknown`` when none named itself.
+
+    ``max_tokens`` is the output cap the request asked for: the agent
+    runner's dynamic value (the model's cap clamped to the room the prompt
+    leaves in the window), a caller's explicit value, or the provider's own
+    default. A call made by an agent run — or by a workflow node for its
+    verdict / delivery — also records the run's ``context_window_tokens``
+    and ``input_budget_tokens`` (the window minus the capped output
+    reservation and safety buffer, or ``context_block_limit`` when set);
+    calls outside a run (memory, judge, compaction, the aux bridges) carry
+    neither."""
     provider: str
     model: str
     prompt_tokens: int
@@ -307,6 +317,9 @@ class ProviderCallEvent(TypedDict):
     duration_ms: float
     finish_reason: str
     purpose: str
+    max_tokens: NotRequired[int]
+    context_window_tokens: NotRequired[int]
+    input_budget_tokens: NotRequired[int]
 
 
 # ===========================================================================

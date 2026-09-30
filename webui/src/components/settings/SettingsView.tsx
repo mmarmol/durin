@@ -801,8 +801,11 @@ function modelCapsSummary(
   const parts = [t("settings.models.capsText")];
   parts.push(`${t("settings.models.capsVision")} ${caps.supports_vision ? "✓" : "✗"}`);
   parts.push(`${t("settings.models.capsAudio")} ${caps.supports_audio_input ? "✓" : "✗"}`);
-  if (caps.max_input_tokens && caps.max_input_tokens > 0) {
-    const k = Math.round(caps.max_input_tokens / 1000);
+  // The window runs on this model get (a lower per-model setting included),
+  // not only the model's own limit.
+  const ctxWindow = caps.context_window_tokens ?? caps.max_input_tokens;
+  if (ctxWindow && ctxWindow > 0) {
+    const k = Math.round(ctxWindow / 1000);
     parts.push(t("settings.models.capsContext", { tokens: `${k}K` }));
   }
   return parts.join(" · ");
