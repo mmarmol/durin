@@ -122,6 +122,23 @@ def test_the_window_follows_the_active_preset_and_the_fallbacks(
     assert _status_data(config, _config_path(fake_home), None)["model"]["context_window_tokens"] == 100_000
 
 
+def test_the_model_row_names_the_fallback_that_caps_the_window(
+    config: Config, fake_home: Path, glm_catalog: None,
+) -> None:
+    from durin.config.schema import ModelPresetConfig
+
+    _on_glm(config)
+    config.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")
+    config.agents.defaults.fallback_models = ["turbo"]
+    data = _status_data(config, _config_path(fake_home), None)
+    assert data["model"]["window_capped_by"] == "turbo (zai_coding_plan/glm-5-turbo)"
+    row = dict(_status_sections(config, _config_path(fake_home), None))["Model"]
+    assert "200,000 ctx" in row
+    assert "capped by fallback turbo (zai_coding_plan/glm-5-turbo)" in row
+    config.agents.defaults.fallback_models = []
+    assert _status_data(config, _config_path(fake_home), None)["model"]["window_capped_by"] is None
+
+
 def test_channels_overlay_runtime_state(config: Config, fake_home: Path) -> None:
     runtime = {
         "url": "http://127.0.0.1:8765/",

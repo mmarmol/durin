@@ -251,8 +251,14 @@ skipped when content has already started streaming. A circuit breaker trips the 
 after three consecutive failures and gates it for 60 seconds before retrying.
 
 Each fallback preset carries its own model's limits (§4.1), and the run's window is
-the smallest of the primary's and every fallback's (`preset_context_window`), so the
-prompt fits whichever model serves it. A failover request sends the fallback's model,
+the smallest of the primary's and every fallback's known window
+(`preset_context_window`), so the prompt fits whichever model serves it. A window is
+known when it is set on the fallback, on its model's entry or in the catalog; one
+that would only be `agents.defaults`' guess (a local or custom model nothing
+describes) does not lower the run's window, since that guess would cut a known
+1M window to 65,536 on no evidence — declare such a fallback's window if it is
+smaller. `preset_window_cap` returns the window with the fallback that sets it
+(`CappingFallback`), which `durin status` and `durin doctor` name. A failover request sends the fallback's model,
 temperature and reasoning effort, and as `max_tokens` the fallback's own output cap or
 the request's, whichever is smaller: the runner sized the request's cap to the room its
 prompt leaves in that shared window, and a fallback with a larger output limit must not

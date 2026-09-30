@@ -370,7 +370,10 @@ Check categories and representative checks:
   `providers.<p>.models` entry, a named preset, an inline fallback) that differs
   from the model's catalog limits: above warns (the run caps it to the catalog
   value), below is listed without warning (a deliberate cost cap is legitimate,
-  a forgotten one shrinks every run on that model).
+  a forgotten one shrinks every run on that model). It also notes the fallback
+  that caps the chat window, and any fallback with no known window (it cannot
+  lower the chat window, so a failover to it may get a prompt larger than it
+  accepts).
 - **tools** — external tool binaries durin relies on (e.g. `git`) resolve on `PATH`.
 - **channels** — channel runtime dependencies are present (e.g. the WhatsApp
   bridge binary is cached).
@@ -513,8 +516,9 @@ durin status
 
 `durin status` shows a factual snapshot (model, providers, channels, gateway,
 memory, config) without health judgement. Its model row carries the context window
-the chat runs with — the active preset's model's, capped by the fallback models' —
-the same value the agent loop uses. `durin doctor` runs the full check
+the chat runs with — the active preset's model's, capped by the fallback models'
+known windows — the same value the agent loop uses, and names the fallback that
+caps it when one does. `durin doctor` runs the full check
 battery with exit-code semantics. The two surfaces are deliberately distinct.
 
 ### WebUI

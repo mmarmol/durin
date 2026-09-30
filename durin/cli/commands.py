@@ -3070,7 +3070,7 @@ def _status_data(
     """Structured snapshot backing both the rendered rows and ``--json``."""
     from durin.cli.tui.startup import memory_summary
     from durin.config.loader import _is_split_layout
-    from durin.providers.factory import preset_context_window
+    from durin.providers.factory import preset_window_cap
     from durin.providers.registry import PROVIDERS
     from durin.utils.oauth import any_token_present
 
@@ -3079,14 +3079,19 @@ def _status_data(
     # --- Model -------------------------------------------------------
     model, preset_tag = _model_display(config)
     d = config.agents.defaults
+    # The window the chat runs with: the active preset's model's (entry,
+    # catalog, then agents.defaults), capped by the fallback models' — the
+    # value the agent loop's provider snapshot uses — and the fallback that
+    # caps it, when one does.
+    window, capping = preset_window_cap(config, config.resolve_preset())
     data["model"] = {
         "model": model,
         "preset_tag": preset_tag,
         "provider": d.provider,
-        # The window the chat runs with: the active preset's model's (entry,
-        # catalog, then agents.defaults), capped by the fallback models' —
-        # the value the agent loop's provider snapshot uses.
-        "context_window_tokens": preset_context_window(config, config.resolve_preset()),
+        "context_window_tokens": window,
+        "window_capped_by": (
+            f"{capping.label} ({capping.provider}/{capping.model})" if capping else None
+        ),
     }
     aux = getattr(config.agents, "aux_models", None)
     aux_map: dict[str, str] = {}
@@ -3235,6 +3240,8 @@ def _status_sections(
     # --- Model -------------------------------------------------------
     m = data["model"]
     ctx = f"{m['context_window_tokens']:,} ctx" if m["context_window_tokens"] else ""
+    if ctx and m.get("window_capped_by"):
+        ctx += f" (capped by fallback {m['window_capped_by']})"
     model_line = " · ".join(
         p for p in (f"{m['model']}{m['preset_tag']}", m["provider"], ctx) if p
     )

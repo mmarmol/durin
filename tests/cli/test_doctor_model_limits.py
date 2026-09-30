@@ -104,6 +104,32 @@ def test_a_preset_is_checked_against_the_provider_it_runs_on(provider: str) -> N
     assert "231,072" in r.message and "200,000" in r.message
 
 
+def test_the_fallback_that_caps_the_chat_window_is_named() -> None:
+    cfg = _cfg()
+    cfg.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")
+    cfg.agents.defaults.fallback_models = ["turbo"]
+    r = _run(cfg)
+    assert r.status == "ok"
+    assert "chat window 200,000" in r.message
+    assert "capped by fallback turbo (zai_coding_plan/glm-5-turbo)" in r.message
+    assert "1,000,000" in r.message
+
+
+def test_a_fallback_with_no_known_window_is_listed() -> None:
+    """It does not lower the chat window, so a prompt bigger than its real
+    window would fail over into an error; declaring its window fixes that."""
+    cfg = _cfg()
+    cfg.providers.ollama.api_base = "http://127.0.0.1:9/v1"
+    cfg.agents.defaults.fallback_models = [
+        InlineFallbackConfig(model="qwen3-coder:30b", provider="ollama"),
+    ]
+    r = _run(cfg)
+    assert r.status == "ok"
+    assert "agents.defaults.fallback_models.0" in r.message
+    assert "ollama/qwen3-coder:30b" in r.message
+    assert "no known window" in r.message
+
+
 def test_an_inline_fallback_with_its_own_limits_is_checked() -> None:
     cfg = _cfg()
     cfg.agents.defaults.fallback_models = [

@@ -395,6 +395,52 @@ def test_a_local_models_limits_never_ask_its_server(monkeypatch) -> None:
     assert calls == []
 
 
+def _with_local_fallback(**fields) -> Config:
+    """glm-5.3 (a 1M window in the catalog) with one inline fallback on a
+    local model the catalog does not know; agents.defaults left alone."""
+    cfg = _config()
+    cfg.providers.zai_coding_plan.api_key = "sk-test"
+    cfg.providers.ollama.api_base = "http://127.0.0.1:9/v1"
+    cfg.agents.defaults.fallback_models = [
+        InlineFallbackConfig(model="qwen3-coder:30b", provider="ollama", **fields),
+    ]
+    return cfg
+
+
+def test_an_unknown_fallback_window_does_not_shrink_a_known_one() -> None:
+    """The fallback's window would only be agents.defaults' guess (65,536):
+    it must not cut the chat's known 1M window to that."""
+    from durin.providers.factory import build_provider_snapshot, preset_window_cap
+
+    cfg = _with_local_fallback()
+    assert build_provider_snapshot(cfg).context_window_tokens == 1_000_000
+    assert preset_window_cap(cfg, cfg.resolve_default_preset()) == (1_000_000, None)
+
+
+def test_a_fallback_whose_window_is_declared_still_caps_the_chat_window() -> None:
+    from durin.providers.factory import build_provider_snapshot, preset_window_cap
+
+    cfg = _with_local_fallback(context_window_tokens=32_768)
+    assert build_provider_snapshot(cfg).context_window_tokens == 32_768
+    window, capping = preset_window_cap(cfg, cfg.resolve_default_preset())
+    assert window == 32_768
+    assert capping is not None and capping.label == "agents.defaults.fallback_models.0"
+    assert (capping.provider, capping.model) == ("ollama", "qwen3-coder:30b")
+    cfg = _with_local_fallback()
+    cfg.providers.ollama.models["qwen3-coder:30b"] = ModelEntry(context_window_tokens=16_384)
+    assert build_provider_snapshot(cfg).context_window_tokens == 16_384
+
+
+def test_a_named_fallback_that_caps_the_window_is_named() -> None:
+    from durin.providers.factory import preset_window_cap
+
+    cfg = _routed_config(turbo=ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan"))
+    cfg.agents.defaults.fallback_models = ["turbo"]
+    window, capping = preset_window_cap(cfg, cfg.resolve_default_preset())
+    assert window == 200_000
+    assert capping is not None and capping.label == "turbo"
+
+
 def test_routed_provider_names_the_registry_key_a_run_goes_to() -> None:
     cfg = _routed_config()
     assert cfg.routed_provider("auto", "glm-5-turbo") == "zai_coding_plan"

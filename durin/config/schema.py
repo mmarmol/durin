@@ -1716,26 +1716,29 @@ class Config(BaseSettings):
         *,
         context_window_tokens: int | None = None,
         max_tokens: int | None = None,
-    ) -> tuple[int, int]:
-        """``(context_window_tokens, max_tokens)`` for a run of *model* on
-        *provider* (the routed registry name, see ``routed_provider``), given
-        its ``(entry, caps)`` from ``_resolve_model_params``.
+    ) -> tuple[int, int, bool]:
+        """``(context_window_tokens, max_tokens, window_known)`` for a run of
+        *model* on *provider* (the routed registry name, see
+        ``routed_provider``), given its ``(entry, caps)`` from
+        ``_resolve_model_params``.
 
         A value passed in (a preset's own) wins; an unset one comes from the
         user's ``providers.<provider>.models`` entry, then the catalog, then
         ``agents.defaults``. A value above the catalog's is capped to it
         (``_capped_limit``). A model no provider serves has no entry or
         catalog row, so an unset value comes from ``agents.defaults``.
+        ``window_known`` says the window was set on the preset, on the entry
+        or in the catalog, not guessed from ``agents.defaults``.
         """
         d = self.agents.defaults
         real_ctx = caps.max_input_tokens if caps and caps.max_input_tokens else None
         real_out = caps.max_output_tokens if caps and caps.max_output_tokens else None
-        ctx = next(v for v in (
+        known_ctx = [v for v in (
             context_window_tokens,
             entry.context_window_tokens if entry else None,
             real_ctx,
-            d.context_window_tokens,
-        ) if v is not None)
+        ) if v is not None]
+        ctx = known_ctx[0] if known_ctx else d.context_window_tokens
         mt = next(v for v in (
             max_tokens,
             entry.max_tokens if entry else None,
@@ -1745,6 +1748,7 @@ class Config(BaseSettings):
         return (
             _capped_limit(ctx, real_ctx, field="context_window_tokens", provider=provider, model=model),
             _capped_limit(mt, real_out, field="max_tokens", provider=provider, model=model),
+            bool(known_ctx),
         )
 
     def resolve_preset_limits(self, preset: ModelPresetConfig) -> ModelPresetConfig:
@@ -1756,16 +1760,22 @@ class Config(BaseSettings):
         preset is never modified, so a resolved value is never written back
         to the config file.
         """
+        return self.resolve_limits(preset)[0]
+
+    def resolve_limits(self, preset: ModelPresetConfig) -> tuple[ModelPresetConfig, bool]:
+        """``resolve_preset_limits(preset)`` and whether its window is known
+        (set on the preset, the model's entry or the catalog) rather than
+        agents.defaults' guess for a model nothing describes."""
         provider = self.routed_provider(preset.provider, preset.model)
         entry, caps = self._resolve_model_params(provider, preset.model)
-        ctx, mt = self._model_limits(
+        ctx, mt, known = self._model_limits(
             provider, preset.model, entry, caps,
             context_window_tokens=preset.context_window_tokens,
             max_tokens=preset.max_tokens,
         )
         if ctx == preset.context_window_tokens and mt == preset.max_tokens:
-            return preset
-        return preset.model_copy(update={"context_window_tokens": ctx, "max_tokens": mt})
+            return preset, known
+        return preset.model_copy(update={"context_window_tokens": ctx, "max_tokens": mt}), known
 
     def routed_provider(self, provider: str, model: str) -> str:
         """The provider registry name a run of *model* on *provider* goes
@@ -1787,7 +1797,7 @@ class Config(BaseSettings):
         d = self.agents.defaults
         provider = self.routed_provider(d.provider, d.model)
         entry, caps = self._resolve_model_params(provider, d.model)
-        ctx, mt = self._model_limits(provider, d.model, entry, caps)
+        ctx, mt, _known = self._model_limits(provider, d.model, entry, caps)
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None

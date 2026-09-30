@@ -1039,6 +1039,34 @@ def _configured_model_limits(cfg) -> list[tuple[str, str, str, int | None, int |
     return out
 
 
+def _chat_window_notes(cfg) -> list[str]:
+    """What sets the chat's window besides its own model: the fallback that
+    lowers it, and any fallback whose window is unknown (it cannot lower the
+    window, so a failover to it may get a prompt larger than it accepts)."""
+    from durin.providers.factory import _resolve_fallbacks, preset_window_cap
+
+    notes: list[str] = []
+    try:
+        resolved = cfg.resolve_preset_limits(cfg.resolve_preset())
+        window, capping = preset_window_cap(cfg, resolved)
+        fallbacks = _resolve_fallbacks(cfg, resolved)
+    except Exception:  # noqa: BLE001 - an unresolvable preset is reported by "default model"
+        return notes
+    if capping is not None:
+        notes.append(
+            f"chat window {window:,}: capped by fallback {capping.label} "
+            f"({capping.provider}/{capping.model}); {resolved.model}'s own is "
+            f"{resolved.context_window_tokens:,}")
+    for fallback in fallbacks:
+        if not fallback.window_known:
+            provider = cfg.routed_provider(fallback.preset.provider, fallback.preset.model)
+            notes.append(
+                f"{fallback.label}: {provider}/{fallback.preset.model} has no known window, "
+                "so it does not lower the chat window; set its context_window_tokens if it "
+                "accepts less than the chat sends")
+    return notes
+
+
 def check_model_limits() -> CheckResult:
     """Every configured window and output cap against the model's catalog
     limits.
@@ -1078,6 +1106,7 @@ def check_model_limits() -> CheckResult:
                 below.append(
                     f"{where}: {label} {value:,} is below {provider}/{model}'s {real:,} "
                     "(a deliberate cap?)")
+    below.extend(_chat_window_notes(cfg))
     detail = "; ".join(above + below)
     if above:
         return CheckResult(
