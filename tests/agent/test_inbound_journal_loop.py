@@ -58,9 +58,9 @@ async def test_drain_at_shutdown_journals_bus_and_pending_queue_messages(tmp_pat
 
 @pytest.mark.asyncio
 async def test_drain_at_shutdown_cancels_the_turn_in_flight_first(tmp_path: Path) -> None:
-    """The turn's own ``finally`` is what moves its pending queue to the bus;
-    the drain must cancel and await the turn so that hand-off happens before
-    the bus is read."""
+    """The drain cancels and awaits the turn in flight, and journals the
+    follow-up queued behind it exactly once: it takes the queue itself, so the
+    turn's ``finally`` has nothing left to put back on the bus."""
     loop, bus = _make_loop(tmp_path)
     turn_started = asyncio.Event()
     release = asyncio.Event()
@@ -148,6 +148,98 @@ async def test_run_replays_the_journal_before_consuming(tmp_path: Path) -> None:
         runner.cancel()
         with pytest.raises(asyncio.CancelledError):
             await runner
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_intake_starts_no_turn_and_leaves_new_messages_for_the_journal(
+    tmp_path: Path,
+) -> None:
+    """A gateway stop lets uvicorn finish its exit before it cancels the loop,
+    and the consumer used to keep starting turns in that window. Once intake
+    stops the consumer ends at once, and a message arriving after that stays
+    on the bus, where the shutdown drain journals it for the next start."""
+    loop, bus = _make_loop(tmp_path)
+    seen: list[str] = []
+
+    async def fake_dispatch(msg, pending=None):
+        seen.append(msg.content)
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    loop._connect_mcp = _noop  # type: ignore[method-assign]
+    loop._warmup_memory_embedding = _noop  # type: ignore[method-assign]
+    runner = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(_msg("before the stop"))
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            if seen:
+                break
+        assert seen == ["before the stop"]
+
+        loop.stop_intake()
+        await bus.publish_inbound(_msg("during the stop"))
+        # Ends by itself, well inside the consumer's one-second poll.
+        await asyncio.wait_for(runner, 0.5)
+        assert bus.inbound_size == 1
+        await asyncio.sleep(0.01)  # a turn started by mistake would run now
+        assert seen == ["before the stop"]
+    finally:
+        if not runner.done():
+            runner.cancel()
+        loop.stop()
+
+    assert await loop.drain_inbound_for_shutdown() == 1
+    assert [m.content for m in loop._inbound_journal.drain()] == ["during the stop"]
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_during_the_stop_is_journaled_after_the_follow_up_queued_before_it(
+    tmp_path: Path,
+) -> None:
+    """Turn A runs, follow-up B waits behind it, the stop begins and C is sent
+    to the same session while uvicorn exits. The next start must answer A, B,
+    then C: C was sent last, and may even take B back ("never mind")."""
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+    started = asyncio.Event()
+
+    async def hanging_turn(*_args, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    loop._process_message = hanging_turn  # type: ignore[method-assign]
+    loop._connect_mcp = _noop  # type: ignore[method-assign]
+    loop._warmup_memory_embedding = _noop  # type: ignore[method-assign]
+    runner = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(_msg("A"))
+        await asyncio.wait_for(started.wait(), 5)
+        await bus.publish_inbound(_msg("B"))
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            queues = loop._pending_queues.get("telegram:c1")
+            if queues is not None and queues.deferred.qsize() == 1:
+                break
+        assert loop._pending_queues["telegram:c1"].deferred.qsize() == 1
+
+        loop.stop_intake()
+        await bus.publish_inbound(_msg("C"))
+        await asyncio.wait_for(runner, 0.5)
+    finally:
+        if not runner.done():
+            runner.cancel()
+        loop.stop()
+
+    assert await loop.drain_inbound_for_shutdown() == 3
+    assert [m.content for m in loop._inbound_journal.drain()] == ["A", "B", "C"]
 
 
 @pytest.mark.asyncio

@@ -305,6 +305,15 @@ def _answers_approvals(connection: Any) -> bool:
     return bool(getattr(connection, "answers_approvals", True))
 
 
+def _end_sse_stream(connection: Any) -> None:
+    """End *connection*'s stream when it is the API's SSE subscriber (it has
+    ``end_stream``). A WebSocket connection has none: uvicorn closes those
+    itself when the gateway stops."""
+    end = getattr(connection, "end_stream", None)
+    if end is not None:
+        end()
+
+
 def _parse_envelope(raw: str) -> dict[str, Any] | None:
     """Return a typed envelope dict if the frame is a new-style JSON envelope, else None.
 
@@ -658,6 +667,9 @@ class WebSocketChannel(BaseChannel):
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
         self._conn_default: dict[Any, str] = {}
+        # Set by end_sse_streams() at a gateway stop: an SSE watcher attaching
+        # after it gets an ended stream.
+        self._sse_streams_ended = False
         # Single-use tokens consumed at WebSocket handshake.
         self._issued_tokens: dict[str, float] = {}
         self._session_manager = session_manager
@@ -731,6 +743,8 @@ class WebSocketChannel(BaseChannel):
         """Idempotently subscribe *connection* to *chat_id*."""
         self._subs.setdefault(chat_id, set()).add(connection)
         self._conn_chats.setdefault(connection, set()).add(chat_id)
+        if self._sse_streams_ended:
+            _end_sse_stream(connection)
         # A reconnect re-subscribing within the grace window keeps the voice
         # session alive: cancel any pending teardown for this chat.
         task = self._voice_cleanup.pop(chat_id, None)
@@ -2215,6 +2229,20 @@ class WebSocketChannel(BaseChannel):
         task = asyncio.create_task(_decide())
         self._approval_tasks.add(task)
         task.add_done_callback(self._approval_tasks.discard)
+
+    def end_sse_streams(self) -> None:
+        """End every SSE watcher's stream, and each one attached from now on.
+
+        Called when the gateway stops, before uvicorn is asked to exit. An SSE
+        stream only ends when its client leaves, so uvicorn would wait out its
+        graceful timeout for it and then cancel it, logging an error. Ended
+        first, each stream sends what it holds and its response finishes. A
+        client that reconnects before uvicorn stops accepting gets an ended
+        stream too.
+        """
+        self._sse_streams_ended = True
+        for connection in list(self._conn_chats):
+            _end_sse_stream(connection)
 
     async def stop(self) -> None:
         if not self._running:

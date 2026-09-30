@@ -159,16 +159,22 @@ sequenceDiagram
 ### The consumer: `run()`
 
 `AgentLoop.run()` is one `while`-loop that consumes `bus.inbound`. On startup it
-connects configured MCP servers (lazily, once), warms the memory embedding
-model in the background, and puts back on the bus the messages the previous
-gateway journaled at shutdown (`sessions/.inbound_journal.jsonl`, see
-`_dispatch` below); they re-enter the queue directly, not through
-`publish_inbound`, because they already passed the authorizer and the
-automation interceptors once. Only after those steps does it ask the memory
-file watcher for its vector backfill, which builds the embedding provider and
-reads the whole vector table, so that work never competes with gateway startup
-(see [memory/02_indexing.md](memory/02_indexing.md)). For each message it
-decides the routing in order:
+connects configured MCP servers (lazily, once; the time it took is logged as a
+`Startup:` line), warms the memory embedding model in the background, and puts
+back on the bus the messages the previous gateway journaled at shutdown
+(`sessions/.inbound_journal.jsonl`, see `_dispatch` below); they re-enter the
+queue directly, not through `publish_inbound`, because they already passed the
+authorizer and the automation interceptors once. Only after it logs "Agent loop
+started" does it start the memory health-check thread built with the loop, and
+that thread's first check waits `_HEALTH_CHECK_FIRST_TICK_DELAY_S`: the first
+check scans the whole memory store at once, and in the gateway `run()` starts
+alongside the channels, uvicorn and the embedding warm-up, which the scan
+would slow down. A loop that never runs `run()` (a one-shot `process_direct`
+call) runs no health checks. At the same point it asks the memory file watcher
+for its vector backfill, which builds the embedding provider and reads the
+whole vector table, so that work never competes with gateway startup (see
+[memory/02_indexing.md](memory/02_indexing.md)). For each message it decides
+the routing in order:
 
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched
@@ -193,6 +199,14 @@ decides the routing in order:
 The effective session key (`_effective_session_key`) collapses to a single
 unified key when `unified_session` is enabled and the message carries no
 override.
+
+**Stopping intake.** `stop_intake()` ends the consumer: it stops taking
+messages at once (its current wait is ended rather than left to run out its
+one-second poll) and `run()` returns. The gateway calls it as soon as it is
+asked to stop, because it cancels the loop only after uvicorn has finished
+its own exit. A message arriving from then on stays on the bus for the
+shutdown drain (see `_dispatch` below), and the turns already running carry
+on until that drain cancels them.
 
 ### Waiting on the user
 
@@ -316,17 +330,22 @@ to discard the follow-ups queued behind it. The gateway's shutdown now calls
 first, across every session key, before awaiting any of them — awaiting one
 would let the others run, and a turn whose own wait (an ask_user answer, an
 approval) gets cancelled by that window ends before the drain reaches it,
-losing its message instead of journaling it. It then waits once, for a
-bounded time, for all the cancelled turns to unwind together (so their
-`finally` hands their queues to the bus); a turn stuck past that bound is
-logged and left behind rather than charging the drain its own timeout again
-for every such turn. It collects what is on the bus plus any queue no task
-handed back, drops trigger-only messages (published for automation triggers,
-never a conversation), and writes the rest to
-`sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The message each
-cancelled turn was answering goes first (the loop keeps it per task from
-`_start_turn_task` until the task finishes), ahead of the follow-ups queued
-behind it. The next start replays the journal into the bus, in order, once —
+losing its message instead of journaling it. With each session's turns it
+takes that session's pending queues, before the turns are cancelled, so a
+turn's `finally` has nothing left to put back on the bus. It then waits once,
+for a bounded time, for all the cancelled turns to unwind together; a turn
+stuck past that bound is logged and left behind rather than charging the
+drain its own timeout again for every such turn. It collects what is on the
+bus plus any queue whose turn is no longer running, drops trigger-only
+messages (published for automation triggers, never a conversation), and
+writes the rest to `sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`).
+Per session the journal holds the message each cancelled turn was answering
+(the loop keeps it per task from `_start_turn_task` until the task finishes),
+then the follow-ups queued behind it, then what was still on the bus. A
+follow-up the turn's `finally` re-published would land behind a message sent
+after intake stopped, which waits on the bus, and the next start would answer
+the two out of order. The next start replays the journal into the bus, in
+order, once —
 a message older than a day at replay time is dropped with a log line rather
 than answered out of the blue. The interrupted turn therefore runs again
 after the restart. Its first attempt stays visible in the session: the user

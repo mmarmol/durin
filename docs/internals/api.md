@@ -254,7 +254,11 @@ the channel: frames wait in a per-subscriber buffer bounded by bytes
 (`SSE_BUFFER_LIMIT_BYTES`); when it is full, text previews (`delta`,
 `reasoning_delta`) are dropped first, and a state frame that still does not fit
 ends the stream with `lagged`. While idle the stream sends a `: keepalive`
-comment every `SSE_KEEPALIVE_S`.
+comment every `SSE_KEEPALIVE_S`. When the gateway stops, it ends every SSE
+stream before it asks uvicorn to exit (`WebSocketChannel.end_sse_streams`,
+which calls each subscriber's `end_stream`): each sends the frames it holds
+and its response finishes, instead of running into uvicorn's graceful
+timeout. A watcher that attaches during the stop gets an ended stream too.
 
 **The streaming send** (`Accept: text/event-stream`) attaches the subscriber and
 delivers the message before returning the response, so a client that leaves at
@@ -342,7 +346,14 @@ behind another turn must not spend the budget. A ceiling hit answers `504` /
 an error frame `Turn exceeded {n}s limit`. A turn stopped from outside —
 `process_direct` registers it with the running turns, so `/stop` and
 `POST /api/v1/sessions/api:<id>/stop` reach it — answers `409 turn_stopped` /
-an error frame `Turn was stopped`. While the queue is empty the stream emits an
+an error frame `Turn was stopped`. So does every turn when the gateway stops:
+`build_openai_routes` returns, with the routes, a stop function (the gateway
+app keeps it as `state.stop_openai_turns`) that cancels every turn in the
+closure set, running or queued, and each one a request starts after it. The
+gateway calls it before it asks uvicorn to exit; otherwise a request waiting
+on its turn, which only the shutdown drain would cancel, after uvicorn's exit,
+would hold that exit open until uvicorn's graceful timeout cuts it off with a
+500. While the queue is empty the stream emits an
 SSE comment (`: keepalive`) on an interval (`_SSE_KEEPALIVE_S`), so proxies and
 client read timeouts do not drop a connection whose turn is running a long
 tool. A client disconnect makes Starlette close the generator; its `finally`

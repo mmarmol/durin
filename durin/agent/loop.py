@@ -243,6 +243,15 @@ _SUBAGENT_WAIT_TIMEOUT = 300
 # how many turns are stuck.
 _DRAIN_CANCEL_WAIT_S = 10.0
 
+# How long after run() starts the memory health check runs its first tick
+# (seconds). That tick scans the whole memory store, and in the gateway run()
+# starts alongside the channels, uvicorn and the embedding warm-up; the scan
+# slowed them all down. A minute is past the longest a channel takes to
+# connect (Slack's Socket Mode connect gives up after 45 s) and no longer
+# than the shortest interval the config allows, so the first check still
+# lands within the first interval.
+_HEALTH_CHECK_FIRST_TICK_DELAY_S = 60.0
+
 _STEER_FRAMING = (
     "[Steer — the user sent this while you were working. Treat it as "
     "guidance for the work in progress: adjust course if it changes the "
@@ -621,6 +630,9 @@ class AgentLoop:
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 480
         self._running = False
+        # The consumer's current wait for an inbound message, while it waits;
+        # stop_intake() ends it early.
+        self._inbound_wait: asyncio.Timeout | None = None
         self._mcp_servers = mcp_servers or {}
         self._mcp_connections: dict[str, Any] = {}
         self._mcp_connect_errors: dict[str, str] = {}  # name -> last connect failure message
@@ -829,10 +841,11 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     def _start_memory_background_services(self) -> None:
-        """Start the optional memory file watcher and health-check
-        scheduler if the config enables them, and ensure the workspace
-        has a `VAULT_README.md` for human consumers (Obsidian users,
-        webui MemoryGraphView, anyone browsing files directly).
+        """Start the optional memory file watcher and build the health-check
+        scheduler (``run()`` starts it) if the config enables them, and
+        ensure the workspace has a `VAULT_README.md` for human consumers
+        (Obsidian users, webui MemoryGraphView, anyone browsing files
+        directly).
 
         Each service is constructed and started independently; a
         failure in one doesn't affect the other. Tests that build
@@ -902,19 +915,42 @@ class AgentLoop:
                     interval_seconds=int(
                         getattr(hc_cfg, "interval_seconds", 900),
                     ),
+                    first_tick_delay_s=_HEALTH_CHECK_FIRST_TICK_DELAY_S,
                 )
-                scheduler.start()
+                # Built here, started by run() once the loop is up — see
+                # _start_memory_health_checks.
                 self._memory_health_scheduler = scheduler
-                logger.info(
-                    "memory health check scheduler started "
-                    "(interval={}s)",
-                    getattr(hc_cfg, "interval_seconds", 900),
-                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "memory health check failed to start "
                     "(continuing without): {}", exc,
                 )
+
+    def _start_memory_health_checks(self) -> None:
+        """Start the health-check thread built with the loop.
+
+        Called by ``run()`` once the loop has started, not at construction,
+        and its first tick waits ``_HEALTH_CHECK_FIRST_TICK_DELAY_S``: that
+        tick scans the whole memory store at once, and in the gateway the
+        scan ran while the channels were being set up, taking several times
+        longer than a later tick and slowing their startup.
+        """
+        scheduler = self._memory_health_scheduler
+        if scheduler is None:
+            return
+        try:
+            scheduler.start()
+            logger.info(
+                "memory health check scheduler started "
+                "(first check in {:g}s, then every {}s)",
+                _HEALTH_CHECK_FIRST_TICK_DELAY_S,
+                scheduler.interval_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory health check failed to start "
+                "(continuing without): {}", exc,
+            )
 
     def _stop_memory_background_services(self) -> None:
         """Stop the memory background services. Safe to call when
@@ -2387,13 +2423,20 @@ class AgentLoop:
         # Startup is not the only moment work strands, so the same pass runs
         # on a timer for the rest of this process's life.
         self._start_job_sweep()
+        mcp_started = time.monotonic()
         await self._connect_mcp()
+        if self._mcp_servers:
+            logger.info(
+                "Startup: connecting MCP servers took {:.2f}s",
+                time.monotonic() - mcp_started,
+            )
         self._schedule_background(self._warmup_memory_embedding())
         # Blocking ask_user may only wait while this consumer is alive to
         # resolve answers (pending_answers.can_block).
         pending_answers.set_consumer_active(True)
         await self._replay_inbound_journal()
         logger.info("Agent loop started")
+        self._start_memory_health_checks()
         # The watcher's vector backfill builds the embedding provider and
         # reads the whole vector table, so it is requested only now that the
         # loop is serving, never while the gateway is still starting up.
@@ -2407,7 +2450,7 @@ class AgentLoop:
                 # that arrives in the same loop iterations, which would keep
                 # this consumer alive past shutdown (the outbound dispatcher
                 # hung the gateway that way).
-                async with asyncio.timeout(1.0):
+                async with asyncio.timeout(1.0) as self._inbound_wait:
                     msg = await self.bus.consume_inbound()
             except asyncio.TimeoutError:
                 continue
@@ -2420,6 +2463,8 @@ class AgentLoop:
             except Exception as e:
                 logger.warning("Error consuming inbound message: {}, continuing...", e)
                 continue
+            finally:
+                self._inbound_wait = None
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
@@ -2770,6 +2815,23 @@ class AgentLoop:
             if key in self._reindex_dirty:
                 self._schedule_session_reindex(key)
 
+    def stop_intake(self) -> None:
+        """Start no more turns: ``run()`` stops taking inbound messages and
+        returns. A message that arrives from now on stays on the bus, where
+        the shutdown drain journals it for the next start; the turns already
+        running carry on until that drain cancels them.
+
+        The gateway calls this as soon as it is asked to stop, because the
+        loop is cancelled only once uvicorn has finished its own exit.
+        """
+        self._running = False
+        wait = self._inbound_wait
+        # An expired wait is already ending; one still running is ended now
+        # instead of at the consumer's next poll. The cancelled get takes
+        # nothing off the queue.
+        if wait is not None and not wait.expired():
+            wait.reschedule(asyncio.get_running_loop().time())
+
     def stop(self) -> None:
         """Stop the agent loop."""
         from durin.agent import pending_answers
@@ -2794,15 +2856,18 @@ class AgentLoop:
         """Journal every inbound message the gateway still owes a turn to, so
         the next start replays it instead of dropping it.
 
-        The turns in flight are cancelled and awaited first: a turn's own
-        ``finally`` is what hands its pending queues back to the bus, and the
-        bus is where they are collected from. Every turn is recorded and
-        cancelled before any is awaited, so a turn blocked on ask_user (whose
-        wait ``stop()`` cancels) is journaled like any other. Queues no task
-        handed back (their turn died before its ``finally``) are collected
-        directly. The message each cancelled turn was answering goes first,
-        ahead of the follow-ups queued behind it, so the next start answers it
-        in order
+        The journal holds, per session, the message each turn in flight was
+        answering, then the follow-ups queued behind that turn, then what is
+        still on the bus, so the next start answers them in the order they
+        were sent. A turn's queues are taken before it is cancelled, leaving
+        its ``finally`` nothing to put back on the bus: once intake has
+        stopped, a newer message for the session waits on the bus, and a
+        follow-up re-published behind it would be answered after it. Every
+        turn is recorded and cancelled before any is awaited, so a turn
+        blocked on ask_user (whose wait ``stop()`` cancels) is journaled like
+        any other. Queues whose turn is no longer running are collected last.
+        The message a cancelled turn was answering is journaled so the next
+        start answers it
         instead of leaving it closed as "interrupted" with no reply ever
         given. Trigger-only messages are not journaled: they were published
         for automation triggers to see, never to become a conversation, and a
@@ -2818,6 +2883,17 @@ class AgentLoop:
             return 0
         owed: list[InboundMessage] = []
         cancelled: list[tuple[str, asyncio.Task]] = []
+
+        def _take_queued(queues: PendingQueues) -> None:
+            # System results first, as a turn's own ``finally`` hands them
+            # back: they complete work the deferred user messages may ask about.
+            for queue in (queues.inject, queues.deferred):
+                while True:
+                    try:
+                        owed.append(queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
         # Record and cancel every turn before awaiting any of them. Awaiting
         # one turn lets the others run, and a turn that ends in that window
         # (a turn whose ask_user wait ``stop()`` just cancelled ends at its
@@ -2831,6 +2907,9 @@ class AgentLoop:
                         owed.append(message)
                     task.cancel()
                 cancelled.append((key, task))
+            queues = self._pending_queues.pop(key, None)
+            if queues is not None:
+                _take_queued(queues)
         if cancelled:
             # One wait for the whole batch, not one per task (see the
             # docstring): a stuck turn's wait_for used to cost the drain its
@@ -2856,12 +2935,7 @@ class AgentLoop:
             except asyncio.QueueEmpty:
                 break
         for queues in list(self._pending_queues.values()):
-            for queue in (queues.inject, queues.deferred):
-                while True:
-                    try:
-                        owed.append(queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+            _take_queued(queues)
         self._pending_queues.clear()
         owed = [m for m in owed if not m.trigger_only]
         count = self._inbound_journal.append(owed, kind=self._process_kind)

@@ -2472,6 +2472,9 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
 
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
         def stop(self) -> None:
             calls.append("agent.stop")
 
@@ -2558,6 +2561,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
 
     assert result.exit_code == 0, result.output
     assert calls == [
+        "agent.stop_intake",
         "agent.close_mcp",
         "cron.stop",
         "stop_dream_workers",
@@ -2641,6 +2645,9 @@ def test_a_signal_during_a_restart_shutdown_wins_and_does_not_reexec(
 
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
+
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
 
         def stop(self) -> None:
             calls.append("agent.stop")
@@ -2804,6 +2811,9 @@ def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
         async def close_mcp(self) -> None:
             calls.append("agent.close_mcp")
 
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
         def stop(self) -> None:
             calls.append("agent.stop")
 
@@ -2887,6 +2897,317 @@ def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
     assert "request_restart_returned_True" in calls
     assert "reexec" not in calls
     assert calls.count("agent.drain_inbound_for_shutdown") == 1
+
+
+def _run_gateway_with_fake_uvicorn(
+    monkeypatch, tmp_path: Path, *, uvicorn_exits_on_its_own: bool
+) -> tuple[object, list[str], dict]:
+    """Boot the gateway with the unified uvicorn server in place (a fake
+    websocket channel and a fake ``uvicorn.Server``), send it SIGTERM from the
+    agent loop, and return the CLI result, the ordered shutdown calls and the
+    kwargs uvicorn's Config was built with."""
+    import signal
+    from types import SimpleNamespace
+
+    import durin.cli.commands as cli_commands
+
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
+    calls: list[str] = []
+    uvicorn_kwargs: dict = {}
+
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18797
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            return 0
+
+    class _FakeAgentLoop:
+        subagents = None
+        tools: dict = {}
+        approval_exec_deps = None
+
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls()
+
+        def __init__(self) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        def reload_app_config(self) -> None:
+            return None
+
+        def apply_default_model_live(self, *_a) -> None:
+            return None
+
+        def cancel_session_turns(self, *_a) -> None:
+            return None
+
+        def bus_turn_key(self, *_a) -> str:
+            return ""
+
+        async def run(self) -> None:
+            signal.raise_signal(signal.SIGTERM)
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                calls.append("agent.run.cancelled")
+                raise
+            raise _StopGatewayError("SIGTERM did not shut the gateway down")
+
+        async def close_mcp(self) -> None:
+            calls.append("agent.close_mcp")
+
+        def stop_intake(self) -> None:
+            calls.append("agent.stop_intake")
+
+        def stop(self) -> None:
+            calls.append("agent.stop")
+
+        async def drain_inbound_for_shutdown(self) -> int:
+            return 0
+
+    ws_channel = SimpleNamespace(
+        config=SimpleNamespace(
+            host="127.0.0.1", port=18798, ssl_certfile="", ssl_keyfile="",
+            max_message_bytes=1024, ping_interval_s=20.0, ping_timeout_s=20.0,
+        ),
+        _static_dist_path=None,
+        end_sse_streams=lambda: calls.append("ws.end_sse_streams"),
+    )
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["websocket"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            calls.append("channels.stop_all")
+
+        def get_channel(self, name: str):
+            return ws_channel if name == "websocket" else None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            await asyncio.Event().wait()
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    class _FakeUvicornConfig:
+        def __init__(self, _app, **kwargs) -> None:
+            uvicorn_kwargs.update(kwargs)
+
+    class _FakeUvicornServer:
+        """uvicorn's serve(): runs until should_exit, then performs its own
+        exit (closing connections, the lifespan shutdown) — or, for the
+        bound test, never finishes it."""
+
+        def __init__(self, _config) -> None:
+            self._should_exit = False
+
+        @property
+        def should_exit(self) -> bool:
+            return self._should_exit
+
+        @should_exit.setter
+        def should_exit(self, value: bool) -> None:
+            if value and not self._should_exit:
+                calls.append("uvicorn.should_exit")
+            self._should_exit = value
+
+        async def serve(self) -> None:
+            try:
+                while not self.should_exit:
+                    await asyncio.sleep(0.01)
+                if not uvicorn_exits_on_its_own:
+                    await asyncio.Event().wait()
+                await asyncio.sleep(0.05)
+                calls.append("uvicorn.exited")
+            except asyncio.CancelledError:
+                calls.append("uvicorn.cancelled")
+                raise
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("durin.memory.dream_supervisor.stop_dream_workers", lambda: None)
+    # No real embed server: the supervisor would spawn a detached process.
+    monkeypatch.setattr(
+        "durin.memory.embed_supervisor.start_embed_server_supervisor", lambda _config: False,
+    )
+    monkeypatch.setattr("durin.agent.mcp_runtime.McpRuntime", lambda _agent: object())
+    monkeypatch.setattr("durin.service.wiring.build_service_registry", lambda **_kw: {})
+    gateway_app = SimpleNamespace(state=SimpleNamespace(
+        stop_openai_turns=lambda: calls.append("api.stop_openai_turns"),
+    ))
+    monkeypatch.setattr("durin.api.asgi.build_gateway_http_app", lambda *_a, **_kw: gateway_app)
+    monkeypatch.setattr("uvicorn.Config", _FakeUvicornConfig)
+    monkeypatch.setattr("uvicorn.Server", _FakeUvicornServer)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    return result, calls, uvicorn_kwargs
+
+
+def test_a_gateway_stop_lets_uvicorn_finish_its_own_exit_first(monkeypatch, tmp_path: Path) -> None:
+    """Shutdown asked uvicorn to exit and cancelled every gateway task in the
+    same breath, so uvicorn's serve() was cancelled in the middle of its own
+    exit: every restart printed a CancelledError traceback, plus "Exception
+    in ASGI application" with a websocket client connected. uvicorn now
+    finishes its exit before the rest of the gateway is cancelled."""
+    result, calls, uvicorn_kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "uvicorn.cancelled" not in calls
+    assert "uvicorn.exited" in calls
+    assert "agent.run.cancelled" in calls
+    assert calls.index("uvicorn.exited") < calls.index("agent.close_mcp")
+    # uvicorn's own graceful exit is bounded too: in-flight requests do not
+    # hold the stop open indefinitely.
+    assert uvicorn_kwargs.get("timeout_graceful_shutdown", 0) > 0
+
+
+def test_a_gateway_stop_stops_intake_and_ends_sse_streams_before_uvicorn_exits(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """uvicorn's exit waits for every open response, and the loop is
+    cancelled only after it. An SSE watcher never ends by itself, so each
+    stop with one open ran into uvicorn's graceful timeout and an error; and
+    the loop kept starting turns during that wait. Both end before uvicorn
+    is asked to exit."""
+    result, calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "agent.stop_intake" in calls
+    assert "ws.end_sse_streams" in calls
+    assert calls.index("agent.stop_intake") < calls.index("uvicorn.should_exit")
+    assert calls.index("ws.end_sse_streams") < calls.index("uvicorn.should_exit")
+
+
+def test_a_gateway_stop_stops_the_openai_api_turns_before_uvicorn_exits(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An OpenAI-compatible request waits on its turn, and the turn ends only
+    at the shutdown drain, after uvicorn has exited: each stop with one open
+    ran into uvicorn's graceful timeout, which answered it with a 500 and
+    logged an error. The API's turns are stopped before uvicorn is asked to
+    exit, so each request answers 409 turn_stopped instead."""
+    result, calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "api.stop_openai_turns" in calls
+    assert calls.index("api.stop_openai_turns") < calls.index("uvicorn.should_exit")
+
+
+def test_a_gateway_boot_logs_how_long_each_startup_phase_took(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A slow boot is diagnosed from gateway.log: one line per startup phase,
+    in boot order, with that phase's own duration and the time since start."""
+    import re
+
+    from loguru import logger
+
+    lines: list[str] = []
+    sink_id = logger.add(
+        lambda m: lines.append(m.record["message"]),
+        level="INFO",
+        filter=lambda r: r["message"].startswith("Startup:"),
+    )
+    try:
+        result, _calls, _kwargs = _run_gateway_with_fake_uvicorn(
+            monkeypatch, tmp_path, uvicorn_exits_on_its_own=True,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result.exit_code == 0, result.output
+    line = re.compile(r"Startup: (.+) took (\d+\.\d\d)s \((\d+\.\d\d)s since start\)")
+    parsed = [line.fullmatch(text) for text in lines]
+    assert all(parsed), lines
+    assert [m.group(1) for m in parsed] == [
+        "config, providers and sessions",
+        "agent loop and memory services setup",
+        "automations setup",
+        "channels setup",
+        "embed server, dream and scheduled jobs setup",
+        "cron and housekeeping start",
+        "API and dashboard app build",
+    ]
+    # Each line's duration is its own phase, not the running total.
+    since = [0.0] + [float(m.group(3)) for m in parsed]
+    for i, m in enumerate(parsed):
+        assert abs(float(m.group(2)) - (since[i + 1] - since[i])) <= 0.02, lines
+
+
+def test_a_uvicorn_that_does_not_exit_is_cancelled_after_the_bound(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The wait for uvicorn's own exit is bounded: past it, the gateway is
+    cancelled as before and shuts down anyway."""
+    monkeypatch.setattr("durin.cli.commands._UVICORN_EXIT_TIMEOUT_S", 0.1, raising=False)
+
+    result, calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "uvicorn.cancelled" in calls
+    assert "agent.run.cancelled" in calls
+    assert "channels.stop_all" in calls
 
 
 def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):

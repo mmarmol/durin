@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -49,6 +49,41 @@ def discover_plugins() -> dict[str, type[BaseChannel]]:
         except Exception as e:
             logger.warning("Failed to load channel plugin '{}': {}", ep.name, e)
     return plugins
+
+
+def _plugin_entry_points() -> dict[str, Any]:
+    """Installed channel plugins' entry points by name, none of them loaded."""
+    from importlib.metadata import entry_points
+
+    return {ep.name: ep for ep in entry_points(group="durin.channels")}
+
+
+def available_channel_names() -> list[str]:
+    """Names of every channel durin can start — built-in modules, then
+    plugins — without importing any of them.
+
+    A plugin registered under a built-in's name is left out: built-ins win,
+    as in ``discover_all``.
+    """
+    builtin = discover_channel_names()
+    plugins = _plugin_entry_points()
+    shadowed = set(plugins) & set(builtin)
+    if shadowed:
+        logger.warning("Plugin(s) shadowed by built-in channels (ignored): {}", shadowed)
+    return builtin + [name for name in plugins if name not in shadowed]
+
+
+def load_channel(name: str) -> type[BaseChannel] | None:
+    """Import only the channel called *name* and return its class.
+
+    The built-in module of that name wins over a plugin registered under it.
+    Returns None when neither exists; an import or plugin-load failure is
+    raised, so the caller can say why the channel is unavailable.
+    """
+    if name in discover_channel_names():
+        return load_channel_class(name)
+    ep = _plugin_entry_points().get(name)
+    return ep.load() if ep is not None else None
 
 
 def discover_all() -> dict[str, type[BaseChannel]]:

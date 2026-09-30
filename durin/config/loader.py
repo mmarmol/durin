@@ -480,9 +480,11 @@ def _channel_matches_default(name: str, section: dict) -> bool:
     every discovered channel. Such sections are dropped on save.
     """
     try:
-        from durin.channels.registry import discover_all
+        from durin.channels.registry import load_channel
 
-        cls = discover_all().get(name)
+        # Only this channel's module: importing all of them would pay for
+        # every channel SDK on a save.
+        cls = load_channel(name)
         if cls is None:
             return False
         default = cls.default_config()

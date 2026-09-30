@@ -183,6 +183,11 @@ stream ends with an `{"error": {"message": "Turn was stopped", "type":
 "turn_stopped"}}` frame and no `[DONE]`. The route addresses the session by
 `api:<session_id>`, so it cannot reach a `session_id` containing `/`.
 
+When the gateway stops or restarts, it stops every turn of this API the same
+way, whether running or waiting behind another request: each request waiting
+on one gets that `409` or that final frame, and so does a request that arrives
+while the gateway is stopping.
+
 Requests to the same `session_id` are processed one at a time — a second call
 waits for the first to finish. Use distinct session ids for genuinely
 independent conversations.

@@ -36,6 +36,10 @@ def _names(chunks: list[bytes]) -> list[bytes]:
     return [c.split(b"\n")[0] for c in chunks]
 
 
+async def _drain_frames(sub: SseSubscriber) -> list[bytes]:
+    return [c async for c in sub.frames()]
+
+
 # -- the subscriber ----------------------------------------------------------
 
 
@@ -92,6 +96,106 @@ async def test_draining_frees_room_in_the_buffer() -> None:
     await _take(sub, 1)
     await sub.send_text(raw)  # fits again once the first was yielded
     assert _names(await _take(sub, 1)) == [b"event: message"]
+
+
+@pytest.mark.asyncio
+async def test_an_ended_stream_sends_what_it_holds_then_ends() -> None:
+    sub = SseSubscriber()
+    await sub.send_text(_frame("message", text="before"))
+    sub.end_stream()
+    await sub.send_text(_frame("message", text="after"))  # ignored
+    chunks = await asyncio.wait_for(_drain_frames(sub), 1)
+    assert _names(chunks) == [b"event: message"]
+    assert b"before" in chunks[0]
+
+
+@pytest.mark.asyncio
+async def test_ending_a_waiting_stream_wakes_it() -> None:
+    sub = SseSubscriber()
+    reader = asyncio.create_task(_drain_frames(sub))
+    await asyncio.sleep(0.01)
+    sub.end_stream()
+    assert await asyncio.wait_for(reader, 1) == []
+
+
+@pytest.mark.asyncio
+async def test_ending_the_sse_streams_ends_every_watcher_and_each_one_attached_later() -> None:
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, MagicMock())
+    watching = SseSubscriber()
+    socket_like = object()  # a WebSocket connection: uvicorn closes those itself
+    channel._attach(watching, "c1")
+    channel._attach(socket_like, "c1")
+
+    channel.end_sse_streams()
+    assert await asyncio.wait_for(_drain_frames(watching), 1) == []
+
+    # A client reconnecting before uvicorn stops accepting gets an ended
+    # stream too, instead of one that would outlive the stop.
+    late = SseSubscriber()
+    channel._attach(late, "c2")
+    assert await asyncio.wait_for(_drain_frames(late), 1) == []
+
+
+@pytest.mark.asyncio
+async def test_ended_sse_streams_let_uvicorn_exit_without_cancelling_them(caplog) -> None:
+    """At a gateway stop uvicorn waits for open responses up to its graceful
+    timeout, then cancels them and logs an error; an SSE watcher never ends
+    on its own, so every stop with one open hit that. Ended first, the stream
+    finishes and uvicorn exits at once."""
+    import contextlib
+    import logging
+    import socket
+    import time
+
+    import uvicorn
+    from starlette.applications import Starlette
+
+    from durin.cli.commands import _UVICORN_GRACEFUL_SHUTDOWN_S
+
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, MessageBus())
+    routes = chat_stream.build_chat_stream_routes(
+        channel, ServiceRegistry(), resolve_principal=lambda _h: _READER,
+    )
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(
+        Starlette(routes=routes), lifespan="off", ws="none", log_config=None,
+        timeout_graceful_shutdown=_UVICORN_GRACEFUL_SHUTDOWN_S,
+    ))
+    server.capture_signals = contextlib.nullcontext
+    serve = asyncio.create_task(server.serve(sockets=[sock]))
+    writer = None
+    try:
+        async with asyncio.timeout(5):
+            while not server.started:
+                await asyncio.sleep(0.01)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"GET /api/v1/sessions/websocket:c1/events HTTP/1.1\r\nHost: t\r\n\r\n")
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert head.startswith(b"HTTP/1.1 200")
+        assert channel._subs.get("c1")
+
+        caplog.set_level(logging.INFO, logger="uvicorn.error")
+        started = time.monotonic()
+        channel.end_sse_streams()
+        server.should_exit = True
+        await asyncio.wait_for(asyncio.shield(serve), _UVICORN_GRACEFUL_SHUTDOWN_S + 2)
+        took = time.monotonic() - started
+        body = await asyncio.wait_for(reader.read(), 1)
+    finally:
+        server.should_exit = True
+        if writer is not None:
+            writer.close()
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(serve, _UVICORN_GRACEFUL_SHUTDOWN_S + 2)
+        sock.close()
+
+    assert took < _UVICORN_GRACEFUL_SHUTDOWN_S / 2
+    assert body.endswith(b"0\r\n\r\n")  # the chunked response ended cleanly
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert "c1" not in channel._subs
 
 
 @pytest.mark.asyncio

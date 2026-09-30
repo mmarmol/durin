@@ -99,6 +99,9 @@ SLACK_DOWNLOAD_TIMEOUT = 30.0
 # succeed while WSS blocks (firewall / region). slack-sdk does not apply HTTP(S)_PROXY
 # to websockets.connect — see slack_sdk.socket_mode.websockets.SocketModeClient.connect.
 SLACK_SOCKET_CONNECT_TIMEOUT_S = 45.0
+# How long stop() waits for the Socket Mode close before moving on; the close
+# itself finishes in the background (see SlackChannel.stop).
+SLACK_SOCKET_CLOSE_TIMEOUT_S = 1.0
 # Initial-connect retries and the disconnect watchdog share this backoff ladder;
 # the last step repeats until connected or the channel stops.
 SLACK_CONNECT_BACKOFF_S = (2.0, 5.0, 15.0, 30.0, 60.0)
@@ -119,6 +122,10 @@ SLACK_FOLLOWED_THREADS_MAX = 5000
 # script; the reader only needs to see that something is happening.
 SLACK_STATUS_MAX_LEN = 160
 _HTML_DOWNLOAD_PREFIXES = (b"<!doctype html", b"<html")
+# Socket Mode closes still running, some past the stop() that started them.
+# The event loop only keeps weak references to tasks; this set keeps each one
+# alive until it finishes.
+_pending_socket_closes: set[asyncio.Task] = set()
 
 
 @dataclass
@@ -307,11 +314,28 @@ class SlackChannel(BaseChannel):
             await asyncio.sleep(delay)
 
     async def stop(self) -> None:
-        """Stop the Slack client."""
+        """Stop the Slack client.
+
+        Closing the Socket Mode client waits for Slack to finish the WebSocket
+        closing handshake, which took about five seconds on every gateway
+        stop. The wait is bounded so neither a gateway stop nor a hot-stop sits
+        through it; past the bound the close carries on in the background, so
+        the SDK still cancels its own reader tasks once Slack lets go.
+        """
         self._running = False
         if self._socket_client:
+            close = asyncio.ensure_future(self._socket_client.close())
+            _pending_socket_closes.add(close)
+            close.add_done_callback(_pending_socket_closes.discard)
             try:
-                await self._socket_client.close()
+                async with asyncio.timeout(SLACK_SOCKET_CLOSE_TIMEOUT_S):
+                    await asyncio.shield(close)
+            except TimeoutError:
+                self.logger.info(
+                    "socket close still waiting on Slack after {:g}s; "
+                    "finishing it in the background",
+                    SLACK_SOCKET_CLOSE_TIMEOUT_S,
+                )
             except Exception as e:
                 self.logger.warning("socket close failed: {}", e)
             self._socket_client = None

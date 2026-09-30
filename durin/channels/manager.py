@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +43,14 @@ _HOT_START_FAIL_FAST_WINDOW_S = 2.0
 # this delay, reset once a channel has stayed up for _CHANNEL_STABLE_UPTIME_S.
 _CHANNEL_RESTART_MAX_DELAY_S = 60.0
 _CHANNEL_STABLE_UPTIME_S = 300.0
+# Upper bound on one channel's stop() in stop_all. Channels stop concurrently,
+# so this also caps the channel phase of a gateway stop. It sits above the
+# longest stop a channel takes on purpose (the WhatsApp bridge gives its Node
+# process ten seconds to exit after SIGTERM) and exists so a stop that hangs
+# cannot hold up the rest of the shutdown (the session flush). A stop that
+# also ignores its cancellation still delays the process exit: asyncio.run
+# waits for every task it cancels.
+_CHANNEL_STOP_TIMEOUT_S = 15.0
 
 _BOOL_CAMEL_ALIASES: dict[str, str] = {
     "send_progress": "sendProgress",
@@ -162,10 +169,11 @@ class ChannelManager:
         refs, applies per-channel overrides (transcription, bool flags), and
         returns the new instance — or ``None`` if the channel class is not
         found or the section is absent.  Does NOT start the channel.
+        Only this channel's module is imported (or its plugin loaded).
         """
-        from durin.channels.registry import discover_all
+        from durin.channels.registry import load_channel
 
-        cls = discover_all().get(name)
+        cls = load_channel(name)
         if cls is None:
             return None
         section = getattr(self.config.channels, name, None)
@@ -219,24 +227,29 @@ class ChannelManager:
         return channel
 
     def _init_channels(self) -> None:
-        """Initialize channels discovered via pkgutil scan + entry_points plugins."""
-        self._ensure_channel_extras()
-        from durin.channels.registry import discover_all
+        """Build the enabled channels, importing only their modules.
 
-        discovered = discover_all()
+        Channel names come from the package listing and the installed
+        plugins' entry points, with nothing imported; only a channel whose
+        section is enabled has its module imported (or its plugin loaded).
+        """
+        self._ensure_channel_extras()
+        from durin.channels.registry import available_channel_names
+
+        known = available_channel_names()
         # A section enabled for a channel durin does not have — a retired
         # built-in, or a plugin that is not installed — would otherwise be
         # skipped without a word, and the channel would just go quiet.
         extra_sections = getattr(self.config.channels, "model_extra", None) or {}
         for name, section in extra_sections.items():
-            if name not in discovered and isinstance(section, dict) and section.get("enabled"):
+            if name not in known and isinstance(section, dict) and section.get("enabled"):
                 logger.warning(
                     "channels.{} is enabled, but durin has no channel named '{}' "
                     "(a retired built-in, or a plugin that is not installed); "
                     "it is not started", name, name,
                 )
 
-        for name, cls in discovered.items():
+        for name in known:
             section = getattr(self.config.channels, name, None)
             if section is None:
                 continue
@@ -252,7 +265,7 @@ class ChannelManager:
                 if channel is None:
                     continue
                 self.channels[name] = channel
-                logger.info("{} channel enabled", cls.display_name)
+                logger.info("{} channel enabled", channel.display_name)
             except SecretNotFoundError as e:
                 # A dangling ${secret:} reference is a configuration error the
                 # operator has to fix, not a transient condition — and it is
@@ -555,7 +568,13 @@ class ChannelManager:
         task.add_done_callback(self._background_tasks.discard)
 
     async def stop_all(self) -> None:
-        """Stop all channels and the dispatcher."""
+        """Stop the dispatcher, then every channel at once.
+
+        Channels stop concurrently, so the slowest one, not their sum, sets
+        how long this takes; each stop is bounded by
+        ``_CHANNEL_STOP_TIMEOUT_S``. One that overruns is logged and
+        cancelled, and this returns without waiting for it.
+        """
         logger.info("Stopping all channels...")
 
         # Stop dispatcher
@@ -565,19 +584,38 @@ class ChannelManager:
             # timeout-based wait in _dispatch_outbound), but shutdown must
             # never hang on a task that does not, so the wait is capped and
             # a late dispatcher is left to die with the process.
-            try:
-                with suppress(asyncio.CancelledError):
-                    await asyncio.wait_for(asyncio.shield(self._dispatch_task), timeout=5)
-            except asyncio.TimeoutError:
+            # asyncio.wait, not wait_for: it never raises the task's own
+            # cancellation into this coroutine, so nothing here has to
+            # suppress CancelledError (which would also eat a cancellation
+            # of stop_all itself).
+            _done, late = await asyncio.wait({self._dispatch_task}, timeout=5)
+            if late:
                 logger.warning("Outbound dispatcher did not stop within 5s of its cancellation")
 
-        # Stop all channels
-        for name, channel in self.channels.items():
-            try:
-                await channel.stop()
-                logger.info("Stopped {} channel", name)
-            except Exception:
-                logger.exception("Error stopping {}", name)
+        if not self.channels:
+            return
+        stops = {
+            asyncio.create_task(self._stop_one_channel(name, channel)): name
+            for name, channel in self.channels.items()
+        }
+        # asyncio.wait's timeout holds even for a stop() that ignores its
+        # cancellation, which a timeout inside each stop could not.
+        _done, late = await asyncio.wait(stops, timeout=_CHANNEL_STOP_TIMEOUT_S)
+        for task in late:
+            logger.warning(
+                "{} channel did not stop within {:g}s; not waiting for it",
+                stops[task], _CHANNEL_STOP_TIMEOUT_S,
+            )
+            task.cancel()
+
+    @staticmethod
+    async def _stop_one_channel(name: str, channel: BaseChannel) -> None:
+        """Stop one channel for ``stop_all``, logging instead of raising."""
+        try:
+            await channel.stop()
+            logger.info("Stopped {} channel", name)
+        except Exception:
+            logger.exception("Error stopping {}", name)
 
     async def start_channel(self, name: str) -> None:
         """Hot-start a single channel without restarting the gateway.

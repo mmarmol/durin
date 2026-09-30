@@ -9,6 +9,28 @@ def _principal():
     return Principal.local()
 
 
+async def test_listing_imports_the_channels_off_the_event_loop(monkeypatch):
+    """A gateway boot imports only the enabled channels, so the first listing
+    imports every other channel's module and SDK. On the event loop that
+    stalled every chat for as long as the imports took."""
+    import threading
+
+    import durin.channels.registry as registry
+
+    real_discover_all = registry.discover_all
+    ran_on: list[threading.Thread] = []
+
+    def _discover_all():
+        ran_on.append(threading.current_thread())
+        return real_discover_all()
+
+    monkeypatch.setattr(registry, "discover_all", _discover_all)
+    svc = ConfigService()
+    result = await svc.channels_list(query=ChannelsListQuery(), principal=_principal())
+    assert ran_on and ran_on[0] is not threading.current_thread()
+    assert any(c["name"] == "websocket" for c in result.channels)
+
+
 async def test_email_returns_typed_field_schema():
     svc = ConfigService()
     result = await svc.channels_list(query=ChannelsListQuery(), principal=_principal())

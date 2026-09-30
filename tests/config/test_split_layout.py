@@ -305,3 +305,26 @@ def test_prune_keeps_channel_scalar_settings() -> None:
     out = _prune_noise_sections(data)
     assert out["channels"]["sendProgress"] is True
     assert out["channels"]["transcriptionProvider"] == "groq"
+
+
+def test_pruning_a_disabled_channel_section_imports_only_that_channel() -> None:
+    """Saving the config checks each disabled channel section against that
+    channel's defaults. It imported every channel to do so, which a gateway
+    boot no longer does, so the first save paid for every channel SDK."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from durin.channels.email import EmailChannel\n"
+        "from durin.config.loader import _prune_noise_sections\n"
+        "data = {'channels': {'email': EmailChannel.default_config()}}\n"
+        "assert _prune_noise_sections(data) == {'channels': {}}\n"
+        "print(sorted(m for m in ('durin.channels.slack', 'durin.channels.telegram',"
+        " 'durin.channels.discord') if m in sys.modules))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "[]"

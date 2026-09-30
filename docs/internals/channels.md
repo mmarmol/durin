@@ -31,13 +31,22 @@ objects onto `bus.inbound`; the agent loop consumes them and pushes
 the appropriate channel's `send` / `send_delta` methods. Neither side blocks
 the other; the queues absorb timing differences.
 
-**Plugin discovery with built-in priority.** `discover_all()` in
-`durin/channels/registry.py` first scans the `durin.channels` package with
-`pkgutil` to find built-in adapters, then loads external adapters registered
-via the Python `entry_points` group `durin.channels`. Built-in adapters always
-win if a plugin registers the same name. `ChannelManager._init_channels`
-iterates the discovered classes, checks `config.channels.<name>.enabled`, and
-instantiates the ones that are on.
+**Plugin discovery with built-in priority, imports only when enabled.**
+`available_channel_names()` in `durin/channels/registry.py` lists the
+built-in adapters by scanning the `durin.channels` package with `pkgutil`,
+then the external adapters registered under the Python `entry_points` group
+`durin.channels`, without importing or loading any of them. Built-in adapters
+always win if a plugin registers the same name. `ChannelManager._init_channels`
+walks those names, checks `config.channels.<name>.enabled`, and only for the
+ones that are on calls `load_channel(name)`, which imports that one module (or
+loads that one plugin). A channel that is off has its adapter module neither
+imported nor loaded at startup, though its SDK can still arrive another way:
+the Telegram service routes (`durin/service/channels_telegram.py`), which the
+gateway always mounts, import the Telegram SDK. Listing the channels
+(`GET /api/v1/channels`, the dashboard's channel settings) imports every
+adapter and loads every plugin with `discover_all()`, in a worker thread so
+the event loop keeps serving meanwhile. A config save that compares a disabled
+channel's section with its defaults imports only that channel.
 
 **Inbound authorization and pairing.** Authorization is enforced once,
 centrally, at the message-bus ingress via `MessageBus.publish_inbound`. When
@@ -145,15 +154,16 @@ sequenceDiagram
 flowchart TD
     A[gateway start] --> B[ChannelManager.__init__]
     B --> C[_init_channels]
-    C --> D["discover_all()<br/>durin/channels/registry.py"]
+    C --> D["available_channel_names()<br/>durin/channels/registry.py<br/>(names only, nothing imported)"]
     D --> E["pkgutil.iter_modules(durin.channels)<br/>built-in adapters"]
     D --> F["entry_points(group='durin.channels')<br/>external plugins"]
     E --> G{built-in wins on name clash}
     F --> G
-    G --> H[for each discovered class]
+    G --> H[for each channel name]
     H --> I{config.channels.name.enabled?}
-    I -- No --> J[skip]
-    I -- Yes --> K["_resolve_section_secrets(section)<br/>expand \${secret:} refs"]
+    I -- No --> J[skip: module not imported]
+    I -- Yes --> Q["load_channel(name)<br/>import that module / load that plugin"]
+    Q --> K["_resolve_section_secrets(section)<br/>expand \${secret:} refs"]
     K --> L[cls(config, bus, **kwargs)]
     L --> M[inject TranscriptionService]
     M --> N[set send_progress / send_tool_hints / show_reasoning]
@@ -167,9 +177,12 @@ flowchart TD
 
 `MessageBus()` is constructed once per gateway process. `ChannelManager` is
 constructed with the bus and the full `Config`. In `_init_channels` it calls
-`discover_all()`, which combines built-in adapters found by
-`pkgutil.iter_modules` with external adapters from `entry_points`. For each
-enabled channel it resolves `${secret:}` credential references with
+`available_channel_names()`, which lists built-in adapters found by
+`pkgutil.iter_modules` and external adapters from `entry_points` by name
+only. For each enabled channel it imports just that adapter
+(`load_channel`); a module that fails to import, or a plugin that fails to
+load, is logged as "channel not available" with the reason, and the other
+channels still start. It then resolves `${secret:}` credential references with
 `_resolve_section_secrets` (so plaintext never lives in the shared config
 object), constructs the channel, injects the shared `TranscriptionService`
 (built once from `config.transcription`), and copies the global boolean
@@ -192,6 +205,27 @@ this task). A swallowed cancellation left the dispatcher looping with its one
 cancellation consumed and the gateway hung on every SIGTERM with a turn in
 flight. `stop_all` also bounds its wait on the dispatcher to five seconds and
 logs a warning rather than hanging the process on a task that does not stop.
+
+**Stopping the channels.** After the dispatcher, `stop_all` stops every
+channel at once, so a gateway stop spends the time of the slowest channel
+rather than the sum of all of them. Each `channel.stop()` gets at most
+`_CHANNEL_STOP_TIMEOUT_S`; the bound sits above the longest stop a channel
+takes on purpose (the WhatsApp bridge gives its Node process ten seconds to
+exit) and only catches a stop that hangs, which is logged by channel name and
+cancelled. The wait uses `asyncio.wait` with a timeout, so `stop_all` returns
+at the bound even when a `stop()` ignores its cancellation, and the rest of
+the shutdown (the session flush) still runs. Such a stop still delays the
+process exit: `asyncio.run` waits for every task it cancels, until the stop
+ends or the process is killed (`durin gateway stop` sends SIGKILL once its
+grace window runs out).
+
+Slack bounds its own stop more tightly. Closing the Socket Mode client waits
+for the WebSocket closing handshake and connection teardown with Slack, which
+takes several seconds; `SlackChannel.stop()` waits at most
+`SLACK_SOCKET_CLOSE_TIMEOUT_S` for it, logs that it moved on, and lets the
+close finish in the background, so the SDK still cancels its own reader tasks
+when Slack lets go of the connection (a hot-stop leaves nothing behind). At
+process exit the pending close is simply cancelled with the event loop.
 
 **Channel crash supervision.** An exception raised out of `channel.start()` is
 treated as a transient crash: the supervisor restarts the channel with a
@@ -835,7 +869,9 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `MessageDeduplicator` | `durin/channels/dedup.py` | Shared TTL + size-capped id cache guarding against transport redelivery. In-memory by default; an optional `persist_path` backs it with an atomically-written JSON file for transports whose redelivery window can span a restart. See "Inbound deduplication" above. |
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
 | `SendReceipt` | `durin/bus/events.py` | Frozen dataclass returned by `send`: `thread_key: str | None` naming the thread a send landed in, in the inbound matcher's per-channel key vocabulary. See "Send receipts" above. |
-| `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes. Built-ins shadow plugins of the same name. |
+| `available_channel_names` | `durin/channels/registry.py` | Names of built-in (pkgutil scan) and external (entry_points) channels, with nothing imported or loaded. Built-ins shadow plugins of the same name. What gateway startup walks. |
+| `load_channel` | `durin/channels/registry.py` | Imports the one built-in module, or loads the one plugin, for a channel name and returns its class; `None` when no channel has that name. Used for each enabled channel at startup, on hot-start, and when a config save compares a disabled channel's section with its defaults. |
+| `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes, importing every one. Built-ins shadow plugins of the same name. Used where every channel's class is needed (channel listings, onboarding), not at gateway startup. |
 | `generate_code` | `durin/pairing/store.py` | Creates a pairing code (`ABCD-EFGH` format, 8 chars) for an unapproved DM sender and writes it to `pairing.json` with a TTL. |
 | `approve_code` | `durin/pairing/store.py` | Moves a pending code to the approved set; returns `(channel, sender_id)` or `None` if expired or absent. |
 | `is_approved` | `durin/pairing/store.py` | Read-only check: is `sender_id` in the approved set for `channel`? |
@@ -931,7 +967,9 @@ mychannel = "mypkg.channels.mychannel:MyChannel"
 ```
 
 will be discovered at startup and can be enabled with
-`channels.mychannel.enabled = true` in `config.json`.
+`channels.mychannel.enabled = true` in `config.json`. Gateway startup loads the
+entry point only when that section is enabled; listing the channels
+(`GET /api/v1/channels`) loads every one.
 
 ### CLI / TUI / webui surfaces
 
@@ -956,8 +994,11 @@ will be discovered at startup and can be enabled with
   `publish_chat_message`, the path the WebSocket `message` frame uses, so both
   accept exactly the same messages. An SSE watcher (`SseSubscriber`) joins the
   per-chat fan-out (`_attach` / `_cleanup_connection`) alongside WebSocket
-  connections; its `send_text` never blocks the channel. A message may carry
-  `origin: "api"`, which is recorded on the transcript's `user` row.
+  connections; its `send_text` never blocks the channel. When the gateway
+  stops, `end_sse_streams()` ends every SSE watcher's stream, and any that
+  attaches afterwards, so uvicorn's exit does not wait on them (WebSocket
+  connections uvicorn closes itself). A message may carry `origin: "api"`,
+  which is recorded on the transcript's `user` row.
 - **Live user messages** — each user message that carries a `client_msg_id` is
   echoed to the conversation's watchers as a `user` frame (text, id, `origin`,
   signed `media_urls`), so a conversation driven from the API or from another

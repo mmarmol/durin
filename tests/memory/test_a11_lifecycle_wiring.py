@@ -1,8 +1,8 @@
 """Memory background services wiring.
 
-- `MemoryFileWatcher` and `HealthCheckScheduler` are started by
+- `MemoryFileWatcher` is started and `HealthCheckScheduler` is built by
   `AgentLoop.__init__` when the corresponding config flag is true
-  (both default ON).
+  (both default ON); `AgentLoop.run()` starts the scheduler.
 - `AgentLoop.stop()` drains them cleanly.
 - Failure-to-start is isolated — the agent loop keeps working
   without the optional background service.
@@ -78,6 +78,51 @@ def test_scheduler_ticks_on_start(
         assert sched.tick_count >= 1
     finally:
         sched.stop()
+
+
+def test_scheduler_first_tick_waits_its_delay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a first-tick delay, nothing runs until it has passed; then the
+    ticks follow as usual."""
+    from durin.memory.health_check import (
+        HealthChecker,
+        HealthCheckScheduler,
+    )
+
+    checker = HealthChecker(workspace=tmp_path)
+    monkeypatch.setattr(checker, "run_tick", lambda: {})
+    sched = HealthCheckScheduler(checker, interval_seconds=60, first_tick_delay_s=0.5)
+    started = time.monotonic()
+    sched.start()
+    try:
+        time.sleep(0.2)
+        assert sched.tick_count == 0
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and sched.tick_count == 0:
+            time.sleep(0.02)
+        assert sched.tick_count == 1
+        assert time.monotonic() - started >= 0.5
+    finally:
+        sched.stop()
+
+
+def test_scheduler_stop_during_the_first_tick_delay_is_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from durin.memory.health_check import (
+        HealthChecker,
+        HealthCheckScheduler,
+    )
+
+    checker = HealthChecker(workspace=tmp_path)
+    monkeypatch.setattr(checker, "run_tick", lambda: {})
+    sched = HealthCheckScheduler(checker, interval_seconds=60, first_tick_delay_s=3600)
+    sched.start()
+    t0 = time.monotonic()
+    sched.stop()
+    assert time.monotonic() - t0 < 1.5
+    assert sched.tick_count == 0
 
 
 def test_scheduler_stop_is_responsive(

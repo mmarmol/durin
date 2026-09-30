@@ -602,18 +602,22 @@ def test_stream_ceiling_zero_disables_it(tmp_path, monkeypatch):
     assert events[-1] == "[DONE]"
 
 
-def _endpoint(loop, *, request_timeout=5.0, turn_timeout=5.0):
+def _endpoint_and_stop(loop, *, request_timeout=5.0, turn_timeout=5.0):
     from durin.api.openai_routes import build_openai_routes
     from durin.service.principal import Principal
 
-    routes = build_openai_routes(
+    routes, stop_turns = build_openai_routes(
         loop,
         model_name="test-model",
         request_timeout=request_timeout,
         turn_timeout=turn_timeout,
         resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
     )
-    return next(r for r in routes if r.path == "/v1/chat/completions").endpoint
+    return next(r for r in routes if r.path == "/v1/chat/completions").endpoint, stop_turns
+
+
+def _endpoint(loop, *, request_timeout=5.0, turn_timeout=5.0):
+    return _endpoint_and_stop(loop, request_timeout=request_timeout, turn_timeout=turn_timeout)[0]
 
 
 def _json_req(*, stream: bool, session_id: str | None = None):
@@ -709,6 +713,65 @@ def test_stopped_turn_stream_ends_with_error_frame(tmp_path, monkeypatch):
     loop.process_direct = AsyncMock(side_effect=_stopped)
     client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
     events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
+    assert events[-1] != "[DONE]"
+    assert json.loads(events[-1])["error"] == {"message": "Turn was stopped", "type": "turn_stopped"}
+
+
+def _hanging_loop() -> tuple[MagicMock, asyncio.Event]:
+    started = asyncio.Event()
+
+    async def _hang(**_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_hang)
+    return loop, started
+
+
+def test_a_gateway_stop_answers_every_waiting_request_turn_stopped():
+    """uvicorn's exit waits for every open request, and an API turn only ends
+    at the shutdown drain, after uvicorn has exited: a request waiting on one
+    ran into uvicorn's graceful timeout and was cut off with a 500. The stop
+    stops the turn in flight and the one queued behind it, so each request
+    answers the documented 409 at once, and a request arriving during the
+    stop starts no turn."""
+    loop, started = _hanging_loop()
+    endpoint, stop_turns = _endpoint_and_stop(loop)
+
+    async def _drive():
+        running = asyncio.create_task(endpoint(_json_req(stream=False)))
+        await asyncio.wait_for(started.wait(), 1)
+        queued = asyncio.create_task(endpoint(_json_req(stream=False)))
+        await asyncio.sleep(0.01)
+
+        stop_turns()
+        answers = await asyncio.wait_for(asyncio.gather(running, queued), 1)
+        late = await asyncio.wait_for(endpoint(_json_req(stream=False)), 1)
+        return [*answers, late]
+
+    for response in asyncio.run(_drive()):
+        assert response.status_code == 409
+        assert json.loads(response.body)["error"]["type"] == "turn_stopped"
+    assert loop.process_direct.await_count == 1
+
+
+def test_a_gateway_stop_ends_a_waiting_stream_with_the_turn_stopped_frame():
+    loop, started = _hanging_loop()
+    endpoint, stop_turns = _endpoint_and_stop(loop)
+
+    async def _drive():
+        response = await endpoint(_json_req(stream=True))
+        body = response.body_iterator
+        first = asyncio.ensure_future(body.__anext__())
+        await asyncio.wait_for(started.wait(), 1)
+        stop_turns()
+        chunks = [await asyncio.wait_for(first, 1)]
+        async for chunk in body:
+            chunks.append(chunk)
+        return b"".join(chunks).decode()
+
+    events = _sse_events(asyncio.run(_drive()))
     assert events[-1] != "[DONE]"
     assert json.loads(events[-1])["error"] == {"message": "Turn was stopped", "type": "turn_stopped"}
 
@@ -817,7 +880,7 @@ def test_stream_ceiling_starts_when_the_turn_gets_the_session():
 
     loop = MagicMock()
     loop.process_direct = AsyncMock(side_effect=_turn)
-    routes = build_openai_routes(
+    routes, _stop_turns = build_openai_routes(
         loop,
         model_name="test-model",
         request_timeout=5.0,
@@ -868,7 +931,7 @@ def test_same_session_requests_serialize():
 
     loop = MagicMock()
     loop.process_direct = AsyncMock(side_effect=_slow)
-    routes = build_openai_routes(
+    routes, _stop_turns = build_openai_routes(
         loop,
         model_name="test-model",
         request_timeout=5.0,

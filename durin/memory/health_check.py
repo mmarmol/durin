@@ -584,9 +584,11 @@ class HealthCheckScheduler:
         checker: "HealthChecker",
         *,
         interval_seconds: int,
+        first_tick_delay_s: float = 0.0,
     ) -> None:
         self._checker = checker
         self._interval = max(1, int(interval_seconds))
+        self._first_tick_delay = max(0.0, float(first_tick_delay_s))
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._tick_count = 0
@@ -595,6 +597,11 @@ class HealthCheckScheduler:
     def tick_count(self) -> int:
         """Total ticks the scheduler has driven (tests + dashboards)."""
         return self._tick_count
+
+    @property
+    def interval_seconds(self) -> int:
+        """Seconds between ticks."""
+        return self._interval
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -629,9 +636,12 @@ class HealthCheckScheduler:
 
         token = bind_telemetry(get_session_logger("gateway"), purpose="memory_health")
         try:
-            # First tick fires immediately so a fresh process has a
-            # health probe in its first interval window, not after.
-            # Subsequent ticks wait `interval_seconds`.
+            # The first tick fires after `first_tick_delay_s` (immediately
+            # by default), so a fresh process has a health probe in its first
+            # interval window, not after. Subsequent ticks wait
+            # `interval_seconds`.
+            if self._first_tick_delay and self._stop_event.wait(timeout=self._first_tick_delay):
+                return
             while not self._stop_event.is_set():
                 try:
                     self._checker.run_tick()

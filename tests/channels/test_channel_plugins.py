@@ -180,8 +180,8 @@ async def test_manager_loads_plugin_from_dict_config():
     )
 
     with patch(
-        "durin.channels.registry.discover_all",
-        return_value={"fakeplugin": _FakePlugin},
+        _EP_TARGET,
+        return_value=[_make_entry_point("fakeplugin", _FakePlugin)],
     ):
         mgr = ChannelManager.__new__(ChannelManager)
         mgr.config = fake_config
@@ -215,8 +215,8 @@ async def test_an_enabled_section_with_no_channel_is_reported():
     sink_id = logger.add(lambda m: records.append(m.record["message"]), level="WARNING")
     try:
         with patch(
-            "durin.channels.registry.discover_all",
-            return_value={"fakeplugin": _FakePlugin},
+            _EP_TARGET,
+            return_value=[_make_entry_point("fakeplugin", _FakePlugin)],
         ):
             mgr = ChannelManager.__new__(ChannelManager)
             mgr.config = fake_config
@@ -248,8 +248,8 @@ async def test_manager_propagates_groq_transcription_api_base_to_channels():
     )
 
     with patch(
-        "durin.channels.registry.discover_all",
-        return_value={"fakeplugin": _FakePlugin},
+        _EP_TARGET,
+        return_value=[_make_entry_point("fakeplugin", _FakePlugin)],
     ):
         mgr = ChannelManager.__new__(ChannelManager)
         mgr.config = fake_config
@@ -284,8 +284,8 @@ async def test_manager_propagates_openai_transcription_api_base_to_channels():
     )
 
     with patch(
-        "durin.channels.registry.discover_all",
-        return_value={"fakeplugin": _FakePlugin},
+        _EP_TARGET,
+        return_value=[_make_entry_point("fakeplugin", _FakePlugin)],
     ):
         mgr = ChannelManager.__new__(ChannelManager)
         mgr.config = fake_config
@@ -537,8 +537,8 @@ async def test_manager_skips_disabled_plugin():
     )
 
     with patch(
-        "durin.channels.registry.discover_all",
-        return_value={"fakeplugin": _FakePlugin},
+        _EP_TARGET,
+        return_value=[_make_entry_point("fakeplugin", _FakePlugin)],
     ):
         mgr = ChannelManager.__new__(ChannelManager)
         mgr.config = fake_config
