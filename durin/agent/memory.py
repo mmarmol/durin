@@ -676,6 +676,10 @@ class Consolidator:
         # compacted by hand (``forget_session``); in-memory and bounded like
         # the veto state above.
         self._compaction_floor: dict[str, tuple[int, CompactionLimits]] = {}
+        # Per session, the limits its latest check was sized by when they are
+        # not the loop's own model's (a turn on a persona's or a per-turn
+        # model): what ``session_trigger`` reports. Bounded like the above.
+        self._session_limits: dict[str, CompactionLimits] = {}
 
     @staticmethod
     def _bounded_put(store: dict[str, Any], key: str, value: Any) -> None:
@@ -688,6 +692,14 @@ class Consolidator:
     def _forget_session_fit(self, key: str) -> None:
         self._fit_baseline.pop(key, None)
         self._awaiting_real_usage.pop(key, None)
+
+    def session_trigger(self, session_key: str) -> int:
+        """The trigger the session's turns compact at, as its latest check in
+        this process was sized: by the model its turn ran on (a persona's, a
+        cron job's), else — also before any check — by the loop's own model.
+        Cheap: nothing is resolved."""
+        limits = self._session_limits.get(session_key) or self._limits()
+        return self._trigger_for(limits)[0]
 
     def forget_session(self, session_key: str) -> None:
         """Drop what the checks remember about a session's prompt: the
@@ -1543,7 +1555,10 @@ class Consolidator:
         and every later turn with it.
         """
         if limits is None:
+            self._session_limits.pop(session.key, None)
             limits = self._limits()
+        else:
+            self._bounded_put(self._session_limits, session.key, limits)
         if not session.messages or limits.context_window_tokens <= 0:
             return
         with self._bound_telemetry(session.key):

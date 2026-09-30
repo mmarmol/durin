@@ -1075,7 +1075,7 @@ class AgentDefaults(Base):
     provider: str = Field(default="auto", description='Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection from the model name')
     max_tokens: int = Field(default=8192, ge=1, description="Max output tokens per turn")
     context_window_tokens: int = Field(default=65_536, ge=1, description="Context window size hint in tokens")
-    context_block_limit: int | None = Field(default=None, description="Hard limit on context blocks; overrides the token budget when set")
+    context_block_limit: int | None = Field(default=None, description="Hard limit, in tokens, on what the chat and its subagents may send: when set it replaces the input budget their model's window gives them, and chat compaction and the replayed history stay under it")
     temperature: float = Field(default=0.4, description="Generation temperature")
     fallback_models: list[FallbackCandidate] = Field(default_factory=list, description="Ordered list of preset names or inline model specs to try on provider failure")
     max_tool_iterations: int = Field(default=200, description="Cap on tool-call iterations per turn")
@@ -1119,7 +1119,7 @@ class AgentDefaults(Base):
         le=0.95,
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
-        description="Consolidation target ratio: fraction of the context budget retained after compression (0.5 = 50%)",
+        description="How far a compaction reduces the prompt, as a fraction of the compaction trigger (0.5 = down to half the trigger)",
     )
     preemptive_compact_ratio: float = Field(
         default=0.5,

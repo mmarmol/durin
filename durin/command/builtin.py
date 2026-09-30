@@ -401,8 +401,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             max_completion_tokens=getattr(
                 getattr(loop.provider, "generation", None), "max_tokens", 8192
             ),
-            compaction_trigger_tokens=getattr(
-                loop.consolidator, "_preemptive_trigger_tokens", 0
+            # The session's own: a persona's model compacts by its own window.
+            compaction_trigger_tokens=loop.session_compaction_trigger(
+                session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             ),
             composition_payload=composition_payload,
         ),

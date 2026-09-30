@@ -481,8 +481,8 @@ The handlers, in order:
 
 `_run_agent_loop` is the bridge from loop to runner. It builds the hook,
 resolves the agent-mode provider and the compaction-grace probe, takes the
-per-turn model BUILD resolved (resolving a ref itself only for a caller
-outside a turn), then calls `self.runner.run(AgentRunSpec(...))`.
+per-turn model BUILD resolved (the loop's own when there is none), then
+calls `self.runner.run(AgentRunSpec(...))`.
 
 `AgentRunner` ([`durin/agent/runner.py`](../../durin/agent/runner.py)) is the
 shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
@@ -960,7 +960,13 @@ model, a persona's model) sizes its compaction and its history replay by that
 model's window and output ceiling, and by its preset's ratio and cap
 (`Consolidator.run_limits`), from BUILD to the compaction scheduled after
 SAVE. Sizing it by the loop's model would put the trigger above the smaller
-model's budget whenever the loop's model has the larger window.
+model's budget whenever the loop's model has the larger window. The context
+gauges follow the same model: `/status` measures a session against the
+trigger its next turn compacts at (`AgentLoop.session_compaction_trigger`
+resolves the session's persona model as BUILD does), and the CLI footer,
+which renders too often to build a provider snapshot each time, against the
+trigger its latest check was sized by (`Consolidator.session_trigger`: the
+loop's own model's until the session's first turn in the process).
 
 `_input_token_budget` does not follow the turn: the summary, the decision-log
 extraction and the learnings extraction all run on the loop's own model. A
@@ -1011,8 +1017,18 @@ preset leaves unset takes the `agents.defaults` value, whatever the previous
 preset set. The `agents.defaults` values travel in the provider snapshot
 (`compaction_defaults`), and the snapshot's signature includes them and the
 preset's own, so the per-turn snapshot refresh applies an edit to them on the
-next turn. A preset's own values come from the loop's preset objects, which the
-gateway reads at start.
+next turn. A preset's own values come from wherever that refresh
+(`_refresh_provider_snapshot`) takes the preset. While the loop holds a
+preset (`_active_preset`: the one `agents.defaults.model_preset` named at
+start, which `from_config` activates, or one set with `/model`, the model
+picker or the settings' default model) and the selection in the file still
+resolves to the same model and provider, the snapshot is rebuilt from the
+loop's own preset object, which only `reload_app_config` replaces (a persona,
+the default model or a concurrency limit saved through the settings) besides
+a restart. Once the file's selection resolves to another model or provider,
+the loop drops the held preset and takes the file's snapshot every turn, so
+an edit to the preset named there applies on the next turn. The `default`
+preset is re-read from the file every turn either way.
 
 The cap governs the loop's session compaction only: workflow nodes and
 subagents prune by the runner's input budget instead.

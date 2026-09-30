@@ -2086,6 +2086,22 @@ class AgentLoop:
             return self._resolve_model_override(ref)
         return None
 
+    def session_compaction_trigger(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> int:
+        """The trigger the session's next turn compacts at: the one of the
+        model its persona names when that is not the loop's own, resolved as
+        BUILD resolves it, else the loop's own model's. Resolving builds that
+        model's provider snapshot, so a display that renders often reads
+        ``Consolidator.session_trigger`` instead."""
+        _soul, model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
+        limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
+        return self.consolidator._trigger_for(limits or self.consolidator._limits())[0]
+
     def _compaction_limits(self, run_snapshot: ProviderSnapshot | None) -> CompactionLimits | None:
         """What compaction is sized by for a turn on *run_snapshot*'s model;
         None (the loop's own model) when the turn runs on the loop's."""
@@ -2113,14 +2129,13 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queues: PendingQueues | None = None,
-        model_preset: str | None = None,
         override_snapshot: ProviderSnapshot | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
 
-        *override_snapshot*: the model this run uses when the caller already
-        resolved it (a turn resolves it once, in BUILD); otherwise
-        *model_preset* is resolved here.
+        *override_snapshot*: the model this run uses when it is not the
+        loop's own (a turn resolves it once, in BUILD); None runs on the
+        loop's model.
 
         *on_stream*: called with each content delta during streaming.
         *on_stream_end(resuming)*: called when a streaming session finishes.
@@ -2370,12 +2385,10 @@ class AgentLoop:
             lock = self.consolidator.get_lock(_session_key_for_compact)
             return lock.locked()
 
-        # Per-turn model override (cron per-job model): resolve the picker ref to
-        # a full provider snapshot for THIS turn only — provider + model + context
-        # window — without touching global model state. Falls back to the agent
-        # default if no override is given or the ref cannot be resolved.
-        if override_snapshot is None:
-            override_snapshot = self._turn_model_snapshot(model_preset)
+        # The turn's own model when it is not the loop's (a cron job's per-job
+        # model, a persona's): a full provider snapshot for THIS run only —
+        # provider + model + context window — without touching global model
+        # state. None runs on the agent default.
         if override_snapshot is not None:
             effective_provider = override_snapshot.provider
             effective_model = override_snapshot.model

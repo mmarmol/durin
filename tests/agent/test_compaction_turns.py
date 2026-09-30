@@ -50,6 +50,7 @@ async def _run_turns(
     tool_turns: tuple[int, ...] = (),
     overflow_turns: tuple[int, ...] = (),
     session_messages: list[dict[str, Any]] | None = None,
+    session_metadata: dict[str, Any] | None = None,
     **loop_kwargs: Any,
 ) -> dict[str, Any]:
     """Run *turns* turns on one session.
@@ -138,7 +139,8 @@ async def _run_turns(
     session = loop.sessions.get_or_create("cli:sim")
     if session_messages is not None:
         session.messages = [dict(m) for m in session_messages]
-        loop.sessions.save(session)
+    session.metadata.update(session_metadata or {})
+    loop.sessions.save(session)
     replies: list[str | None] = []
     compactions: list[int] = []
     tails: list[str | None] = []
@@ -364,6 +366,39 @@ async def test_a_turn_on_a_smaller_model_compacts_by_that_models_limits(tmp_path
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
     assert max(result["main_prompts"]) <= input_budget_tokens(45_000, 8192)
+
+
+@pytest.mark.asyncio
+async def test_status_and_the_footer_measure_against_the_trigger_the_turns_use(tmp_path, monkeypatch):
+    """A persona whose model has a 45,000-token window runs its session's
+    turns on that model, which compacts at 33,750 whatever the loop's own 1M
+    model would. /status and the CLI footer measured the session against the
+    loop's 256,000; /status is right before the session's first turn too."""
+    import durin.cli.footer as footer
+    from durin.cli.footer import build_footer_text
+    from durin.config.schema import Config, ModelPresetConfig, PersonaConfig
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+        "small": ModelPresetConfig(model="test-model", context_window_tokens=45_000),
+    }
+    config = Config()
+    config.personas["brief"] = PersonaConfig(model="small")
+    result = await _run_turns(
+        tmp_path, turns=0, window=1_000_000, model_presets=presets, app_config=config,
+        session_metadata={"persona": "brief"},
+    )
+    loop = result["loop"]
+    monkeypatch.setattr(loop.consolidator, "estimate_session_prompt_tokens", lambda *_a, **_k: (16_875, "test"))
+    monkeypatch.setattr(footer, "_token_estimate", lambda _session: 16_875)
+
+    status = await loop.process_direct("/status", session_key="cli:sim")
+    assert "(50% to compaction)" in status.content
+
+    await loop.process_direct("turn 0: hello", session_key="cli:sim")
+    assert build_footer_text(loop, "cli", "sim")["context_pct"] == 50
+    status = await loop.process_direct("/status", session_key="cli:sim")
+    assert "(50% to compaction)" in status.content
 
 
 @pytest.mark.asyncio
