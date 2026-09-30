@@ -196,9 +196,11 @@ whatever is left unset comes from:
 2. the model catalog (the window and output limit the provider publishes),
 3. `agents.defaults.context_window_tokens` / `agents.defaults.max_tokens`.
 
-A preset whose `provider` is `"auto"` has no provider to look the model up
-under, so it goes straight to `agents.defaults`, like the default model does
-with `provider: "auto"`. A preset that sets only `model`, `provider` and a
+The entry and the catalog are read under the provider the run actually goes
+to: a preset (or the default model) on `"auto"` uses the provider its model
+routes to, and a spelling such as `zai-coding-plan` or `zaiCodingPlan` reads
+the `zai_coding_plan` entry. Only a model that no configured provider serves
+has neither and takes `agents.defaults`. A preset that sets only `model` and a
 `temperature` therefore runs with the model's real limits.
 
 A model's entry holds only what you put there: durin never copies a preset's

@@ -1716,13 +1716,14 @@ class Config(BaseSettings):
         max_tokens: int | None = None,
     ) -> tuple[int, int]:
         """``(context_window_tokens, max_tokens)`` for a run of *model* on
-        *provider*, given its ``(entry, caps)`` from ``_resolve_model_params``.
+        *provider* (the routed registry name, see ``routed_provider``), given
+        its ``(entry, caps)`` from ``_resolve_model_params``.
 
         A value passed in (a preset's own) wins; an unset one comes from the
         user's ``providers.<provider>.models`` entry, then the catalog, then
         ``agents.defaults``. A value above the catalog's is capped to it
-        (``_capped_limit``). A provider of ``"auto"`` has no entry or catalog
-        to read, so an unset value comes from ``agents.defaults``.
+        (``_capped_limit``). A model no provider serves has no entry or
+        catalog row, so an unset value comes from ``agents.defaults``.
         """
         d = self.agents.defaults
         real_ctx = caps.max_input_tokens if caps and caps.max_input_tokens else None
@@ -1753,9 +1754,10 @@ class Config(BaseSettings):
         preset is never modified, so a resolved value is never written back
         to the config file.
         """
-        entry, caps = self._resolve_model_params(preset.provider, preset.model)
+        provider = self.routed_provider(preset.provider, preset.model)
+        entry, caps = self._resolve_model_params(provider, preset.model)
         ctx, mt = self._model_limits(
-            preset.provider, preset.model, entry, caps,
+            provider, preset.model, entry, caps,
             context_window_tokens=preset.context_window_tokens,
             max_tokens=preset.max_tokens,
         )
@@ -1763,11 +1765,27 @@ class Config(BaseSettings):
             return preset
         return preset.model_copy(update={"context_window_tokens": ctx, "max_tokens": mt})
 
+    def routed_provider(self, provider: str, model: str) -> str:
+        """The provider registry name a run of *model* on *provider* goes
+        to — the one the factory builds its client for: ``"auto"`` resolved
+        from the model name and the configured providers, an alias spelling
+        (``zai-coding-plan``, ``zaiCodingPlan``) normalized to the registry
+        name. *provider* as given when nothing routes it.
+
+        The model's entry, catalog row and cap are read under this name: the
+        string a preset was written with is not what its requests go to.
+        """
+        routed = self.get_provider_name(
+            model, preset=ModelPresetConfig(model=model, provider=provider or "auto"),
+        )
+        return routed or provider
+
     def resolve_default_preset(self) -> ModelPresetConfig:
         """The implicit `default` preset: provider.models → catalog → defaults."""
         d = self.agents.defaults
-        entry, caps = self._resolve_model_params(d.provider, d.model)
-        ctx, mt = self._model_limits(d.provider, d.model, entry, caps)
+        provider = self.routed_provider(d.provider, d.model)
+        entry, caps = self._resolve_model_params(provider, d.model)
+        ctx, mt = self._model_limits(provider, d.model, entry, caps)
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None

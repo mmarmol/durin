@@ -153,11 +153,16 @@ of preset, through `Config._model_limits`: a value the preset sets wins, then th
 (`catalog_model_caps`, `durin/providers/provider_catalog.py`: `max_input_tokens`
 for the window, `max_output_tokens` for the output cap), then `agents.defaults`.
 `openai_codex` is not in the catalog, so each codex slug inherits the matching
-`openai` entry's caps. A preset whose provider is `"auto"` has no entry or catalog
-row to read and goes to `agents.defaults` — the default preset's own behaviour
-with an `"auto"` provider. `resolve_preset_limits` returns a copy (or the preset
-itself when nothing changed) and never modifies the stored preset, so a resolved
-value is never saved back to the config file.
+`openai` entry's caps. The entry, the catalog row and the cap are read under
+`Config.routed_provider(provider, model)`: the registry name the factory builds
+the client for (§4.2) — `"auto"` resolved from the model name and the configured
+providers, an alias spelling (`zai-coding-plan`, `zaiCodingPlan`) normalized —
+so the limits are those of the provider the requests actually go to, for the
+default preset and every other. Only a model no configured provider serves has
+neither an entry nor a catalog row and takes `agents.defaults`.
+`resolve_preset_limits` returns a copy (or the preset itself when nothing changed)
+and never modifies the stored preset, so a resolved value is never saved back to
+the config file.
 
 A `ModelEntry` exists only because someone set it: loading a config never
 creates or fills one. Every run on the model reads its entry before the

@@ -311,7 +311,62 @@ def test_the_default_preset_still_reads_entry_then_catalog_then_defaults() -> No
     assert cfg.resolve_default_preset().context_window_tokens == cfg.agents.defaults.context_window_tokens
 
 
-def test_an_auto_provider_preset_falls_back_to_agents_defaults_like_the_default_preset() -> None:
+def test_a_preset_whose_model_routes_to_no_provider_falls_back_to_agents_defaults() -> None:
+    """No provider is configured, so "auto" routes nowhere: there is no entry
+    or catalog row to read."""
     cfg = _config(auto=ModelPresetConfig(model="glm-5.3"))
     cfg.agents.defaults.context_window_tokens = 40_000
     assert cfg.resolve_preset("auto").context_window_tokens == 40_000
+
+
+# --- the provider a run actually uses, not the provider string as written --------------
+
+
+def _routed_config(**presets: ModelPresetConfig) -> Config:
+    """Only zai_coding_plan is configured, and agents.defaults carries the
+    onboarding wizard's window for the default model."""
+    cfg = _config(**presets)
+    cfg.providers.zai_coding_plan.api_key = "sk-test"
+    cfg.agents.defaults.context_window_tokens = 1_000_000
+    cfg.agents.defaults.max_tokens = 131_072
+    return cfg
+
+
+def test_an_auto_preset_takes_the_limits_of_the_provider_it_runs_on() -> None:
+    cfg = _routed_config(turbo=ModelPresetConfig(model="glm-5-turbo"))
+    resolved = cfg.resolve_preset("turbo")
+    assert cfg.get_provider_name(resolved.model, preset=resolved) == "zai_coding_plan"
+    assert (resolved.context_window_tokens, resolved.max_tokens) == (200_000, 131_072)
+
+
+def test_an_auto_fallback_caps_the_chat_window_at_its_real_one() -> None:
+    from durin.providers.factory import build_provider_snapshot
+
+    cfg = _routed_config(turbo=ModelPresetConfig(model="glm-5-turbo"))
+    cfg.agents.defaults.fallback_models = ["turbo"]
+    assert build_provider_snapshot(cfg).context_window_tokens == 200_000
+    assert build_provider_snapshot(cfg, preset_name="turbo").context_window_tokens == 200_000
+
+
+@pytest.mark.parametrize("spelling", ["zai-coding-plan", "zaiCodingPlan", "zai_coding_plan"])
+def test_a_provider_alias_reads_the_same_entry_and_catalog(spelling: str) -> None:
+    cfg = _routed_config(turbo=ModelPresetConfig(model="glm-5-turbo", provider=spelling))
+    assert cfg.resolve_preset("turbo").context_window_tokens == 200_000
+    cfg.providers.zai_coding_plan.models["glm-5-turbo"] = ModelEntry(max_tokens=32_000)
+    assert cfg.resolve_preset("turbo").max_tokens == 32_000
+
+
+def test_an_auto_default_model_takes_the_limits_of_the_provider_it_runs_on() -> None:
+    cfg = _config()
+    cfg.agents.defaults.provider = "auto"
+    cfg.providers.zai_coding_plan.api_key = "sk-test"
+    preset = cfg.resolve_default_preset()
+    assert (preset.context_window_tokens, preset.max_tokens) == (1_000_000, 131_072)
+
+
+def test_routed_provider_names_the_registry_key_a_run_goes_to() -> None:
+    cfg = _routed_config()
+    assert cfg.routed_provider("auto", "glm-5-turbo") == "zai_coding_plan"
+    assert cfg.routed_provider("zai-coding-plan", "glm-5-turbo") == "zai_coding_plan"
+    assert cfg.routed_provider("zaiCodingPlan", "glm-5-turbo") == "zai_coding_plan"
+    assert _config().routed_provider("auto", "glm-5-turbo") == "auto"

@@ -1006,8 +1006,11 @@ def _configured_model_limits(cfg) -> list[tuple[str, str, str, int | None, int |
     """Every window / output cap set in the config, as ``(where, provider,
     model, context_window_tokens, max_tokens)``: each ``providers.<p>.models``
     entry, each named preset and each inline fallback that sets one. ``where``
-    is the config path of the setting. A preset or fallback on the ``"auto"``
-    provider has no catalog row to compare with and is left out."""
+    is the config path of the setting; ``provider`` is the registry name the
+    run goes to (``"auto"`` routed, an alias spelling normalized), since that
+    is the catalog the runtime caps against. A preset or fallback whose model
+    no configured provider serves has no catalog row to compare with and is
+    left out."""
     from durin.cli.config_cmd import _render_path
 
     out: list[tuple[str, str, str, int | None, int | None]] = []
@@ -1018,17 +1021,21 @@ def _configured_model_limits(cfg) -> list[tuple[str, str, str, int | None, int |
                 where = _render_path([("providers", False), (provider, False), ("models", False), (model, True)])
                 out.append((where, provider, model, entry.context_window_tokens, entry.max_tokens))
     for name, preset in cfg.model_presets.items():
-        if preset.provider != "auto" and (
-            preset.context_window_tokens is not None or preset.max_tokens is not None
-        ):
-            where = _render_path([("model_presets", False), (name, True)])
-            out.append((where, preset.provider, preset.model, preset.context_window_tokens, preset.max_tokens))
-    for index, fallback in enumerate(cfg.agents.defaults.fallback_models):
-        if isinstance(fallback, str) or fallback.provider == "auto":
+        if preset.context_window_tokens is None and preset.max_tokens is None:
             continue
-        if fallback.context_window_tokens is not None or fallback.max_tokens is not None:
+        provider = cfg.routed_provider(preset.provider, preset.model)
+        if provider != "auto":
+            where = _render_path([("model_presets", False), (name, True)])
+            out.append((where, provider, preset.model, preset.context_window_tokens, preset.max_tokens))
+    for index, fallback in enumerate(cfg.agents.defaults.fallback_models):
+        if isinstance(fallback, str):
+            continue
+        if fallback.context_window_tokens is None and fallback.max_tokens is None:
+            continue
+        provider = cfg.routed_provider(fallback.provider, fallback.model)
+        if provider != "auto":
             where = f"agents.defaults.fallback_models.{index}"
-            out.append((where, fallback.provider, fallback.model, fallback.context_window_tokens, fallback.max_tokens))
+            out.append((where, provider, fallback.model, fallback.context_window_tokens, fallback.max_tokens))
     return out
 
 

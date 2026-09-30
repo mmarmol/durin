@@ -90,6 +90,20 @@ def test_a_named_preset_with_its_own_limits_is_checked() -> None:
     assert "model_presets" in r.message and "big" in r.message
 
 
+@pytest.mark.parametrize("provider", ["auto", "zai-coding-plan"])
+def test_a_preset_is_checked_against_the_provider_it_runs_on(provider: str) -> None:
+    """A preset on "auto" (the schema default) or an alias spelling runs on
+    zai_coding_plan here, so its window is checked against that catalog."""
+    cfg = _cfg()
+    cfg.model_presets["turbo"] = ModelPresetConfig(
+        model="glm-5-turbo", provider=provider, context_window_tokens=231_072,
+    )
+    r = _run(cfg)
+    assert r.status == "warn"
+    assert 'model_presets["turbo"]' in r.message
+    assert "231,072" in r.message and "200,000" in r.message
+
+
 def test_an_inline_fallback_with_its_own_limits_is_checked() -> None:
     cfg = _cfg()
     cfg.agents.defaults.fallback_models = [

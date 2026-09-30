@@ -668,8 +668,11 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
     from durin.config.schema import Config, ModelPresetConfig
 
     entry = None
-    if config is not None and provider and provider != "auto":
-        pc = getattr(config.providers, provider, None)
+    if config is not None:
+        # The entry of the provider the run goes to ("auto" routed, an alias
+        # spelling normalized), not of the string the ref was written with.
+        routed = config.routed_provider(provider, model)
+        pc = getattr(config.providers, routed, None) if routed and routed != "auto" else None
         entry = (getattr(pc, "models", None) or {}).get(model)
     preset = ModelPresetConfig(
         model=model,

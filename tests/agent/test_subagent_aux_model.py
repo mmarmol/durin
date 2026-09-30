@@ -102,6 +102,32 @@ def test_resolve_via_inline_model_takes_the_users_model_entry_window(tmp_path, m
     assert window == 8_192
 
 
+def test_resolve_via_inline_auto_model_takes_the_limits_of_the_provider_it_runs_on(tmp_path, monkeypatch):
+    """An inline pair on the schema-default provider "auto" runs on the
+    provider its model routes to; its window and output cap are that
+    provider's catalog values, not agents.defaults'."""
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [
+        ModelInfo(id="glm-5-turbo", max_input_tokens=200_000, max_output_tokens=131_072),
+    ]})
+    cfg = _config(tmp_path, monkeypatch)
+    cfg.providers.zai_coding_plan.api_key = "sk-test"
+    cfg.agents.defaults.context_window_tokens = 1_000_000
+    cfg.agents.aux_models.subagents = AuxModelConfig(model="glm-5-turbo")
+    built: list[ModelPresetConfig] = []
+
+    def _make(config, preset=None, **_):
+        built.append(preset)
+        return MagicMock(spec=LLMProvider)
+
+    with patch("durin.providers.factory.make_provider", side_effect=_make):
+        _, _, window = _resolve_subagent_provider(cfg)
+    assert window == 200_000
+    assert cfg.resolve_preset_limits(built[0]).max_tokens == 131_072
+
+
 def test_resolve_bad_preset_raises_to_caller(tmp_path, monkeypatch):
     """A bad preset name raises from resolve_preset(); the caller
     (SubagentManager._run_subagent) is responsible for catching this and
