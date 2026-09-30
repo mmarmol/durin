@@ -635,6 +635,10 @@ same path from the validated config; when it is not there — validation
 dropped a key that is not a field of its section — the write is refused with
 `ConfigKeyError` (the CLI exits 1, the API answers a validation error) instead
 of saving a config where the value landed nowhere or under an unrelated key.
+That refusal, and `get`/`show`'s "No such key", say why when the path goes
+through a field the config file never holds (`exclude=True`: the
+`openai_codex` and `github_copilot` blocks, which `durin oauth login`
+manages) and otherwise show the bracket form of a key with dots.
 `ConfigSettings.tsx` builds its row paths the same way, bracketing any key
 that contains a dot, bracket or quote.
 

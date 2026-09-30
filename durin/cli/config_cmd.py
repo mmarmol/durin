@@ -251,6 +251,41 @@ _DOTTED_KEY_HINT = (
     'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens'
 )
 
+#: How a command's help names a key with dots in a config path.
+_BRACKETS_HELP = 'a key that contains dots, such as a model name, goes in brackets: models["glm-5.3"]'
+_PATH_HELP = f"Config path, e.g. agents.defaults.model; {_BRACKETS_HELP}."
+
+
+def _unsaved_field(path: str) -> tuple[str, str] | None:
+    """The leading part of *path* that names a field the config file never
+    holds (``exclude=True`` — an OAuth provider's block, which ``durin oauth
+    login`` manages), with that field's description; ``None`` when the path
+    goes through no such field. A value written under one lands nowhere."""
+    segments = _parse_path(_normalize_dotted_path(path))
+    model: Any = Config
+    for depth, (key, _) in enumerate(segments):
+        fields = getattr(model, "model_fields", None)
+        if not isinstance(fields, dict) or key not in fields:
+            return None
+        info = fields[key]
+        if info.exclude:
+            return _render_path(segments[: depth + 1]), info.description or ""
+        model = info.annotation
+    return None
+
+
+def _missing_key_hint(path: str) -> str:
+    """Why *path* may name nothing in the config: a field on it that the
+    config file never holds, or else how to write a key that contains dots."""
+    try:
+        unsaved = _unsaved_field(path)
+    except ValueError:
+        unsaved = None
+    if unsaved is None:
+        return _DOTTED_KEY_HINT
+    where, why = unsaved
+    return f"{where} is not kept in the config file" + (f": {why}" if why else "") + "."
+
 
 def apply_setting(data: dict[str, Any], path: str, value: Any) -> Config:
     """*data* with *value* written at the config path *path*, validated.
@@ -273,7 +308,7 @@ def apply_setting(data: dict[str, Any], path: str, value: Any) -> Config:
     try:
         get_at(config.model_dump(mode="json", by_alias=False), normalized)
     except KeyError:
-        raise ConfigKeyError(f"{path} does not name a config key. {_DOTTED_KEY_HINT}") from None
+        raise ConfigKeyError(f"{path} does not name a config key. {_missing_key_hint(path)}") from None
     return config
 
 
@@ -296,7 +331,9 @@ def cmd_path() -> None:
 
 @config_app.command("show")
 def cmd_show(
-    section: str | None = typer.Argument(None, help="Optional dotted section, e.g. 'providers.zhipu'."),
+    section: str | None = typer.Argument(
+        None, help=f"Optional section to show, e.g. providers.zhipu; {_BRACKETS_HELP}.",
+    ),
     raw: bool = typer.Option(False, "--raw", help="Show secrets unmasked (as on disk)."),
 ) -> None:
     """Print the config (or one section), with secrets masked by default."""
@@ -311,6 +348,7 @@ def cmd_show(
             payload = get_at(data, _normalize_dotted_path(section))
         except (KeyError, ValueError):
             console.print(f"[red]No such key: {escape(section)}[/red]")
+            console.print(escape(_missing_key_hint(section)))
             raise typer.Exit(1) from None
     if not raw:
         payload = mask_secrets(payload)
@@ -323,7 +361,7 @@ def cmd_show(
 
 @config_app.command("get")
 def cmd_get(
-    key: str = typer.Argument(..., help="Dotted path through the config (e.g. agents.defaults.model)."),
+    key: str = typer.Argument(..., help=_PATH_HELP),
 ) -> None:
     """Print one value. JSON-encoded when the value is a dict/list.
 
@@ -352,6 +390,7 @@ def cmd_get(
         value = get_at(data, _normalize_dotted_path(key))
     except (KeyError, ValueError):
         console.print(f"[red]No such key: {escape(key)}[/red]")
+        console.print(escape(_missing_key_hint(key)))
         raise typer.Exit(1) from None
     if isinstance(value, (dict, list)):
         console.print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
@@ -423,7 +462,8 @@ def _schema_constraints(node: dict[str, Any]) -> dict[str, Any]:
 @config_app.command("schema")
 def cmd_schema(
     key: str | None = typer.Argument(
-        None, help="Dotted config path (e.g. memory.owner); omit to list top-level sections."
+        None,
+        help=f"Config path, e.g. memory.owner; {_BRACKETS_HELP}. Omit it to list the top-level sections.",
     ),
 ) -> None:
     """Describe config keys from the schema: type, default, constraints, description."""
@@ -473,7 +513,7 @@ def cmd_schema(
 
 @config_app.command("set")
 def cmd_set(
-    key: str = typer.Argument(..., help="Dotted path through the config."),
+    key: str = typer.Argument(..., help=_PATH_HELP),
     value: str = typer.Argument(..., help="New value (JSON-decoded when possible)."),
 ) -> None:
     """Set one value. Validated against the schema before writing.

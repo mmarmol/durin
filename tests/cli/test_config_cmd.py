@@ -558,6 +558,46 @@ def test_cli_config_get_addresses_a_model_name_with_dots(models_config: Path) ->
     assert result.output.strip() == "231072"
 
 
+def test_cli_config_get_a_dotted_model_name_without_brackets_names_the_bracket_form(
+    models_config: Path,
+) -> None:
+    result = runner.invoke(app, [
+        "config", "get", "providers.zai_coding_plan.models.glm-5.3.context_window_tokens",
+    ])
+    assert result.exit_code == 1
+    assert "No such key" in result.output
+    assert "goes in brackets" in " ".join(result.output.split())
+
+
+def test_setting_a_block_the_config_never_saves_says_so() -> None:
+    """An OAuth provider block is excluded from the saved config: the write
+    lands nowhere, and the refusal says why instead of suggesting brackets."""
+    from durin.cli.config_cmd import ConfigKeyError, apply_setting
+
+    data = Config().model_dump(mode="json", by_alias=False)
+    with pytest.raises(ConfigKeyError) as exc:
+        apply_setting(data, 'providers.openai_codex.models["gpt-5.5"].context_window_tokens', 200_000)
+    message = str(exc.value)
+    assert "providers.openai_codex is not kept in the config file" in message
+    assert "durin oauth login" in message
+    assert "goes in brackets" not in message
+
+
+def test_cli_config_get_a_block_the_config_never_saves_says_so(temp_config: Path) -> None:
+    result = runner.invoke(app, ["config", "get", "providers.github_copilot.api_key"])
+    assert result.exit_code == 1
+    flat = " ".join(result.output.split())
+    assert "providers.github_copilot is not kept in the config file" in flat
+    assert "goes in brackets" not in flat
+
+
+@pytest.mark.parametrize("command", ["get", "set", "show", "schema"])
+def test_cli_config_help_names_the_bracket_form(command: str) -> None:
+    result = runner.invoke(app, ["config", command, "--help"])
+    assert result.exit_code == 0, result.output
+    assert "brackets" in " ".join(result.output.split())
+
+
 def test_cli_config_show_addresses_a_model_name_with_dots(models_config: Path) -> None:
     result = runner.invoke(app, ["config", "show", 'providers.zai_coding_plan.models["glm-5.3"]'])
     assert result.exit_code == 0, result.output
