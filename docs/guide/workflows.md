@@ -188,9 +188,10 @@ reply; that call ends the node's turn, and the text sent with it is the
 node's output — for a `FAIL`, the feedback the next step works from. If the
 node finishes without calling it, durin asks for the verdict with one more,
 forced call. If no call arrives at all, a text-parse fallback applies: a
-binary gate reads its verdict from its **last line that states one**
-(PASS/FAIL), and a multi-way node from the **last line that equals one of
-its case labels**.
+binary gate passes only when **every line that states a verdict says
+`PASS`** (a `FAIL` anywhere wins; checklists, code and quotes don't count),
+and a multi-way node takes the **last line that equals one of its case
+labels**.
 
 One special multi-way target is reserved: `__needs_input__`. Routing there
 ends the run with status `needs_input` and the node's own output (its

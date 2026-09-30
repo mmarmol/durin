@@ -775,14 +775,21 @@ When neither produced a valid label — the model never called it, the forced ca
 or the provider did not honour it — the engine **falls back to parsing the node's text
 output**:
 
-- **`parse_verdict` (binary)** reads the **last** line that states a verdict: `FAIL` as the
-  line's first word (followed by anything — "FAIL" and what to fix), or `PASS` alone or
-  followed by punctuation (`PASS.`, `PASS — caveats`). A line that goes on in words after
-  `PASS` ("Pass the id to the handler", a bullet of a FAIL's fix list) is prose and never
-  passes the work. When no line states a verdict, the first non-empty line is read as a
-  leading verdict: `PASS` when it starts with `PASS`, so a prompt that puts the verdict first
-  still routes. Default is `False` (FAIL) — an empty or unparseable answer loops back, never
-  silently passes.
+- **`parse_verdict` (binary)** reads **every line that states a verdict**, and they must all
+  say `PASS`: any `FAIL` line beside a `PASS` reads as FAIL, whichever comes last, so a
+  disagreement costs another pass instead of passing the work. A verdict line uses the
+  uppercase word, after optional markdown and a `Verdict:` / `Overall:` / `Final verdict:`
+  style label: `FAIL` (or `FAILED`) as its first word, followed by anything ("FAIL" and what
+  to fix); `PASS` alone, set off by punctuation or emphasis (`PASS.`, `**PASS** …`,
+  `PASS — caveats`, `PASS (…)`), or `PASS with … caveats`. Lines that are something else are
+  not read: fenced or indented code, list items (a checklist, a fix list), quotes and table
+  rows — so `- PASS: tone` in a checklist, `pass` in a code block or `--- PASS: TestFoo` in
+  pasted test output decide nothing. A quoted `FAIL` line outside those (test output pasted as
+  plain text) still counts, which can read a passing review as FAIL. When no line states a
+  verdict, the first non-empty line is read as a leading verdict: `PASS` when it starts with
+  `pass` in any case, so a prompt that puts the verdict first, even with words after it on that
+  line, still routes. Default is `False` (FAIL) — an empty or unparseable answer loops back,
+  never silently passes.
 - **`parse_label` (multi-way)** scans lines **from the end** for one whose full stripped,
   de-punctuated text equals a declared case label (case-insensitive); it returns the **last**
   match.
@@ -792,7 +799,7 @@ the text irrelevant in the normal case. It still matters when the fallback runs 
 binary node's `PASS`/`FAIL` and a multi-way label belong alone on the text's last line — so a
 verdict still survives if no tool call is ever made.
 
-**Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded.
+**Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded. For a binary gate only a line that is nothing but the verdict is removed (`strip_verdict_line`) — the last non-empty line, else the first — and only when it agrees with the verdict the engine routed on: a checklist bullet or a quoted code line stays, and so does a closing verdict that says the opposite of the node's `route` call.
 
 That same terminal moment stamps `WorkflowResult.final_route_label` — and, on the
 finalized manifest, its `final_route_label` field — with whichever verdict actually ended
@@ -1334,7 +1341,7 @@ End-to-end for a single `run_workflow` call:
 | Symbol | File | Role |
 |---|---|---|
 | `Workflow`, `WorkNode`, `ScriptNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (agent work nodes and deterministic script nodes; routing optional; structural-equivalence guard). |
-| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output, read from its last verdict line (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when neither the node's own `route` call nor the forced one returned a label. |
+| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output — `PASS` only when every line that states a verdict says so (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when neither the node's own `route` call nor the forced one returned a label. |
 | `artifact_dir`, `keyed_work_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. `keyed_work_dir` (the `work_key` folder, shared across runs) ages out on its own clock instead: `prune_runs` reaps a `keys/<workflow>/<key>/` dir once idle past `KEYED_WORK_MAX_AGE_DAYS` (30) days, unless its run lock is held OR `run_log.live_work_keys` still names it (a parked `needs_input` run releases its lock the instant it parks, so the lock check alone would miss it) — the sweep itself runs at most once a day (`keys/.last-sweep`), not on every run. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |

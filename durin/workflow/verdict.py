@@ -11,13 +11,20 @@ from typing import Iterable
 
 _PUNCT = re.compile(r"^[^\w]+|[^\w]+$")
 _LEADING_PUNCT = re.compile(r"^[^\w]+")
-# A FAIL line is FAIL as the line's first word, followed by anything: "FAIL"
-# followed by what to fix is the verdict's own form. A PASS line is PASS alone
-# or followed by punctuation ("PASS.", "PASS — caveats", "PASS (…)"); a line
-# that goes on in words ("Pass the id to the handler") is prose that happens
-# to start with the word, and reading it as a verdict could pass failed work.
-_FAIL_LINE = re.compile(r"FAIL(?![\w-])", re.IGNORECASE)
-_PASS_LINE = re.compile(r"PASS(?![\w-])(?!\s+\w)", re.IGNORECASE)
+# Lines that are part of something else, never the node's own verdict: a list
+# item (a checklist, a fix list), a quote, a table row, and a fence line.
+_LIST_ITEM = re.compile(r"(?:[-*+•]|\d+[.)])\s")
+_FENCE = re.compile(r" {0,3}(?:```|~~~)")
+# "Verdict: FAIL", "**Verdict:** PASS", "Overall: FAIL — …", "Final verdict: PASS".
+_LABEL = re.compile(
+    r"(?i:(?:final\s+|overall\s+)?(?:verdict|result|decision|outcome|overall))\b[^\w\n]*")
+# Only the uppercase words state a verdict. A FAIL line is FAIL (or FAILED) as
+# its first word, followed by anything: "FAIL" and what to fix is the verdict's
+# own form. A PASS line is PASS alone, set off by punctuation or emphasis
+# ("PASS.", "**PASS** …", "PASS — caveats", "PASS (…)"), or "PASS with … caveats";
+# PASS followed straight by words is not read as a verdict line.
+_FAIL_LINE = re.compile(r"FAIL(?:ED)?(?![\w-])")
+_PASS_LINE = re.compile(r"PASS(?![\w-])(?:$|[*`]|\s*[^\w\s]|\s+with\b.*\bcaveats?\b)")
 
 
 def normalize_label(s: str) -> str:
@@ -30,37 +37,67 @@ def normalize_label(s: str) -> str:
     return _PUNCT.sub("", s).upper()
 
 
-def _verdict_line(lines: list[str]) -> tuple[int, bool] | None:
-    """The line of *lines* that states the verdict, as ``(index, passed)``, or
-    None when none does.
-
-    The last PASS or FAIL line wins, read from the end because the node is
-    asked to end its reply with the verdict (leading markdown or list markers
-    ignored, any case). Failing that, the first non-empty line is read as a
-    leading verdict: PASS when it starts with 'PASS', FAIL when it starts with
-    'FAIL' — so a prompt that puts the verdict first, even with words after it
-    on that line, still routes."""
-    for i in range(len(lines) - 1, -1, -1):
-        s = _LEADING_PUNCT.sub("", lines[i].strip())
-        if _FAIL_LINE.match(s):
-            return i, False
-        if _PASS_LINE.match(s):
-            return i, True
-    for i, line in enumerate(lines):
-        s = line.strip().upper()
-        if not s:
+def _statement_lines(lines: list[str]):
+    """``(index, line)`` for each line that could state the node's own verdict:
+    not inside a fenced or indented code block, and not a list item, a quote or
+    a table row."""
+    in_fence = False
+    for i, raw in enumerate(lines):
+        if _FENCE.match(raw):
+            in_fence = not in_fence
             continue
-        if s.startswith(("PASS", "FAIL")):
-            return i, s.startswith("PASS")
-        break
+        if in_fence or raw.startswith(("    ", "\t")):
+            continue
+        s = raw.strip()
+        if not s or s.startswith((">", "|")) or _LIST_ITEM.match(s):
+            continue
+        yield i, s
+
+
+def _after_label(line: str) -> str:
+    """*line* without its leading markdown and ``Verdict:``-style label."""
+    s = _LEADING_PUNCT.sub("", line.strip())
+    label = _LABEL.match(s)
+    return s[label.end():] if label else s
+
+
+def _verdict_of(line: str) -> bool | None:
+    """True for a line that states PASS, False for FAIL, None otherwise (see
+    ``_PASS_LINE`` / ``_FAIL_LINE``)."""
+    s = _after_label(line)
+    if _FAIL_LINE.match(s):
+        return False
+    if _PASS_LINE.match(s):
+        return True
     return None
 
 
+def _verdict_lines(lines: list[str]) -> list[tuple[int, bool]]:
+    """``(index, passed)`` for every line of *lines* that states a verdict."""
+    found = []
+    for i, line in _statement_lines(lines):
+        verdict = _verdict_of(line)
+        if verdict is not None:
+            found.append((i, verdict))
+    return found
+
+
 def parse_verdict(text: str) -> bool:
-    """Return True iff the verdict line of *text* (see ``_verdict_line``) is a
-    PASS; False for a FAIL and when no line states a verdict."""
-    found = _verdict_line((text or "").splitlines())
-    return found is not None and found[1]
+    """Return True iff the lines of *text* that state a verdict all say PASS.
+
+    Any FAIL line beside a PASS reads as FAIL, whichever comes last, so a
+    disagreement only costs another pass. Lines that are something else — code,
+    list items such as a checklist or a fix list, quotes, tables — are not read.
+    When no line states a verdict, the first non-empty line is read as a leading
+    verdict, PASS when it starts with 'PASS' in any case, so prompts that put
+    the verdict first (even with words after it on that line) still route.
+    False (FAIL) otherwise."""
+    lines = (text or "").splitlines()
+    found = _verdict_lines(lines)
+    if found:
+        return all(passed for _, passed in found)
+    first = next((line.strip() for line in lines if line.strip()), "")
+    return first.upper().startswith("PASS")
 
 
 def parse_label(text: str, labels: Iterable[str]) -> str | None:
@@ -92,17 +129,25 @@ def parse_label(text: str, labels: Iterable[str]) -> str | None:
     return None
 
 
-def strip_verdict_line(text: str) -> str:
-    """The binary routing node's output minus the verdict line parse_verdict reads —
-    what the node said BESIDES the verdict. Used when a gate ends the run, so a
-    terminal gate that produced real content (a verification summary, a final
-    answer) contributes it instead of the run returning a stale upstream output."""
+def strip_verdict_line(text: str, passed: bool | None = None) -> str:
+    """The binary routing node's output minus a line that is nothing but its
+    verdict — what the node said BESIDES the verdict. Used when a gate ends the
+    run, so a terminal gate that produced real content (a verification summary,
+    a final answer) contributes it instead of the run returning a stale upstream
+    output, and a gate that answered only "PASS" leaves that output in place.
+
+    Only the last non-empty line, else the first (a verdict put first), is
+    removed, and only when it is the bare verdict (a ``Verdict:``-style label
+    and surrounding punctuation allowed); with *passed* — the verdict the engine
+    routed on — only when it agrees. Any other line is content, and a closing
+    verdict that disagrees with a `route` call's decision is information."""
     lines = (text or "").splitlines()
-    found = _verdict_line(lines)
-    if found is None:
-        return (text or "").strip()
-    i = found[0]
-    return "\n".join(lines[:i] + lines[i + 1:]).strip()
+    filled = [i for i, line in enumerate(lines) if line.strip()]
+    for i in filled[-1:] + filled[:1]:
+        word = normalize_label(_after_label(lines[i]))
+        if word in ("PASS", "FAIL") and (passed is None or (word == "PASS") is passed):
+            return "\n".join(lines[:i] + lines[i + 1:]).strip()
+    return (text or "").strip()
 
 
 def strip_label_line(text: str, labels: Iterable[str]) -> str:
