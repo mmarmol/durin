@@ -208,7 +208,11 @@ has neither and takes `agents.defaults`. A preset that sets only `model` and a
 A model's entry holds only what you put there: durin never copies a preset's
 values or `agents.defaults` into it. A preset's `temperature` or limits apply
 to runs on that preset alone, and `agents.defaults` stays the fallback of the
-last step above.
+last step above — so a window or output cap there never reaches a model the
+catalog knows. To cap such a model (for cost), set the value in its entry or
+on the preset that runs it. `durin doctor` warns when `agents.defaults` holds a
+window or output cap (other than the default) that the default model does not
+run with, and prints the command that sets it on the model's entry instead.
 
 A configured value **above** what the model really accepts (step 2: your
 `model_capabilities` value, else the catalog's) is capped to it when the run

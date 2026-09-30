@@ -117,6 +117,37 @@ def test_a_capability_override_is_the_real_limit_the_doctor_compares_with() -> N
     assert "350,000" in r.message and "300,000" in r.message
 
 
+def test_an_agents_defaults_cap_the_default_model_does_not_use_warns() -> None:
+    """A cost cap written to agents.defaults for a catalog model: the model
+    runs with its catalog limits, so the cap silently stopped applying."""
+    cfg = _cfg()
+    cfg.agents.defaults.context_window_tokens = 128_000
+    cfg.agents.defaults.max_tokens = 16_000
+    r = _run(cfg)
+    assert r.status == "warn"
+    assert "agents.defaults.context_window_tokens" in r.message
+    assert "128,000" in r.message and "1,000,000" in r.message
+    assert "agents.defaults.max_tokens" in r.message
+    assert "16,000" in r.message and "131,072" in r.message
+    assert r.fix and 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' in r.fix
+
+
+@pytest.mark.parametrize("window", [1_000_000, 65_536])
+def test_an_agents_defaults_value_the_default_model_matches_or_the_schema_default_is_silent(window: int) -> None:
+    cfg = _cfg()
+    cfg.agents.defaults.context_window_tokens = window
+    r = _run(cfg)
+    assert r.status == "ok"
+    assert "agents.defaults" not in r.message
+
+
+def test_an_agents_defaults_cap_on_an_uncataloged_default_model_is_silent() -> None:
+    cfg = _cfg()
+    cfg.agents.defaults.model = "my-local-model"
+    cfg.agents.defaults.context_window_tokens = 32_768
+    assert "agents.defaults" not in _run(cfg).message
+
+
 def test_the_fallback_that_caps_the_chat_window_is_named() -> None:
     cfg = _cfg()
     cfg.model_presets["turbo"] = ModelPresetConfig(model="glm-5-turbo", provider="zai_coding_plan")

@@ -1067,6 +1067,49 @@ def _chat_window_notes(cfg) -> list[str]:
     return notes
 
 
+def _unused_default_caps(cfg) -> tuple[list[str], list[str]]:
+    """An ``agents.defaults`` window or output cap set on purpose that the
+    default model does not run with, as ``(lines, fixes)``.
+
+    ``agents.defaults`` only serves a model that nothing else describes; a
+    catalog model takes its entry or its real limits first. A cost cap
+    written there for such a model therefore does nothing — and one that an
+    earlier release applied (it copied ``agents.defaults`` into the default
+    model's entry on load) stops applying on upgrade. A value equal to the
+    schema default is left alone: an old full-dump config holds those
+    without anyone having chosen them."""
+    from durin.cli.config_cmd import _render_path
+    from durin.config.schema import AgentDefaults
+
+    d = cfg.agents.defaults
+    try:
+        resolved = cfg.resolve_default_preset()
+        provider = cfg.routed_provider(d.provider, d.model)
+    except Exception:  # noqa: BLE001 - an unresolvable default is reported by "default model"
+        return [], []
+    lines: list[str] = []
+    fixes: list[str] = []
+    for name, label in (("context_window_tokens", "context window"), ("max_tokens", "output cap")):
+        value = getattr(d, name)
+        if name not in d.model_fields_set or value == AgentDefaults.model_fields[name].default:
+            continue
+        used = getattr(resolved, name)
+        if used == value:
+            continue
+        lines.append(
+            f"agents.defaults.{name}: {label} {value:,} is not what {provider}/{d.model} runs "
+            f"with ({used:,}, from its entry or real limits); agents.defaults only serves "
+            "models nothing else describes")
+        entry_path = _render_path([
+            ("providers", False), (provider, False), ("models", False), (d.model, True), (name, False),
+        ])
+        fixes.append(
+            f"To cap {provider}/{d.model} at {value:,}: `durin config set '{entry_path}' {value}`; "
+            f"to drop the cap instead: `durin config set agents.defaults.{name} "
+            f"{AgentDefaults.model_fields[name].default}`")
+    return lines, fixes
+
+
 def check_model_limits() -> CheckResult:
     """Every configured window and output cap against the model's real
     limits — a ``model_capabilities`` override, else the catalog — the same
@@ -1074,9 +1117,11 @@ def check_model_limits() -> CheckResult:
 
     A value above the real one warns: the run caps it, but the config claims
     a window the provider does not accept (and a stale value there tends to
-    be copied to the next model). A value below is listed as information
-    only — a smaller window or output cap is a legitimate way to bound cost,
-    but a forgotten one silently shrinks every run on that model."""
+    be copied to the next model). So does an ``agents.defaults`` cap the
+    default model does not run with (``_unused_default_caps``). A value
+    below is listed as information only — a smaller window or output cap is
+    a legitimate way to bound cost, but a forgotten one silently shrinks
+    every run on that model."""
     try:
         cfg = load_config()
     except Exception:  # noqa: BLE001
@@ -1103,14 +1148,17 @@ def check_model_limits() -> CheckResult:
                     f"{where}: {label} {value:,} is below {provider}/{model}'s {real:,} "
                     "(a deliberate cap?)")
     below.extend(_chat_window_notes(cfg))
-    detail = "; ".join(above + below)
-    if above:
-        return CheckResult(
-            "model limits", "warn", detail,
-            fix="Lower each value above to the model's limit, or unset it so the model's own "
+    unused, unused_fixes = _unused_default_caps(cfg)
+    detail = "; ".join(above + unused + below)
+    if above or unused:
+        fixes = list(unused_fixes)
+        if above:
+            fixes.insert(0, (
+                "Lower each value above to the model's limit, or unset it so the model's own "
                 "applies, e.g. `durin config set "
-                "'providers.<provider>.models[\"<model>\"].context_window_tokens' null`.",
-            category="models",
+                "'providers.<provider>.models[\"<model>\"].context_window_tokens' null`"))
+        return CheckResult(
+            "model limits", "warn", detail, fix="; ".join(fixes) + ".", category="models",
         )
     if below:
         return CheckResult("model limits", "ok", detail, category="models")

@@ -178,7 +178,11 @@ where it was set — a named preset's `temperature` would become the default
 model's, and a window left in `agents.defaults` would stick to whichever model
 is the default and then to the next one — and would override any later edit
 of that source for the model. A preset's values stay on the preset, and
-`agents.defaults` is read only where the chain falls back to it.
+`agents.defaults` is read only where the chain falls back to it — so its
+window or output cap does nothing for a catalog model, and the doctor's
+"model limits" check warns when one is set (other than the schema default)
+that the default model does not run with (`_unused_default_caps`,
+`durin/cli/doctor.py`).
 
 Resolution happens where a preset becomes a run, so the in-memory presets keep
 "unset" and pick up a later change to the provider's `models` entry:

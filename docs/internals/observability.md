@@ -370,10 +370,12 @@ Check categories and representative checks:
   `providers.<p>.models` entry, a named preset, an inline fallback) that differs
   from the model's catalog limits: above warns (the run caps it to the catalog
   value), below is listed without warning (a deliberate cost cap is legitimate,
-  a forgotten one shrinks every run on that model). It also notes the fallback
-  that caps the chat window, and any fallback with no known window (it cannot
-  lower the chat window, so a failover to it may get a prompt larger than it
-  accepts).
+  a forgotten one shrinks every run on that model). It also warns about an
+  `agents.defaults` window or output cap, set to something other than the
+  schema default, that the default model does not run with (its entry or real
+  limits come first, so the cap does nothing), and notes the fallback that caps
+  the chat window and any fallback with no known window (it cannot lower the
+  chat window, so a failover to it may get a prompt larger than it accepts).
 - **tools** — external tool binaries durin relies on (e.g. `git`) resolve on `PATH`.
 - **channels** — channel runtime dependencies are present (e.g. the WhatsApp
   bridge binary is cached).
