@@ -527,7 +527,10 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   previous one plus new messages, which keeps the provider's prompt cache and
   the usage-anchored size estimate valid; a result never reappears after it
   was pruned. A new run starts with nothing pruned, so it prunes again only
-  if it is over the threshold.
+  if it is over the threshold — unless it continues a previous run's messages
+  and is given that run's state (`AgentRunSpec.prune_state`, from its
+  `AgentRunResult.prune_state`): a workflow node's re-entry and synthesis runs
+  keep what the work loop pruned, so their requests share its prefix.
 - **Which usage stamps to trust.** Size estimates anchor on the latest usage
   stamp, but a run trusts only the stamps it produced after its last batch.
   The stamps on the messages it starts from measured another run's requests

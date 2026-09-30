@@ -433,6 +433,12 @@ class AgentRunSpec:
     # the model is not asked again after it and the text that came with the
     # call stays the answer.
     end_turn_after_tools: Any | None = None  # Callable[[list[dict]], bool]
+    # A previous run's pruning to carry on (its AgentRunResult.prune_state), for
+    # a run that continues that run's messages — a workflow node's re-entry or
+    # synthesis: what it pruned stays pruned, placeholders byte for byte, so the
+    # new run's requests keep the prefix the previous run's had instead of
+    # pruning afresh. Sizes are still counted from scratch, as for any new run.
+    prune_state: Any | None = None
     # Per-turn provider snapshot. The gateway runs a single shared AgentRunner;
     # _apply_provider_snapshot in loop.py mutates self.provider on every
     # concurrent session's /model swap. Carrying the provider here lets run()
@@ -772,10 +778,15 @@ class AgentRunner:
         seen_failed_calls: set[str] = set()
 
         # Old tool results this run replaced by pointers; kept for the whole
-        # run so later requests carry the same placeholders (see _microcompact).
-        # The initial messages' usage stamps measured another run's requests
-        # (possibly pruned ones), so none of them is trusted.
-        prune_state = _PruneState(trusted_from=len(messages))
+        # run so later requests carry the same placeholders (see _microcompact),
+        # and carried on from a previous run when this one continues it. The
+        # initial messages' usage stamps measured another run's requests
+        # (possibly pruned ones, or with other tools), so none of them is trusted.
+        if spec.prune_state is not None:
+            prune_state = spec.prune_state
+            prune_state.trusted_from = len(messages)
+        else:
+            prune_state = _PruneState(trusted_from=len(messages))
         # Where this run's own messages begin: what a caller's end-of-turn
         # check sees as the turn so far.
         turn_start = len(messages)

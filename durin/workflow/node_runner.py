@@ -1177,6 +1177,8 @@ class AgentNodeRunner:
                     concurrent_tools=True,
                     hook=hook,
                     end_turn_after_tools=route_decided,
+                    # Continue what the previous run pruned, keeping its prefix.
+                    prune_state=result.prune_state,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist + re-raise, same as the first run
                 checkpointed = checkpoint_hook.last_persisted
@@ -1230,6 +1232,8 @@ class AgentNodeRunner:
                     context_window_tokens=node_window,
                     workspace=node_workspace,
                     session_key=node_session_key,
+                    # Continue what the work loop pruned, keeping its prefix.
+                    prune_state=result.prune_state,
                 ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
                 raise self._on_failure(req, list(result.messages), exc) from exc

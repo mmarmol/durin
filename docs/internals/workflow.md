@@ -467,7 +467,9 @@ synthesis prompt states that no further tool calls are possible and demands the 
 content as text; when the node declares an `output_schema` it also names the schema's
 required fields, so the transcript the forced `deliver` call transcribes actually
 contains a conclusion for each of them. The second
-call's messages are appended to the first run's messages and persisted together. If the
+call's messages are appended to the first run's messages and persisted together; it
+continues the first run's pruning (as a re-entry does), so it re-sends the gathered results
+the way the loop last sent them instead of pruning afresh. If the
 first run completes within budget, no second call is made and the path is byte-for-byte
 identical to a node without `max_turns`.
 

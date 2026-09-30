@@ -85,7 +85,7 @@ def _config(window: int) -> Config:
 
 
 def _run(tmp_path, node: WorkNode, *, window: int | None = WINDOW, reads: int = READS,
-         output_cap: int | None = None):
+         output_cap: int | None = None, assess: str = "deliver"):
     files = []
     for n in range(reads):
         path = tmp_path / "docs" / f"doc{n}.txt"
@@ -94,7 +94,7 @@ def _run(tmp_path, node: WorkNode, *, window: int | None = WINDOW, reads: int = 
         files.append(path)
     model = _Reader(files, {
         "route": {"label": "PASS"},
-        "assess": {"verdict": "deliver"},
+        "assess": {"verdict": assess},
         "deliver": {"summary": "fine"},
     }, output_cap=output_cap)
     nr = AgentNodeRunner(AgentRunner(model), SessionManager(workspace=tmp_path),
@@ -141,6 +141,25 @@ def test_the_reentry_assessment_stays_inside_the_budget(tmp_path):
     assert tools[-1]["function"]["name"] == "assess"
     assert estimate_prompt_tokens(forced, tools) <= BUDGET
     assert _pruned(model.loop[READS - 1]) <= _pruned(forced)
+
+
+def test_the_synthesis_request_keeps_what_the_loop_pruned(tmp_path):
+    """The synthesis run continues the loop's messages: it re-sends them as the
+    loop last did, pruned results and all, instead of pruning afresh."""
+    model, _ = _run(tmp_path, WorkNode(id="g", prompt="Gather.", tools="default",
+                                       max_turns=READS, next=None))
+    last_loop, synthesis = model.loop[READS - 1], model.loop[-1]
+    assert _pruned(last_loop)
+    assert synthesis[: len(last_loop)] == last_loop
+
+
+def test_a_reentry_keeps_what_the_loop_pruned(tmp_path):
+    model, _ = _run(tmp_path, WorkNode(id="g", prompt="Gather.", tools="default",
+                                       max_turns=READS, max_reentries=1, next=None),
+                    assess="continue")
+    last_loop, reentry = model.loop[READS - 1], model.loop[READS]
+    assert _pruned(last_loop)
+    assert reentry[: len(last_loop)] == last_loop
 
 
 # ── the forced calls' output cap leaves room for their prompt ────────────────
