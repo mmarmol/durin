@@ -207,6 +207,15 @@ provider, the model, the configured and the real value: a window larger than
 the real one lets a prompt grow past what the provider accepts, and it is
 rejected instead of being compacted first. A value **below** the catalog's is
 kept — a smaller window or output cap is a legitimate way to bound cost.
+`durin doctor` lists every configured value that differs from the catalog in
+its "model limits" check: one above warns, one below is listed so a forgotten
+cap does not go unnoticed. To go back to the model's own limit, unset the
+value (a model name with dots goes in brackets, see
+[keys that contain dots](#inspecting-and-editing-config)):
+
+```
+durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' null
+```
 
 **`model_capabilities`** — user-declared capability overrides keyed by model name
 (bare or `provider/model`). Provider-qualified keys win over bare names. Any field

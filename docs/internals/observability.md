@@ -351,6 +351,11 @@ Check categories and representative checks:
 - **models** — every configured specific-model knob (`skills.security.llm_judge`,
   `memory.dream.model_override`, `agents.aux_models.*`) resolves to a servable
   `(provider, model)`; an unservable knob silently falls back to the default preset.
+  "model limits" lists every configured window and output cap (a
+  `providers.<p>.models` entry, a named preset, an inline fallback) that differs
+  from the model's catalog limits: above warns (the run caps it to the catalog
+  value), below is listed without warning (a deliberate cost cap is legitimate,
+  a forgotten one shrinks every run on that model).
 - **tools** — external tool binaries durin relies on (e.g. `git`) resolve on `PATH`.
 - **channels** — channel runtime dependencies are present (e.g. the WhatsApp
   bridge binary is cached).

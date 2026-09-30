@@ -1002,6 +1002,93 @@ def check_specific_models() -> CheckResult:
     return CheckResult("specific models", "ok", detail, category="models")
 
 
+def _configured_model_limits(cfg) -> list[tuple[str, str, str, int | None, int | None]]:
+    """Every window / output cap set in the config, as ``(where, provider,
+    model, context_window_tokens, max_tokens)``: each ``providers.<p>.models``
+    entry, each named preset and each inline fallback that sets one. ``where``
+    is the config path of the setting. A preset or fallback on the ``"auto"``
+    provider has no catalog row to compare with and is left out."""
+    from durin.cli.config_cmd import _render_path
+
+    out: list[tuple[str, str, str, int | None, int | None]] = []
+    for provider in type(cfg.providers).model_fields:
+        models = getattr(getattr(cfg.providers, provider, None), "models", None) or {}
+        for model, entry in models.items():
+            if entry.context_window_tokens is not None or entry.max_tokens is not None:
+                where = _render_path([("providers", False), (provider, False), ("models", False), (model, True)])
+                out.append((where, provider, model, entry.context_window_tokens, entry.max_tokens))
+    for name, preset in cfg.model_presets.items():
+        if preset.provider != "auto" and (
+            preset.context_window_tokens is not None or preset.max_tokens is not None
+        ):
+            where = _render_path([("model_presets", False), (name, True)])
+            out.append((where, preset.provider, preset.model, preset.context_window_tokens, preset.max_tokens))
+    for index, fallback in enumerate(cfg.agents.defaults.fallback_models):
+        if isinstance(fallback, str) or fallback.provider == "auto":
+            continue
+        if fallback.context_window_tokens is not None or fallback.max_tokens is not None:
+            where = f"agents.defaults.fallback_models.{index}"
+            out.append((where, fallback.provider, fallback.model, fallback.context_window_tokens, fallback.max_tokens))
+    return out
+
+
+def check_model_limits() -> CheckResult:
+    """Every configured window and output cap against the model's catalog
+    limits.
+
+    A value above the catalog's warns: the run caps it to the catalog value,
+    but the config claims a window the provider does not accept (and a stale
+    value there tends to be copied to the next model). A value below is
+    listed as information only — a smaller window or output cap is a
+    legitimate way to bound cost, but a forgotten one silently shrinks every
+    run on that model."""
+    from durin.providers.provider_catalog import catalog_model_caps
+
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("model limits", "warn", "Could not load config.", category="models")
+    above: list[str] = []
+    below: list[str] = []
+    for where, provider, model, window, max_tokens in _configured_model_limits(cfg):
+        try:
+            caps = catalog_model_caps(provider, model)
+        except Exception:  # noqa: BLE001 - an unreadable catalog row compares with nothing
+            caps = None
+        if caps is None:
+            continue
+        for label, value, real in (
+            ("context window", window, caps.max_input_tokens),
+            ("output cap", max_tokens, caps.max_output_tokens),
+        ):
+            if value is None or not real or value == real:
+                continue
+            if value > real:
+                above.append(
+                    f"{where}: {label} {value:,} is above {provider}/{model}'s {real:,} "
+                    "(capped to it at runtime)")
+            else:
+                below.append(
+                    f"{where}: {label} {value:,} is below {provider}/{model}'s {real:,} "
+                    "(a deliberate cap?)")
+    detail = "; ".join(above + below)
+    if above:
+        return CheckResult(
+            "model limits", "warn", detail,
+            fix="Lower each value above to the model's limit, or unset it so the model's own "
+                "applies, e.g. `durin config set "
+                "'providers.<provider>.models[\"<model>\"].context_window_tokens' null`.",
+            category="models",
+        )
+    if below:
+        return CheckResult("model limits", "ok", detail, category="models")
+    return CheckResult(
+        "model limits", "ok",
+        "every configured window and output cap is within the catalog's",
+        category="models",
+    )
+
+
 def check_embedding_model() -> CheckResult:
     """Validate ``config.memory.embedding.model`` against fastembed's catalog.
 
@@ -1632,6 +1719,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         pass
     report.add(check_extras_drift())
     report.add(check_specific_models())
+    report.add(check_model_limits())
     report.add(check_embedding_model())
     # Smoke-test the configured models actually load + work. Goes beyond
     # `check_embedding_model` which only validates the id against the catalog.

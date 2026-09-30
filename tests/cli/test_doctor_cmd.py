@@ -421,7 +421,8 @@ def test_run_checks_returns_report_with_many_results(valid_config: Path) -> None
     assert isinstance(report, DoctorReport)
     assert len(report.results) >= 8
     names = {r.name for r in report.results}
-    assert {"python", "config file", "config valid", "workspace", "providers", "whatsapp bridge"}.issubset(names)
+    assert {"python", "config file", "config valid", "workspace", "providers", "whatsapp bridge",
+            "model limits"}.issubset(names)
 
 
 def test_doctor_report_worst_picks_highest_severity() -> None:
