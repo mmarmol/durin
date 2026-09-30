@@ -453,6 +453,13 @@ keeps its own limits there too.
   document again reuses it instead of saving another copy. If the file cannot
   be written, the page says so and why.
 
+Each path `grep` prints leads `read_file` back to the file it found, under the
+caller's rule for relative paths (`work_area.display_path`): relative to the
+folder relative paths resolve in — a workflow node's working folder or a
+session's work area — when the file lies there, from the workspace root for a
+managed top-level area (`workflows/`, `memory/`, ...) or when there is no such
+folder, and absolute otherwise.
+
 `grep` sizes its output the same way. A matching or context line over 2,000
 chars is shortened to a 2,000-char window that ends with the `read_file` call
 for the rest of the line. The call names the file by its absolute path: inside

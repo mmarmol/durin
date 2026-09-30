@@ -752,11 +752,15 @@ class AgentNodeRunner:
             raise outcome["error"]
         return outcome["result"]
 
-    def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
+    def _build_tools(self, node, workspace_override: str | None = None,
+                     work_dir: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
         'default'→the standard subagent tool set) plus a scoped subset of the
         already-connected MCP servers the node selected. ``workspace_override`` points
-        the file tools at a private branch copy (writing-in-parallel)."""
+        the file tools at a private branch copy (writing-in-parallel). ``work_dir``
+        (the node's working folder) is where the tools that take a path resolve a
+        relative one, the folder the node's prompt calls its working directory;
+        ``exec`` still starts in the workspace root."""
         registry = ToolRegistry()
         if getattr(node, "tools", "none") == "default":
             ctx = ToolContext(
@@ -766,6 +770,7 @@ class AgentNodeRunner:
                 scope="subagent",
                 aux_providers=self._get_aux_providers(),
                 app_config=self._app_config,
+                work_dir=work_dir,
             )
             ToolLoader().load(ctx, registry, scope="subagent")
         self._add_mcp_tools(registry, getattr(node, "mcps", ()))
@@ -883,13 +888,22 @@ class AgentNodeRunner:
         user = req.task
         if req.upstream_output:
             user = f"{req.task}\n\n--- Output of the previous step ---\n{req.upstream_output}"
+        tools_registry = self._build_tools(req.node, req.workspace_override, req.output_dir)
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             user = (
                 f"{user}\n\n--- Working directory ---\n"
                 f"Your working directory for this run is: {req.output_dir}\n"
                 "Earlier steps' files are here; create and edit files here so the steps "
-                "after you see them."
+                "after you see them. A relative path in the file tools resolves here (one "
+                "under a durin area such as workflows/ or memory/ resolves from the "
+                "workspace root)."
             )
+            # exec keeps its own start: the workspace root, where a workflow's
+            # scripts are run as `python3 workflows/scripts/...`.
+            exec_cwd = getattr(tools_registry.get("exec"), "working_dir", None)
+            if exec_cwd and Path(exec_cwd).resolve() != Path(req.output_dir).resolve():
+                user += (f"\nShell commands start in the workspace root ({exec_cwd}), "
+                         "not here: cd here first or give full paths.")
         user = f"{user}{self._pass_note(req)}"
         prior_messages: list[dict] | None = None
         if self._is_persistent(req) and req.iteration > 1:
@@ -988,7 +1002,6 @@ class AgentNodeRunner:
         # re-entries) so an early `deliver`/`route` call is captured no matter which
         # pass it happens in.
         node_schema = getattr(req.node, "output_schema", None)
-        tools_registry = self._build_tools(req.node, req.workspace_override)
         delivered = _DeliverCapture()
         if node_schema is not None:
             # Set only where the engine will write the file, so a reply never

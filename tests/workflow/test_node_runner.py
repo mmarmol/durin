@@ -1,5 +1,6 @@
 """The default node runner runs an agent turn and persists the node session."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from durin.agent.runner import AgentRunResult
@@ -314,6 +315,48 @@ def test_file_tool_node_is_told_its_working_folder(tmp_path):
     user_content = " ".join(m["content"] for m in user_turns)
     assert "/ws/.workflow/r/work" in user_content       # the shared working folder
     assert "working directory" in user_content.lower()  # framed as read-and-write here
+
+
+def _working_folder_node_run(tmp_path, mode="build"):
+    """Run a file-tool node over a working folder holding ticket.json, next to
+    another run's ticket.json left at the workspace root. Returns the node's
+    tool registry and its user turn."""
+    work = tmp_path / ".workflow" / "r" / "work"
+    work.mkdir(parents=True)
+    (work / "ticket.json").write_text('{"id": 23164}', encoding="utf-8")
+    (tmp_path / "ticket.json").write_text('{"id": "another run"}', encoding="utf-8")
+    nr = _runner(SessionManager(workspace=tmp_path), AgentRunResult(final_content="ok", messages=[]))
+    nr(NodeRunRequest(
+        node=WorkNode(id="b", tools="default", mode=mode, next=None), task="t",
+        upstream_output=None, shared_context=[], run_id="r", iteration=1,
+        root_session_key=None, output_dir=str(work),
+    ))
+    spec = nr.runner.run.call_args.args[0]
+    user = " ".join(m["content"] for m in spec.initial_messages if m["role"] == "user")
+    return spec.tools, user
+
+
+def test_a_nodes_file_tools_resolve_relative_paths_in_its_working_folder(tmp_path):
+    import asyncio
+
+    tools, _ = _working_folder_node_run(tmp_path)
+    assert "23164" in asyncio.run(tools.get("read_file").execute(path="ticket.json"))
+    # exec keeps starting in the workspace root, where a workflow's scripts are
+    # named `workflows/scripts/...`.
+    assert Path(tools.get("exec").working_dir) == tmp_path.resolve()
+
+
+def test_a_node_is_told_where_relative_paths_and_commands_resolve(tmp_path):
+    _, user = _working_folder_node_run(tmp_path)
+    assert "relative path in the file tools resolves here" in user
+    assert f"Shell commands start in the workspace root ({tmp_path.resolve()})" in user
+
+
+def test_a_node_without_exec_is_not_told_where_commands_start(tmp_path):
+    tools, user = _working_folder_node_run(tmp_path, mode="read")
+    assert "exec" not in tools.tool_names
+    assert "relative path in the file tools resolves here" in user
+    assert "Shell commands" not in user
 
 
 def test_no_tool_node_is_not_told_about_folders(tmp_path):

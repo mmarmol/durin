@@ -99,6 +99,15 @@ output. **Output travels two channels.** The **text** of a node's output is the 
 becomes the next node's input (above). For **files**, every sequential agent node with file
 tools shares ONE **working folder** for the run (`<workspace>/.workflow/<run>/work/`,
 `durin/workflow/artifacts.py`) — it reads earlier steps' files there and writes its own there.
+The node's prompt names the folder as its working directory, and the node's tools that take a
+path (`read_file`, `write_file`, `edit_file`, `list_dir`, `grep`, `interpret_image`,
+`interpret_audio`, `convert_to_markdown`) resolve a relative one there (`ToolContext.work_dir`):
+a path under a managed top-level name (`workflows/`, `memory/`, `skills/`, ...) still resolves
+from the workspace root, as in the chat's work area, and an absolute path is used as given.
+`grep` prints paths that lead back to what it found (relative inside the folder, from the
+workspace root in a managed area, absolute elsewhere). `exec` keeps starting in the workspace root, where a
+workflow's scripts are run as `python3 workflows/scripts/...`; a node that has it is told so
+in its prompt, with the advice to `cd` into the folder or give full paths.
 Because it is one shared folder, created and edited files accumulate in a single place and
 each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
 on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than
@@ -1328,7 +1337,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
-| `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes), persisted as a lineage'd node session, checkpointed every round. |
+| `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes; the node's tools resolve relative paths in its working folder), persisted as a lineage'd node session, checkpointed every round. |
 | `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. Records the command and both redacted streams on every exit path — a script node keeps no session, so this is its only record. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |
 | `running_frame`, `finished_frames`, `pending_frames`, `tool_target` | `durin/workflow/progress.py` | The single builder for every node-frame shape the engine emits (running, finished, the certain-pending tail) and the tool reuses for the terminal frame — a field added to a frame is added here once. |

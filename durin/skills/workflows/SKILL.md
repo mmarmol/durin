@@ -122,7 +122,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   folder per run, so file-producing steps build on each other (a plan's code accumulates; a
   debug loop's reproduction, fix, and test live together) instead of copying a fileset down
   a chain. A `subworkflow` runs in its **parent's** folder, so files flow through composition;
-  parallel writing branches fork the folder and their writes reconcile back.
+  parallel writing branches fork the folder and their writes reconcile back. A node's file
+  tools resolve a relative path in the folder (one under `workflows/`, `memory/` or `skills/`
+  resolves from the workspace root); `exec` starts in the workspace root, so a prompt whose
+  commands work on the folder's files should `cd` there or use full paths.
 - **Input / Output** — optional descriptors (text and/or files, plus a free-text contract).
   A per-call `output_format` overrides the delivery shape for one run. A file-producing
   workflow can also **declare its artifacts** (`output.artifacts`: the paths it promises to

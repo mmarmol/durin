@@ -276,7 +276,10 @@ across iterations as the node refines its work in response to loop feedback.
 - **The shared working folder.** Any node with `tools: "default"` reads
   and writes files in one folder shared by the whole run — so a "write the
   code" step, a "write the test" step, and a "fix the bug" step all see
-  each other's files without you wiring that up explicitly. This is what
+  each other's files without you wiring that up explicitly. A relative path
+  in a node's file tools (`read_file("ticket.json")`) resolves in that
+  folder; shell commands start in the workspace root, so a command that
+  works on the folder's files changes into it first or uses full paths. This is what
   lets `execute-plan` and `debug` collaborate on an evolving fileset across
   steps (and across a loop's revisits) instead of handing copies down a
   chain. That folder is normally fresh every run; passing a `work_key` (a

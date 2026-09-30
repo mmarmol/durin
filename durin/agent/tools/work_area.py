@@ -12,7 +12,7 @@ from pathlib import Path
 
 from durin.session.manager import SessionManager
 
-__all__ = ["MANAGED_PREFIXES", "session_work_dir", "anchored_base"]
+__all__ = ["MANAGED_PREFIXES", "session_work_dir", "anchored_base", "display_path"]
 
 # Top-level names that resolve against the workspace root rather than the
 # session work dir. These are durin-managed surfaces the agent reads by name
@@ -43,3 +43,28 @@ def anchored_base(rel_first_segment: str, workspace: Path, work_dir: Path | None
     if work_dir is None or rel_first_segment in MANAGED_PREFIXES:
         return workspace
     return work_dir
+
+
+def display_path(path: Path, workspace: Path | None, work_dir: Path | None) -> str:
+    """The way to print *path* so that resolving it by the rule above leads
+    back to it: relative to the work dir when it lies there, relative to the
+    workspace when it lies there and would anchor to the workspace root, and
+    absolute otherwise. All three paths are compared as given, so pass them
+    resolved alike."""
+    if work_dir is not None:
+        try:
+            rel = path.relative_to(work_dir)
+        except ValueError:
+            pass
+        else:
+            if rel.parts and rel.parts[0] not in MANAGED_PREFIXES:
+                return rel.as_posix()
+    if workspace is not None:
+        try:
+            rel = path.relative_to(workspace)
+        except ValueError:
+            pass
+        else:
+            if rel.parts and anchored_base(rel.parts[0], workspace, work_dir) == workspace:
+                return rel.as_posix()
+    return str(path)

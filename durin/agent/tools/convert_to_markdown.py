@@ -20,6 +20,7 @@ from typing import Any
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.work_area import anchored_base
 from durin.memory.doc_convert import (
     SUPPORTED_SUFFIXES,
     ConvertedDoc,
@@ -32,7 +33,8 @@ _MAX_OUTLINE_ENTRIES = 100
 
 _PARAMETERS = tool_parameters_schema(
     path=StringSchema(
-        "Absolute path (or workspace-relative path) to the document to convert."
+        "Path to the document to convert: absolute, or relative (in a workflow "
+        "step it resolves in the step's working folder, elsewhere in the workspace)."
     ),
     required=["path"],
 )
@@ -44,12 +46,14 @@ class ConvertToMarkdownTool(Tool):
 
     _scopes = {"core", "subagent"}
 
-    def __init__(self, workspace: str | Path) -> None:
+    def __init__(self, workspace: str | Path, work_dir: str | Path | None = None) -> None:
         self._workspace = Path(workspace).expanduser()
+        # A workflow node's working folder: relative paths resolve there.
+        self._work_dir = Path(work_dir) if work_dir else None
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(workspace=ctx.workspace)
+        return cls(workspace=ctx.workspace, work_dir=getattr(ctx, "work_dir", None))
 
     @property
     def name(self) -> str:
@@ -82,7 +86,8 @@ class ConvertToMarkdownTool(Tool):
 
         source = Path(path_str).expanduser()
         if not source.is_absolute():
-            source = (self._workspace / source).resolve()
+            base = anchored_base(source.parts[0], self._workspace, self._work_dir)
+            source = (base / source).resolve()
         if not source.is_file():
             return {"error": f"file not found: {source}"}
 
