@@ -73,9 +73,13 @@ follows `next` or **routes** on a verdict.
 `cases`. Setting more than one is a parse error.
 
 **Routing details:**
-- A routing node's verdict is a forced tool call (an enum of its own labels), so it is
-  deterministic; the node's text is parsed only as a fallback. For that fallback, a binary
-  node's `PASS`/`FAIL` should be its first line and a multi-way label its last line.
+- A routing node's verdict is a `route` tool call (an enum of its own labels), so it is
+  deterministic. The runner appends the instruction itself — finish the answer, end the text
+  with the verdict alone on its last line, and call `route` in that same reply — so a prompt
+  need only say what PASS/FAIL (or each label) means. A valid call ends the node's turn and
+  the text sent with it is the node's output: for a FAIL, the feedback the next step gets. A
+  turn that ends without one gets a forced `route` call; the text is parsed only as a last
+  fallback, reading the verdict from its last line.
 - On a fail / loop-back edge, the node's feedback is threaded into the target's next run so
   the producer knows what to fix. The framing depends on the target: into a step that leads
   back to the gate without passing through its `on_pass` step, the output arrives as

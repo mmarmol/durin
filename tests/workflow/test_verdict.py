@@ -27,6 +27,49 @@ def test_none_defaults_to_fail():
     assert parse_verdict(None) is False
 
 
+# The node's instruction asks for the verdict on the LAST line. A live judge
+# answer opened with a summary sentence, graded each criterion on its own line,
+# and ended with the verdict: read from the first line it was a FAIL.
+_JUDGE_ANSWER = (
+    "All spot-checks verified — the second named instance matches the note exactly.\n\n"
+    "## Audit complete\n\n"
+    "**1. CORRECTNESS — PASS.** Every technical claim cross-checked.\n\n"
+    "**2. EVIDENCE SUFFICIENCY — PASS.** All modules cited.\n\n"
+    "PASS"
+)
+
+
+def test_the_verdict_is_read_from_the_last_line():
+    assert parse_verdict(_JUDGE_ANSWER) is True
+    assert parse_verdict("The note misstates the expiry.\n\nFAIL — fix the expiry date") is False
+    assert parse_verdict("Looks right.\n\n**PASS**") is True
+
+
+def test_a_later_verdict_line_overrides_an_earlier_one():
+    assert parse_verdict("PASS\nOn a second look the totals are wrong.\nFAIL: recompute them") is False
+    assert parse_verdict("FAIL\nRe-checked after the retry; it holds.\nPASS.") is True
+
+
+def test_a_verdict_on_the_first_line_still_counts():
+    """Prompts written for the old first-line reading keep routing the same way,
+    including a first line that goes on in words after the verdict."""
+    assert parse_verdict("PASS\nAll criteria met.") is True
+    assert parse_verdict("PASS second pass") is True
+    assert parse_verdict("FAIL first pass") is False
+    assert parse_verdict("FAIL\n- add the missing test\n- rename the helper") is False
+
+
+def test_prose_that_starts_with_the_word_never_passes_a_failed_check():
+    """Read from the end, a line that goes on in words after PASS is prose — a
+    bullet of a FAIL's fix list — so it can never flip the verdict to PASS. FAIL
+    lines may go on: 'FAIL' followed by what to fix is the verdict's own form."""
+    assert parse_verdict("FAIL\n- Pass the ticket id to the handler.") is False
+    assert parse_verdict("PASS\nOn a second look it is wrong.\nFAIL the totals are off") is False
+    assert parse_verdict("Checked.\nPASS — with the caveats noted above") is True
+    assert parse_verdict("Review done.\nPASS (minor wording nits only)") is True
+    assert parse_verdict("Fail-safe defaults are in place.") is False
+
+
 # --- parse_label tests ---
 
 
@@ -96,6 +139,14 @@ def test_strip_verdict_line_keeps_text_without_verdict():
 def test_strip_verdict_line_empty_when_only_verdict():
     from durin.workflow.verdict import strip_verdict_line
     assert strip_verdict_line("PASS") == ""
+
+
+def test_strip_verdict_line_removes_the_line_the_verdict_was_read_from():
+    from durin.workflow.verdict import strip_verdict_line
+    assert strip_verdict_line("Checked all three claims.\n\nPASS") == "Checked all three claims."
+    assert strip_verdict_line(_JUDGE_ANSWER) == _JUDGE_ANSWER.rsplit("\n\nPASS", 1)[0]
+    # A criterion line that only mentions a verdict stays.
+    assert "CORRECTNESS — PASS" in strip_verdict_line(_JUDGE_ANSWER)
 
 
 # --- strip_label_line tests ---

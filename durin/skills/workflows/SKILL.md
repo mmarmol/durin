@@ -87,9 +87,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the result, and its failure never sinks the run (side effects: persist, notify, archive).
 - **Routing** is opt-in on a `work` or `script` node, never a separate node type: **binary**
   (`on_pass`/`on_fail`) or **multi-way** (`cases` — a map of labels to targets; a `null`
-  target ends the run). The node ends with its verdict and the engine follows the matching
-  edge. A fail / loop-back edge threads the node's feedback into the producer's next run so
-  it knows what to fix; `max_visits` caps loops. Any case may route to the reserved
+  target ends the run). The node ends its turn by calling `route` with its verdict (the
+  runner tells it how) and the engine follows the matching edge. A fail / loop-back edge
+  threads the node's feedback — the text it sent with the verdict — into the producer's
+  next run so it knows what to fix; `max_visits` caps loops. Any case may route to the reserved
   **`__needs_input__`** terminal, which ends the run asking the caller for more information.
   **A script node routes deterministically**: exit code 0 = PASS / non-zero = FAIL (its
   stderr becomes the loop-back feedback), or its last stdout line as the case label — the

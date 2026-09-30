@@ -40,7 +40,7 @@ marked FINAL). Use it whenever the looping node does incremental work.
       "session": "persistent",
       "prompt": "Implement the change.", "next": "check" },
     { "id": "check",  "kind": "work", "mode": "read",  "tools": "default",
-      "prompt": "Run the tests. End with PASS on the first line if green, else FAIL and say what broke.",
+      "prompt": "Check the change against its tests. PASS if they hold; FAIL and say what broke.",
       "on_pass": null, "on_fail": "make" }
   ]
 }

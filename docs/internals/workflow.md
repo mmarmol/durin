@@ -116,9 +116,10 @@ Retention) therefore agree on what "live" means. (Real deliverables a node write
 the workspace proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
-**Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
-line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
-the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
+**Binary routing** (`on_pass`/`on_fail`): a routing node ends its turn by calling its `route`
+tool with `PASS` or `FAIL`, its text ending with the same verdict on its last line, which the
+engine parses when no call arrives (§4d, `durin/workflow/verdict.py`) — so a routing node can
+*verify* (read the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
 `on_fail`. How a fail's output is threaded depends on the graph: when the `on_fail` target
 can lead back to the gate without passing through the gate's `on_pass` target (the fail path
 returns on a route the pass path does not share), the fail is a loop-back and the output is
@@ -142,8 +143,9 @@ framing (the verdict text itself still arrives). `NodeRunRequest.fail_loops_back
 node's runner the same answer (the script runner words its exit note from it, below). When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
-(`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
-exactly one label; the engine matches the last non-empty line of the output against the declared
+(`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its turn by calling
+`route` with exactly one label, its text ending with that label; when no call arrives the
+engine matches the last non-empty line of the output against the declared
 labels (case-insensitive, surrounding punctuation tolerated), then follows the matching edge.
 A `null` target ends the run; any other target is a node id. If the output matches no label the
 engine tries a `"default"` key — if that is also absent, the run ends as `aborted` naming the
@@ -278,9 +280,14 @@ tool), so its answer is read by tool name: a `deliver` call's arguments are the 
 `deliver_file` call gets the tool's own read and schema check (no tool runs during the
 forced call, so a rejected draft is corrected through `deliver`), and a call to any other
 tool counts as no delivery — its arguments are never read as the payload.
-A `route` call made before the node is done is acknowledged but not
-authoritative — the end-of-turn forced call always decides the actual verdict. The
-forced-tool calls (route / re-entry / deliver) go through
+A valid `route` call decides the verdict and ends the node's turn once its round of tool
+calls finishes (`AgentRunSpec.end_turn_after_tools`), with no request after it (§4d). The
+forced-tool calls (route / re-entry / deliver) are sent from the work-loop run's messages the
+way that run would send its next request (`AgentRunner.request_view`, given the run's
+`AgentRunResult.prune_state`): results the loop pruned stay pruned, placeholders byte for
+byte, and the request is fitted under the same input budget — a forced call built from the
+whole unpruned history could exceed the budget the loop kept to and miss its cached prefix.
+They go through
 `chat_with_retry`, so transient transport failures retry and `max_tokens` resolves to the
 model's configured output cap rather than a hardcoded signature default. The delivery loop
 reads `finish_reason`: a `length` response is named as truncation and the retry is steered
@@ -723,37 +730,53 @@ failure in those modes propagates and aborts the run.
 but the run continued), `"node_failed"` (the node's agent turn raised), `"reused"`
 (the reuse gate skipped the runner; see §2's `reuse: "if-unchanged"` and `origin_run_id`).
 
-### 4d. The routing verdict — a forced tool call, text-parse as fallback
+### 4d. The routing verdict — a `route` call, a forced call, text-parse as fallback
 
 This section covers **agent** routing nodes. A script node's verdict is derived
 directly from its exit code or last stdout line (§2) — there is no LLM call and no
 text-parse fallback involved.
 
 A routing node's verdict is **deterministic by construction**. `route` is registered in the
-node's tool registry from turn 1 (§2), so after the node's work turn the node runner makes
-one **forced `route` tool call** — same tools array as the work loop, `tool_choice` pinned to
-`{"type": "function", "function": {"name": "route"}}` — whose `label` parameter is an **enum
-of that node's own labels** — the `cases` keys for a multi-way node, or `PASS`/`FAIL` for a
-binary one. The model can only return a value from that enum, so the verdict is always a
-valid label instead of a fragile free-text line that a stray word can derail. The call runs
-as a separate `provider.chat` (the runner reaches the provider via `AgentRunner.provider`)
-with the node's full conversation as context, and is wrapped so **any failure yields no
-label** (`route_label=None`) — the run never breaks on it.
+node's tool registry from turn 1 (§2); its `label` parameter is an **enum of that node's own
+labels** — the `cases` keys for a multi-way node, or `PASS`/`FAIL` for a binary one — so the
+verdict is always a valid label instead of a fragile free-text line that a stray word can
+derail. The node runner appends a verdict instruction built from those labels to the node's
+system prompt: finish the answer (a binary gate is told that for a FAIL its text is what the
+next step works from, so it should say exactly what to fix), end the text with the verdict
+alone on its last line, and in that same reply call `route` with it — the call ends the turn.
 
-When the tool call did not produce a valid label — it errored, or the provider did not honour
-the forced call — the engine **falls back to parsing the node's text output**:
+- **A valid `route` call decides the verdict and ends the turn.** Once that round of tool
+  calls finishes, the agent loop stops (`AgentRunSpec.end_turn_after_tools`) and makes no
+  further request; the text sent alongside the call is the node's output — the feedback a
+  FAIL threads onward — or, when the call came with no text, its one-line `reason`. An
+  invalid label (not one of the node's) is answered with the allowed labels and the turn goes
+  on.
+- **A turn that ends without a valid call gets one forced `route` call** — same tools array
+  as the work loop, `tool_choice` pinned to `{"type": "function", "function": {"name":
+  "route"}}`. It runs as a separate `provider.chat` (the runner reaches the provider via
+  `AgentRunner.provider`) over the node's conversation as its loop would send it next — pruned
+  the way the loop pruned it and fitted under its input budget (§2) — and is wrapped so **any
+  failure yields no label** (`route_label=None`) — the run never breaks on it.
 
-- **`parse_verdict` (binary)** reads the **first non-empty line** and returns `True` iff it
-  starts with `PASS` (case-insensitive). Default is `False` (FAIL) — an empty or unparseable
-  answer loops back, never silently passes.
+When neither produced a valid label — the model never called it, the forced call errored,
+or the provider did not honour it — the engine **falls back to parsing the node's text
+output**:
+
+- **`parse_verdict` (binary)** reads the **last** line that states a verdict: `FAIL` as the
+  line's first word (followed by anything — "FAIL" and what to fix), or `PASS` alone or
+  followed by punctuation (`PASS.`, `PASS — caveats`). A line that goes on in words after
+  `PASS` ("Pass the id to the handler", a bullet of a FAIL's fix list) is prose and never
+  passes the work. When no line states a verdict, the first non-empty line is read the way
+  verdicts were read when they came first: `PASS` when it starts with `PASS`. Default is
+  `False` (FAIL) — an empty or unparseable answer loops back, never silently passes.
 - **`parse_label` (multi-way)** scans lines **from the end** for one whose full stripped,
   de-punctuated text equals a declared case label (case-insensitive); it returns the **last**
   match.
 
-**Practical implication (fallback path only):** the tool call makes label placement in the
-text irrelevant in the normal case. It still matters when the fallback runs — a binary node's
-`PASS`/`FAIL` should be its first line, a multi-way label its last — so a verdict still
-survives if the forced tool call is ever unavailable.
+**Practical implication (fallback path only):** the `route` call makes label placement in
+the text irrelevant in the normal case. It still matters when the fallback runs — both a
+binary node's `PASS`/`FAIL` and a multi-way label belong alone on the text's last line — so a
+verdict still survives if no tool call is ever made.
 
 **Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded.
 
@@ -1297,7 +1320,7 @@ End-to-end for a single `run_workflow` call:
 | Symbol | File | Role |
 |---|---|---|
 | `Workflow`, `WorkNode`, `ScriptNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (agent work nodes and deterministic script nodes; routing optional; structural-equivalence guard). |
-| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when the forced `route` tool call did not return a label. |
+| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output, read from its last verdict line (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when neither the node's own `route` call nor the forced one returned a label. |
 | `artifact_dir`, `keyed_work_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. `keyed_work_dir` (the `work_key` folder, shared across runs) ages out on its own clock instead: `prune_runs` reaps a `keys/<workflow>/<key>/` dir once idle past `KEYED_WORK_MAX_AGE_DAYS` (30) days, unless its run lock is held OR `run_log.live_work_keys` still names it (a parked `needs_input` run releases its lock the instant it parks, so the lock check alone would miss it) — the sweep itself runs at most once a day (`keys/.last-sweep`), not on every run. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |

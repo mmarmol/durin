@@ -466,7 +466,11 @@ model override, then calls `self.runner.run(AgentRunSpec(...))`.
 `AgentRunner` ([`durin/agent/runner.py`](../../durin/agent/runner.py)) is the
 shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
 default): call the LLM → if the response has tool calls, execute them (with
-topological batching) and loop; otherwise finalize the content and stop. Around
+topological batching) and loop; otherwise finalize the content and stop. A
+caller whose tool call concludes the work (a workflow node's `route` verdict)
+sets `AgentRunSpec.end_turn_after_tools`: when it returns true after a round of
+tool calls, the turn ends there with the text sent alongside those calls as
+its final content, and no further request is made. Around
 that core it layers guards and context governance — loop detection on repeated
 failed calls, an unknown-tool breaker, an idle-timeout breaker, message
 sanitization (dropping orphan tool results, backfilling missing ones),
@@ -548,6 +552,14 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   with the "unchanged since last read" stub, which would point at content the
   model no longer has. A tool call entry that is not well formed is skipped,
   and a failure here is logged without stopping the run.
+- **A request after the run.** A caller that sends one more request from a
+  finished run's messages — a workflow node's forced `route`, re-entry
+  assessment or `deliver` call — builds it with
+  `AgentRunner.request_view(spec, messages, result.prune_state)`: the governance
+  and budget fit the run's next request would get, from the run's own prune
+  state (`AgentRunResult.prune_state`), so what the run pruned stays pruned byte
+  for byte and the request fits the run's input budget instead of carrying the
+  whole unpruned history.
 
 The placeholder is informative rather than opaque:
 - it names the tool;
