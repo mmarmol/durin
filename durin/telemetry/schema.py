@@ -171,9 +171,11 @@ class SubagentRunEvent(TypedDict):
 
 # Which bound set a compaction trigger, the smallest of: the window times the
 # configured ratio (``ratio``, or ``floor`` when the small-window floor raised
-# that ratio), the absolute cap (``cap``), and the ceiling that keeps the
-# resulting prompt inside the runner's budget (``ceiling``).
-CompactionTriggerBound = Literal["ratio", "floor", "cap", "ceiling"]
+# that ratio), the absolute cap (``cap``), the ceiling that keeps the resulting
+# prompt inside the runner's budget for the window (``ceiling``), and the one a
+# context_block_limit sets, which is then the runner's whole budget
+# (``block_limit``).
+CompactionTriggerBound = Literal["ratio", "floor", "cap", "ceiling", "block_limit"]
 
 
 class CompactionPreemptiveTriggerEvent(TypedDict):

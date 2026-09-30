@@ -18,6 +18,7 @@ from loguru import logger
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
+from durin.telemetry.schema import CompactionTriggerBound
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -553,6 +554,7 @@ class Consolidator:
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
         preemptive_compact_max_tokens: int | None = 256_000,
+        context_block_limit: int | None = None,
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
@@ -564,6 +566,10 @@ class Consolidator:
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
+        # The loop's context_block_limit. When set it IS the runner's input
+        # budget, whatever the window, so the trigger ceiling and the
+        # summarizing call's input must stay under it too.
+        self.context_block_limit = context_block_limit
         # ``consolidation_ratio`` now means: after a compaction round, how
         # much of the *trigger threshold* should remain (default 0.5 → leave
         # half of the trigger). Pre-emptive compaction raised the trigger from
@@ -1020,8 +1026,34 @@ class Consolidator:
 
     @property
     def _input_token_budget(self) -> int:
-        """Available input token budget for consolidation LLM."""
-        return self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+        """Available input token budget for consolidation LLM.
+
+        Never above what a run may send: under a context_block_limit, the
+        summarizing call's input stays one safety buffer under it."""
+        budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+        limit_ceiling = self._block_limit_ceiling
+        return budget if limit_ceiling is None else min(budget, limit_ceiling)
+
+    @property
+    def _block_limit_ceiling(self) -> int | None:
+        """One safety buffer under context_block_limit, or None when no limit
+        is set. The runner's whole input budget is the limit itself then."""
+        limit = self.context_block_limit
+        if isinstance(limit, int) and limit > 0:
+            return limit - self._SAFETY_BUFFER
+        return None
+
+    @property
+    def _window_ceiling(self) -> int:
+        """The window's part of the trigger ceiling: the window less a capped
+        output reservation and two safety buffers."""
+        # ``max_completion_tokens`` of 0 means "provider default, unset"; it
+        # reserves nothing, matching the budget this ceiling replaced.
+        reservation = min(
+            max(0, int(self.max_completion_tokens)),
+            self._MAX_TRIGGER_OUTPUT_RESERVATION,
+        )
+        return self.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
 
     @property
     def _preemptive_ceiling(self) -> int:
@@ -1032,15 +1064,13 @@ class Consolidator:
         strictly below the runner's own input budget (same formula, one extra
         safety buffer) so the loop-level invariant holds: a consolidation that
         lands at or under this ceiling always fits the runner, which is what
-        lets an iteration-0 overflow be read as "consolidation failed".
+        lets an iteration-0 overflow be read as "consolidation failed". When
+        a context_block_limit is set the runner's budget is that limit, so
+        the ceiling is also held one buffer under it.
         """
-        # ``max_completion_tokens`` of 0 means "provider default, unset"; it
-        # reserves nothing, matching the budget this ceiling replaced.
-        reservation = min(
-            max(0, int(self.max_completion_tokens)),
-            self._MAX_TRIGGER_OUTPUT_RESERVATION,
-        )
-        return self.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
+        ceiling = self._window_ceiling
+        limit_ceiling = self._block_limit_ceiling
+        return ceiling if limit_ceiling is None else min(ceiling, limit_ceiling)
 
     @property
     def _effective_compact_ratio(self) -> float:
@@ -1059,25 +1089,27 @@ class Consolidator:
         LLM call."""
         return self._preemptive_trigger()[0]
 
-    def _preemptive_trigger(self) -> tuple[int, str]:
+    def _preemptive_trigger(self) -> tuple[int, CompactionTriggerBound]:
         """The pre-emptive trigger in tokens, and the bound that set it.
 
-        The trigger is the smallest of three bounds, named in the second
+        The trigger is the smallest of four bounds, named in the second
         element: the window times the configured ratio (``ratio``, or
         ``floor`` when the small-window floor raised that ratio), the absolute
-        cap (``cap``), and ``_preemptive_ceiling`` (``ceiling``). The ceiling
-        keeps a misconfigured ratio (e.g. 0.99) or cap from pushing the
-        trigger past the point where the resulting prompt still fits the
-        runner — context overflow still triggers even if the ratio would have
-        skipped. On a tie the earlier bound is named, since the later one
-        changed nothing.
+        cap (``cap``), the window's ceiling (``ceiling``) and the ceiling a
+        context_block_limit sets (``block_limit``). The ceilings keep a
+        misconfigured ratio (e.g. 0.99) or cap from pushing the trigger past
+        the point where the resulting prompt still fits the runner — context
+        overflow still triggers even if the ratio would have skipped. On a tie
+        the earlier bound is named, since the later one changed nothing.
         """
         if self.context_window_tokens <= 0:
             return 0, "ceiling"
-        ceiling = self._preemptive_ceiling
-        if ceiling <= 0:
-            # Window smaller than the reservation: nothing sane to derive.
-            return max(1, self._input_token_budget), "ceiling"
+        window_ceiling = self._window_ceiling
+        if self._preemptive_ceiling <= 0:
+            # Window (or block limit) smaller than the reservation: nothing
+            # sane to derive.
+            bound: CompactionTriggerBound = "ceiling" if window_ceiling <= 0 else "block_limit"
+            return max(1, self._input_token_budget), bound
         ratio = self._effective_compact_ratio
         if ratio > 0:
             trigger = int(self.context_window_tokens * ratio)
@@ -1085,12 +1117,15 @@ class Consolidator:
         else:
             # 0 / negative / garbage → fall back to legacy behavior (trigger
             # only at the hard ceiling).
-            trigger, bound = ceiling, "ceiling"
-        cap = self.preemptive_compact_max_tokens
-        if cap is not None and cap < trigger:
-            trigger, bound = cap, "cap"
-        if ceiling < trigger:
-            trigger, bound = ceiling, "ceiling"
+            trigger, bound = window_ceiling, "ceiling"
+        lower_bounds: tuple[tuple[int | None, CompactionTriggerBound], ...] = (
+            (self.preemptive_compact_max_tokens, "cap"),
+            (window_ceiling, "ceiling"),
+            (self._block_limit_ceiling, "block_limit"),
+        )
+        for value, name in lower_bounds:
+            if value is not None and value < trigger:
+                trigger, bound = value, name
         return max(1, trigger), bound
 
     def _truncate_to_token_budget(self, text: str) -> str:

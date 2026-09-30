@@ -158,8 +158,8 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `plan_stall_turns` | `8` | Turns without todo progress before a reassess reminder is injected; `0` disables |
 | `disabled_skills` | `[]` | Skill names to exclude from loading |
 | `max_messages` | `480` | Max messages replayed from session history; `0` uses default |
-| `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
-| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and capped so the resulting prompt still fits the runner |
+| `consolidation_ratio` | `0.5` | How far a compaction reduces the prompt, as a fraction of the compaction trigger (`0.5` = down to half the trigger) |
+| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and never above what a run may send |
 | `preemptive_compact_max_tokens` | `256000` | Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger. On a 1M-window model the default ratio alone would let every long turn ship up to 500K tokens. A window whose ratio trigger is already lower is unaffected; `null` removes the cap (the ratio alone). Chat compaction only: workflow nodes and subagents trim their context to their model's window instead |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |
 | `compaction_learnings_enabled` | `true` | Distil durable user learnings (preferences, corrections) at compaction time |
@@ -167,7 +167,18 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `decision_log_max_chars` | `3000` | Total character cap on the decision log. Re-injected every turn, so raising it costs tokens on every request; lowering it too far starves the auto-extracted channel, since manual `note_decision` entries hold their slots first |
 | `parallel_tool_calls` | `{}` | Per-model substring → bool map for the `parallel_tool_calls` request flag |
 | `tool_hint_max_length` | `40` | Max characters for tool-call hints shown in the channel (e.g. `$ cd …/project`) |
-| `context_block_limit` | `null` | Hard limit on context blocks (overrides token budget when set) |
+| `context_block_limit` | `null` | Hard limit, in tokens, on what the chat and its subagents may send: when set it replaces the input budget their model's window gives them |
+
+**How the compaction settings fit together.** The chat compacts, at turn
+boundaries (before a turn is built, after it is saved, and when a turn
+overflows), once the prompt reaches its *trigger*: the window times
+`preemptive_compact_ratio`, lowered to `preemptive_compact_max_tokens` when
+that is smaller. A compaction then summarizes the oldest turns until the
+prompt is down to `consolidation_ratio` times the trigger. `context_block_limit`
+outranks both: when set, the trigger and the history replayed into a turn
+always stay under it, whatever the ratio and the cap say. Inside one long turn
+of tool calls, the run trims old tool results by its own budget instead, so
+the cap bounds what each turn starts from, not what a single turn may reach.
 
 **`agents.aux_models`** — optional auxiliary model bridges (used only when the primary model lacks the modality):
 

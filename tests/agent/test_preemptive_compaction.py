@@ -93,7 +93,13 @@ def _session_with_messages(loop: AgentLoop, count: int):
 
 
 def _stub_consolidator(
-    *, window: int, max_completion: int, safety: int, ratio: float, cap: int | None = 256_000,
+    *,
+    window: int,
+    max_completion: int,
+    safety: int,
+    ratio: float,
+    cap: int | None = 256_000,
+    block_limit: int | None = None,
 ):
     """Build a barebones Consolidator without the full LLM provider plumbing.
 
@@ -105,6 +111,7 @@ def _stub_consolidator(
     c.max_completion_tokens = max_completion
     c.preemptive_compact_ratio = ratio
     c.preemptive_compact_max_tokens = cap
+    c.context_block_limit = block_limit
     # ``_SAFETY_BUFFER`` is a class constant on the real class; set as
     # instance attribute here for direct override.
     c._SAFETY_BUFFER = safety
@@ -148,20 +155,28 @@ def test_ceiling_stays_strictly_under_the_runner_input_budget():
     """Loop invariant: a consolidation that lands at the ceiling still fits the
     runner, which is what lets an iteration-0 overflow mean "consolidation
     failed" rather than "the trigger was set too high"."""
-    from durin.agent.runner import _MAX_OUTPUT_RESERVATION, _SNIP_SAFETY_BUFFER, _output_reservation
+    from durin.agent.runner import _MAX_OUTPUT_RESERVATION, input_budget_tokens
 
     for window, max_completion in (
         (231_072, 131_072), (200_000, 8192), (1_000_000, 65_536), (32_000, 4096),
     ):
         # The absolute cap only lowers the trigger, so the invariant holds with
         # it and without it — including a cap larger than the window itself.
+        # A context_block_limit IS the runner's whole budget when set, below
+        # the window's or above it.
         for cap in (None, 256_000, 10_000_000):
-            c = _stub_consolidator(
-                window=window, max_completion=max_completion, safety=1024, ratio=0.99, cap=cap,
-            )
-            runner_budget = window - _output_reservation(max_completion) - _SNIP_SAFETY_BUFFER
-            assert c._preemptive_ceiling < runner_budget, (window, max_completion, cap)
-            assert c._preemptive_trigger_tokens < runner_budget, (window, max_completion, cap)
+            for block_limit in (None, 20_000, 100_000, 2_000_000):
+                c = _stub_consolidator(
+                    window=window, max_completion=max_completion, safety=1024, ratio=0.99,
+                    cap=cap, block_limit=block_limit,
+                )
+                runner_budget = input_budget_tokens(window, max_completion, block_limit)
+                case = (window, max_completion, cap, block_limit)
+                assert c._preemptive_ceiling < runner_budget, case
+                assert c._preemptive_trigger_tokens < runner_budget, case
+                # What the summarizing call may be handed never exceeds what
+                # a run may send either.
+                assert c._input_token_budget <= runner_budget, case
     assert _MAX_OUTPUT_RESERVATION == 32_768
 
 
@@ -248,6 +263,66 @@ def test_the_ceiling_still_wins_when_it_is_the_smallest():
     c = _stub_consolidator(window=260_000, max_completion=8192, safety=1024, ratio=0.99)
     assert c._preemptive_ceiling == 249_760
     assert c._preemptive_trigger() == (249_760, "ceiling")
+
+
+def test_a_block_limit_holds_the_trigger_under_the_runners_budget():
+    """context_block_limit IS the runner's input budget when set: on a 1M
+    window with a 100,000 limit the ratio's 500,000 and the cap's 256,000
+    would both sit far above what a run may send."""
+    from durin.agent.runner import input_budget_tokens
+
+    c = _stub_consolidator(
+        window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, block_limit=100_000,
+    )
+    runner_budget = input_budget_tokens(1_000_000, 8192, 100_000)
+    assert runner_budget == 100_000
+    assert c._preemptive_ceiling == 100_000 - 1024
+    assert c._preemptive_trigger() == (98_976, "block_limit")
+    assert c._input_token_budget == 98_976
+
+
+def test_a_block_limit_above_the_window_budget_changes_nothing():
+    unlimited = _stub_consolidator(window=1_000_000, max_completion=8192, safety=1024, ratio=0.5)
+    loose = _stub_consolidator(
+        window=1_000_000, max_completion=8192, safety=1024, ratio=0.5, block_limit=2_000_000,
+    )
+    assert unlimited._preemptive_ceiling == loose._preemptive_ceiling == 1_000_000 - 8192 - 2048
+    assert unlimited._preemptive_trigger() == loose._preemptive_trigger() == (256_000, "cap")
+    assert unlimited._input_token_budget == loose._input_token_budget == 1_000_000 - 8192 - 1024
+
+
+def test_the_loop_hands_its_block_limit_to_the_consolidator(tmp_path):
+    from durin.agent.runner import input_budget_tokens, provider_max_output
+
+    loop = _make_loop(tmp_path, context_window_tokens=1_000_000, context_block_limit=100_000)
+    c = loop.consolidator
+    # _make_loop zeroes the buffer for its tiny windows; this test needs the
+    # real one, which is what keeps the trigger under the runner's budget.
+    vars(c).pop("_SAFETY_BUFFER", None)
+    assert c.context_block_limit == 100_000
+    runner_budget = input_budget_tokens(
+        loop.context_window_tokens, provider_max_output(loop.provider), loop.context_block_limit,
+    )
+    trigger, bound = c._preemptive_trigger()
+    assert bound == "block_limit"
+    assert trigger < 100_000
+    assert trigger < runner_budget
+
+
+def test_history_replay_stays_within_the_runners_budget(tmp_path):
+    from durin.agent.runner import input_budget_tokens, provider_max_output
+
+    limited = _make_loop(tmp_path, context_window_tokens=1_000_000, context_block_limit=100_000)
+    runner_budget = input_budget_tokens(
+        limited.context_window_tokens, provider_max_output(limited.provider), limited.context_block_limit,
+    )
+    assert limited._replay_token_budget() <= runner_budget
+
+    # Unset, the replay budget is the window's input budget, as before.
+    unlimited = _make_loop(tmp_path, context_window_tokens=1_000_000)
+    assert unlimited._replay_token_budget() == input_budget_tokens(
+        1_000_000, provider_max_output(unlimited.provider),
+    )
 
 
 def test_a_cap_above_the_window_changes_nothing():
@@ -614,6 +689,7 @@ def test_from_config_threads_the_cap_to_the_consolidator(tmp_path):
                 "model": "openai/gpt-4.1",
                 "workspace": str(tmp_path),
                 "preemptive_compact_max_tokens": 180_000,
+                "context_block_limit": 90_000,
             }
         },
     })
@@ -628,6 +704,7 @@ def test_from_config_threads_the_cap_to_the_consolidator(tmp_path):
         AgentLoop.from_config(config)
     _, kwargs = mock_consolidator.call_args
     assert kwargs["preemptive_compact_max_tokens"] == 180_000
+    assert kwargs["context_block_limit"] == 90_000
 
 
 # ===========================================================================

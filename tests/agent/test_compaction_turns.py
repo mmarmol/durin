@@ -95,3 +95,19 @@ async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path):
     failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
     assert failed == [], result["replies"]
     assert sum(result["compactions"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
+    """context_block_limit is the runner's whole budget: on a 1M window with a
+    40,000 limit the session must compact before it reaches the limit, not
+    wait for the cap's 256,000 and fail every turn past 40,000."""
+    from durin.agent.runner import input_budget_tokens
+
+    result = await _run_turns(tmp_path, turns=12, window=1_000_000, context_block_limit=40_000)
+
+    failed = [r for r in result["replies"] if not r or "prompt overflow" in r]
+    assert failed == [], result["replies"]
+    assert sum(result["compactions"]) >= 1
+    budget = input_budget_tokens(1_000_000, 8192, 40_000)
+    assert max(result["main_prompts"]) <= budget

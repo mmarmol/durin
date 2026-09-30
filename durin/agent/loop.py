@@ -695,6 +695,7 @@ class AgentLoop:
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
             preemptive_compact_max_tokens=preemptive_compact_max_tokens,
+            context_block_limit=self.context_block_limit,
             decision_log_enabled=decision_log_enabled,
             decision_log_max_entries=decision_log_max_entries,
             decision_log_max_chars=decision_log_max_chars,
@@ -2056,6 +2057,11 @@ class AgentLoop:
         # collapse the replay budget (mirrors the runner's input budgeting).
         reserved_output = _output_reservation(max_output)
         budget = self.context_window_tokens - reserved_output - 1024
+        # A context_block_limit is the runner's whole input budget when set:
+        # history beyond it could never be sent.
+        limit = self.context_block_limit
+        if isinstance(limit, int) and limit > 0:
+            budget = min(budget, limit)
         return budget if budget > 0 else max(128, self.context_window_tokens // 2)
 
     async def _run_agent_loop(
