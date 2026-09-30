@@ -1017,8 +1017,9 @@ preset leaves unset takes the `agents.defaults` value, whatever the previous
 preset set. The `agents.defaults` values travel in the provider snapshot
 (`compaction_defaults`), and the snapshot's signature includes them and the
 preset's own, so the per-turn snapshot refresh applies an edit to them on the
-next turn. A preset's own values come from wherever that refresh
-(`_refresh_provider_snapshot`) takes the preset. While the loop holds a
+next turn. That refresh (`_refresh_provider_snapshot`) runs only in a loop
+given the snapshot loaders, which the gateway wires and the TUI does not. A
+preset's own values come from wherever it takes the preset. While the loop holds a
 preset (`_active_preset`: the one `agents.defaults.model_preset` named at
 start, which `from_config` activates, or one set with `/model`, the model
 picker or the settings' default model) and the selection in the file still
