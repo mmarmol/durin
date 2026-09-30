@@ -201,6 +201,11 @@ under, so it goes straight to `agents.defaults`, like the default model does
 with `provider: "auto"`. A preset that sets only `model`, `provider` and a
 `temperature` therefore runs with the model's real limits.
 
+A model's entry holds only what you put there: durin never copies a preset's
+values or `agents.defaults` into it. A preset's `temperature` or limits apply
+to runs on that preset alone, and `agents.defaults` stays the fallback of the
+last step above.
+
 A configured value **above** what the model really accepts (the catalog's) is
 capped to the catalog value when the run starts, and one warning names the
 provider, the model, the configured and the real value: a window larger than

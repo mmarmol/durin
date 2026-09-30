@@ -159,6 +159,15 @@ with an `"auto"` provider. `resolve_preset_limits` returns a copy (or the preset
 itself when nothing changed) and never modifies the stored preset, so a resolved
 value is never saved back to the config file.
 
+A `ModelEntry` exists only because someone set it: loading a config never
+creates or fills one. Every run on the model reads its entry before the
+catalog, so a value copied into it from elsewhere would stop being scoped to
+where it was set — a named preset's `temperature` would become the default
+model's, and a window left in `agents.defaults` would stick to whichever model
+is the default and then to the next one — and would override any later edit
+of that source for the model. A preset's values stay on the preset, and
+`agents.defaults` is read only where the chain falls back to it.
+
 Resolution happens where a preset becomes a run, so the in-memory presets keep
 "unset" and pick up a later change to the provider's `models` entry:
 `resolve_preset(name)`, the factory's `_resolve_model_preset` (every `make_provider`,
