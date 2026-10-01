@@ -300,8 +300,13 @@ def _isolate_user_home(tmp_path_factory, monkeypatch):
         monkeypatch.setenv("USERPROFILE", home)
 
 
+# The test this process ran last, named when a secret store turns up cached
+# between tests.
+_LAST_TEST: dict = {"nodeid": None}
+
+
 @pytest.fixture(autouse=True)
-def _isolate_durin_home(tmp_path_factory, monkeypatch):
+def _isolate_durin_home(tmp_path_factory, monkeypatch, request):
     """Run every test as a throwaway durin instance.
 
     ``durin_home()`` reads ``$DURIN_HOME`` with priority over ``Path.home()``,
@@ -311,11 +316,22 @@ def _isolate_durin_home(tmp_path_factory, monkeypatch):
     fresh per-test durin home so tests see one instance whatever the ambient
     environment. A test that needs the default/unset behaviour controls
     DURIN_HOME itself (see ``tests/config/test_config_paths.py``).
+
+    The secret store is cached in a module global
+    (``durin.security.secrets._STORE``), built on first use for the config
+    path active then. Kept across tests, a secret one test stored reached
+    every later test in the process: an exec-scoped one showed up in the next
+    test's exec environment. Each test starts with no store and builds its
+    own, from its own home; the global is emptied again when the test ends.
+    A store found cached when a test starts was built outside any test, by
+    something a test left running or at import, and fails that test, naming
+    the test that ran before it.
     """
     import tempfile
     from pathlib import Path
 
     import durin.config.loader as _loader
+    import durin.security.secrets as _secrets
 
     # One folder per test, created with mkdtemp's random name inside a
     # subfolder of the run's base temp. tmp_path_factory.mktemp numbers its
@@ -327,6 +343,17 @@ def _isolate_durin_home(tmp_path_factory, monkeypatch):
     home = Path(tempfile.mkdtemp(prefix="home", dir=homes))
     monkeypatch.setenv("DURIN_HOME", str(home))
     monkeypatch.setattr(_loader, "_current_config_path", None, raising=False)
+    previous, _LAST_TEST["nodeid"] = _LAST_TEST["nodeid"], request.node.nodeid
+    if _secrets._STORE is not None:
+        stray, _secrets._STORE = _secrets._STORE.path, None
+        pytest.fail(
+            f"a secret store for {stray} was cached in "
+            f"durin.security.secrets._STORE when this test started, after "
+            f"{previous or 'no test'}: it was built outside any test, by "
+            "something left running or at import.",
+            pytrace=False,
+        )
+    monkeypatch.setattr(_secrets, "_STORE", None)
     yield
 
 
