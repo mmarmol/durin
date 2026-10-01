@@ -1230,6 +1230,43 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
     assert seen["workspace"] == Path(config.agents.defaults.workspace)
 
 
+def test_gateway_startup_logs_one_error_when_the_config_did_not_load(monkeypatch, tmp_path: Path) -> None:
+    """A gateway on a config that did not load starts on defaults for what
+    failed, and its log said nothing above a warning: the person running it
+    could not tell the config they wrote was not the one running, or that
+    durin would refuse to save it. One error line now says both, naming the
+    files."""
+    from loguru import logger
+
+    from durin.config import loader
+
+    config_file = _write_instance_config(tmp_path)
+    split = config_file.with_suffix(".json.d")
+    split.mkdir()
+    config_file.write_text('{"_layout": "split"}')
+    (split / "agents.json").write_text('{"defaults": {"model": "openai/gpt-4.1",, }}')
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        set_config_path=lambda path: monkeypatch.setattr(loader, "_current_config_path", path),
+        make_provider=_stop_gateway_provider,
+    )
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    finally:
+        logger.remove(sink)
+
+    assert isinstance(result.exception, _StopGatewayError)
+    startup = [line for line in errors if "Config did not load cleanly" in line]
+    assert len(startup) == 1, errors
+    assert "running on defaults" in startup[0] and "refused until these files are fixed" in startup[0]
+    assert f"{split / 'agents.json'}: Expecting property name" in startup[0]
+
+
 def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) -> None:
     config_file = _write_instance_config(tmp_path)
     config = Config()

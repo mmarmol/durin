@@ -733,17 +733,27 @@ def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str
     Idempotent — values already shaped as references are skipped.
     Backs the config up first. Returns the secret names created.
     """
+    from durin.config.loader import config_write, get_config_path
+
+    path = config_path or get_config_path()
+    # Under the config's lock, and refused (ConfigNotLoadedError) when the
+    # config on disk does not load cleanly: the rewrite below must neither
+    # race another writer nor touch a config durin could not read.
+    with config_write(path):
+        return _migrate_plaintext_provider_keys(path)
+
+
+def _migrate_plaintext_provider_keys(path: Path) -> list[str]:
     import json as _json
     import re as _re
 
     from durin.config.loader import (
+        ConfigFileUnreadableError,
         _is_split_layout,
         _split_dir,
         backup_config,
-        get_config_path,
+        read_config_file,
     )
-
-    path = config_path or get_config_path()
 
     providers_file: Path | None
     mono: dict[str, Any] | None
@@ -752,14 +762,14 @@ def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str
         if not providers_file.exists():
             return []
         try:
-            providers = _json.loads(providers_file.read_text(encoding="utf-8") or "{}")
-        except (OSError, _json.JSONDecodeError):
+            providers = read_config_file(providers_file)
+        except ConfigFileUnreadableError:
             return []
         mono = None
     elif path.exists():
         try:
-            mono = _json.loads(path.read_text(encoding="utf-8") or "{}")
-        except (OSError, _json.JSONDecodeError):
+            mono = read_config_file(path)
+        except ConfigFileUnreadableError:
             return []
         if not isinstance(mono, dict) or mono.get("_layout") == "split":
             return []

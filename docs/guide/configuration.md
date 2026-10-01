@@ -50,6 +50,34 @@ To see the exact path for the active instance:
 durin config path
 ```
 
+### When the config does not load
+
+A config file does not load when it cannot be parsed (a JSON syntax error, a
+byte that is not UTF-8, nesting too deep to read) or when a setting in it fails
+validation (`"temperature": "hot"`, a number too large to read, which reads as
+infinity). The compaction cap is the exception: a value it cannot use is
+dropped and the rest loads. When something does not load:
+
+- **durin still runs**, on defaults for what failed: the section of a file it
+  could not read, or the whole config when a setting fails validation.
+- **durin changes nothing on disk.** Every save is refused until the config
+  loads again: `durin config set`, `durin config edit`, the dashboard's
+  settings, the API, `durin onboard`, `durin upgrade` and `durin secret
+  migrate` say so and name each file with its error; background saves (the
+  example personas seeded at startup, an OAuth login completing) log the same
+  as an error. Your hand-edited file stays exactly as you left it.
+- **It tells you where.** `durin doctor` fails its `config valid` check,
+  `durin status` says the config did not load, and the gateway's startup log
+  has one error line, each naming the files and their errors.
+
+To fix it, edit the files named (any JSON linter points at a syntax error), or
+replace them with a backup: `config.json.legacy`, or a timestamped
+`config.json.d.bak.*` that `durin onboard` leaves before it rewrites the
+config. `durin config edit` cannot open a config that does not load, since
+saving its merged view would drop the broken file's settings. Run `durin
+doctor` again to confirm, then restart the gateway so it reads the fixed
+config.
+
 ### Environment variable overrides
 
 Because the root config class is a pydantic `BaseSettings` with the prefix

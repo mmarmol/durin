@@ -162,6 +162,8 @@ class DurinApp(App[None]):
 
     def _persist_appearance(self) -> None:
         """Write the current palette/mode back to config."""
+        from durin.config.loader import ConfigNotLoadedError
+
         try:
             from durin.config.loader import load_config, save_config
 
@@ -169,6 +171,10 @@ class DurinApp(App[None]):
             cfg.appearance.palette = self._palette
             cfg.appearance.mode = self._mode
             save_config(cfg)
+        except ConfigNotLoadedError as e:
+            # The theme still changes for this session; the person learns
+            # why it was not saved and which files to fix.
+            self.notify(str(e), severity="error", timeout=15, markup=False)
         except Exception:  # noqa: BLE001 - a theme toggle must not crash
             pass
 

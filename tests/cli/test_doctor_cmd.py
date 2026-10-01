@@ -163,7 +163,24 @@ def test_check_config_parses_rejects_invalid_json(fake_home: Path) -> None:
     with patch("durin.cli.doctor.get_config_path", return_value=cfg):
         r = check_config_parses()
     assert r.status == "fail"
-    assert "JSON parse error" in r.message
+    assert f"{cfg}: Expecting property name" in r.message
+
+
+def test_check_config_parses_names_each_split_file_that_did_not_load(fake_home: Path) -> None:
+    """A split config whose files all parse but one setting fails validation
+    loaded as defaults, and the check passed: it only parsed config.json,
+    the split layout's marker. It names each file that did not load."""
+    cfg = fake_home / ".durin" / "config.json"
+    split = cfg.with_suffix(".json.d")
+    split.mkdir(parents=True)
+    cfg.write_text('{"_layout": "split"}', encoding="utf-8")
+    (split / "agents.json").write_text('{"defaults": {"temperature": "hot"}}', encoding="utf-8")
+    (split / "tools.json").write_text('{"restrictToWorkspace": true,}', encoding="utf-8")
+    with patch("durin.cli.doctor.get_config_path", return_value=cfg):
+        r = check_config_parses()
+    assert r.status == "fail"
+    assert f"{split / 'agents.json'}: agents.defaults.temperature: Input should be a valid number" in r.message
+    assert f"{split / 'tools.json'}: Expecting property name" in r.message
 
 
 def test_check_config_parses_accepts_valid(valid_config: Path) -> None:

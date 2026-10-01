@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import typer
+from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
 from durin import __version__
-from durin.config.loader import get_config_path, load_config
+from durin.config.loader import ConfigNotLoadedError, get_config_path, load_config
 
 if TYPE_CHECKING:
     from durin.config.schema import Config
@@ -108,29 +109,25 @@ def check_config_file() -> CheckResult:
 
 
 def check_config_parses() -> CheckResult:
+    """Every config file parses and the settings validate. A config that does
+    not runs on defaults for what failed, and durin refuses to save it until
+    it is fixed, so each failing file is named with its error."""
+    from durin.config.loader import config_load_problems
+
     path = get_config_path()
     if not path.exists():
         return CheckResult("config valid", "fail", "No config to validate.", category="config")
-    try:
-        with path.open(encoding="utf-8") as f:
-            json.load(f)
-    except json.JSONDecodeError as e:
+    problems = config_load_problems(path)
+    if problems:
         return CheckResult(
             "config valid", "fail",
-            f"JSON parse error: {e}",
-            fix="Edit the file by hand, or back it up and run `durin onboard` to start over.",
+            "Did not load, so durin runs on defaults for it and refuses to save the config: "
+            + "; ".join(f"{p.path}: {p.error}" for p in problems),
+            fix="Fix or remove those files by hand (a backup of a working config, if you have one, "
+                "can replace them), then run `durin doctor` again.",
             category="config",
         )
-    try:
-        load_config(path)
-    except Exception as e:  # noqa: BLE001 — pydantic ValidationError or downstream
-        return CheckResult(
-            "config valid", "fail",
-            f"Schema validation failed: {e}",
-            fix="Run `durin upgrade --migrate-only`, or revert to `~/.durin/config.json.bak`.",
-            category="config",
-        )
-    return CheckResult("config valid", "ok", "Schema validation passed.", category="config")
+    return CheckResult("config valid", "ok", "Loads cleanly: every file parses and validates.", category="config")
 
 
 def check_workspace() -> CheckResult:
@@ -1841,6 +1838,9 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     # reinstall dropped them.
     try:
         update_extras_state()
+    except ConfigNotLoadedError as e:
+        # The config check above names the files; nothing is written.
+        logger.error("Could not record the installed extras: {}", e)
     except Exception:  # noqa: BLE001
         pass
     report.add(check_extras_drift())

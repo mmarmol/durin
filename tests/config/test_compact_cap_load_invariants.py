@@ -192,3 +192,201 @@ def test_a_random_hand_edited_cap_loads_with_the_rest_of_the_config(tmp_path, se
         raw = _random_raw(rng)
         problems += _check(tmp_path / str(n), raw)
     assert problems == [], "\n".join(problems[:10])
+
+
+# ---------------------------------------------------------------------------
+# No durin writer changes a config that did not load cleanly.
+#
+# The agents section is broken the ways a hand edit or a crash leaves a file,
+# in either layout, and each of durin's writers tries to save through its own
+# real path. Every config file must stay byte for byte, the writer must say it
+# refused and name the broken file (an interactive writer to the person, a
+# background one in the log, as an error), and nothing may crash. A config
+# that loads cleanly saves normally, and so does one whose cap the loader
+# normalizes.
+# ---------------------------------------------------------------------------
+
+_GOOD = {
+    "agents": b'{"defaults": {"model": "openai/gpt-4.1", "temperature": 0.3}}',
+    "providers": b'{"openai": {"apiKey": "sk-test-not-real"}}',
+    "tools": b'{"restrictToWorkspace": true}',
+}
+_CORRUPTIONS = {
+    "syntax_error": b'{"defaults": {"model": "openai/gpt-4.1",, }}',
+    "huge_integer": b'{"defaults": {"model": "openai/gpt-4.1", "maxToolIterations": 1' + b"0" * 4_300 + b"}}",
+    "deep_nesting": b'{"defaults": ' + b"[" * 100_000 + b"]" * 100_000 + b"}",
+    "bad_utf8": b'{"defaults": {"model": "openai/gpt-4.1\xff\xfe"}}',
+    "invalid_value": b'{"defaults": {"model": "openai/gpt-4.1", "temperature": "hot"}}',
+}
+_CLEAN = {
+    "clean": _GOOD["agents"],
+    "normalized_cap": b'{"defaults": {"model": "openai/gpt-4.1", "temperature": 0.3, '
+                      b'"preemptiveCompactMaxTokens": "300000"}}',
+}
+
+
+def _config_dir(root, layout: str, agents: bytes):
+    """A config whose agents section is *agents*, in *layout*, under *root*;
+    returns the config path and the file a broken agents section is in."""
+    root.mkdir(parents=True)
+    path = root / "config.json"
+    sections = {**_GOOD, "agents": agents}
+    if layout == "split":
+        split = path.with_suffix(".json.d")
+        split.mkdir()
+        for name, text in sections.items():
+            (split / f"{name}.json").write_bytes(text)
+        path.write_bytes(b'{"_layout": "split"}')
+        return path, split / "agents.json"
+    path.write_bytes(b"{" + b", ".join(b'"%s": %s' % (k.encode(), v) for k, v in sections.items()) + b"}")
+    return path, path
+
+
+def _config_files(path) -> dict[str, bytes]:
+    """Every config file at *path*'s location, byte for byte: the config
+    file, its split directory and the backup a migration leaves."""
+    files = [path, path.with_suffix(".json.legacy")]
+    split = path.with_suffix(".json.d")
+    if split.is_dir():
+        files += sorted(split.iterdir())
+    return {p.name: p.read_bytes() for p in files if p.is_file()}
+
+
+def _by_config_set(path):
+    from typer.testing import CliRunner
+
+    from durin.cli.config_cmd import config_app
+
+    result = CliRunner().invoke(config_app, ["set", "tools.restrictToWorkspace", "false"])
+    if result.exception is not None and not isinstance(result.exception, SystemExit):
+        raise result.exception
+    return result.exit_code != 0, result.output
+
+
+def _by_api_post_config(path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from starlette.testclient import TestClient
+
+    from durin.api.asgi import build_gateway_http_app
+    from durin.channels.websocket import WebSocketChannel
+
+    bus = MagicMock()
+    bus.publish_inbound = AsyncMock()
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "host": "127.0.0.1", "port": 8765, "path": "/",
+         "websocketRequiresToken": False},
+        bus,
+    )
+    registry = channel._services
+    client = TestClient(build_gateway_http_app(channel, registry, auth=registry.get("auth")))
+    token = client.get("/webui/bootstrap").json()["token"]
+    resp = client.post(
+        "/api/v1/config", json={"key": "tools.restrictToWorkspace", "value": "false"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code < 500, f"the API failed instead of refusing: {resp.status_code} {resp.text}"
+    return resp.status_code != 200, resp.text
+
+
+def _by_load_and_save(path):
+    from durin.config.loader import ConfigNotLoadedError, load_config, save_config
+
+    config = load_config(path)
+    config.tools.restrict_to_workspace = False
+    try:
+        save_config(config, path)
+    except ConfigNotLoadedError as refusal:
+        return True, str(refusal)
+    return False, ""
+
+
+def _logged_errors(write) -> tuple[bool, str]:
+    from loguru import logger
+
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        write()
+    finally:
+        logger.remove(sink)
+    return bool(errors), "".join(errors)
+
+
+def _by_startup_seeding(path):
+    from durin.personas.builtin import seed_example_personas
+
+    return _logged_errors(seed_example_personas)
+
+
+def _by_onboard_plugins(path):
+    import warnings
+
+    from durin.cli import commands
+
+    with commands.console.capture() as captured, warnings.catch_warnings():
+        # Discovering the channels imports discord.py, whose player module
+        # imports the deprecated audioop: not durin's, and not this test's.
+        warnings.filterwarnings("ignore", "'audioop' is deprecated", DeprecationWarning)
+        commands._onboard_plugins(path)
+    out = captured.get()
+    return "did not change" in out, out
+
+
+_WRITERS = {
+    "config_set": _by_config_set,
+    "api_post_config": _by_api_post_config,
+    "load_and_save": _by_load_and_save,
+    "startup_seeding": _by_startup_seeding,
+    "onboard_plugins": _by_onboard_plugins,
+}
+
+
+@pytest.fixture()
+def _config_at(monkeypatch):
+    """Point durin at a config path for the test, then back."""
+    from durin.config import loader
+
+    def use(path):
+        monkeypatch.setattr(loader, "_current_config_path", path)
+
+    return use
+
+
+@pytest.mark.parametrize("writer", list(_WRITERS))
+@pytest.mark.parametrize("layout", _LAYOUTS)
+@pytest.mark.parametrize("corruption", list(_CORRUPTIONS))
+def test_no_writer_changes_a_config_that_did_not_load(tmp_path, _config_at, corruption, layout, writer):
+    path, broken = _config_dir(tmp_path / "cfg", layout, _CORRUPTIONS[corruption])
+    _config_at(path)
+    before = _config_files(path)
+
+    refused, report = _WRITERS[writer](path)
+
+    assert _config_files(path) == before, f"{writer} changed the {layout} config with {corruption}"
+    assert refused, f"{writer} did not report its refusal: {report[:300]!r}"
+    assert broken.name in report, f"{writer}'s refusal does not name {broken.name}: {report[:300]!r}"
+
+
+@pytest.mark.parametrize("writer", list(_WRITERS))
+@pytest.mark.parametrize("layout", _LAYOUTS)
+@pytest.mark.parametrize("variant", list(_CLEAN))
+def test_a_config_that_loads_cleanly_saves(tmp_path, _config_at, variant, layout, writer):
+    from durin.config.loader import load_config
+    from durin.personas import SEED_PERSONAS
+
+    path, _ = _config_dir(tmp_path / "cfg", layout, _CLEAN[variant])
+    _config_at(path)
+
+    refused, report = _WRITERS[writer](path)
+
+    assert not refused, f"{writer} refused a clean {layout} config: {report[:300]!r}"
+    config = load_config(path)
+    assert config.providers.openai.api_key == "sk-test-not-real"
+    assert config.agents.defaults.temperature == 0.3
+    if variant == "normalized_cap":
+        assert config.agents.defaults.preemptive_compact_max_tokens == 300_000
+    if writer in ("config_set", "api_post_config", "load_and_save"):
+        assert config.tools.restrict_to_workspace is False
+    if writer == "startup_seeding":
+        assert set(SEED_PERSONAS) <= set(config.personas)

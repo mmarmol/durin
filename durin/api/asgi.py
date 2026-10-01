@@ -37,6 +37,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
+from durin.config.loader import ConfigNotLoadedError
 from durin.service.auth import AuthService
 from durin.service.principal import Principal, Scope
 from durin.service.registry import BoundRoute, ServiceRegistry
@@ -49,6 +50,7 @@ from durin.service.types import (
     UnauthenticatedError,
     UnavailableError,
     ValidationFailedError,
+    config_refusal,
 )
 
 if TYPE_CHECKING:
@@ -385,6 +387,10 @@ def _build_write_handler(
                 result = await handler(principal)
         except DomainError as exc:
             return _problem_response(exc)
+        except ConfigNotLoadedError as exc:
+            # Any route that writes the config: the person sees which files
+            # to fix instead of a bare server error.
+            return _problem_response(config_refusal(exc))
 
         return _result_response(result, status_code=bound.spec.status_code)
 

@@ -116,3 +116,13 @@ class UnavailableError(DomainError):
     """A dependency needed to serve the request is not available (HTTP 503)."""
 
     code = "unavailable"
+
+
+def config_refusal(error: Any) -> ConflictError:
+    """The conflict a config write refused by ``config_write`` (a
+    ``ConfigNotLoadedError``) answers with: the refusal, and each file that
+    did not load with its error, so the caller can show what to fix."""
+    return ConflictError(
+        str(error),
+        details={"files": [{"file": str(p.path), "error": p.error} for p in error.problems]},
+    )
