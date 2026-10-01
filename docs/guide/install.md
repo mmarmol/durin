@@ -314,7 +314,7 @@ onboard` (no-wizard) performs.
 touching anything:
 
 ```bash
-durin uninstall                 # dry-run by default: lists what would be deleted
+durin uninstall                 # lists what it would delete, then asks before deleting
 durin uninstall --yes           # delete user data (~/.durin, ~/.cache/durin)
 durin uninstall --purge --yes   # also `pip uninstall durin-agent` afterwards
 durin uninstall --keep-config   # remove the rest, keep the config and the credentials
