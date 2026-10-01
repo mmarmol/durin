@@ -12,7 +12,11 @@ The record is a *live manifest*: ``start_run`` writes it ``running`` before the 
 ``update_run`` rewrites it after each node completes (so an in-flight run is observable),
 and ``finalize_run`` writes the terminal status. Each file is unique (``<run_id>.json``)
 and single-writer (the one run that owns the id), so a full-file rewrite per update is
-safe with no RMW lock. A per-workflow cursor marks how far the dream pass has consumed.
+safe with no RMW lock. It is read while it is rewritten, though (the runs panel, the
+crash sweep, the folder pruner, the run's own next rewrite), so every write replaces
+the file whole: a reader sees the previous record or the new one, never a torn file it
+would take for "no record". A per-workflow cursor marks how far the dream pass has
+consumed.
 
 One state has more than one writer: a ``needs_input`` pause can be answered (resumed),
 rejected (an approval pause), or cancelled, each from its own caller, each a
@@ -25,6 +29,8 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+
+from durin.utils.atomic_write import atomic_write_text
 
 
 def runs_root(workspace: str | Path) -> Path:
@@ -132,6 +138,15 @@ def _record_path(workspace: str | Path, name: str, run_id: str) -> Path:
     return d / f"{run_id}.json"
 
 
+def _write_json(path: Path, data: dict) -> None:
+    """Replace ``path`` with ``data`` as JSON in one step: written to a temporary
+    file beside it, then renamed over it. A plain rewrite truncates the file
+    first, so a reader arriving mid-write would find a torn file, which every
+    reader here takes for "no record". The temporary name never matches the
+    ``*.json`` globs the listings walk."""
+    atomic_write_text(path, json.dumps(data))
+
+
 def start_run(
     workspace: str | Path, name: str, run_id: str, *,
     root_session_key: str | None, started_at: float,
@@ -206,7 +221,7 @@ def start_run(
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
-    path.write_text(json.dumps(record), encoding="utf-8")
+    _write_json(path, record)
     return path
 
 
@@ -241,7 +256,7 @@ def update_run(
         "active_node": None,
         "runs": _node_records(result),
     }
-    path.write_text(json.dumps(record), encoding="utf-8")
+    _write_json(path, record)
 
 
 def mark_node_started(
@@ -273,7 +288,7 @@ def mark_node_started(
         "node_id": node_id, "label": label, "started_at": started_at,
         "iteration": iteration, "session_key": session_key,
     }
-    _record_path(workspace, name, run_id).write_text(json.dumps(base), encoding="utf-8")
+    _write_json(_record_path(workspace, name, run_id), base)
 
 
 def finalize_run(
@@ -338,7 +353,7 @@ def finalize_run(
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)
-    path.write_text(json.dumps(record), encoding="utf-8")
+    _write_json(path, record)
     return path
 
 
@@ -382,7 +397,7 @@ def finalize_short_circuit(
         record["cancelled_by"] = cancelled_by
         record["cancelled_at"] = now
     path = _record_path(workspace, name, run_id)
-    path.write_text(json.dumps(record), encoding="utf-8")
+    _write_json(path, record)
     return record
 
 
@@ -433,7 +448,7 @@ def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
     record["status"] = "running"
     record["owner"] = process_identity()
     path = _record_path(workspace, name, run_id)
-    path.write_text(json.dumps(record), encoding="utf-8")
+    _write_json(path, record)
     return record
 
 
@@ -450,7 +465,7 @@ def release_resume_claim(
     Called under ``run_lock_target``'s lock, like the claim."""
     if read_manifest(workspace, name, run_id) != claimed:
         return False
-    _record_path(workspace, name, run_id).write_text(json.dumps(prior), encoding="utf-8")
+    _write_json(_record_path(workspace, name, run_id), prior)
     return True
 
 
@@ -533,7 +548,7 @@ def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) ->
             if orphaned:
                 rec["status"] = "crashed"
                 try:
-                    f.write_text(json.dumps(rec), encoding="utf-8")
+                    _write_json(f, rec)
                     count += 1
                 except OSError:
                     continue
@@ -572,7 +587,7 @@ def read_cursor(workspace: str | Path, name: str) -> float:
 def advance_cursor(workspace: str | Path, name: str, ts: float) -> None:
     d = _wf_dir(workspace, name)
     d.mkdir(parents=True, exist_ok=True)
-    (d / ".cursor.json").write_text(json.dumps({"ts": ts}), encoding="utf-8")
+    _write_json(d / ".cursor.json", {"ts": ts})
 
 
 def workflow_names_with_runs(workspace: str | Path) -> list[str]:
@@ -870,8 +885,7 @@ def reconcile_one(workspace: str | Path, name: str, run_id: str) -> bool:
         return False
     rec["status"] = "crashed"
     try:
-        _record_path(workspace, name, run_id).write_text(
-            json.dumps(rec), encoding="utf-8")
+        _write_json(_record_path(workspace, name, run_id), rec)
     except OSError:
         return False
     return True

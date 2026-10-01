@@ -561,7 +561,7 @@ a post-run summary:
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
 
-Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
+Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. The manifest is read while it is rewritten, though — by the runs panel and the `tasks` tool, the crash sweep, the folder pruner deciding which runs are still live, and the run's own next rewrite, which starts from the previous manifest — so every write replaces the file in one step (`atomic_write_text`: a temporary file beside it, renamed over it). A reader sees the previous manifest or the new one, never a torn file, which every reader would take for "no record". The improve pass's cursor (`.cursor.json`) and pending-validation record (`.pending_validation.json`), and a working folder's `.provenance.json`, are written the same way. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
 
 The per-node entries in the manifest's `runs` array carry:
 
