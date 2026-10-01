@@ -746,7 +746,18 @@ class AgentRunner:
                 prune_state.trusted_from = len(messages)
             view = self._apply_tool_result_budget(spec, view)
             if not (iteration == 0 and spec.caller_compacts_on_overflow):
-                view = self._snip_history(spec, view, provider)
+                snipped = self._snip_history(spec, view, provider)
+                if snipped is not view:
+                    # The reply to this request is stamped with the size of
+                    # the snipped view, but the next view is built from all
+                    # the messages again: an estimate anchored on that stamp
+                    # would leave out the history dropped here, come out low,
+                    # and let the whole history go out. So no stamp up to that
+                    # reply is trusted, the reply's own included (it lands at
+                    # index len(messages)), and the next estimate counts the
+                    # view as it is sent.
+                    prune_state.trusted_from = max(prune_state.trusted_from, len(messages) + 1)
+                view = snipped
             # Snipping may have created new orphans; clean them up.
             view = self._drop_orphan_tool_results(view)
             return self._backfill_missing_tool_results(view)

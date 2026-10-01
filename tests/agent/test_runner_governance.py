@@ -1000,3 +1000,37 @@ async def test_a_request_over_the_budget_without_its_history_says_what_fills_it(
     assert "the input budget is 12,000" in result.final_content
     assert "send it again" not in result.final_content
     assert result.messages[-1]["content"] == NO_ROOM_PLACEHOLDER
+
+
+@pytest.mark.asyncio
+async def test_a_request_after_a_snipped_one_is_sized_as_sent():
+    """The reply to a snipped request carries the prompt count of the
+    snipped view, and the next request's view is built from all the
+    messages again. Anchored on that count, its estimate came out below the
+    request: nothing was snipped and the whole history went out, over the
+    budget."""
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import ToolCallRequest
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, _schemas = _over_budget_run()
+    spec.tools.execute = AsyncMock(return_value="a short result")
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        # A provider reports the prompt it was sent.
+        sent.append(estimate_prompt_tokens(messages, tools))
+        usage = {"prompt_tokens": sent[-1], "completion_tokens": 10}
+        if len(sent) == 1:
+            return LLMResponse(
+                content="", tool_calls=[ToolCallRequest(id="c1", name="tool_0", arguments={})], usage=usage,
+            )
+        return LLMResponse(content="done", usage=usage)
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "completed"
+    assert len(sent) == 2
+    assert max(sent) <= 12_000, sent

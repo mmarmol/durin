@@ -613,7 +613,10 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   results. Those are dropped from the model-facing copy (they are never
   sent), so the request is counted from scratch: the pruning check, the
   history snip and the mid-turn precheck see the prompt actually sent, never
-  one that looks smaller or larger than it is.
+  one that looks smaller or larger than it is. Nor is the stamp on the reply
+  to a request the history snip shortened trusted: it measured the snipped
+  view, while the next view is built from all the messages again and
+  snipped anew, so `_PruneState.trusted_from` moves past that reply.
 - **No window, no pruning.** A run without a known context window has no
   budget to measure against and prunes nothing.
 - **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,
