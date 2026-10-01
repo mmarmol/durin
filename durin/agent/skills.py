@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -51,6 +52,16 @@ _META_CACHE_LOCK = threading.Lock()
 # Bumped by every forget. A parse that began before a forget is not stored:
 # the text it read may be the one the forget was for.
 _META_CACHE_GEN = 0
+# A parse is kept only when the file's mtime is at least this much older than
+# the moment it was stat'ed (git's "racily clean" rule): within one timestamp
+# tick of that mtime, a rewrite of the same size could leave (mtime, size)
+# exactly as they were. Two seconds is the coarsest modification-time
+# granularity among the filesystems durin runs on: FAT keeps 2 s; HFS+, ext3
+# and many NFS servers, 1 s; ext4, XFS, btrfs and tmpfs, one kernel tick
+# (1-10 ms); APFS and NTFS, finer still. A file younger than that is parsed
+# again on every read, which in practice means only for a few seconds after a
+# write.
+_RACY_TICK_NS = 2_000_000_000
 
 
 def _file_stamp(path: Path) -> tuple[int, int] | None:
@@ -86,12 +97,12 @@ def _parse_skill_frontmatter(content: str | None) -> dict | None:
 def forget_skill_metadata(path: Path) -> None:
     """Drop the cached frontmatter of the skill file at ``path``.
 
-    The cache trusts a file while its (mtime, size) are unchanged, but a
-    rewrite that keeps the size and lands within the filesystem's mtime
-    granularity (a jiffy on ext4, a second or more on HFS+ or FAT) changes
-    neither. durin's own writes to a skill call this, so the next read parses
-    the new text. An edit made outside this process in that window stays
-    unseen until the file changes again."""
+    A parse is kept only once its file is older than one timestamp tick, so a
+    later rewrite moves the file's mtime and the next read sees it. durin's
+    own writes to a skill call this as well, so nothing they replace is ever
+    served from the cache, even when the replacement keeps the old (mtime,
+    size): a copy or move that preserves the source's mtime does, and so can a
+    file system whose clock lags behind this machine's."""
     global _META_CACHE_GEN
     key = str(Path(path).resolve())
     with _META_CACHE_LOCK:
@@ -449,8 +460,9 @@ class SkillsLoader:
         Get metadata from a skill's frontmatter.
 
         Served from the process-wide cache while the skill file's (mtime, size)
-        match the stat taken before it was last read. Every call returns its
-        own copy, so a caller that changes it changes nothing for the next.
+        match the stat taken before it was last read, for files older than one
+        timestamp tick. Every call returns its own copy, so a caller that
+        changes it changes nothing for the next.
 
         Args:
             name: Skill name.
@@ -461,6 +473,7 @@ class SkillsLoader:
         path = self._skill_file(name)
         if path is None:
             return None
+        stat_ns = time.time_ns()
         stamp = _file_stamp(path)
         if stamp is None:
             # No freshness token to hold a cached parse against.
@@ -475,10 +488,13 @@ class SkillsLoader:
         # Stat first, read second: a write in between leaves new text under the
         # old stamp, which the next stat no longer matches.
         meta = _parse_skill_frontmatter(path.read_text(encoding="utf-8"))
-        with _META_CACHE_LOCK:
-            if gen == _META_CACHE_GEN:
-                _META_CACHE[key] = (stamp, meta)
-                _META_CACHE.move_to_end(key)
-                while len(_META_CACHE) > _META_CACHE_MAX:
-                    _META_CACHE.popitem(last=False)
+        # A file modified within one tick of that stat is racily clean: the
+        # parse is not kept, and the next read parses again until it is older.
+        if stat_ns - stamp[0] >= _RACY_TICK_NS:
+            with _META_CACHE_LOCK:
+                if gen == _META_CACHE_GEN:
+                    _META_CACHE[key] = (stamp, meta)
+                    _META_CACHE.move_to_end(key)
+                    while len(_META_CACHE) > _META_CACHE_MAX:
+                        _META_CACHE.popitem(last=False)
         return copy.deepcopy(meta)

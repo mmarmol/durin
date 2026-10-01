@@ -492,13 +492,21 @@ size well above a workspace's skill count) and locked, because the gateway
 builds prompts for concurrent turns on worker threads.
 
 A rewrite that keeps the size and lands within the filesystem's mtime
-granularity (a jiffy on ext4, a second or more on HFS+ or FAT) changes
-neither value. Every SKILL.md write in `skills_store` therefore goes through
-`_write_skill_file`, which calls `forget_skill_metadata` after writing, and a
-parse already in flight when that forget runs does not store what it read.
-What remains: a same-size edit made outside the process within that window —
-by hand, by a shell command, or by another durin process such as a dream
-worker — is not seen until the file changes again.
+granularity (a kernel tick on ext4, a second or two on HFS+ or FAT) changes
+neither value. So a parse is kept only when the file's mtime is at least two
+seconds older than the stat taken for it — git's "racily clean" rule, with
+the tick sized to FAT's two-second granularity, the coarsest among the
+filesystems durin runs on. A younger file is parsed again on every read,
+which in practice means for a few seconds after a write; a file old enough
+to be kept cannot be rewritten without its mtime moving. That holds for edits
+made outside the process — by hand, by a shell command, or by another durin
+process such as a dream worker — as much as for durin's own. Every SKILL.md
+write in `skills_store` also goes through `_write_skill_file`, which calls
+`forget_skill_metadata` after writing, and a parse already in flight when
+that forget runs does not store what it read: a replacement that keeps the
+old (mtime, size), as a copy or move preserving the source's mtime does, is
+never served from the cache either. What remains is a network filesystem
+whose clock lags this machine's by more than the tick.
 
 Only this read is cached. The store's own reads (`read_mode`,
 `list_skills_info`, `_durin_blob`), the skills surface, import and approvals
@@ -553,7 +561,7 @@ there is no session left to credit.
 | `_finalize_skill` | `durin/agent/skills_store.py` | Shared activation core for both authoring ramps: backfills a missing frontmatter `name`/`description`, scans bundled files, stamps provenance + `mode=auto`, commits with attribution, syncs the index, emits `skill.authored`. Quarantines instead of activating on a caution/dangerous scan (no event emitted). |
 | `publish_draft_skill` / `discard_draft_skill` | `durin/agent/skills_store.py` | Promote `skill-drafts/<name>/` into the registry via `_finalize_skill` (`ramp="publish"`) — gated on the same integrity check and composition gate as create, refusing a name collision with an already-active skill — or delete the draft outright without touching the registry. |
 | `Attribution` | `durin/agent/skills_store.py` | Actor, Session, Agent trailers stamped on every skill git commit. |
-| `SkillsLoader` | `durin/agent/skills.py` | Loads skills from workspace (shadows builtins). `list_skills`, `load_skill`, `get_always_skills`, `build_skills_summary`, `load_skills_for_context`. Frontmatter parses come from a process-wide cache checked against each file's `(st_mtime_ns, st_size)`. |
+| `SkillsLoader` | `durin/agent/skills.py` | Loads skills from workspace (shadows builtins). `list_skills`, `load_skill`, `get_always_skills`, `build_skills_summary`, `load_skills_for_context`. Frontmatter parses come from a process-wide cache checked against each file's `(st_mtime_ns, st_size)`, kept only for files older than two seconds. |
 | `decide_action` | `durin/agent/skills_import.py` | Trust-times-verdict gate: dangerous → block; carries_code / caution / not-allowlisted → confirm; else allow. Enforced in code at install. |
 | `scan_skill` / `ScanReport` | `durin/security/skill_scan.py` | Deterministic static scan: body regex rules + AST behavioral pass. Returns `findings` and `verdict` (safe / caution / dangerous). |
 | `SkillRegistry` protocol + adapters | `durin/agent/skill_registry.py` | Protocol: `search(query, limit)` → list of `SkillSearchHit`. Two adapters: `SkillsShRegistry` (skills.sh) and `ClawHubRegistry` (clawhub). `search_registries` queries both in parallel with round-robin interleave. |

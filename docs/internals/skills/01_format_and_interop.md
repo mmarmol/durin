@@ -161,8 +161,8 @@ precedes the stamp is covered in [`00_overview.md`](00_overview.md) §4 Import.
 | `validate_skill` | `durin/agent/skills_import.py` | Format validator: checks name/description presence, name shape, code detection. Returns `ValidationReport` with `carries_code`. |
 | `_update_md` | `durin/agent/skills_store.py` | Mutation helper used by all write paths: read → `split_frontmatter` → mutate → `join_frontmatter` → write (through `_write_skill_file`, which drops the loader's cached parse). Foreign fields survive. |
 | `SkillPage.from_file` | `durin/memory/skill_page.py` | Parses a SKILL.md for indexing: extracts name, description, body, mode, and disabled flag. Returns `None` for unreadable files so rebuild walkers skip silently. |
-| `get_skill_metadata` | `durin/agent/skills.py` | Reads and parses SKILL.md frontmatter via `yaml.safe_load`, served from a process-wide cache while the file's `(st_mtime_ns, st_size)` hold. Returns native Python types, a fresh copy per call. |
-| `forget_skill_metadata` | `durin/agent/skills.py` | Drops one file's cached parse; every SKILL.md write in the store calls it, for rewrites the (mtime, size) check cannot see. |
+| `get_skill_metadata` | `durin/agent/skills.py` | Reads and parses SKILL.md frontmatter via `yaml.safe_load`, served from a process-wide cache while the file's `(st_mtime_ns, st_size)` hold; a file modified within the last two seconds is parsed on every read. Returns native Python types, a fresh copy per call. |
+| `forget_skill_metadata` | `durin/agent/skills.py` | Drops one file's cached parse; every SKILL.md write in the store calls it, for replacements that keep the old (mtime, size). |
 | `_is_model_invocation_disabled` | `durin/agent/skills.py` | Checks `disable_model_invocation`, `disableModelInvocation`, and `disable-model-invocation` spellings. |
 
 ---
