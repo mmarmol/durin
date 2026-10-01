@@ -5,6 +5,583 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.5 — 2026-10-01
+
+### Highlights
+
+- **Every run gets the window and output cap of the model it runs on.** On
+  one install, a workflow judge on the named preset `judge-cold` ran with
+  the schema defaults, a 65,536-token window and an 8,192-token output cap,
+  while its model, glm-5.3, accepts 1,000,000 and 131,072. It pruned its
+  history twice and its answer was cut at 8,192 tokens.
+  - A limit a preset leaves unset now comes from the model's
+    `providers.<p>.models` entry, then the model's real limits
+    (`model_capabilities`, else the catalog), then `agents.defaults`. The
+    chat, `/model` and cron picks, workflow nodes, subagents, aux and judge
+    models and fallbacks all resolve this way.
+  - A configured value above what the model accepts is capped to it at run
+    time.
+  - `durin status` shows the window the chat really runs with, the new
+    "model limits" check of `durin doctor` compares every configured window
+    and output cap with the model's real limits, and `provider.call`
+    telemetry records the output cap each request asked for. (#674)
+- **Chat compaction fires by 256,000 tokens on very large windows.** With
+  its model's real window, a glm-5.3 chat has 1,000,000 tokens, and at the
+  default ratio of 0.5 it would compact only past 500,000: every long turn
+  could start from half a million tokens. The chat now compacts at the
+  smaller of the ratio's trigger and an absolute cap,
+  `agents.defaults.preemptive_compact_max_tokens`: 256,000 by default, at
+  least 64,000, `null` or `0` to turn it off, and settable per preset.
+  Compaction also stays under `context_block_limit` and under the window of
+  the model a turn runs on, and a session at its window's limit no longer
+  fails every turn after an overflow. (#676)
+- **Turns rescued by an overflow retry keep their replies.** When a turn's
+  first call overflowed, durin compacted and retried, but the retry carried
+  the user's message twice and the turn was saved from one message too far
+  on: the reply was delivered and not saved, the session ended on the
+  user's message, and every later turn lost its reply the same way. In one
+  replay a 30-turn session kept 6 of its 30 replies. The retry now carries
+  the message once, a turn is saved from right after the prompt it was
+  given, and a turn that still fails keeps its overflow notice. (#676)
+- **durin never writes over a config it cannot load.** One invalid value
+  in a hand-edited file, such as `"temperature": "hot"`, made the config
+  fall back to the defaults, and the gateway's startup then saved them:
+  `agents.json` was overwritten, `providers.json` and `tools.json`
+  deleted. While the config on disk does not load cleanly, every writer
+  now refuses and leaves the files as they are: `durin config` and the
+  settings editor name each file and its error, and the API answers 409.
+  A file that cannot be parsed (an integer too long to read, nesting too
+  deep, bad UTF-8) no longer crashes the load, and `durin doctor`,
+  `durin status` and the gateway's startup log say it runs on the
+  defaults until the files are fixed. (#676)
+- **Session summaries no longer skip turns.** The nightly pass that
+  summarizes idle sessions kept a session's last 48,000 characters and
+  marked the whole session summarized, so the turns before them were never
+  summarized, by it or by compaction. After `/new` or a session-file trim,
+  its cursor, a position in the message list, also made messages nobody
+  summarized count as covered. The pass now summarizes its whole span in
+  pieces sized by the memory model, its cursor names the message it ended
+  on, and `/compact` and the `/new` record leave out what it covered, so no
+  message is summarized twice. (#676)
+- **A routing node's verdict ends its turn, and a PASS reads as PASS.** On
+  the same install, the judge never called its `route` tool, so its verdict
+  depended on the forced call durin makes after the turn, and the text
+  fallback behind that call would have routed its PASS as a FAIL: it read
+  the first line, while the node was told to put the verdict on the last.
+  A routing node is now told to finish its answer and call `route` in the
+  same reply. A valid call made with the answer ends its turn, and the text
+  sent with it is the node's output: for a FAIL, the feedback the next step
+  works from. The text fallback passes a binary gate only when every line
+  that states a verdict says PASS. (#675)
+- **Relative paths in a workflow node resolve in its working folder.** The
+  node's prompt called that folder its working directory, but its file
+  tools resolved relative paths against the workspace root. On one run,
+  eleven relative reads failed across four nodes, and one failure pointed
+  the model at a stray `slack-context.json` that another ticket's run had
+  left at the root. The file tools and the other tools that take a path
+  now resolve a relative one in the working folder, and `execute_code`
+  runs there. (#675)
+- **Model names with dots work in config paths.**
+  `durin config set providers.zai_coding_plan.models.glm-5.3.context_window_tokens null`
+  split `glm-5.3` on its dot, saved an empty `glm-5` entry and printed
+  "updated". A key with dots now goes in brackets, as in
+  `providers.zai_coding_plan.models["glm-5.3"].context_window_tokens`, and
+  `set` refuses, saving nothing, a path whose value would not land where
+  it says. The settings editor sends the bracket form. (#674)
+
+### Upgrade notes
+
+- **`agents.defaults` limits no longer reach a model something
+  describes.** A `context_window_tokens` or `max_tokens` under
+  `agents.defaults` now serves only a model with no `providers.<p>.models`
+  entry, no catalog row and no `model_capabilities` limits.
+  - With `agents.defaults.provider` on `"auto"`, the default, earlier
+    releases read neither the default model's entry nor the catalog, so
+    the chat ran with those values: 65,536 and 8,192 unless you changed
+    them. It now runs with the model's own limits, from its entry or else
+    its real limits: 200,000 and 64,000 for claude-opus-4-5, 1,000,000 and
+    131,072 for glm-5.3. Its prompts can grow far larger, and cost more,
+    before compaction starts: at 150,000 tokens on claude-opus-4-5 and, with
+    the new cap, at 256,000 on glm-5.3. The entry's `temperature` and other
+    settings now apply to it too.
+  - With a named provider, earlier releases copied a value you set there
+    into the default model's entry, when it had none, as the config loaded.
+  - To cap a catalog model, for cost, set the cap on the model's entry or
+    on the preset that runs it. `durin doctor` warns about an
+    `agents.defaults` cap, other than the default, that the default model
+    does not run with, and prints the command that moves it, such as
+    `durin config set 'providers.zai_coding_plan.models["glm-5.3"].context_window_tokens' 128000`,
+    and the one that drops it. (#674)
+- **Entries earlier releases saved stay as they are.** Those releases also
+  filled in a missing `providers.<p>.models` entry as the config loaded,
+  from `agents.defaults` for the default model and from each named preset
+  for its model, when they named a provider, and the next save wrote it to
+  the file. Such an entry still applies. Its window and output cap apply to
+  every run on that model that sets none of its own; a value above the
+  model's real limit is capped at run time, with a warning in the log. Its
+  `temperature` and `reasoning_effort` apply to the runs that read the
+  entry, such as the default model's, ahead of `agents.defaults`, so a
+  later edit of `agents.defaults` does not reach that model. The "model
+  limits" check of `durin doctor` lists each window and output cap that
+  differs from the model's real limit; for the rest, read
+  `durin config show providers` and unset what you did not choose with
+  `null`. (#674)
+- **Named presets without limits run with the model's own.** A named
+  preset that sets no window or output cap now runs with its model's real
+  limits: on glm-5.3, 1,000,000 and 131,072 instead of 65,536 and 8,192.
+  Its prompts can grow far larger, and cost more, before pruning and
+  compaction start; to keep a lower limit, set one on the preset. Earlier
+  releases dropped a preset limit equal to the old default (8,192 or
+  65,536) when they saved the config, so set such a cap again if you rely
+  on it. A model set by name for memory, the dream, the skill judge or
+  automations likewise runs with its own limits, not the default model's.
+  (#674)
+- **Limits below 1 read as unset.** A `max_tokens` or
+  `context_window_tokens` below 1 in the config file is dropped with a
+  warning in the log and reads as unset. `durin config set` and the API
+  refuse 0; unset a limit with `null`. (#674)
+- **Keys with dots go in brackets.** In `durin config` and
+  `POST /api/v1/config` paths, a key that contains dots, such as the model
+  name `glm-5.3`, goes in brackets, quoted or not: `models["glm-5.3"]`,
+  `models['glm-5.3']` or `models[glm-5.3]`. The unbracketed form used to
+  write somewhere else and report success; it is now refused and changes
+  nothing. (#674)
+- **Workflow nodes write relative paths into the run's working folder.**
+  - A node's relative writes and edits now resolve in its working folder
+    instead of the workspace root. Working folders are pruned: a run's once
+    `workflow.keep_runs` newer runs of any workflow have started, a
+    `work_key` folder after 30 days without use. A prompt that writes a
+    file meant to outlive the run should give it an absolute path. A path
+    under one of durin's own folders, such as `memory/`, still resolves
+    from the workspace root.
+  - A read falls back to the workspace root only for a path into a folder
+    there, such as a repository checked out at the root, and never for a
+    file lying at the root itself. Edits and writes never fall back: a
+    prompt that edits a repository kept at the root, or reads a file at the
+    root, needs absolute paths.
+  - `execute_code` in a node now runs in the working folder; `exec` still
+    starts at the workspace root. (#675)
+- **A binary gate's text fallback reads every verdict line.** When neither
+  the node's `route` call nor the forced one gives a label, a text with
+  both a PASS line and a FAIL line now reads as FAIL. (#675)
+- **Chats on large windows compact sooner.** On a model whose window is
+  above about 341K tokens, the chat now compacts by 256,000 tokens, where
+  the ratio alone let it reach 0.5 of the window (0.75 below 512K). A
+  preset opts out only with its own `preemptive_compact_max_tokens`: `0`
+  for no cap, while `null` inherits the 256,000. To keep ratio-only
+  compaction everywhere, set `agents.defaults.preemptive_compact_max_tokens`
+  to `null`. In the config file, a cap under 64,000 is raised to 64,000 as
+  it loads, a number written as a string is read as that number, and a
+  value that is no finite number is dropped, each with a warning in the
+  log; `durin config set` and the settings editor refuse a value under
+  64,000. (#676)
+- **Editing the selected preset applies on the next turn.** A running
+  gateway reads the preset `agents.defaults.model_preset` selects on every
+  turn, so switching to another preset, or editing the selected one,
+  applies from the next turn; a switch to a preset on the same model used
+  to wait for a restart. A preset picked with `/model` or the model picker
+  is replaced from the next turn when the configuration's selection
+  changes, an edit of the selected preset's own settings included; new
+  limits from the refreshed model catalog are not such a change. (#676)
+- **`durin uninstall` removes everything in the durin home.** Besides the
+  config, the workspace and the caches, it now removes the split config
+  (`config.json.d/`), the credentials (`secrets.json`, `api_tokens.json`,
+  `oauth/`), the config backups and every other entry in the durin home.
+  `--keep-config` keeps the config with its backups and credentials, and
+  `--keep-cache` also keeps `~/.durin/models/`. It removes nothing, and
+  says why, when the durin home is your home folder, `/`, a folder above
+  your home, or a folder without durin's markers (`config.json.d/`). With
+  `DURIN_HOME` set it never touches `~/.cache/durin`, which belongs to the
+  default install. (#676)
+
+### Model limits
+
+- **One resolution for every run.** The chat, a named preset, a
+  `/model provider model` or cron pick, a workflow node, a subagent, an aux
+  or judge model and a fallback all resolve their window and output cap
+  the same way: a value set on the preset (or inline fallback) wins, and an
+  unset one comes from the model's `providers.<p>.models` entry, then its
+  real limits, then `agents.defaults`. `max_tokens` and
+  `context_window_tokens` on a preset are optional. Limits are resolved
+  where a preset becomes a run and never written back, so an unset limit
+  stays unset on disk and follows later edits of the model's entry, even
+  for a `/model` pick the loop has cached. (#674)
+- **A model's real limits** are its `model_capabilities`
+  `max_input_tokens` / `max_output_tokens` when you declared them (a
+  `provider/model` key before the bare name), else its catalog row. A
+  catalog output limit is also held to the model's documented cap
+  (OpenRouter lists 943,717 output tokens for glm-5.3, documented at
+  131,072) and to the model's window, and a resolved `max_tokens` is never
+  above the resolved window. (#674)
+- **Above is capped, below is kept.** A configured value above the real
+  limit is capped to it at run time, with one warning per process for each
+  distinct value. A value below it is kept: a smaller window or output cap
+  is a legitimate cost cap. (#674)
+- **Limits are read under the provider the requests go to.** `"auto"` is
+  resolved from the model name, and alias spellings (`zai-coding-plan`) are
+  normalized, before the entry and the catalog are read; both used to find
+  neither an entry nor a catalog row, so a default model on `"auto"` ran
+  with the `agents.defaults` values and ignored its entry, sampling
+  settings included. `/model` and cron picks of a model the catalog does
+  not know used a hard-coded 65,536 / 8,192; they now take
+  `model_capabilities`, then `agents.defaults`. (#674)
+- **Fallbacks size themselves.** An inline fallback resolves its own
+  model's limits instead of taking the primary's. The run's window is
+  still the smallest of the primary's and every fallback's, but only a
+  known window lowers it: a fallback nothing describes, such as a local
+  model, does not cut a 1,000,000-token chat to 65,536. A failover sends
+  the fallback's own output cap, or the caller's when the caller asked for
+  less; it used to send the fallback's cap whatever the caller asked for.
+  (#674)
+- **Local providers are never asked for limits.** The window and output
+  limit of a model on ollama, vLLM, LM Studio or another local provider
+  come from the static catalog index (the vendored rows plus the refresh
+  cache), never from its server, whose live model list has ids only. The
+  gateway resolves every preset and fallback at the start of each message,
+  and that lookup never waits on a server that does not answer. (#674)
+- **Loading a config writes nothing into model entries.** An entry holds
+  only what someone set, so a preset's `temperature` or limits apply to
+  that preset's runs alone. (#674)
+- **`durin status` shows the window the chat runs with,** capped by the
+  fallbacks, and names the fallback that caps it (`window_capped_by` in
+  `--json`). It used to print `agents.defaults.context_window_tokens`:
+  65,536 for a glm-5.3 chat that ran with 1,000,000. (#674)
+- **`durin doctor` checks model limits.** Its new "model limits" check
+  compares every configured window and output cap (model entries, named
+  presets, inline fallbacks) with the model's real limits.
+  - A value above warns, and the fix prints the
+    `durin config set <path> null` that unsets it. A value below is listed
+    without a warning.
+  - An `agents.defaults` cap other than the schema default that the default
+    model does not run with also warns; the fix prints the command that
+    sets it on the model's entry and the one that drops it.
+  - It names the fallback that caps the chat window and any fallback whose
+    window is unknown. (#674)
+
+### Compaction
+
+- **An absolute cap.** The chat compacts at the smallest of the window of
+  the model the turn runs on times `preemptive_compact_ratio` (raised to
+  0.75 on windows under 512K, as before), `preemptive_compact_max_tokens`,
+  and the most the turn may send. The cap is 256,000 by default and at
+  least 64,000, since a cap under the prompt's fixed part (system prompt
+  with `AGENTS.md`, tool schemas, summary) would compact on every turn;
+  `null` or `0` under
+  `agents.defaults` turns it off. A preset's own
+  `preemptive_compact_max_tokens` overrides it: `null` inherits the default
+  and `0` means no cap for that preset. The cap bounds what each turn
+  starts from, not what one long turn of tool calls may reach, and applies
+  to chat compaction only: workflow nodes and subagents trim their context
+  to their model's window. (#676)
+- **`context_block_limit` holds for compaction and replay.** When set, it
+  is the whole input budget of the chat's runs and its subagents', but
+  compaction and the history replayed into a turn ignored it: with a limit
+  of 100,000 on a 1M-window model, a session grew past the limit and every
+  later turn stopped before its first call. The trigger, the summarizing
+  call's input and the replay now stay under it. (#676)
+- **A turn on another model compacts by that model's limits.** A cron
+  job's model, a persona's model and a preset passed to a direct call run
+  on their own window, but compaction and history replay were sized by the
+  chat's model: with a 1M-window chat model and a turn on a 45,000-token
+  one, every turn failed once the session outgrew the smaller window. They
+  now use the turn's model's window and output cap and its preset's ratio
+  and cap, and `/status` and the CLI footer measure a persona's session
+  against its model's trigger. (#676)
+- **An overflow no longer locks a session.** When a turn overflowed its
+  input budget, the retry's compaction could be skipped because the
+  provider's last count had fit, so the retry overflowed too, and so did
+  every later turn: on a 40,000-token window, a session stopped answering
+  from its seventh turn. A compaction forced by an overflow now skips the
+  checks meant for a rough estimate: the overflow is the runner's own
+  measurement, newer than the provider's count. (#676)
+- **A compaction that cannot make room is not repeated every turn.** When
+  the part of the prompt compaction may not summarize (the system prompt
+  with `AGENTS.md`, the tool schemas, the summary) fills the trigger or
+  nearly does, every compaction freed almost nothing and the next turn
+  compacted again: a 40,000-token `AGENTS.md` with a ratio of 0.05 on a 1M
+  window compacted on 7 of 8 turns, and a 64,000-token window with a long
+  `AGENTS.md` on 12 of 14. After a compaction that leaves less than a
+  quarter of the usual room under the trigger, the session waits until the
+  prompt has grown by the usual room, never past its ceiling, so its
+  prompts run past the trigger for a while. It stops waiting once there is
+  room again, after `/new` or `/compact`, and when a turn runs on a model
+  with other limits. (#676)
+- **Small windows keep answering.** On a small window, a long session's
+  summary and decision log could leave no room for the turn's message, and
+  every later turn failed after compactions that could not help. When the
+  summary does not fit beside the message and the history, a prompt now
+  carries it cut to a quarter of what the system prompt, the tool schemas
+  and the message leave of the input budget, its oldest parts first and
+  the paths of evicted blocks last. The message counts as at least a fixed
+  allowance, so the cut stays the same from one ordinary message to the
+  next and the provider's prompt cache keeps working. The decision log
+  leaves out its oldest automatic entries first, then the oldest
+  `note_decision` ones, when the message would not fit with all of it;
+  both stay whole on disk. A turn whose system prompt, tool schemas and
+  message alone are over the budget fails at once, naming the largest
+  parts (`AGENTS.md`, the tool definitions, the message). (#676)
+- **Long spans are summarized whole.** A span larger than the summarizing
+  model's input budget (a compaction round, the decision-log and learnings
+  extraction, `/compact`, the summary `/new` records, the nightly pass) is
+  cut at message boundaries into pieces that fit, each summarized in its
+  own call; its tail used to be cut off. Only a single message larger than
+  the budget is still truncated. Summaries leave out the notices of failed
+  turns and keep the user's messages. (#676)
+- **A preset without its own ratio uses the default again.** Switching
+  from a preset with its own `preemptive_compact_ratio` to one without kept
+  the first preset's ratio. (#676)
+- **Compaction settings apply without a restart.** A running gateway
+  applies an edit of `agents.defaults.preemptive_compact_ratio` or
+  `preemptive_compact_max_tokens`, and of the selected preset's own, from
+  the next turn. (#676)
+
+### Configuration
+
+- **Brackets for keys with dots.** `durin config set`, `get`, `show` and
+  `schema`, and the API's `POST /api/v1/config`, accept a key with dots in
+  brackets: `providers.zai_coding_plan.models["glm-5.3"].context_window_tokens`.
+  Map keys (model, preset and header names) are kept as typed; field names
+  stay case-tolerant, in brackets or not. The commands' help shows the
+  bracket form. (#674)
+- **`set` checks where the value landed.** It reads the value back from
+  the validated config, and when it did not land where the path says (a
+  misspelled field, a dotted name without brackets), it refuses and saves
+  nothing: the CLI exits 1 and the API answers with a validation error.
+  The refusal names a block the config file never keeps (`openai_codex` and
+  `github_copilot`, which `durin oauth login` manages), or else shows the
+  bracket form, as `get` and `show` now do for a key they cannot find.
+  (#674)
+- **List items.** `set` writes into an item the list already has
+  (`agents.defaults.fallback_models.1.max_tokens`, or `[1]`), and refuses
+  any other index and a path through a plain value. (#674)
+- **Limits are at least 1** on presets, model entries, inline fallbacks and
+  `agents.defaults`. `durin config set` and the API drop a stored value
+  below 1 the same way before they edit the file. (#674)
+- **Bracketed spellings trigger the API's follow-ups.**
+  `POST /api/v1/config` decides whether to reload the concurrency caps or
+  restart a channel from the path's keys, so a bracketed spelling of such
+  a key triggers them too. (#674)
+
+### Workflows
+
+- **A valid `route` call ends the node's turn.**
+  - The routing instruction is built from the node's own labels; a `cases`
+    node used to be told to end with PASS/FAIL, like a binary gate. It
+    tells the node to finish its answer, put the verdict alone on the
+    text's last line and call `route` in that same reply. A binary gate is
+    also told that for a FAIL its text is what the next step works from.
+  - Once that round of tool calls finishes, no request follows. The node's
+    output is the text sent with the call (a FAIL's feedback, the questions
+    of a `__needs_input__` route), else the latest text of the turn, else
+    the call's `reason`. A call with none of these does not end the turn:
+    its reply asks the model to write its assessment, and the recorded
+    verdict stands. An invalid label keeps the turn going.
+  - A turn that ends without a valid call still gets one forced `route`
+    call. (#675)
+- **The text fallback reads verdict lines.** Used only when neither call
+  gave a label, it passes a binary gate only when every line that states a
+  verdict says PASS. A verdict line is the uppercase word, optionally after
+  markdown and a `Verdict:` / `Overall:` style label: FAIL (or FAILED)
+  followed by anything, or PASS alone, set off by punctuation or emphasis,
+  or "PASS with ... caveats". Code blocks, list items, quotes and table
+  rows are not read, so a checklist's `- PASS: tone`, or test output in a
+  code block, decides nothing; test output pasted as plain text
+  (`--- FAIL: TestFoo`) still counts. With no verdict line, the first line
+  is read as before, so prompts that put the verdict first still route.
+  (#675)
+- **A terminal gate keeps what it wrote.** When a gate ends the run, only a
+  line that is nothing but the verdict is removed from the run's output
+  (the last non-empty line, else the first), and only when it agrees with
+  the verdict the engine routed on. Checklist bullets, quoted code and a
+  closing verdict that contradicts the `route` call stay. (#675)
+- **Forced calls are sent like the loop's next request.** The forced
+  `route`, re-entry assessment and `deliver` calls keep what the work loop
+  pruned, byte for byte, fit under the run's input budget, and ask for the
+  model's output cap clamped to the room the prompt leaves in the window.
+  On one run, the forced `route` call carried 57,507 prompt tokens against
+  the node's input budget of 56,320 and asked for the model's full output
+  cap. A node's re-entry and synthesis runs continue the loop's pruning,
+  so their first request shares its cached prefix instead of paying for a
+  new cache write. (#675)
+- **Paths in a node.**
+  - `read_file`, `write_file`, `edit_file`, `list_dir`, `grep` and the
+    other file tools, `repo_overview`, `interpret_image`,
+    `interpret_audio`, `convert_to_markdown` and `memory_ingest` resolve a
+    relative path in the node's working folder. A path under a durin folder
+    (`workflows/`, `memory/`, `skills/`, …) still resolves from the
+    workspace root, and an absolute path is used as given.
+  - A read the working folder cannot serve falls back to the workspace root
+    when the path leads into a folder there. It never does for a file at
+    the root itself, so a stray file another run left there is not read in
+    place of this run's, nor for a write or a `..` path.
+  - `deliver_file` resolves a path the same way, so it names the file
+    `write_file` wrote, and refuses one in a durin folder as outside the
+    working folder.
+  - The node's prompt names the workspace root and says how relative paths
+    resolve; a node with `exec` is also told that shell commands start at
+    the root. (#675)
+- **Schema rejections quote the start of the value.** A rejection from
+  `deliver`, `deliver_file` or the forced delivery keeps the failing
+  field's path and the reason, and quotes a failing string by its first 200
+  characters followed by the count of characters left out; any other long
+  value is cut to about the same length. A drafted note whose body lacked a
+  required `?` used to come back from `deliver_file` as an 8,053-character
+  reply that repeated the note. (#675)
+- **A node runs with its own model's limits.** A node on a preset that sets
+  no window or output cap gets its model's own, where it used to get
+  65,536 / 8,192. A node that names a plain model asks for that model's own
+  output cap, not the default client's, which a model that accepts less
+  would reject. It shares the default client only when its generation
+  settings match, and when its own client cannot be built it runs on the
+  default client instead of falling back to the default model. (#674)
+- **The built-in `workflows` skill follows.** It describes the `route` call
+  and where a node's paths resolve, and its pattern example no longer tells
+  a gate to put PASS on its first line. (#675)
+
+### Web dashboard
+
+- **The model editors show the window a run gets.** The default model's
+  and the aux models' capability lines show the window runs on that model
+  get, a lower per-model setting included, instead of the model's own
+  limit. `GET /api/v1/model/capabilities` returns it as
+  `context_window_tokens`, next to `max_input_tokens`, the model's own; the
+  OpenAPI contract is regenerated. (#674)
+- **"All settings" edits numbers by the config schema.**
+  - An unset window or output cap can be edited, with a translated "unset"
+    placeholder.
+  - Clearing a field that may be unset saves `null`; it used to save 0,
+    since `Number("")` is 0.
+  - A value the field does not accept cannot be saved: empty where `null`
+    is not allowed, not a whole number for an integer, or below the
+    minimum.
+  - The editor reads the schema from `json_schema`, the key the server
+    sends, and brackets a key with dots in the paths it sends. (#674)
+
+### Telemetry
+
+- **`provider.call` records the limits.** Each row carries `max_tokens`,
+  the output cap the request asked for. A call an agent run makes also
+  carries the run's `context_window_tokens` and `input_budget_tokens`, and
+  so do a workflow node's verdict, delivery and re-entry calls; a model
+  that a tool calls during the run is not tagged with the run's limits.
+  When a fallback answered, the row names the fallback's provider and
+  model and the cap it was sent. (#674)
+- **Compaction events name the bound that set their trigger.**
+  `compaction.preemptive_trigger`, `compaction.deferred` and
+  `compaction.completed` carry `trigger_bound` (`ratio`, `floor`, `cap`,
+  `ceiling` or `block_limit`) and `cap_tokens`, the cap in force (`null`
+  when none), read together with the trigger. `compaction.deferred` has a
+  new reason, `fixed_prompt`, for a session waiting after a compaction that
+  could not get under its trigger. (#676)
+
+### Fixes
+
+- **Model and preset names keep their case in config paths.**
+  `durin config` turned every key of a path to snake_case, so a model named
+  `MiniMax-M2` was written as `mini_max-_m2`. (#674)
+- **A chat reads a folder at the workspace root by its relative path.** In
+  a chat, a relative path resolves in the session's work area; a read of a
+  path the area lacks, into a folder at the workspace root (a repository
+  kept there), now reads the root's. A file at the root itself and a write
+  never fall back. (#675)
+- **`grep` prints paths that read back.** Each path it prints leads
+  `read_file` to the file it found; in a chat, a workspace file outside a
+  managed area was printed with a path that resolved inside the session's
+  work area. `repo_overview` names its folder the same way. (#675)
+- **The TUI and the SDK cap the window by the fallbacks.**
+  `AgentLoop.from_config` now sizes the chat's window by the fallbacks'
+  windows as the gateway does; it used the model's own. (#674)
+- **An effort variant keeps every setting of its preset.** `/effort` and
+  the TUI's effort picker dropped the preset's `request_timeout_s`,
+  `top_p`, `top_k` and `repeat_penalty`. (#676)
+- **A run's history trim leaves room for the rest of the request.** The
+  runner's last-resort trim of old history counted only the system prompt
+  next to it, so a prompt over its budget stayed over it once the tool
+  schemas were added: with compaction unable to shrink a session, an
+  82,586-token prompt against a 60,000-token budget failed. The trim now
+  counts everything the request sends, the line between messages
+  included, and drops only history before the run's own request. The
+  precheck and the output cap also count the task-state block a request
+  appends, once; a request on a 60,000-token window asked for 62,214. A
+  reply to a trimmed request, or from the finalization retry, is no longer
+  the baseline of the next estimate, which then came in low and sent the
+  full history. (#676)
+- **A message queued behind a failed first call is saved.** When a turn's
+  first model call failed while a message waited in its queue, the message
+  reached the model merged into the prompt's last entry but never reached
+  the session. It is now saved as its own message, after the failed call's
+  placeholder. (#676)
+- **A subagent or workflow result is saved once.** A result that the
+  prompt merged into the session's last message was not saved at all, and
+  a subagent result also saved an assistant entry holding only runtime
+  metadata. (#676)
+- **A result on a persona's session runs as the persona.** A subagent or
+  workflow result landing on a persona's session, or on a cron run with
+  its own model or persona, ran on the default model and SOUL, and its
+  compaction check measured that model's prompt; it now runs on the
+  model and SOUL the session's own turns use. (#676)
+- **The webui shows the persona a thread's turns use.** It ignored
+  channel and per-chat personas and a cron run's persona. (#676)
+- **`/status` counts the whole system prompt.** Its prompt composition
+  left out the SOUL and the rest of the stable part of the system prompt.
+  (#676)
+- **`durin doctor` says when it installs.** Its embedding-model check
+  reached a catalog read that installed the `[memory]` extra (about
+  400 MB) silently, while the row still read "not installed". When vector
+  memory is on and the extra is missing, doctor now installs it as its own
+  step, as `install.auto_install_extras` allows, and the row says what
+  happened: installed (restart the gateway), the failure with the manual
+  command, or, with the setting off, not installed with the fix. It
+  installs nothing while the config does not load, since the defaults it
+  then runs on could turn installs on against your setting. The onboarding
+  wizard's probe no longer installs anything; turning a feature on still
+  installs its extra, as before. Doctor's cache-size hint names the cache
+  folders instead of suggesting an uninstall, and checking the gateway
+  daemon's status creates no folders. (#676, #677)
+- **Workflow run records are written whole.** Run manifests, the improve
+  pass's cursor, the pending-validation record and a run folder's
+  provenance were rewritten in place, so a reader could catch a
+  half-written file: the next writer then dropped the fields it carries
+  forward, and pruning could briefly miss a live run. They are replaced
+  atomically now. (#677)
+- **Docs.** The configuration guide has a "Model limits" section, covers
+  keys with dots and list items, says how the compaction settings fit
+  together and what happens when the config does not load; the install
+  guide describes what uninstall removes and keeps; the providers and
+  workflows guides follow. (#674, #675, #676)
+
+### Performance
+
+- **Skill frontmatter is parsed once until the file changes.** Every
+  system-prompt build re-parsed every skill's frontmatter. A process-wide
+  cache keyed by each file's modification time and size now serves it;
+  durin's own skill writes refresh their entry, and a file changed less
+  than 2 seconds before it was read is parsed again until it ages, so a
+  same-size edit from another process is still seen. (#677)
+
+### Development
+
+- **The test suite runs in four processes.** CI runs `pytest -n 4` on its
+  one runner (pytest-xdist joins `[dev]`) and installs `[memory]`; a CI
+  run takes about 4 minutes instead of 18–21. No test reaches the network,
+  runs the extras installer or loads a real embedding model: guards fail
+  the test that tries, naming it. Each test gets its own `HOME` and an
+  empty secret store. `pytest -m real_model` runs the opt-in tests that
+  embed with the real model. (#678)
+- **An invariant harness guards the turn pipeline.** Seeded multi-turn
+  runs on the real loop check, after every turn, that each delivered reply
+  is saved once, no user message is lost from or summarized twice into the
+  summaries, no request exceeds its budget, the prompt prefix stays stable
+  and compaction stays sane; `DURIN_INVARIANT_SEEDS=500` runs the extended
+  set. The Discord tests each hold the bot-token lock in a folder of their
+  own, so concurrent runs no longer fail each other. (#676)
+
+### Dependencies
+
+- litellm 1.89.7, pypdf 6.19.0, sentence-transformers 5.6.0, PyJWT 2.15.0
+  and urllib3 2.8.0 in the lockfile. (#679, #680, #681, #682, #683)
+- pytest-xdist in the `[dev]` extra. (#678)
+
 ## 0.11.4 — 2026-09-30
 
 ### Highlights

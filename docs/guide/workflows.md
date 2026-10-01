@@ -279,11 +279,14 @@ across iterations as the node refines its work in response to loop feedback.
   code" step, a "write the test" step, and a "fix the bug" step all see
   each other's files without you wiring that up explicitly. A relative path
   in a node's file tools (`read_file("ticket.json")`) resolves in that
-  folder; a path into another folder at the workspace root, such as a
-  repository checked out there, is read from the root when the working
-  folder doesn't have it. Shell commands start in the workspace root, so a
-  command that works on the folder's files changes into it first or uses
-  full paths. This is what
+  folder, except one under `workflows/`, `memory/`, `skills/` or another of
+  durin's own folders, which resolves from the workspace root; a path into
+  another folder at the workspace root, such as a repository checked out
+  there, is read from the root when the working folder doesn't have it,
+  but an edit or a write there needs the full path.
+  `execute_code` scripts run in the folder, but shell commands start in the
+  workspace root, so a command that works on the folder's files changes
+  into it first or uses full paths. This is what
   lets `execute-plan` and `debug` collaborate on an evolving fileset across
   steps (and across a loop's revisits) instead of handing copies down a
   chain. That folder is normally fresh every run; passing a `work_key` (a
