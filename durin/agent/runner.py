@@ -1353,8 +1353,20 @@ class AgentRunner:
             # Check for mid-turn injections BEFORE signaling stream end.
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
+            # Without a reply to put first (an error, an empty reply), a
+            # queued message would merge into the user message before it: the
+            # turn's own message when the first call failed, which the caller
+            # does not save. What a turn without a queued message keeps for
+            # the missing reply goes first instead.
+            ahead = assistant_message
+            if ahead is None and messages and messages[-1].get("role") == "user":
+                ahead = build_assistant_message(
+                    _PERSISTED_MODEL_ERROR_PLACEHOLDER
+                    if response.finish_reason == "error"
+                    else EMPTY_FINAL_RESPONSE_MESSAGE
+                )
             should_continue, injection_cycles = await self._try_drain_injections(
-                spec, messages, assistant_message, injection_cycles,
+                spec, messages, ahead, injection_cycles,
                 phase="after final response",
                 iteration=iteration,
             )

@@ -638,7 +638,14 @@ Two behaviors connect the runner back to the loop:
   the final response it drains both queues — deferred user messages last, so
   the model answers them with all results already in context — and websocket
   clients get a `queued_consumed` ack. Drained messages are appended as user
-  turns so the run continues without a new dispatch. Injection is bounded — at
+  turns so the run continues without a new dispatch. When the call before
+  that drain produced no reply (an error, or an empty reply after its
+  retries), what the turn keeps without a queued message for that missing
+  reply (the model-error placeholder, or the empty-reply text) is appended
+  first, so a drained message is never merged into the user message before
+  it: when the first call failed that is the turn's own message, which the
+  loop does not save, and the drained message would reach the model but not
+  the session. Injection is bounded — at
   most `_MAX_INJECTIONS_PER_TURN` messages drained per cycle and
   `_MAX_INJECTION_CYCLES` cycles — so an injection chain cannot run forever.
 - **Per-turn provider snapshot.** `AgentRunSpec.provider` carries the provider

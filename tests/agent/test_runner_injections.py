@@ -839,6 +839,61 @@ async def test_drain_injections_on_llm_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "empty"])
+async def test_a_message_queued_behind_a_failed_first_call_is_saved_on_its_own(tmp_path, failure):
+    """A turn's first call fails (an error, or an empty reply after the
+    retries) while a message is queued: the queued message was merged into
+    the turn's own message, which sits before what the turn saves, so the
+    model saw it and the session never did. The reply that never came is
+    recorded first, as it would be without a queued message, and the queued
+    message follows as a user message of its own."""
+    from durin.agent.loop import AgentLoop, PendingQueues
+    from durin.agent.runner import _MAX_EMPTY_RETRIES, _PERSISTED_MODEL_ERROR_PLACEHOLDER
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+    from durin.providers.base import GenerationSettings
+    from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=4096)
+    provider.estimate_prompt_tokens.return_value = (0, "none")
+    failures = 1 if failure == "error" else _MAX_EMPTY_RETRIES + 1
+    calls = {"n": 0}
+
+    async def chat_with_retry(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] <= failures:
+            if failure == "error":
+                return LLMResponse(content=None, finish_reason="error", usage={})
+            return LLMResponse(content="", usage={})
+        return LLMResponse(content="the answer", usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    provider.chat_stream_with_retry = chat_with_retry
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    queues = PendingQueues.create()
+    queues.deferred.put_nowait(
+        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="a queued follow-up"),
+    )
+
+    await loop._process_message(
+        InboundMessage(channel="cli", sender_id="u", chat_id="direct", content="the question"),
+        session_key="cli:queued", pending_queues=queues,
+    )
+
+    placeholder = _PERSISTED_MODEL_ERROR_PLACEHOLDER if failure == "error" else EMPTY_FINAL_RESPONSE_MESSAGE
+    saved = loop.sessions.get_or_create("cli:queued").messages
+    assert [(m["role"], m["content"]) for m in saved] == [
+        ("user", "the question"),
+        ("assistant", placeholder),
+        ("user", "a queued follow-up"),
+        ("assistant", "the answer"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_drain_injections_on_empty_final_response():
     """Pending injections should be drained when the runner exits due to empty response."""
     from durin.agent.runner import _MAX_EMPTY_RETRIES, AgentRunner, AgentRunSpec
