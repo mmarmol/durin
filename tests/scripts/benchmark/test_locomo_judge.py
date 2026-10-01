@@ -82,8 +82,9 @@ def test_empty_answer_short_circuits_without_llm_call() -> None:
     assert not calls
 
 
-def test_max_retries_default_is_four_meaning_five_attempts() -> None:
+def test_max_retries_default_is_four_meaning_five_attempts(monkeypatch) -> None:
     """H2: default is now 4 retries (= 5 attempts) — not 2."""
+    monkeypatch.setattr(_judge_mod.time, "sleep", lambda _: None)
     attempts: list[int] = []
 
     def _invoke(prompt, *, model, **_kw):
