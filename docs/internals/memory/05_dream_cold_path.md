@@ -354,10 +354,21 @@ not re-summarized from turn zero, and the pass requires at least four new
 user/assistant messages before it spends an LLM call. The placeholders of
 turns that produced no answer are left out of the span, as compaction leaves
 them out (`without_failure_placeholders`): both write into the same bounded
-summary. The user's own messages always stay. When that start lands
-past the end of the file — the file shrank without the cursor resetting,
-because `/new` emptied it or the file cap trimmed it — what is there now is a
-new conversation, and the span falls back to `last_consolidated`.
+summary. The user's own messages always stay.
+
+The cursor names the message the pass ended on — its timestamp, role and a
+hash of its content — besides the position it held then, and every reader
+resolves it against the session as it is now (`summarized_count`): the
+covered part ends right after that message. `/new` empties a session and the
+file cap drops its head, both without touching the cursor, and a bare
+position would then cover messages no call ever summarized, in the
+conversation after a `/new` once it grew past the old count, or as many
+messages as the cap dropped. A message that is gone covers nothing. One held
+twice resolves to the last match at or before the recorded position: a
+message only moves toward the head, so a match past that position is a later
+copy the pass never saw. A cursor written as a bare position, before it
+named its message, covers nothing — one more summary of the same turns,
+never a loss.
 
 The exclusion runs both ways, since the two writers advance different cursors
 over the same message list. The pass never re-summarizes a span the compactor

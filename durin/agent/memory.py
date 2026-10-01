@@ -919,18 +919,20 @@ class Consolidator:
         return summaries, tags
 
     def _unsummarized(self, session: Session, chunk: list[dict]) -> list[dict]:
-        """Drop the head of *chunk* the nightly session-summary pass already
-        summarized. Its cursor is an index into ``session.messages`` — the
-        same list ``last_consolidated`` indexes — so the overlap is the
-        difference. An empty result means the whole chunk is already
-        summarized: no LLM call, nothing appended."""
+        """Drop the head of *chunk* (which starts at ``last_consolidated``)
+        that the nightly session-summary pass already summarized. The pass's
+        cursor names the message it ended on and is resolved against
+        ``session.messages`` as they are now (``summarized_count``), so /new
+        and the file cap, which renumber the messages, cannot make it cover
+        any the pass never saw. An empty result means the whole chunk is
+        already summarized: no LLM call, nothing appended."""
         try:
-            from durin.memory.session_summary_dream import get_summary_cursor
+            from durin.memory.session_summary_dream import summarized_count
             path = self.sessions.sessions_dir / f"{self.sessions.safe_key(session.key)}.jsonl"
-            cursor = get_summary_cursor(path)
+            covered = summarized_count(path, session.messages)
         except Exception:  # noqa: BLE001 — a missing sidecar means nothing was summarized
             return chunk
-        already = cursor - session.last_consolidated
+        already = covered - session.last_consolidated
         if already <= 0:
             return chunk
         return chunk[already:] if already < len(chunk) else []

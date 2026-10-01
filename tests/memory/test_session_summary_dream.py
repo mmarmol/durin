@@ -6,8 +6,8 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from durin.memory.extract_runner import _meta_path, load_session
 from durin.memory.session_summary_dream import (
-    get_summary_cursor,
     run_session_summary_pass,
     summarize_session,
 )
@@ -16,6 +16,14 @@ from durin.memory.session_summary_store import (
     session_summary_path,
 )
 from durin.memory.storage import load_entry
+
+
+def _covered(path: Path) -> int:
+    """How many of the session file's messages, from the first, the nightly
+    cursor covers."""
+    from durin.memory.session_summary_dream import summarized_count
+
+    return summarized_count(path, load_session(path)[1])
 
 
 class _Resp:
@@ -31,7 +39,7 @@ def _invoke(prompt: str, *, model=None) -> _Resp:
 def _write_session(
     ws: Path, key: str, n_pairs: int = 3, *,
     idle: timedelta = timedelta(days=1), metadata: dict | None = None,
-    last_consolidated: int = 0,
+    last_consolidated: int = 0, prefix: str = "",
 ) -> Path:
     """Write a session file the way SessionManager lays it out: a metadata
     line 0, then one JSON message per line."""
@@ -43,8 +51,8 @@ def _write_session(
         "metadata": metadata or {}, "last_consolidated": last_consolidated, "preview": "",
     }]
     for i in range(n_pairs):
-        rows.append({"role": "user", "content": f"question {i}", "timestamp": ts})
-        rows.append({"role": "assistant", "content": f"answer {i}", "timestamp": ts})
+        rows.append({"role": "user", "content": f"{prefix}question {i}", "timestamp": ts})
+        rows.append({"role": "assistant", "content": f"{prefix}answer {i}", "timestamp": ts})
     path = sdir / f"{key.replace(':', '_')}.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
@@ -58,7 +66,7 @@ def test_idle_session_gets_a_summary_and_a_cursor(tmp_path: Path) -> None:
 
     assert first["written"] is True
     assert "user asked three questions" in text
-    assert get_summary_cursor(path) == 6
+    assert _covered(path) == 6
     # The prompt's trailing tag block rides the entry, not the floor.
     assert load_entry(session_summary_path(tmp_path, "websocket:abc")).topics == ["testing"]
 
@@ -160,7 +168,7 @@ def test_a_span_longer_than_one_call_is_summarized_whole_and_in_order(tmp_path: 
     text, _ = get_session_summary(tmp_path, "websocket:long")
     blocks = [text.index(f"span {n}") for n in range(1, len(prompts) + 1)]
     assert blocks == sorted(blocks)
-    assert get_summary_cursor(path) == 40
+    assert _covered(path) == 40
 
 
 def test_a_failed_call_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None:
@@ -180,13 +188,13 @@ def test_a_failed_call_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None
     with pytest.raises(RuntimeError):
         summarize_session(tmp_path, path, llm_invoke=flaky, budget_tokens=_PIECE_BUDGET)
     stored = [i for i in range(20) if _question(i) in prompts[0]]
-    assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
+    assert _covered(path) == 2 * (stored[-1] + 1)
 
     rest: list[str] = []
     summarize_session(tmp_path, path, llm_invoke=_numbered(rest), budget_tokens=_PIECE_BUDGET)
     assert _question(stored[-1] + 1) in rest[0]
     assert not any(_question(i) in p for p in rest for i in stored)
-    assert get_summary_cursor(path) == 40
+    assert _covered(path) == 40
 
 
 def test_the_time_budget_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None:
@@ -204,11 +212,11 @@ def test_the_time_budget_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> No
     assert first["yielded"] is True
     assert len(prompts) == 1
     stored = [i for i in range(20) if _question(i) in prompts[0]]
-    assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
+    assert _covered(path) == 2 * (stored[-1] + 1)
     rest: list[str] = []
     summarize_session(tmp_path, path, llm_invoke=_numbered(rest), budget_tokens=_PIECE_BUDGET)
     assert _question(stored[-1] + 1) in rest[0]
-    assert get_summary_cursor(path) == 40
+    assert _covered(path) == 40
 
 
 def test_a_message_larger_than_the_budget_is_cut_alone_and_summarized(tmp_path: Path) -> None:
@@ -242,7 +250,7 @@ def test_a_message_larger_than_the_budget_is_cut_alone_and_summarized(tmp_path: 
     assert truncate_to_tokens(_format_turns([messages[2]]), 1_000) in sent
     assert any("question 0: a short one" in s for s in sent)
     assert any("question 2: another short one" in s for s in sent)
-    assert get_summary_cursor(path) == 6
+    assert _covered(path) == 6
 
 
 def test_the_dream_sizes_the_pass_by_the_memory_model(tmp_path: Path, monkeypatch) -> None:
@@ -298,7 +306,7 @@ def test_non_conversations_are_skipped(tmp_path: Path) -> None:
 
     assert out["written"] == 0
     for p in (wf, sub, tagged):
-        assert get_summary_cursor(p) == 0
+        assert _covered(p) == 0
 
 
 def test_pass_counts_and_yields_on_max_seconds(tmp_path: Path) -> None:
@@ -314,15 +322,12 @@ def test_pass_counts_and_yields_on_max_seconds(tmp_path: Path) -> None:
 
 
 def test_cursor_past_the_end_restarts_the_conversation(tmp_path: Path) -> None:
-    """A cursor past the end of the file means the file was rewritten.
-
-    `/new` empties the session file and the file cap trims it; neither resets
-    the cursor. Whatever is in the file now is a new conversation, so the pass
-    must summarize it instead of waiting for it to outgrow the stale index.
-    """
+    """`/new` empties the session file and leaves the cursor the pass wrote.
+    The cursor names the message it ended on, which the new conversation does
+    not hold: the pass summarizes that conversation from its first message."""
     path = _write_session(tmp_path, "websocket:abc", n_pairs=5)
     assert summarize_session(tmp_path, path, llm_invoke=_invoke)["written"] is True
-    assert get_summary_cursor(path) == 10
+    assert _covered(path) == 10
 
     # Same key, same file: /new emptied it and two fresh turns landed.
     _write_session(tmp_path, "websocket:abc", n_pairs=2)
@@ -333,6 +338,104 @@ def test_cursor_past_the_end_restarts_the_conversation(tmp_path: Path) -> None:
     second = summarize_session(tmp_path, path, llm_invoke=_invoke_fresh)
 
     assert second["written"] is True
-    assert get_summary_cursor(path) == 4
+    assert _covered(path) == 4
     text, _ = get_session_summary(tmp_path, "websocket:abc")
     assert "the fresh conversation" in text
+
+
+def _capture(prompts: list[str]):
+    def invoke(prompt: str, *, model=None) -> _Resp:
+        prompts.append(prompt)
+        return _Resp("- a block\n---\nentities: []\ntopics: []")
+
+    return invoke
+
+
+def test_after_new_a_longer_conversation_is_summarized_from_its_first_message(tmp_path: Path) -> None:
+    """The cursor was a position: once the conversation after a `/new` grew
+    past it, the pass read its first messages as already summarized and
+    skipped them for good."""
+    path = _write_session(tmp_path, "websocket:abc", n_pairs=3)
+    summarize_session(tmp_path, path, llm_invoke=_invoke)
+    # /new: the same file now holds a new conversation, longer than the last.
+    _write_session(tmp_path, "websocket:abc", n_pairs=5, prefix="new ")
+
+    prompts: list[str] = []
+    summarize_session(tmp_path, path, llm_invoke=_capture(prompts))
+
+    assert "new question 0" in "\n".join(prompts)
+    assert _covered(path) == 10
+
+
+def test_after_the_file_cap_the_pass_resumes_after_the_message_it_ended_on(tmp_path: Path) -> None:
+    """The file cap drops the head of a session and shifts every position;
+    the cursor kept its old one and the pass skipped as many messages as the
+    cap dropped. Driven the way a turn drives it: the cap, then the save."""
+    from durin.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:direct")
+    for i in range(25):
+        session.add_message("user", f"question {i:03d}")
+        session.add_message("assistant", f"answer {i:03d}")
+    sessions.save(session)
+    path = sessions._get_session_path("cli:direct")
+    summarize_session(tmp_path, path, llm_invoke=_invoke, idle_hours=0, min_new_messages=1, budget_tokens=100_000)
+    for i in range(25, 40):
+        session.add_message("user", f"question {i:03d}")
+        session.add_message("assistant", f"answer {i:03d}")
+    session.enforce_file_cap(limit=60)
+    sessions.save(session)
+    assert session.messages[0]["content"] == "question 010"
+
+    prompts: list[str] = []
+    summarize_session(
+        tmp_path, path, llm_invoke=_capture(prompts), idle_hours=0, min_new_messages=1, budget_tokens=100_000,
+    )
+
+    sent = "\n".join(prompts)
+    assert "question 025" in sent
+    assert "answer 024" not in sent
+
+
+def test_a_cursor_from_before_it_named_its_message_counts_as_nothing(tmp_path: Path) -> None:
+    """A bare position cannot tell whether /new or the file cap moved the
+    messages under it since it was written: trusted, it could skip messages
+    no call ever summarized. It covers nothing, at the cost of one more
+    summary of the same turns."""
+    path = _write_session(tmp_path, "websocket:abc", n_pairs=3)
+    _meta_path(path).write_text(json.dumps({"summary_cursor": 6}), encoding="utf-8")
+
+    prompts: list[str] = []
+    summarize_session(tmp_path, path, llm_invoke=_capture(prompts))
+
+    assert "question 0" in "\n".join(prompts)
+    assert _covered(path) == 6
+
+
+def test_a_message_held_twice_resolves_to_the_last_match_up_to_the_cursors_position(tmp_path: Path) -> None:
+    """The same message (timestamp, role and content) twice: the cursor
+    resolves to the last match at or before the position it recorded. A
+    message only moves toward the head, so a match past that position is a
+    later copy the pass never saw."""
+    from durin.memory.session_summary_dream import set_summary_cursor, summarized_count
+
+    same = {"role": "tool", "content": "ok", "tool_call_id": "t1", "timestamp": "2026-10-01T12:00:00.000001"}
+    messages = [
+        {"role": "user", "content": "q0", "timestamp": "2026-10-01T12:00:00.000000"},
+        {"role": "assistant", "content": "a0", "timestamp": "2026-10-01T12:00:00.000000"},
+        dict(same), dict(same),
+        {"role": "user", "content": "q1", "timestamp": "2026-10-01T12:00:01"},
+        {"role": "assistant", "content": "a1", "timestamp": "2026-10-01T12:00:02"},
+        dict(same),
+    ]
+    path = tmp_path / "s.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    set_summary_cursor(path, messages, 4)
+    assert summarized_count(path, messages) == 4
+    set_summary_cursor(path, messages, 3)
+    assert summarized_count(path, messages) == 3
+    # The cap dropped the first two: the copy the pass ended on is now second.
+    set_summary_cursor(path, messages, 4)
+    assert summarized_count(path, messages[2:]) == 2

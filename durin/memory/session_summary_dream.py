@@ -17,11 +17,14 @@ carries an ``origin_type`` marker is skipped too.
 The cursor is a top-level ``summary_cursor`` key in ``<stem>.meta.json`` —
 the same file and lock the extract cursor uses — because
 ``SessionManager.save()`` replaces only the ``derived`` block and so cannot
-erase it.
+erase it. It names the message the pass ended on, not only its position:
+``/new`` and the file cap renumber a session's messages without touching it
+(``summarized_count``).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import datetime, timedelta
@@ -45,11 +48,11 @@ from durin.utils.runtime import (
 )
 
 __all__ = [
-    "get_summary_cursor",
     "memory_input_budget",
     "run_session_summary_pass",
     "set_summary_cursor",
     "summarize_session",
+    "summarized_count",
 ]
 
 LLMInvoke = Callable[..., Any]
@@ -58,19 +61,49 @@ _CURSOR_KEY = "summary_cursor"
 _SKIP_STEM_PREFIXES = ("workflow_", "subagent_", "cron_", "automation_", "bench_")
 
 
-def get_summary_cursor(jsonl_path: Path) -> int:
-    """Number of messages already summarized for this session (0 when unset)."""
+def _content_hash(message: dict) -> str:
+    """A short digest of a message's content, the same in every process and
+    across the session file's JSON round trip."""
+    raw = json.dumps(message.get("content"), sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def summarized_count(jsonl_path: Path, messages: list[dict]) -> int:
+    """How many of *messages*, from the first, the nightly pass summarized.
+
+    The cursor names the message the pass ended on (its timestamp, role and
+    a hash of its content) and the position it held then. That message is
+    found in *messages* as they are now, and the covered part ends right
+    after it: ``/new`` empties a session and the file cap drops its head,
+    both without touching the cursor, and a position alone would then cover
+    messages no call ever summarized. A message that is gone covers nothing.
+    One held more than once resolves to the last match at or before the
+    recorded position: a message only moves toward the head, so a match past
+    that position is a later copy the pass never saw. A cursor written as a
+    bare position, before it named its message, covers nothing either: one
+    more summary of the same turns, never a loss."""
     mp = _meta_path(Path(jsonl_path))
     if not mp.exists():
         return 0
     try:
-        return int(json.loads(mp.read_text(encoding="utf-8")).get(_CURSOR_KEY) or 0)
+        record = json.loads(mp.read_text(encoding="utf-8")).get(_CURSOR_KEY)
+        position = int(record["position"]) if isinstance(record, dict) else 0
     except Exception:  # noqa: BLE001 — a corrupt sidecar means "start over"
         return 0
+    for i in range(min(position, len(messages)) - 1, -1, -1):
+        message = messages[i]
+        if (
+            message.get("timestamp") == record.get("timestamp")
+            and message.get("role") == record.get("role")
+            and _content_hash(message) == record.get("hash")
+        ):
+            return i + 1
+    return 0
 
 
-def set_summary_cursor(jsonl_path: Path, n: int) -> None:
-    """Persist the cursor as a top-level key under the session's lock."""
+def set_summary_cursor(jsonl_path: Path, messages: list[dict], n: int) -> None:
+    """Record, under the session's lock, that the pass summarized
+    ``messages[:n]``: the position and the message it ended on."""
     jsonl_path = Path(jsonl_path)
     mp = _meta_path(jsonl_path)
     with cross_process_lock(jsonl_path):
@@ -80,7 +113,16 @@ def set_summary_cursor(jsonl_path: Path, n: int) -> None:
                 data = json.loads(mp.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
                 data = {}
-        data[_CURSOR_KEY] = int(n)
+        if n > 0:
+            last = messages[n - 1]
+            data[_CURSOR_KEY] = {
+                "position": int(n),
+                "timestamp": last.get("timestamp"),
+                "role": last.get("role"),
+                "hash": _content_hash(last),
+            }
+        else:
+            data.pop(_CURSOR_KEY, None)
         atomic_write_text(mp, json.dumps(data, indent=2))
 
 
@@ -179,11 +221,7 @@ def summarize_session(
     if reason:
         return {"session": key, "skipped": reason}
 
-    start = max(get_summary_cursor(jsonl_path), int(meta.get("last_consolidated") or 0))
-    if start > len(msgs):
-        # The file shrank since the cursor was written (/new emptied it or the
-        # file cap trimmed it): what is there now is a new conversation.
-        start = int(meta.get("last_consolidated") or 0)
+    start = max(summarized_count(jsonl_path, msgs), int(meta.get("last_consolidated") or 0))
     # The placeholders of turns that produced no answer stay out, as they do
     # of what compaction summarizes into the same bounded store: they say
     # nothing worth a block that would evict an older, real one.
@@ -231,10 +269,10 @@ def summarize_session(
                 summarized = True
                 written = written or path is not None
         cursor = position[id(piece[-1])] + 1
-        set_summary_cursor(jsonl_path, cursor)
+        set_summary_cursor(jsonl_path, msgs, cursor)
     # What follows the last piece is failure placeholders, left out.
     total = len(msgs)
-    set_summary_cursor(jsonl_path, total)
+    set_summary_cursor(jsonl_path, msgs, total)
     if not summarized:
         return {"session": key, "skipped": "nothing", "cursor": total}
     return {
