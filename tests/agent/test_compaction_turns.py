@@ -238,8 +238,12 @@ async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path, turn
     history with the turn's own message in it, already saved at BUILD, so the
     prompt carried that message twice and SAVE skipped one message too many:
     the reply was lost, the session ended on a user message, and every later
-    turn merged into it and lost its reply the same way."""
-    result = await _run_turns(tmp_path, turns=turns, window=40_000)
+    turn merged into it and lost its reply the same way.
+
+    The window leaves 6,000 tokens of the input budget beside the system
+    prompt and the tool definitions, measured where the test runs: a fixed
+    40,000 put a checkout with longer paths over the edge."""
+    result = await _run_turns(tmp_path, turns=turns, window=_window_leaving(tmp_path, 6_000))
 
     failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]
@@ -400,6 +404,25 @@ async def test_a_small_window_filled_by_its_fixed_prompt_compacts_on_a_runway(tm
     result = await _run_turns(tmp_path, turns=14, window=64_000, agents_md="guidance " * 20_000)
 
     assert sum(1 for count in result["compactions"] if count) <= 4, result["compactions"]
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_prompt_near_the_ceiling_compacts_once_a_turn_and_answers(tmp_path):
+    """A 25,000-word AGENTS.md on a 64,000-token window leaves about 3,900
+    tokens under the ceiling, where the wait for a runway stops: room for
+    the summary and one exchange of history, not two. Every turn after the
+    first few therefore has to drop the exchange before it, and compacts to
+    do so; what the session must not do is fail a turn, send past the
+    budget, or compact twice in one turn."""
+    from durin.agent.runner import input_budget_tokens
+
+    result = await _run_turns(tmp_path, turns=16, window=64_000, agents_md="guidance " * 25_000)
+
+    failed = [i for i, r in enumerate(result["replies"]) if not r or r.startswith(_OVERFLOW_REPLY)]
+    assert failed == []
+    assert max(result["main_prompts"]) <= input_budget_tokens(64_000, 8192)
+    assert max(result["compactions"]) <= 1, result["compactions"]
     _assert_turns_saved(result)
 
 
