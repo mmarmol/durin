@@ -410,8 +410,8 @@ def _test_default_author_scope():
         yield
 
 
-@pytest.fixture(autouse=True)
-def _ban_catalog_network_fetch(monkeypatch):
+@pytest.fixture(autouse=True, scope="session")
+def _ban_catalog_network_fetch():
     """Suite-wide ban on the catalog refreshers' real network fetch.
 
     Both refresh schedulers (MCP + provider models) fetch IMMEDIATELY in
@@ -422,6 +422,12 @@ def _ban_catalog_network_fetch(monkeypatch):
     with a raiser (the failure is swallowed by the refreshers' keep-prior-data
     contract); a test exercising refresh behavior injects its own fake fetch
     or monkeypatches ``_default_fetch`` on top of this.
+
+    The ban holds for the whole session, not test by test: AgentLoop starts
+    both schedulers' daemon threads, a test that never stops its loop leaves
+    them running, and set per test the ban was lifted between one test's
+    teardown and the next one's setup, where a thread that started late
+    reached the real fetch.
     """
 
     def _banned(url: str) -> bytes:
@@ -430,8 +436,10 @@ def _ban_catalog_network_fetch(monkeypatch):
     import durin.agent.mcp_catalog_refresh as _mcr
     import durin.providers.catalog_refresh as _pcr
 
-    monkeypatch.setattr(_mcr, "_default_fetch", _banned)
-    monkeypatch.setattr(_pcr, "_default_fetch", _banned)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_mcr, "_default_fetch", _banned)
+        mp.setattr(_pcr, "_default_fetch", _banned)
+        yield
 
 
 @pytest.fixture(autouse=True)
