@@ -30,6 +30,20 @@ def _resolve_secret_refs(obj: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class CompactionDefaults:
+    """agents.defaults' compaction ratio and cap as a snapshot read them:
+    what a preset that sets none of its own compacts by."""
+
+    ratio: float
+    max_tokens: int | None
+
+    @classmethod
+    def of(cls, config: Config) -> CompactionDefaults:
+        defaults = config.agents.defaults
+        return cls(defaults.preemptive_compact_ratio, defaults.preemptive_compact_max_tokens)
+
+
+@dataclass(frozen=True)
 class ProviderSnapshot:
     provider: LLMProvider
     model: str
@@ -40,6 +54,30 @@ class ProviderSnapshot:
     # snapshot time so a preset switch propagates the new ratio into the
     # consolidator without the loop having to know about preset internals.
     preemptive_compact_ratio: float | None = None
+    # The preset's absolute compaction cap in tokens, carried the same way.
+    # ``None`` means the preset sets none: the agents.defaults cap applies.
+    preemptive_compact_max_tokens: int | None = None
+    # agents.defaults' ratio and cap when the snapshot was built, so an edit
+    # to them reaches the running loop with the next snapshot refresh; None
+    # when it was built without a config, and the loop keeps what it has.
+    compaction_defaults: CompactionDefaults | None = None
+    # On a snapshot of what the config selects: which preset that is
+    # (agents.defaults.model_preset, "default" when it names none) and that
+    # preset's own settings. A running loop reads a change here as a new
+    # choice, and follows it. None on a snapshot of a preset asked for by
+    # name or object.
+    selection: tuple[object, ...] | None = None
+
+
+def _configured_selection(config: Config) -> tuple[str, str]:
+    """What the configuration selects: the active preset's name and its
+    settings as configured, before its window and output limit are resolved
+    against the model catalog. The catalog is refreshed without the
+    configuration changing, and a running loop reads a new selection as a
+    new choice that replaces a preset picked with /model."""
+    name = config.agents.defaults.model_preset or "default"
+    preset = config.configured_default_preset() if name == "default" else config.model_presets[name]
+    return name, preset.model_dump_json()
 
 
 def _resolve_model_preset(
@@ -281,6 +319,12 @@ def _signature(
         resolved.temperature,
         resolved.reasoning_effort,
         resolved.context_window_tokens,
+        # Compaction sizing: a change here re-applies the snapshot too, so an
+        # edit takes effect on the next turn without a restart.
+        resolved.preemptive_compact_ratio,
+        resolved.preemptive_compact_max_tokens,
+        config.agents.defaults.preemptive_compact_ratio,
+        config.agents.defaults.preemptive_compact_max_tokens,
         tuple(_fallback_signature(fallback) for fallback in fallback_presets),
     )
 
@@ -329,12 +373,18 @@ def build_provider_snapshot(
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     fallbacks = _resolve_fallbacks(config, resolved)
+    selection = None
+    if preset_name is None and preset is None:
+        selection = _configured_selection(config)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
         context_window_tokens=_window_and_cap(config, resolved, fallbacks)[0],
         signature=_signature(config, resolved, [fallback.preset for fallback in fallbacks]),
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
+        preemptive_compact_max_tokens=resolved.preemptive_compact_max_tokens,
+        compaction_defaults=CompactionDefaults.of(config),
+        selection=selection,
     )
 
 

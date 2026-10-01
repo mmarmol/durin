@@ -373,6 +373,44 @@ async def test_runner_retries_empty_final_response_with_summary_prompt():
 
 
 @pytest.mark.asyncio
+async def test_a_reply_from_the_finalization_retry_is_stamped_with_one_request():
+    """A reply's usage stamp stands for the system prompt, the tool schemas
+    and every message before it: the next request's estimate is the stamp
+    plus what came after it, and compaction reads it as the prompt's real
+    size. The reply the no-tools finalization retry produced was stamped
+    with two requests' counts added together, the blank answer's and the
+    retry's, about twice the prompt. The request with tools that the blank
+    answer came from is the one the stamp stands for."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock(spec=LLMProvider)
+    calls: list[dict] = []
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        calls.append({"tools": tools})
+        if len(calls) <= 2:
+            return LLMResponse(content=None, tool_calls=[], usage={"prompt_tokens": 500, "completion_tokens": 1})
+        return LLMResponse(content="final answer", tool_calls=[], usage={"prompt_tokens": 420, "completion_tokens": 7})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "do task"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert calls[-1]["tools"] is None
+    reply = result.messages[-1]
+    assert reply["content"] == "final answer"
+    assert reply["usage_prompt_tokens"] == 500
+
+
+@pytest.mark.asyncio
 async def test_runner_uses_specific_message_after_empty_finalization_retry():
     """After silent retries + finalization all return empty, stop_reason is empty_final_response."""
     from durin.agent.runner import AgentRunner, AgentRunSpec

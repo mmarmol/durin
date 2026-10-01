@@ -351,10 +351,24 @@ session is left to the compactor, which already summarizes it on compaction.
 The span to summarize starts after the greater of this pass's own cursor and
 the compactor's `last_consolidated`, so a session that compacted recently is
 not re-summarized from turn zero, and the pass requires at least four new
-user/assistant messages before it spends an LLM call. When that start lands
-past the end of the file — the file shrank without the cursor resetting,
-because `/new` emptied it or the file cap trimmed it — what is there now is a
-new conversation, and the span falls back to `last_consolidated`.
+user/assistant messages before it spends an LLM call. The placeholders of
+turns that produced no answer are left out of the span, as compaction leaves
+them out (`without_failure_placeholders`): both write into the same bounded
+summary. The user's own messages always stay.
+
+The cursor names the message the pass ended on — its timestamp, role and a
+hash of its content — besides the position it held then, and every reader
+resolves it against the session as it is now (`summarized_count`): the
+covered part ends right after that message. `/new` empties a session and the
+file cap drops its head, both without touching the cursor, and a bare
+position would then cover messages no call ever summarized, in the
+conversation after a `/new` once it grew past the old count, or as many
+messages as the cap dropped. A message that is gone covers nothing. One held
+twice resolves to the last match at or before the recorded position: a
+message only moves toward the head, so a match past that position is a later
+copy the pass never saw. A cursor written as a bare position, before it
+named its message, covers nothing — one more summary of the same turns,
+never a loss.
 
 The exclusion runs both ways, since the two writers advance different cursors
 over the same message list. The pass never re-summarizes a span the compactor
@@ -362,12 +376,28 @@ already archived, because its start respects `last_consolidated`. And when an
 idle-then-summarized session resumes and compacts, `Consolidator._unsummarized`
 trims the head of the compaction chunk that this pass's `summary_cursor`
 already covers — an entirely covered chunk means no LLM call and no block
-appended.
+appended. `/compact` and the record `/new` files apply the same trim.
 
 The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**
 (`agent/consolidator_archive.md`), so both paths produce the same shape of
-bullet summary plus trailing entity/topic tags. The result is appended to
+bullet summary plus trailing entity/topic tags. It goes to the summarizer
+whole, sized as compaction sizes its calls but by the model the dream
+summarizes with: the dream passes the memory model's input budget
+(`memory_input_budget`: its window less its output ceiling and compaction's
+safety buffer), and the span is cut at message boundaries by the splitter
+compaction uses (`runs_that_fit`, `summary_token_count`) into pieces that
+each fit it, summarized one call per piece, in order, each summary its own
+block. A single message larger than the budget is a piece of its own, cut
+to it exactly as compaction cuts one (`truncate_to_tokens`) and summarized:
+sent whole, it would fail its call every night on a memory model that
+cannot take it, the cursor would stay before it, and the session would
+never be summarized again. The cursor moves past
+each piece once its call answered, so a call that fails, or the pass's time
+budget (`memory.dream.max_seconds_per_run`, checked between pieces as well as
+between sessions), leaves the rest of the span for the next pass instead of
+skipping it: compaction skips whatever the cursor covers. Each block is
+appended to
 `memory/session_summary/<key>.md` via `append_session_summary_block` — the
 same bounded, block-based store the compactor writes (oldest blocks evicted
 past the size cap, their path trailers carried forward into a synthetic head

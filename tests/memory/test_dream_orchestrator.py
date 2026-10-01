@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from durin.config.schema import Config
+from durin.config.schema import Config, ModelPresetConfig
 
 
 def _mk_stub(calls, name, ret):
@@ -93,10 +93,10 @@ def stubbed_passes(monkeypatch):
     )
     monkeypatch.setattr(skill_usage, "collect_recent_skill_calls", lambda *a, **k: [])
 
-    class _Preset:
-        model = "test-model"
-
-    monkeypatch.setattr(model_resolve, "resolve_aux_preset", lambda *a, **k: _Preset())
+    # The memory preset as resolve_aux_preset returns one: the model with
+    # its provider and limits.
+    preset = ModelPresetConfig(model="test-model", provider="openai", context_window_tokens=32_768, max_tokens=4_096)
+    monkeypatch.setattr(model_resolve, "resolve_aux_preset", lambda *a, **k: preset)
     return calls
 
 
@@ -139,6 +139,24 @@ def test_full_dream_order_summary_and_progress(stubbed_passes, tmp_path):
     }
     assert events[0] == {"kind": "run_started"}
     assert events[-1] == {"kind": "run_finished", "ok": True}
+
+
+def test_the_session_summary_pass_is_sized_by_the_memory_model(stubbed_passes, tmp_path, monkeypatch):
+    """The nightly pass's calls run on the memory model, so the dream sizes
+    them by what that model takes: its window less its output ceiling and
+    compaction's safety buffer."""
+    from durin.agent.memory import Consolidator
+    from durin.memory import session_summary_dream
+    from durin.memory.dream_orchestrator import run_full_dream
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        session_summary_dream, "run_session_summary_pass",
+        lambda *a, **k: seen.append(k) or {"sessions": 0, "written": 0, "skipped": 0, "duration_ms": 0},
+    )
+    run_full_dream(_cfg(), tmp_path, progress=lambda _e: None)
+
+    assert [k["budget_tokens"] for k in seen] == [32_768 - 4_096 - Consolidator._SAFETY_BUFFER]
 
 
 def test_skill_judges_see_the_finish_reason(stubbed_passes, tmp_path, monkeypatch):

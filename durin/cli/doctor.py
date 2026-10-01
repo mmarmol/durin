@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import typer
+from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
 from durin import __version__
-from durin.config.loader import get_config_path, load_config
+from durin.config.loader import ConfigNotLoadedError, get_config_path, load_config
 
 if TYPE_CHECKING:
     from durin.config.schema import Config
@@ -108,29 +109,25 @@ def check_config_file() -> CheckResult:
 
 
 def check_config_parses() -> CheckResult:
+    """Every config file parses and the settings validate. A config that does
+    not runs on defaults for what failed, and durin refuses to save it until
+    it is fixed, so each failing file is named with its error."""
+    from durin.config.loader import config_load_problems
+
     path = get_config_path()
     if not path.exists():
         return CheckResult("config valid", "fail", "No config to validate.", category="config")
-    try:
-        with path.open(encoding="utf-8") as f:
-            json.load(f)
-    except json.JSONDecodeError as e:
+    problems = config_load_problems(path)
+    if problems:
         return CheckResult(
             "config valid", "fail",
-            f"JSON parse error: {e}",
-            fix="Edit the file by hand, or back it up and run `durin onboard` to start over.",
+            "Did not load, so durin runs on defaults for it and refuses to save the config: "
+            + "; ".join(f"{p.path}: {p.error}" for p in problems),
+            fix="Fix or remove those files by hand (a backup of a working config, if you have one, "
+                "can replace them), then run `durin doctor` again.",
             category="config",
         )
-    try:
-        load_config(path)
-    except Exception as e:  # noqa: BLE001 — pydantic ValidationError or downstream
-        return CheckResult(
-            "config valid", "fail",
-            f"Schema validation failed: {e}",
-            fix="Run `durin upgrade --migrate-only`, or revert to `~/.durin/config.json.bak`.",
-            category="config",
-        )
-    return CheckResult("config valid", "ok", "Schema validation passed.", category="config")
+    return CheckResult("config valid", "ok", "Loads cleanly: every file parses and validates.", category="config")
 
 
 def check_workspace() -> CheckResult:
@@ -783,22 +780,29 @@ def check_stt_round_trip(cfg: "Config | None" = None) -> CheckResult:
 
 
 def check_cache_size() -> CheckResult:
+    from durin.cli.uninstall import _path_size
+
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
         return CheckResult("cache size", "ok", "no cache yet", category="state")
-    total = 0
-    for root, _dirs, files in os.walk(cache, followlinks=False):
-        for name in files:
-            try:
-                total += (Path(root) / name).stat().st_size
-            except OSError:
-                continue
+    sizes = {
+        entry.name + ("/" if entry.is_dir() and not entry.is_symlink() else ""): _path_size(entry)
+        for entry in cache.iterdir()
+    }
+    total = sum(sizes.values())
     gb = total / (1024 ** 3)
     if gb > 10:
+        # Named, not removed: an uninstall would take the sessions, the
+        # history and everything else in the durin home with the caches.
+        biggest = ", ".join(
+            f"{name} ({size / 1024 ** 3:.1f} GB)"
+            for name, size in sorted(sizes.items(), key=lambda item: -item[1])[:3]
+        )
         return CheckResult(
             "cache size", "warn",
             f"{gb:.1f} GB at {cache}",
-            fix="`durin uninstall --keep-config --keep-workspace --yes` to drop caches.",
+            fix=f"Delete what you no longer need in {cache} (biggest: {biggest}); "
+                "its telemetry/ is the default install's usage log, not a cache.",
             category="state",
         )
     if gb > 1:
@@ -1241,9 +1245,22 @@ def check_embedding_model() -> CheckResult:
 def _install_memory_extra(cfg: "Config", model_name: str, exc: RuntimeError) -> CheckResult:
     """Vector memory is on but fastembed's catalog did not load: install the
     ``[memory]`` extra as doctor's own step when ``install.auto_install_extras``
-    allows, and report the outcome in the embedding-model row either way."""
+    allows, and report the outcome in the embedding-model row either way.
+
+    Not while the config does not load cleanly: what failed runs on defaults,
+    and the default allows installs, so the user's own setting could not be
+    read and may forbid them."""
+    from durin.config.loader import config_load_problems
     from durin.extras import ensure_extra
 
+    if config_load_problems(get_config_path()):
+        return CheckResult(
+            "embedding model", "warn",
+            f"configured as {model_name}, but the [memory] extra is not installed; doctor installs "
+            "nothing while the config does not load cleanly (see config valid)",
+            fix="Fix the config, then `durin doctor --install-missing -y`.",
+            category="state",
+        )
     res = ensure_extra("memory_vector", config=cfg)
     if res.status == "installed":
         return CheckResult(
@@ -1841,6 +1858,9 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     # reinstall dropped them.
     try:
         update_extras_state()
+    except ConfigNotLoadedError as e:
+        # The config check above names the files; nothing is written.
+        logger.error("Could not record the installed extras: {}", e)
     except Exception:  # noqa: BLE001
         pass
     report.add(check_extras_drift())

@@ -43,6 +43,7 @@ from durin.service.types import (
     Query,
     Result,
     ValidationFailedError,
+    config_refusal,
 )
 
 # ---------------------------------------------------------------------------
@@ -385,9 +386,18 @@ class ConfigService:
             path_segments,
             validate_dict,
         )
-        from durin.config.loader import drop_unusable_limits, get_config_path, save_config
+        from durin.config.loader import (
+            ConfigNotLoadedError,
+            config_load_problems,
+            drop_unusable_limits,
+            get_config_path,
+            save_config,
+        )
 
         path = get_config_path()
+        problems = config_load_problems(path)
+        if problems:
+            raise config_refusal(ConfigNotLoadedError(problems))
         try:
             canonical = validate_dict(drop_unusable_limits(load_raw_config(path))).model_dump(
                 mode="json", by_alias=False

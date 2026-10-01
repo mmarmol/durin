@@ -131,8 +131,9 @@ a "Last turn — composition" block that splits its prompt into two buckets:
 what the conversation contributed (prior turns, the current message, and the
 per-turn volatile blocks — active memory, the automatic memory prefetch, recent
 history, an archived session summary) and what infrastructure contributed
-(identity, bootstrap files, skills, the memory pinned and hot layers, the agent
-mode, tool definitions). The figures come from the turn's `context.composition`
+(identity, bootstrap files, the SOUL, the operating rules, skills, the rich
+output guide, the memory pinned and hot layers, the agent mode, tool
+definitions: every part of the system prompt's stable tier). The figures come from the turn's `context.composition`
 payload, rolled into the two buckets by `summarize_composition`
 (`durin/agent/context.py`) — the same rollup the TUI footer reads. The automatic
 prefetch gets a line of its own even though its block rides inside the current
@@ -733,7 +734,9 @@ and agent:
   a custom provider/model entry; selecting one publishes `/model <ref>`. The effort
   section lists reasoning levels (Default / Off / High / Max); selecting one
   publishes `/effort <level>`. The current effort level (if any) is extracted from
-  the active model preset's suffix (e.g. `default:high` → `high`).
+  the active model preset's suffix (e.g. `default:high` → `high`). `/effort`, and
+  the TUI's effort picker, switch to a variant of the active preset
+  (`<preset>:<level>`) that keeps every other setting of the preset.
 
 **Sending while the agent works.** A plain message sent mid-turn is deferred
 server-side: it enters the conversation when the current work finishes its

@@ -365,7 +365,9 @@ Check categories and representative checks:
   document counts; `~/.cache/durin` byte count (warn at > 10 GB). With vector
   memory on and the `[memory]` extra missing, the embedding-model check
   installs the extra as doctor's own step (`ensure_extra`, gated by
-  `install.auto_install_extras`) and its row reports the outcome: installed,
+  `install.auto_install_extras`, and only once the config loads cleanly: what
+  fails to load runs on defaults, which allow installs) and its row reports
+  the outcome: installed,
   restart the gateway; or the failure with the manual command; or, with the
   setting off, not installed with the fix (`durin doctor --install-missing -y`
   or the pipx/uv command). Reading the catalog never installs anything
@@ -438,7 +440,10 @@ to keep their noise out of `gateway.log`.
 `daemon_status()` returns a `DaemonStatus` with `state ∈ {running, not_running,
 stale_pid}`. A stale PID is detected when the PID file exists but its pid fails
 `pid_alive` (`durin/utils/process.py`), the cross-platform liveness probe
-shared with the jobs subsystem's reconcile sweeps. The gateway also acquires an exclusive flock on
+shared with the jobs subsystem's reconcile sweeps. Checking the status
+creates nothing: the path helpers only name the pid and log files, and what
+writes one creates its folder (`start_daemon` the boot log's, loguru the
+log file's). An uninstall checks the status after it lists what it removes. The gateway also acquires an exclusive flock on
 `~/.durin/gateway.lock` at startup (`acquire_gateway_singleton`); the OS
 releases it automatically on exit, providing crash-safe singleton enforcement
 that the PID file alone cannot guarantee.

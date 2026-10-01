@@ -146,6 +146,25 @@ def test_prefetch_block_is_billed_as_its_own_line(monkeypatch, tmp_path):
     assert summarize_composition(payload)["conversation_breakdown"]["Memory prefetch"] == prefetch_tokens
 
 
+def test_the_status_breakdown_counts_every_part_of_the_system_prompt(monkeypatch, tmp_path):
+    """The stable tier holds the SOUL, the operating rules and the rich-output
+    guide besides the parts /status named; the breakdown left them out, so a
+    persona's SOUL, often the largest part, went missing from the
+    infrastructure total."""
+    from durin.agent.context import summarize_composition
+
+    events = _bind_telemetry(monkeypatch)
+    b = _make_builder(tmp_path)
+    b.build_messages(
+        history=[], current_message="hi", active_persona_soul="You are Long. " + "rule " * 3000,
+    )
+    payload = [e for e in events if e[0] == "context.composition"][-1][1]
+
+    summary = summarize_composition(payload)
+    assert payload["stable_breakdown"]["soul"] > 3000
+    assert summary["infra_tokens"] == payload["stable_tokens"] + payload["context_tokens"] + payload["tools_tokens"]
+
+
 def test_composition_event_skips_when_no_telemetry(monkeypatch, tmp_path):
     """No global telemetry bound → no event is emitted, build doesn't error."""
     monkeypatch.setattr(

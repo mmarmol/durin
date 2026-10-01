@@ -162,6 +162,8 @@ class DurinApp(App[None]):
 
     def _persist_appearance(self) -> None:
         """Write the current palette/mode back to config."""
+        from durin.config.loader import ConfigNotLoadedError
+
         try:
             from durin.config.loader import load_config, save_config
 
@@ -169,6 +171,10 @@ class DurinApp(App[None]):
             cfg.appearance.palette = self._palette
             cfg.appearance.mode = self._mode
             save_config(cfg)
+        except ConfigNotLoadedError as e:
+            # The theme still changes for this session; the person learns
+            # why it was not saved and which files to fix.
+            self.notify(str(e), severity="error", timeout=15, markup=False)
         except Exception:  # noqa: BLE001 - a theme toggle must not crash
             pass
 
@@ -1140,20 +1146,12 @@ class DurinApp(App[None]):
         if current == effort:
             return
 
-        # Create a temp preset variant with the new effort.
+        # Create a temp preset variant with the new effort: the same preset,
+        # every other setting kept, including any a later preset field adds.
         from durin.cli.tui.state import add_recent_model
-        from durin.config.schema import ModelPresetConfig
 
         variant_name = f"{active_name}:{selected}"
-        variant = ModelPresetConfig(
-            model=active_preset.model,
-            provider=active_preset.provider,
-            max_tokens=active_preset.max_tokens,
-            context_window_tokens=active_preset.context_window_tokens,
-            temperature=active_preset.temperature,
-            reasoning_effort=effort,
-            preemptive_compact_ratio=active_preset.preemptive_compact_ratio,
-        )
+        variant = active_preset.model_copy(update={"reasoning_effort": effort})
         presets[variant_name] = variant
         add_recent_model(variant_name)
         await self._publish_inbound(f"/model {variant_name}", [])

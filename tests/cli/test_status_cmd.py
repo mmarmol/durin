@@ -303,3 +303,22 @@ def test_status_json_is_parseable(fake_home: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert "model" in payload and "gateway" in payload and "config" in payload
+
+
+def test_status_says_the_config_did_not_load(config: Config, fake_home: Path) -> None:
+    """A config that did not load runs on defaults for what failed, and
+    status showed it as fine: only its path and layout. It names the files
+    that did not load and says saves are refused until they are fixed."""
+    cfg_path = _config_path(fake_home)
+    split = cfg_path.with_suffix(".json.d")
+    split.mkdir(parents=True)
+    cfg_path.write_text('{"_layout": "split"}', encoding="utf-8")
+    (split / "agents.json").write_text('{"defaults": {"temperature": "hot"}}', encoding="utf-8")
+
+    data = _status_data(config, cfg_path, None)
+    rows = _status_sections(config, cfg_path, None)
+
+    assert [p["file"] for p in data["config"]["problems"]] == [str(split / "agents.json")]
+    shown = " ".join(value for _, value in rows)
+    assert "did not load" in shown and "saves are refused" in shown
+    assert f"{split / 'agents.json'}: agents.defaults.temperature" in shown

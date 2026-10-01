@@ -21,7 +21,7 @@ import typer
 from rich.console import Console
 
 from durin import __version__
-from durin.config.loader import get_config_path, load_config, save_config
+from durin.config.loader import ConfigNotLoadedError, get_config_path, load_config, save_config
 
 console = Console()
 
@@ -241,6 +241,8 @@ def run_upgrade(
     ref: str | None = None,
 ) -> int:
     """Top-level entry; returns a process exit code."""
+    from durin.cli.config_cmd import report_config_refusal
+
     info = detect_install_mode()
     console.print(f"[cyan]durin {info.version}[/cyan] ({info.mode})")
 
@@ -249,7 +251,11 @@ def run_upgrade(
         return 0
 
     if migrate_only:
-        changed = migrate_config_file()
+        try:
+            changed = migrate_config_file()
+        except ConfigNotLoadedError as e:
+            report_config_refusal(e, console)
+            return 1
         if changed:
             console.print("[green]✓[/green] Config migration applied.")
         else:
@@ -280,7 +286,12 @@ def run_upgrade(
         console.print(f"[red]Package update failed (exit {rc}).[/red]")
         return rc
 
-    changed = migrate_config_file()
+    try:
+        changed = migrate_config_file()
+    except ConfigNotLoadedError as e:
+        console.print("[green]✓[/green] Package updated; the config was not migrated.")
+        report_config_refusal(e, console)
+        return 1
     if changed:
         console.print("[green]✓[/green] Config migrated to new schema defaults.")
     console.print("[green]✓[/green] Upgrade complete.")

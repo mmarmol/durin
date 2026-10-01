@@ -26,6 +26,7 @@ from durin.utils.helpers import (
     IncrementalThinkExtractor,
     build_assistant_message,
     estimate_message_tokens,
+    estimate_prompt_tokens,
     estimate_prompt_tokens_chain,
     extract_reasoning,
     find_legal_message_start,
@@ -40,6 +41,9 @@ from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.prompt_templates import render_template
 from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
+    MODEL_ERROR_PLACEHOLDER,
+    NO_ROOM_PLACEHOLDER,
+    OVERFLOW_PLACEHOLDER,
     build_finalization_retry_message,
     build_length_recovery_message,
     build_reasoning_truncation_message,
@@ -51,12 +55,8 @@ from durin.utils.runtime import (
 from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
-_PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
-_PERSISTED_OVERFLOW_PLACEHOLDER = (
-    "[Turn stopped before the next model call: the prompt exceeded the input "
-    "budget even after emergency trimming. The request was not finished; the "
-    "next turn starts from a compacted context.]"
-)
+_PERSISTED_MODEL_ERROR_PLACEHOLDER = MODEL_ERROR_PLACEHOLDER
+_PERSISTED_OVERFLOW_PLACEHOLDER = OVERFLOW_PLACEHOLDER
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
 _MAX_INJECTIONS_PER_TURN = 3
@@ -273,6 +273,18 @@ def _message_text(message: dict[str, Any]) -> str:
     return ""
 
 
+def _request_message_tokens(message: dict[str, Any]) -> int:
+    """Tokens *message* adds to the estimate of a request that sends it.
+
+    The request estimate (``estimate_prompt_tokens``) joins the text of all
+    messages, and then the tool schemas, with a newline, which tiktoken
+    counts as a token of its own unless a neighbouring space absorbs it;
+    the message's own estimate has no such separator. Summing own
+    estimates alone undercounts a request by about one token per message,
+    which on a history of many short messages is more than any margin."""
+    return estimate_message_tokens(message) + 1
+
+
 def _turn_budget_chars() -> int:
     raw = os.getenv("DURIN_TURN_BUDGET_CHARS")
     if raw is None:
@@ -447,6 +459,12 @@ class AgentRunSpec:
     # the turn immune to concurrent swaps. None → fall back to self.provider
     # for backward compatibility.
     provider: LLMProvider | None = None
+    # Set by a caller that compacts the history it handed over and retries
+    # when the run's first request does not fit (the chat loop's turn): that
+    # request leaves the history whole and the run stops on the precheck
+    # overflow, so the caller summarizes what a trim would have dropped.
+    # Later requests trim as usual.
+    caller_compacts_on_overflow: bool = False
 
 
 @dataclass(slots=True)
@@ -469,6 +487,11 @@ class AgentRunResult:
     # made after it from these messages can be sent as the loop would send
     # its next one (AgentRunner.request_view).
     prune_state: Any = None
+    # On a precheck overflow: whether the request would fit with all the
+    # history before the run's own request dropped (True too when that could
+    # not be estimated). False means no compaction can make it fit; None,
+    # that the run did not stop on an overflow.
+    fits_without_history: bool | None = None
 
 
 class AgentRunner:
@@ -722,7 +745,19 @@ class AgentRunner:
                 # first one stamped with the pruned size.
                 prune_state.trusted_from = len(messages)
             view = self._apply_tool_result_budget(spec, view)
-            view = self._snip_history(spec, view, provider)
+            if not (iteration == 0 and spec.caller_compacts_on_overflow):
+                snipped = self._snip_history(spec, view, provider)
+                if snipped is not view:
+                    # The reply to this request is stamped with the size of
+                    # the snipped view, but the next view is built from all
+                    # the messages again: an estimate anchored on that stamp
+                    # would leave out the history dropped here, come out low,
+                    # and let the whole history go out. So no stamp up to that
+                    # reply is trusted, the reply's own included (it lands at
+                    # index len(messages)), and the next estimate counts the
+                    # view as it is sent.
+                    prune_state.trusted_from = max(prune_state.trusted_from, len(messages) + 1)
+                view = snipped
             # Snipping may have created new orphans; clean them up.
             view = self._drop_orphan_tool_results(view)
             return self._backfill_missing_tool_results(view)
@@ -760,6 +795,7 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        fits_without_history: bool | None = None
 
         # Idle-timeout circuit breaker state.
         # Increments on every iteration whose response is an idle/wall-clock
@@ -856,16 +892,25 @@ class AgentRunner:
                         # Genuinely unrecoverable: abort before the LLM call
                         # with a distinct stop_reason and an overflow-specific
                         # placeholder (NOT "model error"). A1 re-bases the
-                        # context for the next turn.
-                        final_content = (
-                            "Error: prompt overflow before LLM call "
-                            f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
-                            "The request was not finished; send it again and the next "
-                            "turn runs on a freshly-compacted context."
-                        )
+                        # context for the next turn. Unless even no history
+                        # would fit: then no compaction can help, and the
+                        # error says what fills the budget instead of asking
+                        # for the request again.
+                        fixed = self._history_free_parts(spec, messages_for_model, provider)
+                        fits_without_history = fixed is None or fixed[0] <= budget_tokens
+                        if fits_without_history:
+                            final_content = (
+                                "Error: prompt overflow before LLM call "
+                                f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
+                                "The request was not finished; send it again and the next "
+                                "turn runs on a freshly-compacted context."
+                            )
+                            self._append_overflow_placeholder(messages)
+                        else:
+                            final_content = self._no_room_message(fixed, budget_tokens)
+                            self._append_overflow_placeholder(messages, NO_ROOM_PLACEHOLDER)
                         stop_reason = "mid_turn_precheck_overflow"
                         error = final_content
-                        self._append_overflow_placeholder(messages)
                         context = AgentHookContext(iteration=iteration, messages=messages)
                         context.final_content = final_content
                         context.error = error
@@ -878,6 +923,7 @@ class AgentRunner:
                                     "session_key": spec.session_key,
                                     "estimated_tokens": estimate_tokens,
                                     "budget_tokens": budget_tokens,
+                                    "fixed_tokens": fixed[0] if fixed is not None else None,
                                 })
                         logger.warning(
                             "Mid-turn precheck overflow on turn {} for {}: "
@@ -905,6 +951,8 @@ class AgentRunner:
                 messages=messages,
             )
             await hook.before_iteration(context)
+            # Measured before the request, which appends the same block.
+            appended_tokens = self._appended_task_state_tokens(spec, messages_for_model)
             _llm_started = time.monotonic()
             with self._bound_call_limits(spec, provider):
                 response = await self._request_model(
@@ -913,6 +961,10 @@ class AgentRunner:
                 )
             total_llm_ms += (time.monotonic() - _llm_started) * 1000.0
             raw_usage = self._usage_dict(response.usage)
+            # Taken from this request alone: a no-tools finalization retry
+            # below adds its own request's count to raw_usage, and a reply
+            # it produces still stands on this request's prompt.
+            stamp_tokens = self._stamp_tokens(raw_usage, appended_tokens)
             context.response = response
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
@@ -1042,7 +1094,7 @@ class AgentRunner:
                     tool_calls=[tc.to_openai_tool_call() for tc in response.tool_calls],
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=raw_usage.get("prompt_tokens"),
+                    prompt_tokens=stamp_tokens,
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in response.tool_calls)
@@ -1339,14 +1391,26 @@ class AgentRunner:
                     clean,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=raw_usage.get("prompt_tokens"),
+                    prompt_tokens=stamp_tokens,
                 )
 
             # Check for mid-turn injections BEFORE signaling stream end.
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
+            # Without a reply to put first (an error, an empty reply), a
+            # queued message would merge into the user message before it: the
+            # turn's own message when the first call failed, which the caller
+            # does not save. What a turn without a queued message keeps for
+            # the missing reply goes first instead.
+            ahead = assistant_message
+            if ahead is None and messages and messages[-1].get("role") == "user":
+                ahead = build_assistant_message(
+                    _PERSISTED_MODEL_ERROR_PLACEHOLDER
+                    if response.finish_reason == "error"
+                    else EMPTY_FINAL_RESPONSE_MESSAGE
+                )
             should_continue, injection_cycles = await self._try_drain_injections(
-                spec, messages, assistant_message, injection_cycles,
+                spec, messages, ahead, injection_cycles,
                 phase="after final response",
                 iteration=iteration,
             )
@@ -1399,7 +1463,7 @@ class AgentRunner:
                 clean,
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
-                prompt_tokens=raw_usage.get("prompt_tokens"),
+                prompt_tokens=stamp_tokens,
             ))
             await self._emit_checkpoint(
                 spec,
@@ -1453,6 +1517,7 @@ class AgentRunner:
             had_injections=had_injections,
             llm_ms=total_llm_ms,
             prune_state=prune_state,
+            fits_without_history=fits_without_history,
         )
 
     @staticmethod
@@ -1517,12 +1582,7 @@ class AgentRunner:
         if budget is None or budget <= 0:
             return None
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                _provider,
-                spec.model,
-                messages,
-                self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, messages, _provider)
         except Exception:
             # Token estimation is best-effort; never block a turn on the
             # estimator failing. Let the provider's own 400 handle it.
@@ -1633,12 +1693,7 @@ class AgentRunner:
         """Estimate the prompt size for ``messages`` (best-effort, returns
         ``None`` on estimator failure)."""
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                provider,
-                spec.model,
-                messages,
-                self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, messages, provider)
         except Exception:
             return None
         return estimate
@@ -1669,6 +1724,78 @@ class AgentRunner:
             if mode.is_tool_allowed(ToolRegistry._schema_name(d))
         ]
 
+    def _request_estimate(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None,
+    ) -> int:
+        """Tokens of the request a run sends on *messages*: them, the task
+        state it appends when that changed during the run, and the tool
+        schemas."""
+        added = [m for m in (self._task_state_message(spec, messages),) if m is not None]
+        estimate, _ = estimate_prompt_tokens_chain(
+            provider, spec.model, messages + added, self._active_tool_definitions(spec),
+        )
+        return estimate
+
+    def _task_state_message(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """The task-state message a request on *messages* adds, or None when
+        the conversation already shows the current task state (or there is
+        none)."""
+        if spec.task_state_provider is None:
+            return None
+        try:
+            lines = [str(line) for line in (spec.task_state_provider() or [])]
+        except Exception:
+            logger.exception("task_state_provider failed; sending the request without it")
+            return None
+        if not lines:
+            return None
+        block = "\n".join(lines)
+        if any(block in _message_text(m) for m in messages):
+            return None
+        return {
+            "role": "user",
+            "content": (
+                "[Task state, updated during this turn; it supersedes the "
+                "one shown earlier]\n" + block
+            ),
+        }
+
+    def _appended_task_state_tokens(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> int:
+        """Tokens of the task state a request on *messages* appends (0 when it
+        appends none)."""
+        message = self._task_state_message(spec, messages)
+        return estimate_message_tokens(message) if message is not None else 0
+
+    @staticmethod
+    def _stamp_tokens(raw_usage: dict[str, int], appended_tokens: int) -> int | None:
+        """The usage stamp a reply records: the provider's count of the
+        request that produced it, without the task state that request
+        appended.
+
+        A stamp stands for the system prompt, the tool schemas and every
+        message before the reply, and the next request's estimate is the
+        stamp plus what came after it. The appended block is in neither: the
+        conversation never keeps it, and the next request appends the task
+        state as it is then. Left in the stamp, it was counted a second time
+        on every request after the task state first changed. None (no
+        stamp) when the provider reported no count, or one smaller than the
+        block itself."""
+        prompt_tokens = raw_usage.get("prompt_tokens")
+        if not prompt_tokens or prompt_tokens <= appended_tokens:
+            return None
+        return prompt_tokens - appended_tokens
+
     def _with_task_state(
         self,
         spec: AgentRunSpec,
@@ -1680,26 +1807,11 @@ class AgentRunner:
         Appended last, so the cached prompt prefix is untouched; returned as
         a new list, so the block never enters the saved conversation.
         """
-        if spec.task_state_provider is None:
-            return messages
-        try:
-            lines = [str(line) for line in (spec.task_state_provider() or [])]
-        except Exception:
-            logger.exception("task_state_provider failed; sending the request without it")
-            return messages
-        if not lines:
-            return messages
-        block = "\n".join(lines)
-        if any(block in _message_text(m) for m in messages):
+        message = self._task_state_message(spec, messages)
+        if message is None:
             return messages
         updated = list(messages)
-        self._append_injected_messages(updated, [{
-            "role": "user",
-            "content": (
-                "[Task state, updated during this turn; it supersedes the "
-                "one shown earlier]\n" + block
-            ),
-        }])
+        self._append_injected_messages(updated, [message])
         return updated
 
     @staticmethod
@@ -2472,7 +2584,9 @@ class AgentRunner:
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
     @staticmethod
-    def _append_overflow_placeholder(messages: list[dict[str, Any]]) -> None:
+    def _append_overflow_placeholder(
+        messages: list[dict[str, Any]], placeholder: str = _PERSISTED_OVERFLOW_PLACEHOLDER,
+    ) -> None:
         """Persist an overflow-specific assistant placeholder.
 
         Distinct from ``_append_model_error_placeholder`` so the transcript
@@ -2481,7 +2595,7 @@ class AgentRunner:
         """
         if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
             return
-        messages.append(build_assistant_message(_PERSISTED_OVERFLOW_PLACEHOLDER))
+        messages.append(build_assistant_message(placeholder))
 
     def _normalize_tool_result(
         self,
@@ -2867,9 +2981,7 @@ class AgentRunner:
         if len(prunable) < 2:
             return view
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                _provider, spec.model, view, self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, view, _provider)
         except Exception:
             return view
         if estimate <= budget * _MICROCOMPACT_PRESSURE_RATIO:
@@ -3064,6 +3176,18 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         provider: LLMProvider | None = None,
     ) -> list[dict[str, Any]]:
+        """*messages* with the oldest history dropped until the request fits
+        the input budget.
+
+        The history is what comes before the run's own request: the last user
+        message of the prompt the run started from. That request and
+        everything after it (the run's replies, tool calls and results, the
+        messages it took in) are sent whatever this does, as are the system
+        prompt, the task state a request appends and the tool schemas; the
+        history gets what they leave, newest first, starting at a user
+        message on a legal tool-call boundary. When even no history leaves
+        the request over budget, the precheck after this decides. A run whose
+        prompt holds no user message keeps the newest messages that fit."""
         _provider = provider if provider is not None else self.provider
         if not messages or not spec.context_window_tokens:
             return messages
@@ -3072,26 +3196,46 @@ class AgentRunner:
         if budget is None or budget <= 0:
             return messages
 
+        tools = self._active_tool_definitions(spec)
+        # The task state a request on these messages appends, when it changed
+        # during the run: sent with them, so it has to fit beside them.
+        added = [m for m in (self._task_state_message(spec, messages),) if m is not None]
         estimate, _ = estimate_prompt_tokens_chain(
             _provider,
             spec.model,
-            messages,
-            self._active_tool_definitions(spec),
+            messages + added,
+            tools,
         )
         if estimate <= budget:
             return messages
 
         system_messages = [dict(msg) for msg in messages if msg.get("role") == "system"]
-        non_system = [dict(msg) for msg in messages if msg.get("role") != "system"]
+        # A usage stamp measured a prompt that still held the messages dropped
+        # below, so none of them describes what is kept.
+        non_system = [
+            {key: value for key, value in msg.items() if key != "usage_prompt_tokens"}
+            for msg in messages if msg.get("role") != "system"
+        ]
         if not non_system:
             return messages
 
-        system_tokens = sum(estimate_message_tokens(msg) for msg in system_messages)
-        remaining_budget = max(128, budget - system_tokens)
+        fixed_tokens = sum(_request_message_tokens(msg) for msg in system_messages + added)
+        if tools:
+            fixed_tokens += estimate_prompt_tokens([], tools)
+        request_at = self._run_request_index(spec, non_system)
+        if request_at is not None:
+            turn = non_system[request_at:]
+            room = budget - fixed_tokens - sum(_request_message_tokens(msg) for msg in turn)
+            kept = self._newest_history_within(non_system[:request_at], room) + turn
+            if len(kept) == len(non_system):
+                return messages
+            return system_messages + kept
+
+        remaining_budget = max(128, budget - fixed_tokens)
         kept: list[dict[str, Any]] = []
         kept_tokens = 0
         for message in reversed(non_system):
-            msg_tokens = estimate_message_tokens(message)
+            msg_tokens = _request_message_tokens(message)
             if kept and kept_tokens + msg_tokens > remaining_budget:
                 break
             kept.append(message)
@@ -3121,7 +3265,95 @@ class AgentRunner:
             start = find_legal_message_start(kept)
             if start:
                 kept = kept[start:]
+        if len(kept) == len(non_system):
+            # Nothing dropped after all: the stamps still describe these
+            # messages, and the count that found them over is kept.
+            return messages
         return system_messages + kept
+
+    def _history_free_parts(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None,
+    ) -> tuple[int, int, int, int] | None:
+        """What a request on *messages* needs with all the history before the
+        run's own request dropped, the part no compaction can shrink, as
+        ``(total, system prompt, tool definitions, the run's own messages
+        with the task state they append)``. None when it cannot be
+        estimated."""
+        try:
+            system = [msg for msg in messages if msg.get("role") == "system"]
+            non_system = [
+                {key: value for key, value in msg.items() if key != "usage_prompt_tokens"}
+                for msg in messages if msg.get("role") != "system"
+            ]
+            request_at = self._run_request_index(spec, non_system)
+            turn = non_system[request_at:] if request_at is not None else non_system
+            tools = self._active_tool_definitions(spec)
+            total = self._request_estimate(spec, system + turn, provider)
+            system_tokens = estimate_prompt_tokens(system)
+            tool_tokens = estimate_prompt_tokens([], tools) if tools else 0
+        except Exception:
+            logger.exception("History-free estimate failed for {}", spec.session_key or "default")
+            return None
+        return total, system_tokens, tool_tokens, max(0, total - system_tokens - tool_tokens)
+
+    @staticmethod
+    def _no_room_message(fixed: tuple[int, int, int, int], budget: int) -> str:
+        """The error of a request that cannot fit its budget whatever is
+        compacted: what it needs, and what that is made of."""
+        total, system, tools, turn = fixed
+        return (
+            "Error: prompt overflow before LLM call: even without the conversation "
+            f"history this request needs {total:,} tokens and the input budget is "
+            f"{budget:,}, so compacting the conversation cannot make it fit, and the "
+            f"request was not finished. The system prompt takes {system:,} tokens, "
+            f"the tool definitions {tools:,} and this turn's messages {turn:,}. Make "
+            "one of them smaller, or use a model with a larger context window."
+        )
+
+    @staticmethod
+    def _run_request_index(
+        spec: AgentRunSpec, non_system: list[dict[str, Any]],
+    ) -> int | None:
+        """Where the run's own request sits in *non_system*: the last user
+        message of the prompt it started from, found by its rank among user
+        messages, since the governance before the trim adds and drops tool
+        results only. None when that prompt holds no user message."""
+        rank = sum(1 for msg in spec.initial_messages if msg.get("role") == "user")
+        if not rank:
+            return None
+        seen = 0
+        for idx, msg in enumerate(non_system):
+            if msg.get("role") == "user":
+                seen += 1
+                if seen == rank:
+                    return idx
+        return None
+
+    @staticmethod
+    def _newest_history_within(
+        history: list[dict[str, Any]], room: int,
+    ) -> list[dict[str, Any]]:
+        """The newest messages of *history* that fit in *room* tokens,
+        starting at a user message on a legal tool-call boundary (none when
+        no user message fits)."""
+        kept: list[dict[str, Any]] = []
+        used = 0
+        for message in reversed(history):
+            tokens = _request_message_tokens(message)
+            if used + tokens > room:
+                break
+            kept.append(message)
+            used += tokens
+        kept.reverse()
+        first_user = next((i for i, msg in enumerate(kept) if msg.get("role") == "user"), None)
+        if first_user is None:
+            return []
+        kept = kept[first_user:]
+        start = find_legal_message_start(kept)
+        return kept[start:] if start else kept
 
     def _partition_tool_batches(
         self,

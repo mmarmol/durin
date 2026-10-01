@@ -128,6 +128,8 @@ def key_status() -> OpenRouterKeyStatus:
 def disconnect() -> bool:
     """Forget the OpenRouter key: clear the config field and, when it points
     at durin's own secret, delete the secret too."""
+    from durin.config.loader import ConfigNotLoadedError
+
     removed = False
     try:
         from durin.config.loader import load_config, save_config
@@ -144,6 +146,10 @@ def disconnect() -> bool:
             store = SecretStore().load()
             if store.remove(_SECRET_NAME):
                 get_secret_store(reload=True)
+    except ConfigNotLoadedError:
+        # The person disconnecting is told which config files to fix; the
+        # key stays until they are.
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not disconnect openrouter: {}", exc)
     return removed
@@ -225,9 +231,13 @@ def start_loopback_login(*, max_wait_s: float = 180.0) -> str:
         url = _build_authorize_url(callback_url, challenge)
 
         def _run() -> None:
+            from durin.config.loader import ConfigNotLoadedError
+
             try:
                 if result.done.wait(timeout=max_wait_s) and result.code:
                     store_key(exchange_code(result.code, verifier))
+            except ConfigNotLoadedError as exc:
+                logger.error("openrouter login could not save its key: {}", exc)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("openrouter loopback login ended: {}", exc)
             finally:
@@ -279,11 +289,15 @@ async def start_gateway_login(base: str, *, max_wait_s: float = 180.0) -> str:
         url = _build_authorize_url(callback_url, challenge)
 
         async def _run() -> None:
+            from durin.config.loader import ConfigNotLoadedError
+
             try:
                 code, _state = await asyncio.wait_for(callback.wait(), timeout=max_wait_s)
                 if code:
                     key = await asyncio.to_thread(exchange_code, code, verifier)
                     store_key(key)
+            except ConfigNotLoadedError as exc:
+                logger.error("openrouter login could not save its key: {}", exc)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("openrouter gateway login ended: {}", exc)
             finally:

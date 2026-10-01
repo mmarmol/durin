@@ -163,7 +163,24 @@ def test_check_config_parses_rejects_invalid_json(fake_home: Path) -> None:
     with patch("durin.cli.doctor.get_config_path", return_value=cfg):
         r = check_config_parses()
     assert r.status == "fail"
-    assert "JSON parse error" in r.message
+    assert f"{cfg}: Expecting property name" in r.message
+
+
+def test_check_config_parses_names_each_split_file_that_did_not_load(fake_home: Path) -> None:
+    """A split config whose files all parse but one setting fails validation
+    loaded as defaults, and the check passed: it only parsed config.json,
+    the split layout's marker. It names each file that did not load."""
+    cfg = fake_home / ".durin" / "config.json"
+    split = cfg.with_suffix(".json.d")
+    split.mkdir(parents=True)
+    cfg.write_text('{"_layout": "split"}', encoding="utf-8")
+    (split / "agents.json").write_text('{"defaults": {"temperature": "hot"}}', encoding="utf-8")
+    (split / "tools.json").write_text('{"restrictToWorkspace": true,}', encoding="utf-8")
+    with patch("durin.cli.doctor.get_config_path", return_value=cfg):
+        r = check_config_parses()
+    assert r.status == "fail"
+    assert f"{split / 'agents.json'}: agents.defaults.temperature: Input should be a valid number" in r.message
+    assert f"{split / 'tools.json'}: Expecting property name" in r.message
 
 
 def test_check_config_parses_accepts_valid(valid_config: Path) -> None:
@@ -358,6 +375,26 @@ def test_install_missing_extras_unknown_mode_returns_one() -> None:
 def test_check_cache_size_no_cache(fake_home: Path) -> None:
     r = check_cache_size()
     assert r.status == "ok"
+
+
+def test_a_big_cache_names_its_folders_instead_of_an_uninstall(fake_home: Path) -> None:
+    """Over 10 GB the fix read "`durin uninstall --keep-config
+    --keep-workspace --yes` to drop caches": that removes the sessions, the
+    history and everything else in the durin home, with no question asked.
+    It names the cache's folders now, the biggest first."""
+    cache = fake_home / ".cache" / "durin"
+    (cache / "models").mkdir(parents=True)
+    with open(cache / "models" / "weights.bin", "wb") as f:
+        f.truncate(11 * 1024 ** 3)  # sparse: the size without the disk
+    (cache / "telemetry").mkdir()
+    (cache / "telemetry" / "cli_2026-10-01.jsonl").write_text("{}\n", encoding="utf-8")
+
+    r = check_cache_size()
+
+    assert r.status == "warn"
+    assert "uninstall" not in r.fix
+    assert f"{cache}" in r.fix
+    assert r.fix.index("models/ (11.0 GB)") < r.fix.index("telemetry/")
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +655,22 @@ def test_embedding_check_reports_a_failed_install_with_the_manual_command(
     assert "simulated install failure" in r.message
     assert "durin doctor --install-missing -y" in (r.fix or "")
     assert install_hint(["memory"]) in (r.fix or "")
+
+
+def test_embedding_check_installs_nothing_while_the_config_does_not_load(
+    valid_config: Path, memory_extra_missing
+) -> None:
+    """A config file that does not load runs on defaults for what failed, and
+    the defaults turn vector memory and installs on: the user's own
+    install.autoInstallExtras, off in the broken file, could not be read.
+    Doctor installs nothing until the config loads cleanly, and says why."""
+    valid_config.write_text('{"install": {"autoInstallExtras": false}, "memory": {', encoding="utf-8")
+
+    r = doctor.check_embedding_model()
+
+    assert memory_extra_missing.calls == []
+    assert r.status == "warn"
+    assert "does not load cleanly" in r.message
 
 
 def test_embedding_check_with_memory_off_installs_nothing(

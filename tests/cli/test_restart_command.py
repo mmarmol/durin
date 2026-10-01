@@ -457,6 +457,29 @@ class TestRestartCommand:
         assert response.metadata == {"render_as": "text"}
 
     @pytest.mark.asyncio
+    async def test_status_measures_a_large_window_against_the_capped_trigger(self):
+        """A 1M window at the default ratio compacts at the 256K cap, not at
+        500K, so 128K of context is half the way there, not a quarter."""
+        loop, _bus = _make_loop()
+        loop.context_window_tokens = 1_000_000
+        loop.consolidator.context_window_tokens = 1_000_000
+        session = MagicMock()
+        session.get_history.return_value = [{"role": "user"}]
+        loop.sessions.get_or_create.return_value = session
+        loop._last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        loop.consolidator.estimate_session_prompt_tokens = MagicMock(
+            return_value=(128_000, "tiktoken")
+        )
+        loop.subagents.get_running_count_by_session.return_value = 0
+
+        response = await loop._process_message(
+            InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/status")
+        )
+
+        assert response is not None
+        assert "Context: 128k/1000k (50% to compaction)" in response.content
+
+    @pytest.mark.asyncio
     async def test_status_counts_running_dispatch_and_subagent_tasks(self):
         loop, _bus = _make_loop()
         session = MagicMock()

@@ -76,6 +76,10 @@ class TestMidTurnCommandDispatchedDirectly:
         ))
         loop.sessions.save = MagicMock()
         loop.sessions.invalidate = MagicMock()
+        # /new leaves out what the nightly pass summarized: nothing here. A
+        # mock would answer with a truthy mock, and /new would schedule a
+        # record of an empty conversation that nothing awaits.
+        loop.consolidator._unsummarized = lambda _session, chunk: chunk
         loop._schedule_background = MagicMock()
         loop._cancel_active_tasks = AsyncMock(return_value=0)
         return loop

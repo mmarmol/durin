@@ -364,7 +364,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     ctx_est = 0
     with suppress(Exception):
-        ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
+        ctx_est = loop.session_prompt_estimate(
+            session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        )
     if ctx_est <= 0:
         ctx_est = loop._last_usage.get("prompt_tokens", 0)
 
@@ -401,8 +403,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             max_completion_tokens=getattr(
                 getattr(loop.provider, "generation", None), "max_tokens", 8192
             ),
-            compaction_trigger_tokens=getattr(
-                loop.consolidator, "_preemptive_trigger_tokens", 0
+            # The session's own: a persona's model compacts by its own window.
+            compaction_trigger_tokens=loop.session_compaction_trigger(
+                session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             ),
             composition_payload=composition_payload,
         ),
@@ -535,19 +538,17 @@ async def _archive_closed_session(
     )
 
     log = logging.getLogger(__name__)
-    summary: str | None = None
+    summaries: list[str] = []
     tags: dict[str, list[str]] = {"entities": [], "topics": []}
     if snapshot:
         try:
-            result = await loop.consolidator.archive(snapshot)
-            first = result[0] if isinstance(result, tuple) else None
-            if isinstance(first, str) and first.strip() and first.strip() != "(nothing)":
-                summary = first.strip()
-            if isinstance(result, tuple) and isinstance(result[1], dict):
-                tags = result[1]
+            # In as many summarizing calls as the conversation needs, so a
+            # long one is filed whole rather than cut to what one call takes.
+            found, tags = await loop.consolidator.archive_pieces(snapshot)
+            summaries = [s.strip() for s in found if s.strip() and s.strip() != "(nothing)"]
         except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
             log.exception("/new archive failed for %s", key)
-    parts = [p for p in (prior_summary, summary) if p]
+    parts = [p for p in (prior_summary, *summaries) if p]
     if not parts:
         return
     when = last_active if isinstance(last_active, datetime) else datetime.now()
@@ -580,7 +581,10 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     )
 
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
-    snapshot = session.messages[session.last_consolidated:]
+    # The head the nightly pass already summarized stays out of the record's
+    # archive: its block is in the key's summary, which rides into the record.
+    # Resolved before clear(), against the messages the cursor names.
+    snapshot = loop.consolidator._unsummarized(session, session.messages[session.last_consolidated:])
     last_active = session.updated_at            # before clear() stamps "now"
     # Read before the delete below: the record is filed in the background,
     # by which time the key's summary file is gone. One parse for both the
@@ -597,6 +601,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
+    loop.consolidator.forget_session(session.key)
     # A fresh session starts without archived context: the key's summary file
     # is what the next turn would replay, so it goes; its text rides into the
     # closed-conversation record instead.
@@ -827,8 +832,6 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
     """Set reasoning effort level for the active model preset."""
-    from durin.config.schema import ModelPresetConfig
-
     loop = ctx.loop
     args = ctx.args.strip().lower()
     metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
@@ -854,14 +857,10 @@ async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
 
     effort_val = args or None
     variant_name = f"{active_name}:{effort_val}" if effort_val else active_name
-    loop.model_presets[variant_name] = ModelPresetConfig(
-        model=base_preset.model,
-        provider=base_preset.provider,
-        max_tokens=base_preset.max_tokens,
-        context_window_tokens=base_preset.context_window_tokens,
-        temperature=base_preset.temperature,
-        reasoning_effort=effort_val,
-        preemptive_compact_ratio=base_preset.preemptive_compact_ratio,
+    # The same preset with another effort: every other setting is kept,
+    # including any a later preset field adds.
+    loop.model_presets[variant_name] = base_preset.model_copy(
+        update={"reasoning_effort": effort_val},
     )
     loop.set_model_preset(variant_name)
 
@@ -1458,9 +1457,14 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
             content="Nothing to compact — session is already consolidated.",
             metadata=metadata_text,
         )
+    # The head the nightly pass already summarized stays out: summarized
+    # again, it would be a second block of the same turns in the bounded store.
+    pending = loop.consolidator._unsummarized(session, chunk)
 
     try:
-        summary, tags = await loop.consolidator.archive(chunk)
+        # In as many summarizing calls as the conversation needs, so a long
+        # one is summarized whole rather than cut to what one call takes.
+        summaries, tags = await loop.consolidator.archive_pieces(pending)
     except Exception as exc:  # noqa: BLE001
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -1469,19 +1473,25 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
         )
 
     session.last_consolidated = len(session.messages)
-    if summary:
+    loop.consolidator.forget_session(session.key)
+    if summaries:
         loop.consolidator._merge_session_tags(session, tags)
-        loop.consolidator._persist_last_summary(session, [summary], tags)
+        loop.consolidator._persist_last_summary(session, summaries, tags)
     loop.sessions.save(session)
 
-    if summary:
+    if summaries:
         content = (
             f"Compacted {len(chunk)} messages into summary "
             f"(total: {len(session.messages)})."
         )
+    elif not pending:
+        content = (
+            f"Compacted {len(chunk)} messages: the nightly summary already covers them "
+            f"(total: {len(session.messages)})."
+        )
     else:
         content = (
-            f"Consolidation LLM degraded — raw-archived {len(chunk)} messages "
+            f"Consolidation LLM degraded — raw-archived {len(pending)} messages "
             "as a breadcrumb. Cursor still advanced."
         )
     return OutboundMessage(

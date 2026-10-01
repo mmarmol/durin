@@ -302,6 +302,7 @@ async def test_unrecoverable_overflow_uses_overflow_placeholder(monkeypatch):
         AgentRunner,
         AgentRunSpec,
     )
+    from durin.utils.runtime import NO_ROOM_PLACEHOLDER
 
     telemetry = _RecordingTelemetry()
     _bind_telemetry(monkeypatch, telemetry)
@@ -331,7 +332,9 @@ async def test_unrecoverable_overflow_uses_overflow_placeholder(monkeypatch):
     assert _PERSISTED_OVERFLOW_PLACEHOLDER != _PERSISTED_MODEL_ERROR_PLACEHOLDER
     last = result.messages[-1]
     assert last.get("role") == "assistant"
-    assert last.get("content") == _PERSISTED_OVERFLOW_PLACEHOLDER
+    # The estimator counts every request as 500,000 tokens, so the request
+    # is over the budget even with no history: the overflow nothing can cure.
+    assert last.get("content") == NO_ROOM_PLACEHOLDER
 
 
 # --------------------------------------------------------------------------

@@ -317,7 +317,7 @@ touching anything:
 durin uninstall                 # dry-run by default: lists what would be deleted
 durin uninstall --yes           # delete user data (~/.durin, ~/.cache/durin)
 durin uninstall --purge --yes   # also `pip uninstall durin-agent` afterwards
-durin uninstall --keep-config   # remove caches/workspace, preserve config.json
+durin uninstall --keep-config   # remove the rest, keep the config and the credentials
 ```
 
 Flags:
@@ -326,43 +326,59 @@ Flags:
 - `--purge` — additionally run `pip uninstall durin-agent` (the PyPI
   distribution name). Self-uninstalls in a subprocess so the running command
   finishes cleanly first.
-- `--keep-config` — preserve `~/.durin/config.json` and `pairing.json`;
-  everything else still goes.
-- `--keep-cache` — preserve `~/.cache/durin/`.
+- `--keep-config` — preserve the config (`~/.durin/config.json`, its
+  `config.json.d/` sections and their backups), `pairing.json`, and the
+  credentials the config's `${secret:…}` references and sign-ins resolve
+  against (`secrets.json`, `api_tokens.json`, `oauth/`); everything else
+  still goes.
+- `--keep-cache` — preserve the caches: the install's telemetry, the STT and
+  OCR model caches under `~/.durin/models/` and, for the default install, the
+  rest of `~/.cache/durin/` it would remove.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
-The command prints the exact paths and byte counts before prompting, so
-you can sanity-check before committing.
+The command prints every path it will remove, grouped, with its size, before
+it asks; with `--yes` it prints the same list before it starts. A symlink is
+removed as the link itself — the list shows where it points — and what it
+points at is never touched. A path it could not remove is listed at the end,
+and the command exits 1.
+
+It refuses outright, removing nothing, when the durin home (`DURIN_HOME`) is
+your home folder, the filesystem root, or a folder that contains your home
+folder. It also refuses a folder that is not recognizably durin's — one that
+holds neither `config.json.d/` nor a `config.json` that is durin's
+split-layout marker, which every durin release writes — since the names
+durin uses there (`config.json`, `logs/`, `sessions/`…) may be your own. If
+such a folder really is a durin home, remove it by hand.
 
 ### What lives outside the package
+
+`~/.durin/` below is the durin home: `$DURIN_HOME` when that is set.
 
 | Path | Removed by default? | Flag to keep |
 |---|---|---|
 | `~/.durin/config.json` | yes | `--keep-config` |
-| `~/.durin/config.json.bak` | yes | `--keep-config` |
+| `~/.durin/config.json.d/` (the config's sections) | yes | `--keep-config` |
+| `~/.durin/config.json.bak`, `config.json.bak.<stamp>`, `config.json.d.bak.<stamp>` (copies taken before a rewrite) | yes | `--keep-config` |
+| `~/.durin/config.json.legacy` (the config from before the split layout) | yes | `--keep-config` |
 | `~/.durin/pairing.json` | yes | `--keep-config` |
+| `~/.durin/secrets.json`, `api_tokens.json`, `oauth/` (the credentials) | yes | `--keep-config` |
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
-| `~/.durin/sessions/` | yes | — |
-| `~/.durin/history/` | yes | — |
-| `~/.durin/cron/` | yes | — |
-| `~/.durin/media/` | yes | — |
-| `~/.durin/bridge/` | yes | — |
-| `~/.durin/webui/` | yes | — |
-| `~/.durin/logs/` | yes | — |
-| `~/.cache/durin/telemetry/` | yes | `--keep-cache` |
-| `$DURIN_HOME/telemetry/` (instances selected with `DURIN_HOME`) | yes | `--keep-cache` |
-| `~/.cache/durin/models/` | yes | `--keep-cache` |
-| `~/.cache/durin/archive/` | yes | `--keep-cache` |
-| `~/.durin/models/stt/` | **no** (STT model cache, not enumerated) | — |
-| `~/.durin/models/ocr/` | **no** (OCR language-model cache, not enumerated) | — |
+| `~/.cache/durin/telemetry/` (the default install's telemetry) | by the default install only | `--keep-cache` |
+| `$DURIN_HOME/telemetry/` (an instance's telemetry) | yes | `--keep-cache` |
+| `~/.durin/models/` (the STT and OCR model caches) | yes | `--keep-cache` |
+| `~/.cache/durin/models/` (model files shared by every install on the machine) | by the default install only | `--keep-cache` |
+| `~/.cache/durin/archive/` (the default install's archive) | by the default install only | `--keep-cache` |
+| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, …), as long as the folder is recognizably a durin home (see above) | yes | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed
 automatically — many users keep their workspace under a project repo and
 don't want durin to touch it. Pass `--workspace <path>` to opt-in.
-The model caches under `~/.durin/models/` (STT engines, OCR recognition
-languages) are also left in place and can be deleted manually if you want to
-reclaim disk space.
+
+An instance selected with `DURIN_HOME` removes its own home and its own
+telemetry, and never touches `~/.cache/durin/`: that belongs to the default
+install, and the model files there are shared by every install on the
+machine. Its plan lists what it leaves there, and why.
 
 ---
 
@@ -390,7 +406,8 @@ installs it and says so in the report ("installed the [memory] extra; restart
 the gateway to activate it"), or reports why it could not, with the command to
 run by hand. With `install.auto_install_extras` set to `false` it installs
 nothing and reports the extra as missing, with the fix: `durin doctor
---install-missing -y`.
+--install-missing -y`. Nor does it install while the config does not load
+cleanly: what failed runs on defaults, so your own setting could not be read.
 
 The complementary snapshot is `durin status` — "what do I have and is it
 running?" with no judgement. It probes the live gateway for version, uptime,

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -20,6 +20,16 @@ if TYPE_CHECKING:
     from durin.agent.tools.web import WebToolsConfig
 
 logger = logging.getLogger(__name__)
+
+# The smallest absolute compaction cap. The system prompt, tool schemas and
+# summary a prompt always carries run to tens of thousands of tokens; a cap
+# at or under that part makes every turn compact, and each compaction can
+# only archive the one turn before it.
+PREEMPTIVE_COMPACT_MIN_TOKENS = 64_000
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 class Base(BaseModel):
@@ -954,6 +964,36 @@ class ModelPresetConfig(Base):
         serialization_alias="preemptiveCompactRatio",
         description="Fraction of context_window_tokens above which compaction fires before the next LLM call instead of waiting for a context-overflow 400; None inherits agents.defaults.preemptive_compact_ratio",
     )
+    # Three states, since null already means "inherit": null takes the
+    # agents.defaults cap, 0 is no cap for this preset, any other value is
+    # this preset's own (at least PREEMPTIVE_COMPACT_MIN_TOKENS).
+    preemptive_compact_max_tokens: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
+        serialization_alias="preemptiveCompactMaxTokens",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires for this preset, whatever the ratio; None inherits agents.defaults.preemptive_compact_max_tokens, 0 means no cap for this preset, otherwise at least 64000",
+    )
+
+    @field_validator("preemptive_compact_max_tokens", mode="before")
+    @classmethod
+    def _negative_cap_is_no_cap(cls, value: Any) -> Any:
+        if _is_number(value) and value < 0:
+            logger.warning(
+                "config: a preset's preemptive_compact_max_tokens is %s; reading it as 0, no cap for the preset",
+                value,
+            )
+            return 0
+        return value
+
+    @field_validator("preemptive_compact_max_tokens")
+    @classmethod
+    def _cap_is_off_or_above_the_minimum(cls, value: int | None) -> int | None:
+        if value is not None and 0 < value < PREEMPTIVE_COMPACT_MIN_TOKENS:
+            raise ValueError(
+                f"must be 0 (no cap for this preset), null (the agents.defaults cap) "
+                f"or at least {PREEMPTIVE_COMPACT_MIN_TOKENS}"
+            )
+        return value
 
     def to_generation_settings(self) -> Any:
         from durin.providers.base import GenerationSettings
@@ -1035,7 +1075,7 @@ class AgentDefaults(Base):
     provider: str = Field(default="auto", description='Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection from the model name')
     max_tokens: int = Field(default=8192, ge=1, description="Max output tokens per turn")
     context_window_tokens: int = Field(default=65_536, ge=1, description="Context window size hint in tokens")
-    context_block_limit: int | None = Field(default=None, description="Hard limit on context blocks; overrides the token budget when set")
+    context_block_limit: int | None = Field(default=None, description="Hard limit, in tokens, on what the chat and its subagents may send: when set it replaces the input budget their model's window gives them, and chat compaction and the replayed history stay under it")
     temperature: float = Field(default=0.4, description="Generation temperature")
     fallback_models: list[FallbackCandidate] = Field(default_factory=list, description="Ordered list of preset names or inline model specs to try on provider failure")
     max_tool_iterations: int = Field(default=200, description="Cap on tool-call iterations per turn")
@@ -1079,7 +1119,7 @@ class AgentDefaults(Base):
         le=0.95,
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
-        description="Consolidation target ratio: fraction of the context budget retained after compression (0.5 = 50%)",
+        description="How far a compaction reduces the prompt, as a fraction of the compaction trigger (0.5 = down to half the trigger)",
     )
     preemptive_compact_ratio: float = Field(
         default=0.5,
@@ -1089,6 +1129,30 @@ class AgentDefaults(Base):
         serialization_alias="preemptiveCompactRatio",
         description="Default fraction of the context window that triggers pre-emptive compaction when the active preset doesn't override it",
     )
+    # A ratio alone stops bounding cost on the largest windows: 0.5 of a 1M
+    # window fires only at 500K, so every long turn would ship up to half a
+    # million tokens. The cap bounds the trigger in tokens instead; a window
+    # whose ratio trigger is already lower never reaches it.
+    preemptive_compact_max_tokens: int | None = Field(
+        default=256_000,
+        ge=PREEMPTIVE_COMPACT_MIN_TOKENS,
+        validation_alias=AliasChoices("preemptiveCompactMaxTokens", "preemptive_compact_max_tokens"),
+        serialization_alias="preemptiveCompactMaxTokens",
+        description="Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger when the active preset doesn't override it; at least 64000; null or 0 = no cap (the ratio alone)",
+    )
+
+    @field_validator("preemptive_compact_max_tokens", mode="before")
+    @classmethod
+    def _zero_cap_is_no_cap(cls, value: Any) -> Any:
+        # 0 is the usual spelling of "no cap"; null is this key's own.
+        if _is_number(value) and value <= 0:
+            if value < 0:
+                logger.warning(
+                    "config: agents.defaults.preemptive_compact_max_tokens is %s; reading it as null, no cap",
+                    value,
+                )
+            return None
+        return value
     decision_log_enabled: bool = Field(default=True, description="Record key decisions/findings in a task-state anchor that survives compaction")
     compaction_learnings_enabled: bool = Field(default=True, description="Distil durable user learnings (preferences, corrections) at compaction time")
     decision_log_max_entries: int = Field(default=10, ge=1, le=100, description="Cap on decision-log entries (the log is re-injected every turn)")
@@ -1876,6 +1940,32 @@ class Config(BaseSettings):
         provider = self.routed_provider(d.provider, d.model)
         entry, caps = self._resolve_model_params(provider, d.model)
         ctx, mt, _known = self._model_limits(provider, d.model, entry, caps)
+        return self._default_preset(entry, context_window_tokens=ctx, max_tokens=mt)
+
+    def configured_default_preset(self) -> ModelPresetConfig:
+        """The implicit `default` preset as the configuration states it: as
+        ``resolve_default_preset`` builds it, but with the window and output
+        limit the configuration sets (the model's ``providers.<provider>.models``
+        entry, else ``agents.defaults``) instead of ones resolved against the
+        catalog, whose rows are refreshed without the configuration
+        changing."""
+        d = self.agents.defaults
+        entry, _caps = self._resolve_model_params(self.routed_provider(d.provider, d.model), d.model)
+        ctx = entry.context_window_tokens if entry and entry.context_window_tokens is not None else None
+        mt = entry.max_tokens if entry and entry.max_tokens is not None else None
+        return self._default_preset(
+            entry,
+            context_window_tokens=d.context_window_tokens if ctx is None else ctx,
+            max_tokens=d.max_tokens if mt is None else mt,
+        )
+
+    def _default_preset(
+        self, entry: ModelEntry | None, *, context_window_tokens: int, max_tokens: int,
+    ) -> ModelPresetConfig:
+        """The implicit `default` preset with the given limits: the model and
+        settings of ``agents.defaults``, each overridden by the model's
+        ``providers.<provider>.models`` entry where that sets one."""
+        d = self.agents.defaults
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None
@@ -1883,8 +1973,8 @@ class Config(BaseSettings):
         top_k = entry.top_k if entry and entry.top_k is not None else None
         repeat_penalty = entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
         return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=mt,
-            context_window_tokens=ctx, temperature=temp, reasoning_effort=eff,
+            model=d.model, provider=d.provider, max_tokens=max_tokens,
+            context_window_tokens=context_window_tokens, temperature=temp, reasoning_effort=eff,
             request_timeout_s=timeout,
             top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
         )

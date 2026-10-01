@@ -875,6 +875,102 @@ async def test_system_subagent_followup_is_persisted_before_prompt_assembly(tmp_
     ]
 
 
+async def _system_message_turn(
+    tmp_path: Path, seed: list[tuple[str, str, dict]], *, sender: str, content: str, metadata: dict,
+) -> list[dict]:
+    """Process one system-origin message on a session holding *seed*, with a
+    run that answers "ack"; return the saved session, keyed fields only."""
+    loop = _make_full_loop(tmp_path)
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    session = loop.sessions.get_or_create("cli:sys")
+    for role, text, extra in seed:
+        session.add_message(role, text, **extra)
+    loop.sessions.save(session)
+
+    async def fake_run_agent_loop(initial_messages, **_kwargs):
+        # As the runner returns them: the prompt it was given, plus its own.
+        return "ack", [], [*initial_messages, {"role": "assistant", "content": "ack"}], "stop", False, []
+
+    loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
+    await loop._process_message(InboundMessage(
+        channel="system", sender_id=sender, chat_id="cli:sys", content=content, metadata=metadata,
+    ))
+    loop.sessions.invalidate("cli:sys")
+    return [
+        {k: v for k, v in m.items() if k in {"role", "content", "injected_event", "subagent_task_id"}}
+        for m in loop.sessions.get_or_create("cli:sys").messages
+    ]
+
+
+_WORKFLOW_RESULT = "[Background workflow 'digest' finished]\n\nThree items need a reply."
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_merged_into_an_unanswered_message_is_saved_once(tmp_path: Path) -> None:
+    """A background workflow's result arriving on a session that ends on an
+    unanswered user message: the build merges it into that message, the
+    prompt is one entry shorter, and the save, counted from the history,
+    started after the merged entry. The reply was saved; the result's text
+    never was."""
+    saved = await _system_message_turn(
+        tmp_path,
+        [("user", "an earlier question", {}), ("assistant", "an earlier answer", {}),
+         ("user", "a question that got no reply", {})],
+        sender="workflow_background", content=_WORKFLOW_RESULT,
+        metadata={"injected_event": "workflow_background_result", "workflow": "digest"},
+    )
+
+    assert saved == [
+        {"role": "user", "content": "an earlier question"},
+        {"role": "assistant", "content": "an earlier answer"},
+        {"role": "user", "content": "a question that got no reply"},
+        {"role": "user", "content": _WORKFLOW_RESULT},
+        {"role": "assistant", "content": "ack"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_is_saved_once_as_its_own_entry(tmp_path: Path) -> None:
+    saved = await _system_message_turn(
+        tmp_path,
+        [("user", "a question", {}), ("assistant", "an answer", {})],
+        sender="workflow_background", content=_WORKFLOW_RESULT,
+        metadata={"injected_event": "workflow_background_result", "workflow": "digest"},
+    )
+
+    assert saved == [
+        {"role": "user", "content": "a question"},
+        {"role": "assistant", "content": "an answer"},
+        {"role": "user", "content": _WORKFLOW_RESULT},
+        {"role": "assistant", "content": "ack"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_subagent_result_saves_no_entry_of_its_prompt(tmp_path: Path) -> None:
+    """A subagent's result is saved before the prompt is built, so its own
+    entry in the prompt carries only the runtime context. When it is not
+    saved again (the same task's result delivered twice) and the session ends
+    on a user message, the build adds that entry on its own, and the save,
+    counted from the history, kept it: an assistant message holding nothing
+    but the runtime context."""
+    result_extra = {"injected_event": "subagent_result", "subagent_task_id": "sub-1"}
+    saved = await _system_message_turn(
+        tmp_path,
+        [("user", "research the options", {}), ("assistant", "the options are A and B", result_extra),
+         ("user", "and the second part?", {})],
+        sender="subagent", content="the options are A and B",
+        metadata={"subagent_task_id": "sub-1"},
+    )
+
+    assert saved == [
+        {"role": "user", "content": "research the options"},
+        {"role": "assistant", "content": "the options are A and B", **result_extra},
+        {"role": "user", "content": "and the second part?"},
+        {"role": "assistant", "content": "ack"},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_multiple_subagent_followups_all_persist_as_standalone_history(tmp_path: Path) -> None:
     loop = _make_full_loop(tmp_path)

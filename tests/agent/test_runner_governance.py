@@ -789,3 +789,248 @@ def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
         assert non_system[0]["role"] in ("user", "tool"), (
             f"Safety net should ensure first non-system is user/tool, got {non_system[0]['role']}"
         )
+
+
+def _over_budget_run(*, caller_compacts_on_overflow: bool = False):
+    """A run on a 12,000-token block limit whose request is over it: a
+    system prompt, a long history, the current question, and tool schemas of
+    a few thousand tokens. The history alone would fit beside the system
+    prompt; beside the schemas too, only once its oldest turns are dropped."""
+    from durin.agent.runner import AgentRunSpec
+
+    schemas = [
+        {"type": "function", "function": {
+            "name": f"tool_{i}", "description": "does a thing " * 200,
+            "parameters": {"type": "object", "properties": {}},
+        }}
+        for i in range(5)
+    ]
+    tools = MagicMock()
+    tools.get_definitions.return_value = schemas
+    messages = [{"role": "system", "content": "system prompt " * 300}]
+    for i in range(30):
+        messages += [
+            {"role": "user", "content": f"question {i} " + "words " * 400},
+            {"role": "assistant", "content": f"answer {i}"},
+        ]
+    messages.append({"role": "user", "content": "the current question"})
+    extra = {"caller_compacts_on_overflow": True} if caller_compacts_on_overflow else {}
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=200_000,
+        context_block_limit=12_000,
+        **extra,
+    )
+    return spec, schemas
+
+
+def test_snip_history_leaves_room_for_everything_the_request_sends():
+    """A request sends the tool schemas and the current question with the
+    history. The trim kept history up to the budget less the system prompt,
+    so its view was still over the budget by the schemas' size."""
+    from durin.agent.runner import AgentRunner
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, schemas = _over_budget_run()
+    view = AgentRunner(MagicMock())._snip_history(spec, spec.initial_messages)
+
+    assert estimate_prompt_tokens(view, schemas) <= 12_000
+    assert view[0]["role"] == "system"
+    assert view[-1]["content"] == "the current question"
+    assert len(view) < len(spec.initial_messages)
+
+
+@pytest.mark.asyncio
+async def test_a_run_its_trim_can_fit_is_sent_not_stopped():
+    """With the schemas counted, dropping the oldest turns fits the request,
+    so the run calls the model instead of stopping on the precheck overflow;
+    what it sends fits the budget."""
+    from durin.agent.runner import AgentRunner
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, _schemas = _over_budget_run()
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        sent.append(estimate_prompt_tokens(messages, tools))
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "completed"
+    assert sent and max(sent) <= 12_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("words", [3, 20])
+async def test_a_history_of_many_short_messages_is_trimmed_to_fit(words):
+    """The precheck's estimate joins every message's text with a newline,
+    a token of its own per message; the trim summed the messages one by one
+    without it. On a history of short messages it kept a view over the
+    budget by about one token per message kept, which no tool result could
+    make up for, so the precheck stopped the run instead of sending it."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {
+            "name": "tool", "description": "does a thing " * 200,
+            "parameters": {"type": "object", "properties": {}},
+        }},
+    ]
+    messages = [{"role": "system", "content": "system prompt " * 300}]
+    for i in range(3_000):
+        # No trailing space: one would absorb the newline into its token.
+        messages += [
+            {"role": "user", "content": f"question {i} " + ("short words " * words).strip()},
+            {"role": "assistant", "content": f"answer {i} " + ("fine " * words).strip()},
+        ]
+    messages.append({"role": "user", "content": "the current question"})
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        sent.append(estimate_prompt_tokens(messages, tools))
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=200_000,
+        context_block_limit=30_000,
+    ))
+
+    assert result.stop_reason == "completed"
+    assert sent and max(sent) <= 30_000
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_its_task_state_never_asks_past_the_window():
+    """A request appends the task state when it changed during the run. The
+    precheck, and the output cap it sizes, counted the request without it.
+    With an output ceiling above the reserved share of the window, that cap
+    fills what the counted prompt leaves, and a task state longer than the
+    safety buffer took the request past the window."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    messages = [{"role": "system", "content": "system prompt"}]
+    for i in range(13):
+        messages += [
+            {"role": "user", "content": f"question {i} " + "words " * 1500},
+            {"role": "assistant", "content": f"answer {i}"},
+        ]
+    messages.append({"role": "user", "content": "the current question " + "words " * 2500})
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=60_000,
+        max_tokens=50_000,
+        task_state_provider=lambda: [f"- decision {i}: " + "detail " * 40 for i in range(70)],
+    )
+    requests: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, max_tokens=None, **_kwargs):
+        requests.append(estimate_prompt_tokens(messages, tools) + max_tokens)
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    await AgentRunner(provider).run(spec)
+
+    assert requests and max(requests) <= 60_000
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_compacts_gets_the_overflow_instead_of_a_trim():
+    """The chat loop compacts the history it replays and retries when its
+    first request does not fit: it summarizes what a trim would drop. For
+    such a caller the first request leaves the history whole and the run
+    stops on the overflow."""
+    from durin.agent.runner import AgentRunner
+
+    spec, _schemas = _over_budget_run(caller_compacts_on_overflow=True)
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="never"))
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "mid_turn_precheck_overflow"
+    provider.chat_with_retry.assert_not_awaited()
+    # Without the history it would fit: a compaction can make room.
+    assert result.fits_without_history is True
+
+
+@pytest.mark.asyncio
+async def test_a_request_over_the_budget_without_its_history_says_what_fills_it():
+    """When the system prompt, the tool schemas and the request are over the
+    budget by themselves, no compaction can make the request fit: the run
+    says so, and what each of them takes, instead of asking for a resend."""
+    import dataclasses
+
+    from durin.agent.runner import AgentRunner
+    from durin.utils.runtime import NO_ROOM_PLACEHOLDER
+
+    spec, _schemas = _over_budget_run(caller_compacts_on_overflow=True)
+    spec = dataclasses.replace(spec, initial_messages=[
+        {"role": "system", "content": "system prompt " * 6_000}, *spec.initial_messages[1:],
+    ])
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="never"))
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "mid_turn_precheck_overflow"
+    assert result.fits_without_history is False
+    assert "cannot make it fit" in result.final_content
+    assert "the input budget is 12,000" in result.final_content
+    assert "send it again" not in result.final_content
+    assert result.messages[-1]["content"] == NO_ROOM_PLACEHOLDER
+
+
+@pytest.mark.asyncio
+async def test_a_request_after_a_snipped_one_is_sized_as_sent():
+    """The reply to a snipped request carries the prompt count of the
+    snipped view, and the next request's view is built from all the
+    messages again. Anchored on that count, its estimate came out below the
+    request: nothing was snipped and the whole history went out, over the
+    budget."""
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import ToolCallRequest
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, _schemas = _over_budget_run()
+    spec.tools.execute = AsyncMock(return_value="a short result")
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        # A provider reports the prompt it was sent.
+        sent.append(estimate_prompt_tokens(messages, tools))
+        usage = {"prompt_tokens": sent[-1], "completion_tokens": 10}
+        if len(sent) == 1:
+            return LLMResponse(
+                content="", tool_calls=[ToolCallRequest(id="c1", name="tool_0", arguments={})], usage=usage,
+            )
+        return LLMResponse(content="done", usage=usage)
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "completed"
+    assert len(sent) == 2
+    assert max(sent) <= 12_000, sent

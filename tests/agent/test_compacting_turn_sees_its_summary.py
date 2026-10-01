@@ -53,7 +53,7 @@ async def test_the_compacting_turn_sees_the_summary_it_just_wrote(tmp_path: Path
     ]
     loop.sessions.save(session)
 
-    async def _consolidate(sess, *, replay_max_messages=None):
+    async def _consolidate(sess, *, replay_max_messages=None, force=False, limits=None, persona_soul=None):
         # What a real consolidation does to the session: the turns leave the
         # history and their summary lands in the store.
         write_session_summary(

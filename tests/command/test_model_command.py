@@ -423,6 +423,31 @@ async def test_effort_tracks_default_changed_at_runtime(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_effort_variant_keeps_every_setting_of_its_preset(tmp_path) -> None:
+    """The effort variant is the same preset with another effort: its
+    sampling settings, timeout, compaction ratio and cap must all survive
+    the switch, not just the fields the variant used to copy one by one."""
+    loop = _make_loop(tmp_path)
+    base = loop.model_presets["fast"].model_copy(update={
+        "temperature": 0.3,
+        "request_timeout_s": 42.0,
+        "top_p": 0.9,
+        "top_k": 40,
+        "repeat_penalty": 1.1,
+        "preemptive_compact_ratio": 0.6,
+        "preemptive_compact_max_tokens": 300_000,
+    })
+    loop.model_presets["fast"] = base
+    loop.set_model_preset("fast", publish_update=False)
+
+    await cmd_effort(_ctx(loop, "/effort high", args="high"))
+
+    variant = loop.model_presets["fast:high"]
+    assert variant.model_dump() == {**base.model_dump(), "reasoning_effort": "high"}
+    assert loop.consolidator.preemptive_compact_max_tokens == 300_000
+
+
+@pytest.mark.asyncio
 async def test_model_default_tracks_default_changed_at_runtime(tmp_path) -> None:
     """Regression: after the default model changes in Settings, picking the
     `default` row in the model picker (`/model default`) must switch to the NEW

@@ -21,6 +21,16 @@ from durin.channels.discord import (
 from durin.command.builtin import build_help_text
 
 
+@pytest.fixture(autouse=True)
+def _own_token_lock_folder(monkeypatch, tmp_path) -> None:
+    """Each test holds the bot-token lock in a folder of its own. The lock is
+    one per token per machine (a second gateway on the same token would reply
+    twice), and every test here uses the same token: two runs of this file at
+    once, from two checkouts or as xdist workers, would refuse each other's
+    channels."""
+    monkeypatch.setattr("durin.channels.discord.tempfile.gettempdir", lambda: str(tmp_path))
+
+
 # Minimal Discord client test double used to control startup/readiness behavior.
 class _FakeDiscordClient:
     instances: list["_FakeDiscordClient"] = []
@@ -1845,12 +1855,37 @@ async def test_on_ready_syncs_commands_only_once() -> None:
     assert len(sync_calls) == 1
 
 
-def test_token_lock_rejects_second_holder(monkeypatch, tmp_path) -> None:
-    # Isolate the advisory lock file to a per-test tmp dir: the lock path is
-    # derived only from the (shared, hardcoded) token, so two concurrent test
-    # runs on the same host would otherwise collide on the same lock file in
-    # the real system tempdir and deadlock the second assertion below.
-    monkeypatch.setattr("durin.channels.discord.tempfile.gettempdir", lambda: str(tmp_path))
+def test_a_channel_starts_while_another_run_holds_its_tokens_lock() -> None:
+    """The bot-token lock is one per token per machine, and every test here
+    uses the same token: a test that started a channel while another run of
+    this file held the lock (a second checkout, an xdist worker) was refused.
+    Each test holds the lock in a folder of its own."""
+    import subprocess
+    import sys
+    import uuid
+
+    hold = (
+        "import fcntl, hashlib, os, sys, tempfile, time\n"
+        "digest = hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16]\n"
+        "fd = os.open(os.path.join(tempfile.gettempdir(), f'durin-discord-{digest}.lock'), os.O_CREAT | os.O_RDWR, 0o600)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "print('holding', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    # A token of this run's own, so two runs of this test never meet on it.
+    token = f"token-{uuid.uuid4().hex}"
+    holder = subprocess.Popen([sys.executable, "-c", hold, token], stdout=subprocess.PIPE, text=True)
+    channel = DiscordChannel(DiscordConfig(enabled=True, token=token, allow_from=["*"]), MessageBus())
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "holding"
+        assert channel._acquire_token_lock() is True
+    finally:
+        channel._release_token_lock()
+        holder.kill()
+        holder.wait()
+
+
+def test_token_lock_rejects_second_holder() -> None:
     channel_a = _make_channel()
     channel_b = _make_channel()
     try:

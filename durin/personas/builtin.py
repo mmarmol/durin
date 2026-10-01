@@ -31,7 +31,12 @@ def seed_example_personas() -> None:
     user who edits or deletes a seeded example keeps that choice across restarts
     (the examples are never re-injected once the marker is set). Best-effort:
     never raises, so a config-write hiccup cannot block startup."""
-    from durin.config.loader import get_config_path, load_config, mutate_config
+    from durin.config.loader import (
+        ConfigNotLoadedError,
+        get_config_path,
+        load_config,
+        mutate_config,
+    )
 
     def _seed(c: object) -> None:
         for name, persona in SEED_PERSONAS.items():
@@ -42,5 +47,9 @@ def seed_example_personas() -> None:
         if load_config(get_config_path()).agents.defaults.personas_seeded:
             return
         mutate_config(_seed)
+    except ConfigNotLoadedError as e:
+        # The config did not load cleanly: the marker may be unset only
+        # because its file failed, and writing would overwrite that file.
+        logger.error("Could not seed example personas: {}", e)
     except Exception as e:
         logger.warning("Could not seed example personas: {}", e)

@@ -37,6 +37,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
+from durin.config.loader import ConfigNotLoadedError
 from durin.service.auth import AuthService
 from durin.service.principal import Principal, Scope
 from durin.service.registry import BoundRoute, ServiceRegistry
@@ -49,6 +50,7 @@ from durin.service.types import (
     UnauthenticatedError,
     UnavailableError,
     ValidationFailedError,
+    config_refusal,
 )
 
 if TYPE_CHECKING:
@@ -385,6 +387,10 @@ def _build_write_handler(
                 result = await handler(principal)
         except DomainError as exc:
             return _problem_response(exc)
+        except ConfigNotLoadedError as exc:
+            # Any route that writes the config: the person sees which files
+            # to fix instead of a bare server error.
+            return _problem_response(config_refusal(exc))
 
         return _result_response(result, status_code=bound.spec.status_code)
 
@@ -835,9 +841,11 @@ def build_gateway_http_app(
                 return _problem_response(
                     NotFoundError("webui thread not found", details={"key": key})
                 )
-        # Resolve the active persona for this session and include it in the payload.
+        # The persona the session's turns run with, resolved as one of its
+        # turns that brings no persona of its own resolves it: the channel and
+        # chat its key names, a cron run's recorded persona, the defaults.
         from durin.config.loader import load_config
-        from durin.personas.resolve import resolve_active_persona_name
+        from durin.personas.resolve import channel_and_chat_of, session_persona_name
 
         raw_session = sm.read_session_file(key) if sm is not None else None
         session_metadata = (raw_session or {}).get("metadata") or {}
@@ -845,7 +853,8 @@ def build_gateway_http_app(
             cfg = load_config()
         except Exception:
             cfg = None
-        data["persona"] = resolve_active_persona_name(cfg, session_metadata, None)
+        key_channel, key_chat = channel_and_chat_of(key)
+        data["persona"] = session_persona_name(cfg, session_metadata, channel=key_channel, chat_id=key_chat)
         return JSONResponse({"data": data})
 
     # -- WebSocket chat endpoint --------------------------------------------

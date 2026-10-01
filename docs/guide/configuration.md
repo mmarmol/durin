@@ -50,6 +50,34 @@ To see the exact path for the active instance:
 durin config path
 ```
 
+### When the config does not load
+
+A config file does not load when it cannot be parsed (a JSON syntax error, a
+byte that is not UTF-8, nesting too deep to read) or when a setting in it fails
+validation (`"temperature": "hot"`, a number too large to read, which reads as
+infinity). The compaction cap is the exception: a value it cannot use is
+dropped and the rest loads. When something does not load:
+
+- **durin still runs**, on defaults for what failed: the section of a file it
+  could not read, or the whole config when a setting fails validation.
+- **durin changes nothing on disk.** Every save is refused until the config
+  loads again: `durin config set`, `durin config edit`, the dashboard's
+  settings, the API, `durin onboard`, `durin upgrade` and `durin secret
+  migrate` say so and name each file with its error; background saves (the
+  example personas seeded at startup, an OAuth login completing) log the same
+  as an error. Your hand-edited file stays exactly as you left it.
+- **It tells you where.** `durin doctor` fails its `config valid` check,
+  `durin status` says the config did not load, and the gateway's startup log
+  has one error line, each naming the files and their errors.
+
+To fix it, edit the files named (any JSON linter points at a syntax error), or
+replace them with a backup: `config.json.legacy`, or a timestamped
+`config.json.d.bak.*` that `durin onboard` leaves before it rewrites the
+config. `durin config edit` cannot open a config that does not load, since
+saving its merged view would drop the broken file's settings. Run `durin
+doctor` again to confirm, then restart the gateway so it reads the fixed
+config.
+
 ### Environment variable overrides
 
 Because the root config class is a pydantic `BaseSettings` with the prefix
@@ -158,15 +186,76 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `plan_stall_turns` | `8` | Turns without todo progress before a reassess reminder is injected; `0` disables |
 | `disabled_skills` | `[]` | Skill names to exclude from loading |
 | `max_messages` | `480` | Max messages replayed from session history; `0` uses default |
-| `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
-| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and capped so the resulting prompt still fits the runner |
+| `consolidation_ratio` | `0.5` | How far a compaction reduces the prompt, as a fraction of the compaction trigger (`0.5` = down to half the trigger) |
+| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and never above what a run may send |
+| `preemptive_compact_max_tokens` | `256000` | Absolute cap, in tokens, on where pre-emptive compaction fires: it fires at the smaller of this and the ratio's trigger. On a 1M-window model the default ratio alone would let every long turn ship up to 500K tokens. A window whose ratio trigger is already lower is unaffected. At least `64000`, since a cap under the prompt's fixed part (system prompt, tool schemas, summary) would compact on every turn; `null` or `0` removes the cap (the ratio alone). Chat compaction only: workflow nodes and subagents trim their context to their model's window instead |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |
 | `compaction_learnings_enabled` | `true` | Distil durable user learnings (preferences, corrections) at compaction time |
 | `decision_log_max_entries` | `10` | Cap on decision-log entries re-injected each turn |
 | `decision_log_max_chars` | `3000` | Total character cap on the decision log. Re-injected every turn, so raising it costs tokens on every request; lowering it too far starves the auto-extracted channel, since manual `note_decision` entries hold their slots first |
 | `parallel_tool_calls` | `{}` | Per-model substring → bool map for the `parallel_tool_calls` request flag |
 | `tool_hint_max_length` | `40` | Max characters for tool-call hints shown in the channel (e.g. `$ cd …/project`) |
-| `context_block_limit` | `null` | Hard limit on context blocks (overrides token budget when set) |
+| `context_block_limit` | `null` | Hard limit, in tokens, on what the chat and its subagents may send: when set it replaces the input budget their model's window gives them |
+
+**How the compaction settings fit together.** The chat compacts, at turn
+boundaries (before a turn is built, after it is saved, and when a turn
+overflows), once the prompt reaches its *trigger*: the window of the model
+the turn runs on times `preemptive_compact_ratio`, lowered to
+`preemptive_compact_max_tokens` when that is smaller. A compaction then summarizes the oldest turns until the
+prompt is down to `consolidation_ratio` times the trigger. `context_block_limit`
+outranks both: when set, the trigger and the history replayed into a turn
+always stay under it, whatever the ratio and the cap say. Inside one long turn
+of tool calls, the run trims old tool results by its own budget instead, so
+the cap bounds what each turn starts from, not what a single turn may reach.
+
+The part of the prompt a compaction cannot summarize (the system prompt,
+`AGENTS.md` included, the tool schemas, the summary so far) can nearly fill
+the trigger on its own, for example a very long
+`AGENTS.md` under a low cap. A compaction then frees almost nothing, so after
+one that leaves less than a quarter of the usual room under the trigger, the
+chat waits until the prompt has grown by the usual room before compacting
+again: its prompts run past the trigger for a while instead of compacting on
+every turn. The wait stops at the window's ceiling, the most a turn may start
+from (the input budget less a safety margin): where the system prompt and the
+tool schemas leave less than the usual room under it, as a very long
+`AGENTS.md` on a small window does, the chat compacts whenever the prompt
+reaches the ceiling, which can be every turn. It stops waiting once there is
+room again (a shorter `AGENTS.md`), after `/new` or `/compact`, and when a
+turn runs on a model with other limits.
+
+On a small window the summary so far would take much of that room by itself.
+When it does not fit beside the message and the conversation history, a
+prompt carries it cut to a quarter of what the system prompt, the tool
+schemas and the turn's own message leave of the input budget, its oldest
+parts left out first. The message is counted as at least a fixed allowance,
+so the cut stays the same from one ordinary message to the next and the
+provider's prompt cache keeps working. The decision log rides in the message: when the
+message would not fit with all of it, the prompt leaves out its oldest
+automatic entries first (the ones durin records on its own), then the oldest
+ones recorded with `note_decision`, until it does.
+
+When the system prompt, the tool schemas and the message alone are over the
+input budget, no compaction can make the turn fit: it fails at once, and the
+error names the largest parts of the prompt (`AGENTS.md`, the tool
+definitions, the message) so you know what to shorten.
+
+An empty `preemptive_compact_max_tokens` in the settings editor is `null`,
+and `null` means two different things: under `agents.defaults` it is no cap,
+while on a preset it is the `agents.defaults` cap. To turn the cap off for
+one preset, set that preset's value to `0`.
+
+A running gateway applies an edit to `agents.defaults.preemptive_compact_ratio`
+or `preemptive_compact_max_tokens` from the next turn. A preset's own ratio
+and cap reach it like the preset's other settings. The preset
+`agents.defaults.model_preset` selects is read from the configuration on
+every turn: switching to another preset, or editing the selected one,
+applies from the next turn. A preset picked with `/model` or the model picker
+is held as it was loaded: an edit to it applies after a restart
+(`durin gateway restart`), or sooner when a settings change reloads the
+presets (saving a persona, the default model or a concurrency limit). A
+change to what the configuration selects (another preset, or an edit to the
+selected one) replaces such a pick from the next turn. New limits for a
+model in the refreshed model catalog are not such a change.
 
 **`agents.aux_models`** — optional auxiliary model bridges (used only when the primary model lacks the modality):
 
@@ -195,6 +284,7 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 | `top_k` | `null` | Top-k sampling; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `repeat_penalty` | `null` | Repetition penalty; non-standard, sent via `extra_body` to OpenAI-compatible providers only |
 | `preemptive_compact_ratio` | `null` | Per-preset compaction trigger; `null` inherits from `agents.defaults` |
+| `preemptive_compact_max_tokens` | `null` | Per-preset absolute compaction cap in tokens, at least `64000`. `null` inherits the `agents.defaults` cap, and `0` means no cap for this preset (its ratio alone) |
 
 #### Model limits
 
@@ -1004,7 +1094,7 @@ edit it manually.
 | Key | Default | Meaning |
 |---|---|---|
 | `extras` | `[]` | Additive list of optional extras detected at any point; used by `durin doctor` |
-| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated, and let `durin doctor` install a missing `[memory]` extra while vector memory is on (it reports the install); `false` shows the manual install command instead (`pipx inject durin-agent 'durin-agent[X]'`, or `uv tool install 'durin-agent[X]'` for uv installs) |
+| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated, and let `durin doctor` install a missing `[memory]` extra while vector memory is on and the config loads cleanly (it reports the install); `false` shows the manual install command instead (`pipx inject durin-agent 'durin-agent[X]'`, or `uv tool install 'durin-agent[X]'` for uv installs) |
 
 ---
 

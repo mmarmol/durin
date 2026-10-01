@@ -488,12 +488,15 @@ class TestNewCommandArchival:
     def _make_loop(tmp_path: Path):
         from durin.agent.loop import AgentLoop
         from durin.bus.queue import MessageBus
-        from durin.providers.base import LLMResponse
+        from durin.providers.base import GenerationSettings, LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
         provider.estimate_prompt_tokens.return_value = (10_000, "test")
+        # A real provider always carries its generation settings; the
+        # consolidator sizes its summarizing calls by them.
+        provider.generation = GenerationSettings()
         loop = AgentLoop(
             bus=bus,
             provider=provider,
@@ -519,10 +522,11 @@ class TestNewCommandArchival:
 
         call_count = 0
 
-        async def _failing_summarize(_messages) -> bool:
+        async def _failing_summarize(_messages):
+            # archive()'s failure: no summary (it raw-archived the messages).
             nonlocal call_count
             call_count += 1
-            return False
+            return None, {"entities": [], "topics": []}
 
         loop.consolidator.archive = _failing_summarize  # type: ignore[method-assign]
 
@@ -552,10 +556,10 @@ class TestNewCommandArchival:
 
         archived_count = -1
 
-        async def _fake_summarize(messages) -> bool:
+        async def _fake_summarize(messages):
             nonlocal archived_count
             archived_count = len(messages)
-            return True
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _fake_summarize  # type: ignore[method-assign]
 
@@ -579,8 +583,8 @@ class TestNewCommandArchival:
             session.add_message("assistant", f"resp{i}")
         loop.sessions.save(session)
 
-        async def _ok_summarize(_messages) -> bool:
-            return True
+        async def _ok_summarize(_messages):
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _ok_summarize  # type: ignore[method-assign]
 
@@ -605,10 +609,10 @@ class TestNewCommandArchival:
 
         archived = asyncio.Event()
 
-        async def _slow_summarize(_messages) -> bool:
+        async def _slow_summarize(_messages):
             await asyncio.sleep(0.1)
             archived.set()
-            return True
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _slow_summarize  # type: ignore[method-assign]
 
@@ -763,7 +767,7 @@ class TestCompactorSkipsSummarizedSpan:
         loop.sessions.save(session)
 
         # The nightly pass already summarized the first four messages.
-        set_summary_cursor(loop.sessions._get_session_path("cli:test"), 4)
+        set_summary_cursor(loop.sessions._get_session_path("cli:test"), session.messages, 4)
 
         archived: list[str] = []
 
@@ -816,7 +820,7 @@ class TestCompactorSkipsSummarizedSpan:
             session.add_message("assistant", f"answer {i}")
         loop.sessions.save(session)
         # The nightly pass already summarized every message the round can cut.
-        set_summary_cursor(loop.sessions._get_session_path("cli:test"), len(session.messages))
+        set_summary_cursor(loop.sessions._get_session_path("cli:test"), session.messages, len(session.messages))
 
         archive_calls: list[list[dict]] = []
         real_archive = loop.consolidator.archive
@@ -830,9 +834,96 @@ class TestCompactorSkipsSummarizedSpan:
 
         await loop.consolidator.maybe_consolidate_by_tokens(session)
 
-        # archive() ran on an empty remainder, so no provider call was made.
-        assert archive_calls == [[]]
+        # Nothing was left to summarize: no summarizing call, no provider call.
+        assert archive_calls == []
         assert loop.provider.chat_with_retry.await_count == 0
         done = [d for t, d in events if t == "compaction.completed"]
         assert done and done[0]["exit_reason"] == "already_summarized"
         assert done[0]["rounds"] == 1
+
+    @staticmethod
+    def _archived_by_replay_compaction(loop, session) -> list[str]:
+        """Run the replay-window compaction over the whole unconsolidated span
+        and return what its summarizing calls received."""
+        from durin.providers.base import LLMResponse
+
+        archived: list[str] = []
+
+        async def _chat(*args, **kwargs):
+            messages = kwargs["messages"]
+            if "Extract key facts" in (messages[0].get("content") or ""):
+                archived.append(messages[-1]["content"])
+            return LLMResponse(content="- compacted", tool_calls=[])
+
+        loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+        return archived
+
+    @pytest.mark.asyncio
+    async def test_after_new_compaction_summarizes_the_new_conversation_from_its_start(
+        self, tmp_path: Path,
+    ) -> None:
+        """/new empties the session and leaves the nightly cursor. Read as a
+        position, it covered the first messages of the next conversation once
+        that grew past it: compaction archived them with no summary."""
+        from durin.memory.session_summary_dream import summarize_session
+
+        loop = TestNewCommandArchival._make_loop(tmp_path)
+        loop.consolidator.context_window_tokens = 200_000
+        loop.consolidator.max_completion_tokens = 4096
+        session = loop.sessions.get_or_create("cli:test")
+        for i in range(3):
+            session.add_message("user", f"old question {i}")
+            session.add_message("assistant", f"old answer {i}")
+        loop.sessions.save(session)
+        path = loop.sessions._get_session_path("cli:test")
+        summarize_session(
+            tmp_path, path, llm_invoke=lambda prompt, **_: "- the old conversation",
+            idle_hours=0, min_new_messages=1, budget_tokens=100_000,
+        )
+        session.clear()
+        loop.sessions.save(session)
+        for i in range(5):
+            session.add_message("user", f"new question {i}")
+            session.add_message("assistant", f"new answer {i}")
+        loop.sessions.save(session)
+        archived = self._archived_by_replay_compaction(loop, session)
+
+        await loop.consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=1)
+
+        sent = "\n".join(archived)
+        assert all(f"new question {i}" in sent for i in range(5))
+
+    @pytest.mark.asyncio
+    async def test_after_the_file_cap_compaction_skips_only_what_the_pass_summarized(
+        self, tmp_path: Path,
+    ) -> None:
+        """The file cap drops the head and shifts every position; read as a
+        position, the cursor covered as many more messages as the cap dropped,
+        and compaction archived those with no summary."""
+        from durin.memory.session_summary_dream import summarize_session
+
+        loop = TestNewCommandArchival._make_loop(tmp_path)
+        loop.consolidator.context_window_tokens = 200_000
+        loop.consolidator.max_completion_tokens = 4096
+        session = loop.sessions.get_or_create("cli:test")
+        for i in range(25):
+            session.add_message("user", f"question {i:03d}")
+            session.add_message("assistant", f"answer {i:03d}")
+        loop.sessions.save(session)
+        path = loop.sessions._get_session_path("cli:test")
+        summarize_session(
+            tmp_path, path, llm_invoke=lambda prompt, **_: "- the first fifty",
+            idle_hours=0, min_new_messages=1, budget_tokens=100_000,
+        )
+        for i in range(25, 40):
+            session.add_message("user", f"question {i:03d}")
+            session.add_message("assistant", f"answer {i:03d}")
+        session.enforce_file_cap(limit=60)
+        loop.sessions.save(session)
+        archived = self._archived_by_replay_compaction(loop, session)
+
+        await loop.consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=1)
+
+        sent = "\n".join(archived)
+        assert "question 025" in sent
+        assert "answer 024" not in sent

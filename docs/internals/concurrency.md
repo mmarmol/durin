@@ -291,11 +291,36 @@ session save.
 Config lives as a split-file layout (`config.json.d/agents.json`, `providers.json`,
 …) with a marker `config.json`. `save_config()` wraps the *entire* multi-file
 write — every per-topic file plus the stale-file cleanup — in
-`cross_process_lock(config_path)`, so a concurrent reader under the same lock
-never sees a half-written cross-section.
+`config_write(config_path)`, which holds `cross_process_lock(config_path)`, so a
+concurrent reader under the same lock never sees a half-written cross-section.
 
-For read-modify-write, `mutate_config(mutator)` is the safe entry point: it takes
-the config lock, reloads from disk under it, applies the mutator, and saves
+`config_write` also refuses the write (`ConfigNotLoadedError`, naming each file
+and its error) when the config on disk does not load cleanly: every file parses
+and the merged settings validate (`config_load_problems`, which reads and
+validates exactly as a load does, without writing). A load that is not clean
+runs on defaults for what failed — a file that cannot be read leaves its
+section at the defaults, settings that fail validation the whole config — so a
+save from it would overwrite, delete or shadow the file it could not use. Every
+writer goes through it: `save_config`, `mutate_config`, `write_persisted_config`
+(writers of the on-disk dict, such as `durin onboard`'s channel backfill), the
+monolith→split migration a clean load runs, and the plaintext-key migration in
+`durin.security.secrets`. Interactive callers report the refusal to the person
+(the CLI prints it, the API answers `409` with the files in `details`, the TUI
+notifies); background ones (the startup persona seeding, an OAuth login
+completing, `durin doctor` recording extras) log it as an error and write
+nothing. As a second line, the split writer never deletes a stale topic file
+whose content does not parse.
+
+Reading is shared too: `read_config_file` parses one file with every failure —
+a syntax error, bad UTF-8, nesting past the recursion limit, an I/O error —
+raised as `ConfigFileUnreadableError`, never as a crash, and an integer with
+more digits than Python converts read as ±inf: an out-of-range value the cap and
+limit scrubs drop (`drop_unusable_limits`) and validation rejects anywhere
+else. A degraded run says so: `durin doctor`'s `config valid` check fails, `durin
+status` lists the files, and the gateway logs one error line at startup.
+
+For read-modify-write, `mutate_config(mutator)` is the safe entry point: it holds
+`config_write`, reloads from disk under it, applies the mutator, and saves
 (the inner `save_config` re-takes the same lock reentrantly on the same thread).
 A direct `load_config() → edit → save_config()` that is *not* routed through
 `mutate_config` is last-writer-wins across processes — an accepted trade-off for
@@ -513,6 +538,7 @@ without a restart (see [loop](loop.md)).
 | `session_turn_lease` | `durin/session/turn_lease.py` | Async context manager holding `<key>.turn.lock` for a whole turn (600 s acquire timeout) via `asyncio.to_thread`; wraps interactive turns and all out-of-turn savers. |
 | `SessionManager.reload` / `.save` | `durin/session/manager.py` | `reload` drops the cache and re-reads (load-per-turn); `save` does the atomic `.jsonl`/`.meta.json`/`.md` + FTS write under `cross_process_lock(<key>.jsonl)`. |
 | `save_config` / `mutate_config` | `durin/config/loader.py` | `save_config` wraps the split-layout write in the config lock; `mutate_config` is the lost-update-safe read-modify-write entry point. |
+| `config_write` / `config_load_problems` | `durin/config/loader.py` | `config_write` holds the config lock for every writer and refuses (`ConfigNotLoadedError`) when the config on disk does not load cleanly; `config_load_problems` lists the files that do not, with their errors. |
 | `CronService._lock` / `_tick_lock` | `durin/cron/service.py` | Two independent `FileLock` instances: store read-modify-write serialization, and non-blocking at-most-once tick guard. |
 | `git_worktree_lock_path` | `durin/memory/memory_writer.py` | Canonical `.git-worktree` lock target shared by writers and the indexer/vector prune paths. |
 | `_root_write_lock` (RLock dict) | `durin/memory/memory_writer.py` | In-process per-repo `threading.RLock`; outermost memory lock around the whole read-apply-CAS-reset section. |

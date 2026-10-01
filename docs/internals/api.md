@@ -195,7 +195,13 @@ rejected with a `validation_failed` problem response before the service is
 even called. When no display transcript exists (non-websocket sessions), the
 endpoint falls back to converting the raw session history instead — see
 [channels.md](channels.md) for that path — and that fallback payload always
-carries `prevCursor: null` since it is not byte-paged.
+carries `prevCursor: null` since it is not byte-paged. Either way the payload's
+`data.persona` names the persona the session's turns run with, resolved as a
+turn of the session that brings no persona of its own resolves it
+(`session_persona_name` in `durin.personas.resolve`, which the loop uses for a
+system message's turn): the persona a cron run's turn was given (recorded on
+its session as `turn_overrides`), else the session's pick, the chat map and
+channel default of the channel and chat its key names, then the global default.
 
 Display-transcript appends are buffered: the WS channel enqueues each streamed
 event into a process-wide `TranscriptWriter`, which batches them to disk with
@@ -457,7 +463,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
 | `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
 | `SERVICE_CLASSES` / `build_catalog_registry` | `durin/service/catalog.py` | Canonical list of HTTP-exposed service classes; deps-less registry factory for spec tooling and OpenAPI generation |
-| `build_api_app` | `durin/api/asgi.py` | Starlette app for `/api/v1/*`: one `Route` per read (`_build_handler`) and write (`_build_write_handler`) route, ordered literals-before-params |
+| `build_api_app` | `durin/api/asgi.py` | Starlette app for `/api/v1/*`: one `Route` per read (`_build_handler`) and write (`_build_write_handler`) route, ordered literals-before-params. A write whose config save is refused because the config on disk does not load cleanly (`ConfigNotLoadedError`) answers `409` through `config_refusal`, with each failing file and its error in `details.files` |
 | `build_gateway_http_app` | `durin/api/asgi.py` | Full gateway app: assembles WS, signed reads, `/api/v1/*`, bootstrap, media, and SPA routes in priority order |
 | `resolve_principal_from_headers` | `durin/api/asgi.py` | Extracts and verifies a bearer token; returns `Principal` or `None` |
 | `StarletteConnectionAdapter` | `durin/api/asgi.py` | Wraps a Starlette `WebSocket` to satisfy the same `ConnectionAdapter` interface used by the `websockets` transport |

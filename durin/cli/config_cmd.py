@@ -36,6 +36,39 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 
+def report_config_refusal(error: Any, out: Console | None = None) -> None:
+    """Tell the person a config write was refused (a ``ConfigNotLoadedError``):
+    which files did not load, why, and what to do."""
+    out = out or console
+    out.print("[red]durin did not change the config: it does not load cleanly.[/red]")
+    for problem in error.problems:
+        out.print(f"  {escape(str(problem.path))}: {escape(problem.error)}", soft_wrap=True)
+    out.print("Fix or remove these files by hand, then try again. `durin doctor` lists them too.")
+
+
+def refuse_unless_config_loads(path: Path) -> None:
+    """Exit with the refusal when the config at *path* does not load cleanly,
+    before a command touches it."""
+    from durin.config.loader import ConfigNotLoadedError, config_load_problems
+
+    problems = config_load_problems(path)
+    if problems:
+        report_config_refusal(ConfigNotLoadedError(problems))
+        raise typer.Exit(1)
+
+
+def save_config_or_exit(config: Config, path: Path) -> None:
+    """``save_config``, or the refusal and exit 1 when the config on disk does
+    not load cleanly."""
+    from durin.config.loader import ConfigNotLoadedError
+
+    try:
+        save_config(config, path)
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e)
+        raise typer.Exit(1) from None
+
+
 def load_raw_config(path: Path) -> dict[str, Any]:
     """Return the on-disk config dict, transparent to the storage layout.
 
@@ -525,6 +558,7 @@ def cmd_set(
     from durin.config.loader import drop_unusable_limits
 
     path = get_config_path()
+    refuse_unless_config_loads(path)
     bootstrapped = not path.exists()
     raw = load_raw_config(path)  # {} when the file is absent
     # Canonicalize the dict to snake_case (the on-disk + field-name form)
@@ -546,7 +580,7 @@ def cmd_set(
         console.print("[red]Validation failed; config not modified.[/red]")
         console.print(str(e))
         raise typer.Exit(1) from None
-    save_config(config, path)
+    save_config_or_exit(config, path)
     if bootstrapped:
         console.print(f"[green]✓[/green] Created config at {path}")
     console.print(f"[green]✓[/green] {escape(key)} updated.")
@@ -634,7 +668,13 @@ def cmd_import(
     replicate a setup on a fresh install without re-running the wizard
     (e.g. `durin config import ~/.durin_backup`).
     """
-    from durin.config.loader import backup_config, load_config, save_config
+    from durin.config.loader import (
+        ConfigNotLoadedError,
+        backup_config,
+        config_load_problems,
+        describe_config_problems,
+        load_config,
+    )
     from durin.security.secrets import migrate_plaintext_provider_keys
 
     src = Path(source).expanduser()
@@ -648,6 +688,15 @@ def cmd_import(
         console.print(f"[red]No config found at {source}.[/red]")
         raise typer.Exit(1)
 
+    # A source that does not load cleanly would import defaults where it
+    # failed: the settings in the files it could not use would be dropped.
+    problems = config_load_problems(src_config)
+    if problems:
+        console.print(
+            f"[red]Could not read config from {escape(source)}:[/red] {escape(describe_config_problems(problems))}",
+            soft_wrap=True,
+        )
+        raise typer.Exit(1)
     try:
         imported = load_config(src_config)
     except Exception as e:  # noqa: BLE001
@@ -655,11 +704,16 @@ def cmd_import(
         raise typer.Exit(1) from None
 
     dest = get_config_path()
+    refuse_unless_config_loads(dest)
     backup = backup_config(dest)
     if backup is not None:
         console.print(f"[dim]Existing config backed up to {backup}[/dim]")
-    save_config(imported, dest)
-    created = migrate_plaintext_provider_keys(dest)
+    save_config_or_exit(imported, dest)
+    try:
+        created = migrate_plaintext_provider_keys(dest)
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e)
+        raise typer.Exit(1) from None
 
     console.print(f"[green]✓[/green] Imported config from {source}.")
     if created:
@@ -679,6 +733,9 @@ def cmd_edit() -> None:
     if not path.exists():
         console.print(f"[red]No config at {path}.[/red] Run [cyan]durin onboard[/cyan].")
         raise typer.Exit(1)
+    # The merged view would leave out a file that does not load, and saving
+    # it back would drop that file's settings: those files are fixed by hand.
+    refuse_unless_config_loads(path)
     editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or _default_editor()
     if shutil.which(editor) is None:
         console.print(f"[red]Editor {editor!r} not found on PATH.[/red] Set $EDITOR.")
@@ -695,14 +752,16 @@ def cmd_edit() -> None:
         if edited == original:
             console.print("[yellow]No changes.[/yellow]")
             return
+        from durin.config.loader import parse_config_text
+
         try:
-            data = json.loads(edited)
+            data = parse_config_text(edited)
             config = validate_dict(data)
-        except (json.JSONDecodeError, pydantic.ValidationError) as e:
+        except (ValueError, RecursionError) as e:  # a JSON or validation error
             console.print("[red]Edit rejected; config left untouched.[/red]")
-            console.print(str(e))
+            console.print("nested too deeply to read" if isinstance(e, RecursionError) else str(e))
             raise typer.Exit(1) from None
-        save_config(config, path)
+        save_config_or_exit(config, path)
         console.print(f"[green]✓[/green] Config updated at {path}.")
     finally:
         with __import__("contextlib").suppress(FileNotFoundError):

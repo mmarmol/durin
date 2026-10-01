@@ -104,12 +104,11 @@ def build_footer_text(
     ctx_window = int(getattr(agent_loop, "context_window_tokens", 0) or 0)
     # Percentage of the way to the next compaction, not of the raw window —
     # compaction fires well below 100% of the window, so a window-denominated
-    # gauge never approaches the number that actually matters.
+    # gauge never approaches the number that actually matters. The session's
+    # own trigger: a persona's model compacts by its own window.
     ctx_denominator = 0
     with suppress(Exception):
-        ctx_denominator = int(
-            getattr(agent_loop.consolidator, "_preemptive_trigger_tokens", 0) or 0
-        )
+        ctx_denominator = int(agent_loop.consolidator.session_trigger(session_key) or 0)
     if ctx_denominator <= 0:
         ctx_denominator = ctx_window
     ctx_pct = (token_est * 100 // ctx_denominator) if ctx_denominator else 0

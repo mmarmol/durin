@@ -14,22 +14,49 @@ from durin.agent.skills import SkillsLoader
 from durin.agent.task_state import task_state_runtime_lines
 from durin.memory.eager_surface import EagerSnapshot
 from durin.memory.hot_layer import read_hot_layer
+from durin.memory.session_summary_store import fit_summary_to_tokens
+from durin.session.decision_log import decision_log_runtime_lines
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
+    estimate_prompt_tokens,
+    estimate_text_tokens,
 )
 from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
+
+# What the session adds to every prompt beside the system prompt's fixed
+# tiers and the tool definitions, bounded by what those leave of the input
+# budget of the model the turn runs on, less a margin for how the request's
+# estimate joins its parts. The decision log rides in the turn's own message
+# and gives way first, its oldest entries left out until the message fits.
+# The archived session summary is carried whole when it fits beside the
+# message and the replayed history; otherwise it takes at most this share of
+# what the message leaves, and the history gets the rest. Both stores cap
+# their text by characters whatever the window, so on a small window either
+# could otherwise leave a turn no room, or make it too large to send at all.
+_SUMMARY_ROOM_SHARE = 0.25
+_PROMPT_JOIN_MARGIN = 64
+# What the summary leaves for the turn's own message (its runtime context
+# and task state included) however short the message is. The summary rides
+# in the system prompt, the head of every prompt cache, so a cut that
+# followed each message's length would miss the cache for the whole prompt
+# on every turn; a fixed allowance moves it only for a message larger than
+# that.
+_MESSAGE_ALLOWANCE = 2_048
 
 # The stable tier's sub-block labels for the ``/status`` composition
 # breakdown (see ``summarize_composition`` below).
 STABLE_LABELS: tuple[tuple[str, str], ...] = (
     ("identity", "Identity"),
     ("bootstrap", "Bootstrap files"),
+    ("soul", "SOUL"),
+    ("operating_floor", "Operating rules"),
     ("skills_active", "Skills (active)"),
     ("skills_catalog", "Skills catalog"),
     ("memory_pinned", "Memory pinned"),
+    ("rich_output", "Rich output guide"),
     ("memory_hot", "Memory hot layer"),
 )
 
@@ -222,6 +249,11 @@ class ContextBuilder:
         # The caller reads it right after a build to freeze the surface for
         # the rest of the session; nothing else depends on it.
         self.last_eager_render: tuple[str, str, frozenset[str]] | None = None
+        # The token bound the last build with an input budget put on the
+        # decision log to make the turn fit, or None when it carried the log
+        # whole. The caller reads it right after a build, so the task state
+        # a run appends mid-turn is cut the same way.
+        self.last_decision_log_tokens: int | None = None
         # Hot working-set tier: the ranked set is memoized keyed on the
         # candidate name-set, so the stable prefix stays byte-identical
         # across turns yet a skill installed or removed mid-process (the
@@ -271,6 +303,25 @@ class ContextBuilder:
         the same snapshot back on every build. Omitted, both are rendered
         live and exposed through ``last_eager_render``.
         """
+        stable, context = self._system_layers(
+            channel=channel,
+            agent_mode_name=agent_mode_name,
+            active_persona_soul=active_persona_soul,
+            eager_snapshot=eager_snapshot,
+        )
+        volatile = self._build_volatile_layer(session_summary=session_summary)
+        return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
+
+    def _system_layers(
+        self,
+        *,
+        channel: str | None,
+        agent_mode_name: str | None,
+        active_persona_soul: str | None,
+        eager_snapshot: EagerSnapshot | None,
+    ) -> tuple[str, str]:
+        """The stable and context tiers of the system prompt (see
+        ``build_system_prompt``), with the per-call breakdown started over."""
         # Reset the per-call breakdown — each layer fills its slot.
         self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
         stable = self._build_stable_layer(
@@ -279,8 +330,7 @@ class ContextBuilder:
             eager_snapshot=eager_snapshot,
         )
         context = self._build_context_layer(agent_mode_name=agent_mode_name)
-        volatile = self._build_volatile_layer(session_summary=session_summary)
-        return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
+        return stable, context
 
     def _build_operating_floor(self, soul_body: str) -> str:
         """Always-on execution discipline, independent of the active SOUL.
@@ -586,6 +636,7 @@ class ContextBuilder:
         *,
         probe: bool = False,
         eager_snapshot: EagerSnapshot | None = None,
+        input_budget_tokens: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call.
 
@@ -594,23 +645,34 @@ class ContextBuilder:
         emits ``context.composition`` nor updates ``last_composition``, so the
         telemetry series and the cached payload keep describing real turns.
 
-        ``eager_snapshot`` goes straight to ``build_system_prompt``: the
-        pinned block and hot layer already rendered for this session, rather
-        than a fresh read off disk.
+        ``eager_snapshot`` goes straight to the system prompt's stable tier:
+        the pinned block and hot layer already rendered for this session,
+        rather than a fresh read off disk.
+
+        ``input_budget_tokens``, the input budget of the model the turn runs
+        on, bounds what the session adds to the prompt by the room the
+        system prompt's fixed tiers and *tools* leave of it: the decision
+        log gives way first; the archived summary stays whole when it fits
+        beside the message and the history, and otherwise takes its share
+        (``_SUMMARY_ROOM_SHARE``) of what the message, at least
+        ``_MESSAGE_ALLOWANCE``, leaves, so neither makes the turn too large to
+        send, whatever history goes, and the cut does not follow each
+        message's length.
         """
         # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
         # every turn (derived from session.metadata, so it survives
         # compaction). See durin/agent/task_state.py.
-        extra = task_state_runtime_lines(session_metadata)
+        task_lines = task_state_runtime_lines(session_metadata)
         # After /build approves a plan, surface the path so the next turn
         # can read it without the user having to copy/paste it. One-shot
         # (consumed below); the persistent counterpart is the executing-plan
         # pointer injected just above.
+        plan_lines: list[str] = []
         if session_metadata is not None:
             approved_path = session_metadata.get("approved_plan_path")
             if approved_path:
-                extra = list(extra) + [
+                plan_lines = [
                     f"Approved plan ready at: {approved_path}",
                     "Start with updating your todo list using the todo_write "
                     "tool if applicable — include the plan's Verification "
@@ -621,13 +683,6 @@ class ContextBuilder:
                 with suppress(Exception):
                     if isinstance(session_metadata, dict):
                         session_metadata.pop("approved_plan_path", None)
-        runtime_ctx = self._build_runtime_context(
-            channel,
-            chat_id,
-            self.timezone,
-            sender_id=sender_id,
-            supplemental_lines=extra or None,
-        )
         user_content = self._build_user_content(
             current_message, media,
             audio_mode=audio_mode,
@@ -666,31 +721,63 @@ class ContextBuilder:
             else:
                 user_content = list(user_content) + [{"type": "text", "text": memory_prefetch}]
 
-        # Merge runtime context and user content into a single user message
-        # to avoid consecutive same-role messages that some providers reject.
-        # Runtime context is appended to keep the user-content prefix stable
-        # for prompt-cache hits (the context changes every turn due to time).
-        if isinstance(user_content, str):
-            merged = f"{user_content}\n\n{runtime_ctx}"
-        else:
-            merged = user_content + [{"type": "text", "text": runtime_ctx}]
+        def _merged(lines: list[str]) -> Any:
+            # Merge runtime context and user content into a single user message
+            # to avoid consecutive same-role messages that some providers reject.
+            # Runtime context is appended to keep the user-content prefix stable
+            # for prompt-cache hits (the context changes every turn due to time).
+            runtime_ctx = self._build_runtime_context(
+                channel,
+                chat_id,
+                self.timezone,
+                sender_id=sender_id,
+                supplemental_lines=(list(lines) + plan_lines) or None,
+            )
+            if isinstance(user_content, str):
+                return f"{user_content}\n\n{runtime_ctx}"
+            return user_content + [{"type": "text", "text": runtime_ctx}]
+
+        def _turn_tokens(content: Any) -> int:
+            # Counted as the runner's precheck counts it: the text, not an
+            # attached image's encoding.
+            return estimate_prompt_tokens([{"role": current_role, "content": content}])
+
+        merged = _merged(task_lines)
         agent_mode_name = None
         if session_metadata is not None:
             from durin.agent.agent_mode import SESSION_MODE_KEY
 
             agent_mode_name = session_metadata.get(SESSION_MODE_KEY)
+        stable, context = self._system_layers(
+            channel=channel,
+            agent_mode_name=agent_mode_name,
+            active_persona_soul=active_persona_soul,
+            eager_snapshot=eager_snapshot,
+        )
+        self.last_decision_log_tokens = None
+        if input_budget_tokens:
+            room = (
+                input_budget_tokens
+                - _PROMPT_JOIN_MARGIN
+                - estimate_text_tokens("\n\n---\n\n".join(p for p in (stable, context) if p))
+                - (estimate_prompt_tokens([], tools) if tools else 0)
+            )
+            turn_tokens = _turn_tokens(merged)
+            decisions = decision_log_runtime_lines(session_metadata)
+            if turn_tokens > room and decisions:
+                allowed = max(0, estimate_text_tokens("\n".join(decisions)) - (turn_tokens - room))
+                merged = _merged(task_state_runtime_lines(session_metadata, decision_log_max_tokens=allowed))
+                turn_tokens = _turn_tokens(merged)
+                self.last_decision_log_tokens = allowed
+            message_tokens = max(_MESSAGE_ALLOWANCE, turn_tokens)
+            history_tokens = estimate_prompt_tokens(history) if history else 0
+            if session_summary and estimate_text_tokens(session_summary) + message_tokens + history_tokens > room:
+                session_summary = fit_summary_to_tokens(
+                    session_summary, int(max(0, room - message_tokens) * _SUMMARY_ROOM_SHARE),
+                )
+        volatile = self._build_volatile_layer(session_summary=session_summary)
         messages = [
-            {
-                "role": "system",
-                "content": self.build_system_prompt(
-                    skill_names,
-                    channel=channel,
-                    session_summary=session_summary,
-                    agent_mode_name=agent_mode_name,
-                    active_persona_soul=active_persona_soul,
-                    eager_snapshot=eager_snapshot,
-                ),
-            },
+            {"role": "system", "content": "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)},
             *history,
         ]
         if messages[-1].get("role") == current_role:

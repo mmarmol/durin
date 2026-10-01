@@ -107,3 +107,50 @@ def test_webui_thread_persona_is_null_when_no_persona_set(
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["persona"] is None
+
+
+def _thread_persona(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, metadata: dict[str, Any],
+) -> Any:
+    """The persona the thread view shows for a session saved under *key*
+    with *metadata*, on a config whose telegram channel has the persona
+    "brief" and whose default is "plain"."""
+    from durin.config.schema import Config
+
+    config = Config.model_validate({
+        "agents": {"defaults": {"persona": "plain"}},
+        "channels": {"telegram": {"enabled": False, "persona": "brief"}},
+    })
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *_a, **_k: config)
+    sm = SessionManager(tmp_path)
+    session = Session(key=key)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "hi")
+    session.metadata.update(metadata)
+    sm.save(session)
+    client = _make_client(bus, session_manager=sm)
+    auth = {"Authorization": f"Bearer {_token(client)}"}
+
+    resp = client.get(f"/api/v1/sessions/{key}/webui-thread", headers=auth)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]["persona"]
+
+
+def test_a_channel_session_shows_the_channel_persona_its_turns_use(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A telegram chat's turns run with the telegram channel's persona; the
+    thread showed the configured default instead."""
+    assert _thread_persona(bus, tmp_path, monkeypatch, "telegram:42", {}) == "brief"
+
+
+def test_a_cron_run_shows_the_persona_the_job_gave_its_turn(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cron job's run turns run with the job's persona, recorded on the
+    run's session; the thread showed the configured default instead."""
+    persona = _thread_persona(
+        bus, tmp_path, monkeypatch, "cron:job-1:run:1700000000000", {"turn_overrides": {"persona": "tutor"}},
+    )
+    assert persona == "tutor"

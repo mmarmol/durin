@@ -189,9 +189,15 @@ def cmd_migrate() -> None:
     One-shot and idempotent. The config keeps `${secret:…}` references
     afterwards; the values live in `secrets.json` (mode 0600).
     """
+    from durin.cli.config_cmd import report_config_refusal
+    from durin.config.loader import ConfigNotLoadedError
     from durin.security.secrets import migrate_plaintext_provider_keys
 
-    created = migrate_plaintext_provider_keys()
+    try:
+        created = migrate_plaintext_provider_keys()
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e, console)
+        raise typer.Exit(1) from None
     if not created:
         console.print(
             "[dim]Nothing to migrate — no plaintext provider keys in config.[/dim]"

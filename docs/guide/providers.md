@@ -204,6 +204,10 @@ restores the direct `model`/`provider` fields.
 A preset also accepts an optional `preemptive_compact_ratio` — the fraction
 of the context window at which durin compresses history before the next LLM
 call. When unset it inherits from `agents.defaults.preemptive_compact_ratio`.
+Its optional `preemptive_compact_max_tokens` caps that point in tokens,
+whatever the ratio: compression starts at the smaller of the two. When unset
+it inherits `agents.defaults.preemptive_compact_max_tokens`; `0` turns the
+cap off for that preset, leaving it on its ratio alone.
 
 ## Aux-model presets
 

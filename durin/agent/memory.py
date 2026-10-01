@@ -8,6 +8,7 @@ import os
 import re
 import weakref
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
@@ -15,9 +16,12 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 import tiktoken
 from loguru import logger
 
+from durin.agent.runner import input_budget_tokens
+from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
+from durin.telemetry.schema import CompactionTriggerBound
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -29,10 +33,17 @@ from durin.utils.helpers import (
 )
 from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
+from durin.utils.runtime import (
+    runs_that_fit,
+    summary_token_count,
+    truncate_to_tokens,
+    without_failure_placeholders,
+)
 
 if TYPE_CHECKING:
     from durin.memory.eager_surface import EagerSnapshot
     from durin.providers.base import LLMProvider
+    from durin.providers.factory import CompactionDefaults
     from durin.session.manager import SessionManager
 
 
@@ -493,6 +504,19 @@ def extract_discovered_paths(messages: list[dict[str, Any]]) -> list[str]:
     return list(seen)[:_MAX_DISCOVERED_PATHS]
 
 
+@dataclass(frozen=True)
+class CompactionLimits:
+    """The model numbers one compaction check is sized by: the window and
+    output ceiling of the model a turn runs on, and the ratio and absolute cap
+    that apply to it (``cap`` None: no cap). The loop's context_block_limit
+    applies on top, whatever the model."""
+
+    context_window_tokens: int
+    max_completion_tokens: int
+    ratio: float
+    cap: int | None
+
+
 class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
 
@@ -529,6 +553,12 @@ class Consolidator:
     _FIT_GROWTH_RATIO = 0.05
     _FIT_GROWTH_FLOOR = 4096
 
+    # The share of a normal compaction cycle's runway (trigger − target) a
+    # compaction has to leave under the trigger to have made room. With less,
+    # the prompt's fixed part fills the trigger, just over it or just under
+    # it, and the next turn or two would compact again for as little.
+    _FIXED_PROMPT_MIN_ROOM = 0.25
+
     # Tier 2 A3: aggregate timeout for acquiring the per-session compaction
     # lock. If a prior compaction hung (e.g. provider call stuck
     # mid-summarize), waiting on the lock indefinitely starves the session
@@ -549,9 +579,12 @@ class Consolidator:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         *,
         eager_snapshot_for_session: Callable[[Session], EagerSnapshot | None] | None = None,
+        pending_summary_for_session: Callable[[Session], str | None] | None = None,
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        preemptive_compact_max_tokens: int | None = 256_000,
+        context_block_limit: int | None = None,
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
@@ -563,6 +596,10 @@ class Consolidator:
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
+        # The loop's context_block_limit. When set it IS the runner's input
+        # budget, whatever the window, so the trigger ceiling and the
+        # summarizing call's input must stay under it too.
+        self.context_block_limit = context_block_limit
         # ``consolidation_ratio`` now means: after a compaction round, how
         # much of the *trigger threshold* should remain (default 0.5 → leave
         # half of the trigger). Pre-emptive compaction raised the trigger from
@@ -577,8 +614,17 @@ class Consolidator:
         # a 1M-window model wants ~0.15 (you pay for every token shipped, so
         # waiting until 500K means shipping a huge prompt every turn). Set
         # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
-        # overrides; otherwise inherits from ``AgentDefaults``.
+        # overrides; otherwise inherits from ``AgentDefaults``. The default is
+        # kept apart so switching away from a preset's ratio restores it.
         self.preemptive_compact_ratio = preemptive_compact_ratio
+        self._default_preemptive_compact_ratio = preemptive_compact_ratio
+        # Absolute bound on the same trigger, in tokens; None leaves the ratio
+        # alone. The ratio stops bounding cost on the largest windows (0.5 of
+        # 1M fires only at 500K), so the trigger is the smaller of the two. A
+        # preset may set its own; one that sets none runs with this default,
+        # kept apart so switching away from a preset's cap restores it.
+        self.preemptive_compact_max_tokens = preemptive_compact_max_tokens
+        self._default_preemptive_compact_max_tokens = preemptive_compact_max_tokens
         # Concern B (task-state anchor): caps + toggle for the auto-extracted
         # decision log written at compaction. See durin/session/decision_log.py.
         self.decision_log_enabled = decision_log_enabled
@@ -595,6 +641,10 @@ class Consolidator:
         # probe render live, which is what a session without a frozen surface
         # gets anyway.
         self._eager_snapshot_for_session = eager_snapshot_for_session
+        # The session's own summary framed as its next prompt carries it, so
+        # the probe measures that text. None (a test scaffold, an ad-hoc
+        # runner) reads the session's own summary unframed.
+        self._pending_summary_for_session = pending_summary_for_session
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -624,9 +674,27 @@ class Consolidator:
         # extra compaction, so it is not worth persisting.
         self._fit_baseline: dict[str, int] = {}
         self._awaiting_real_usage: dict[str, int] = {}
+        # Per session, where the last compaction that could not make room
+        # left it: over its trigger, or under it by less than
+        # ``_FIXED_PROMPT_MIN_ROOM`` of a normal runway. The part compaction
+        # may not archive (system prompt, tool schemas, summary, the last
+        # turn) fills the trigger there, so compacting again on the next turn
+        # would archive that one turn and nothing more, turn after turn. The
+        # next compaction waits until the prompt has grown by a normal
+        # cycle's runway past this level (never past the ceiling). Kept with
+        # the limits it was reached under, since another window or cap makes
+        # it meaningless. Cleared by a compaction that makes room, a check
+        # that finds room again, and a session that starts over or is
+        # compacted by hand (``forget_session``); in-memory and bounded like
+        # the veto state above.
+        self._compaction_floor: dict[str, tuple[int, CompactionLimits]] = {}
+        # Per session, the limits its latest check was sized by when they are
+        # not the loop's own model's (a turn on a persona's or a per-turn
+        # model): what ``session_trigger`` reports. Bounded like the above.
+        self._session_limits: dict[str, CompactionLimits] = {}
 
     @staticmethod
-    def _bounded_put(store: dict[str, int], key: str, value: int) -> None:
+    def _bounded_put(store: dict[str, Any], key: str, value: Any) -> None:
         """Insert into a per-session tracking dict, evicting oldest first."""
         if key not in store and len(store) >= Consolidator._MAX_TRACKED_SESSIONS:
             with suppress(StopIteration):
@@ -636,6 +704,22 @@ class Consolidator:
     def _forget_session_fit(self, key: str) -> None:
         self._fit_baseline.pop(key, None)
         self._awaiting_real_usage.pop(key, None)
+
+    def session_trigger(self, session_key: str) -> int:
+        """The trigger the session's turns compact at, as its latest check in
+        this process was sized: by the model its turn ran on (a persona's, a
+        cron job's), else — also before any check — by the loop's own model.
+        Cheap: nothing is resolved."""
+        limits = self._session_limits.get(session_key) or self._limits()
+        return self._trigger_for(limits)[0]
+
+    def forget_session(self, session_key: str) -> None:
+        """Drop what the checks remember about a session's prompt: the
+        fixed-prompt level and the real-usage veto state. For a session that
+        starts over (/new) or was compacted by hand (/compact): both measured
+        a prompt that is gone, and would hold its next compaction back."""
+        self._compaction_floor.pop(session_key, None)
+        self._forget_session_fit(session_key)
 
     def _defer_to_real_usage(
         self, session: Session, rough: int, trigger: int,
@@ -697,17 +781,24 @@ class Consolidator:
         context_window_tokens: int,
         *,
         preemptive_compact_ratio: float | None = None,
+        preemptive_compact_max_tokens: int | None = None,
+        compaction_defaults: CompactionDefaults | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = provider.generation.max_tokens
-        # Per-preset ratio override (Tier 2 A1). When the model preset
-        # changes (set_model_preset → _apply_provider_snapshot), callers
-        # can supply the preset's preemptive_compact_ratio. None leaves
-        # the existing ratio untouched.
-        if preemptive_compact_ratio is not None:
-            self.preemptive_compact_ratio = preemptive_compact_ratio
+        # agents.defaults' ratio and cap as the snapshot read them: an edit
+        # made while the gateway runs reaches every later turn this way.
+        if compaction_defaults is not None:
+            self._default_preemptive_compact_ratio = compaction_defaults.ratio
+            self._default_preemptive_compact_max_tokens = compaction_defaults.max_tokens
+        # Per-preset ratio and cap (Tier 2 A1). When the model preset changes
+        # (set_model_preset → _apply_provider_snapshot), callers supply the
+        # preset's own values, which apply while it is active. A preset that
+        # sets none (None) gets the default back, never the previous preset's.
+        self.preemptive_compact_ratio = self._preset_ratio(preemptive_compact_ratio)
+        self.preemptive_compact_max_tokens = self._preset_cap(preemptive_compact_max_tokens)
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -802,12 +893,12 @@ class Consolidator:
         self,
         session: Session,
         replay_max_messages: int | None,
-    ) -> tuple[str | None, dict[str, list[str]]] | None:
+    ) -> tuple[list[str], dict[str, list[str]]] | None:
         """Archive messages that would be hidden by the replay message window.
 
-        Returns the round's ``(summary, tags)`` — the same pair ``archive()``
+        Returns the round's ``(summaries, tags)`` — what ``_archive_in_pieces``
         produces — or ``None`` when there was nothing to archive. The caller
-        needs the tags too: they ride the summary into the session-summary
+        needs the tags too: they ride the summaries into the session-summary
         store, not only into the session's metadata.
         """
         end_idx = self._replay_overflow_boundary(session, replay_max_messages)
@@ -822,25 +913,26 @@ class Consolidator:
             len(chunk),
             replay_max_messages,
         )
-        summary, tags = await self.archive(self._unsummarized(session, chunk))
-        self._merge_session_tags(session, tags)
+        summaries, tags = await self._archive_in_pieces(session, self._unsummarized(session, chunk))
         session.last_consolidated = end_idx
         self.sessions.save(session)
-        return summary, tags
+        return summaries, tags
 
     def _unsummarized(self, session: Session, chunk: list[dict]) -> list[dict]:
-        """Drop the head of *chunk* the nightly session-summary pass already
-        summarized. Its cursor is an index into ``session.messages`` — the
-        same list ``last_consolidated`` indexes — so the overlap is the
-        difference. An empty result means the whole chunk is already
-        summarized: no LLM call, nothing appended."""
+        """Drop the head of *chunk* (which starts at ``last_consolidated``)
+        that the nightly session-summary pass already summarized. The pass's
+        cursor names the message it ended on and is resolved against
+        ``session.messages`` as they are now (``summarized_count``), so /new
+        and the file cap, which renumber the messages, cannot make it cover
+        any the pass never saw. An empty result means the whole chunk is
+        already summarized: no LLM call, nothing appended."""
         try:
-            from durin.memory.session_summary_dream import get_summary_cursor
+            from durin.memory.session_summary_dream import summarized_count
             path = self.sessions.sessions_dir / f"{self.sessions.safe_key(session.key)}.jsonl"
-            cursor = get_summary_cursor(path)
+            covered = summarized_count(path, session.messages)
         except Exception:  # noqa: BLE001 — a missing sidecar means nothing was summarized
             return chunk
-        already = cursor - session.last_consolidated
+        already = covered - session.last_consolidated
         if already <= 0:
             return chunk
         return chunk[already:] if already < len(chunk) else []
@@ -945,8 +1037,17 @@ class Consolidator:
     def estimate_session_prompt_tokens(
         self,
         session: Session,
+        *,
+        persona_soul: str | None = None,
+        limits: CompactionLimits | None = None,
     ) -> tuple[int, str]:
-        """Estimate prompt size from the full unconsolidated session tail."""
+        """Estimate prompt size from the full unconsolidated session tail.
+
+        ``persona_soul`` is the SOUL the session's turns are built with when
+        a persona sets one (None: the default SOUL); a persona's SOUL can be
+        many times the default's size. ``limits`` are the numbers of the
+        model those turns run on (None: the loop's own): its input budget
+        bounds the session summary in the prompt as it does in theirs."""
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
@@ -954,14 +1055,19 @@ class Consolidator:
         # source of truth); the legacy `session.metadata["_last_summary"]` is
         # kept as a backward-compat fallback for pre-A10 sessions until they
         # next compact (at which point `_persist_last_summary` migrates).
-        from durin.memory.session_summary_store import get_session_summary
-        summary, _ = get_session_summary(self.store.workspace, session.key)
-        if summary is None:
-            legacy = session.metadata.get("_last_summary")
-            if isinstance(legacy, dict):
-                summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
-            elif isinstance(legacy, str):
-                summary = legacy
+        if self._pending_summary_for_session is not None:
+            summary = self._pending_summary_for_session(session)
+        else:
+            from durin.memory.session_summary_store import get_session_summary
+            summary, _ = get_session_summary(self.store.workspace, session.key)
+            if summary is None:
+                legacy = session.metadata.get("_last_summary")
+                if isinstance(legacy, dict):
+                    summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
+                elif isinstance(legacy, str):
+                    summary = legacy
+        limits = limits or self._limits()
+        tools = self._get_tool_definitions()
         # ``probe=True``: this build exists only to be measured. Without the
         # flag it would emit a ``context.composition`` row and overwrite the
         # cached payload that /status and the CLI footer read, so the estimate
@@ -991,21 +1097,107 @@ class Consolidator:
             session_metadata=session.metadata,
             probe=True,
             eager_snapshot=eager_snapshot,
+            active_persona_soul=persona_soul,
+            # The tool definitions take their share of the budget in the
+            # turn's build too: without them the probe bounds the summary
+            # by a room larger than the turn's by all of their tokens.
+            tools=tools,
+            input_budget_tokens=input_budget_tokens(
+                limits.context_window_tokens, limits.max_completion_tokens, self.context_block_limit,
+            ),
         )
         return estimate_prompt_tokens_chain(
             self.provider,
             self.model,
             probe_messages,
-            self._get_tool_definitions(),
+            tools,
         )
+
+    def _limits(self) -> CompactionLimits:
+        """The loop's own model's numbers, as they stand now."""
+        return CompactionLimits(
+            context_window_tokens=self.context_window_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            ratio=self.preemptive_compact_ratio,
+            cap=self._effective_cap(self.preemptive_compact_max_tokens),
+        )
+
+    @staticmethod
+    def _effective_cap(cap: int | None) -> int | None:
+        """The cap a check applies: None or 0 and under (a preset's "no cap")
+        is none, and a count under the minimum is raised to it. The config is
+        validated against the same rules, but a loop built in code is not,
+        and a cap under the prompt's fixed part would compact every turn."""
+        if cap is None or cap <= 0:
+            return None
+        return max(cap, PREEMPTIVE_COMPACT_MIN_TOKENS)
+
+    def _preset_ratio(self, ratio: float | None) -> float:
+        """A preset's ratio, or the default one when the preset sets none."""
+        return self._default_preemptive_compact_ratio if ratio is None else ratio
+
+    def _preset_cap(self, cap: int | None) -> int | None:
+        """A preset's cap, or the default one when the preset sets none."""
+        return self._default_preemptive_compact_max_tokens if cap is None else cap
+
+    def run_limits(
+        self,
+        context_window_tokens: int,
+        max_completion_tokens: int,
+        *,
+        preemptive_compact_ratio: float | None = None,
+        preemptive_compact_max_tokens: int | None = None,
+    ) -> CompactionLimits:
+        """Limits for a turn that runs on another model than the loop's own,
+        such as a cron job's or a persona's: that model's window and output
+        ceiling, and its preset's ratio and cap, each taken from the defaults
+        when the preset sets none, as for the loop's own model."""
+        return CompactionLimits(
+            context_window_tokens=context_window_tokens,
+            max_completion_tokens=max_completion_tokens,
+            ratio=self._preset_ratio(preemptive_compact_ratio),
+            cap=self._effective_cap(self._preset_cap(preemptive_compact_max_tokens)),
+        )
+
+    def _input_budget_for(self, limits: CompactionLimits) -> int:
+        budget = limits.context_window_tokens - limits.max_completion_tokens - self._SAFETY_BUFFER
+        limit_ceiling = self._block_limit_ceiling
+        return budget if limit_ceiling is None else min(budget, limit_ceiling)
 
     @property
     def _input_token_budget(self) -> int:
-        """Available input token budget for consolidation LLM."""
-        return self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+        """Available input token budget for consolidation LLM, which runs on
+        the loop's own model.
+
+        Never above what a run may send: under a context_block_limit, the
+        summarizing call's input stays one safety buffer under it."""
+        return self._input_budget_for(self._limits())
 
     @property
-    def _preemptive_ceiling(self) -> int:
+    def _block_limit_ceiling(self) -> int | None:
+        """One safety buffer under context_block_limit, or None when no limit
+        is set. The runner's whole input budget is the limit itself then."""
+        limit = self.context_block_limit
+        if isinstance(limit, int) and limit > 0:
+            return limit - self._SAFETY_BUFFER
+        return None
+
+    def _window_ceiling_for(self, limits: CompactionLimits) -> int:
+        """The window's part of the trigger ceiling: the window less a capped
+        output reservation and two safety buffers."""
+        # ``max_completion_tokens`` of 0 means "provider default, unset"; it
+        # reserves nothing, matching the budget this ceiling replaced.
+        reservation = min(
+            max(0, int(limits.max_completion_tokens)),
+            self._MAX_TRIGGER_OUTPUT_RESERVATION,
+        )
+        return limits.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
+
+    @property
+    def _window_ceiling(self) -> int:
+        return self._window_ceiling_for(self._limits())
+
+    def _ceiling_for(self, limits: CompactionLimits) -> int:
         """Hard upper bound on the pre-emptive trigger.
 
         Reserves only a *capped* slice of the window for output, so a large
@@ -1013,64 +1205,135 @@ class Consolidator:
         strictly below the runner's own input budget (same formula, one extra
         safety buffer) so the loop-level invariant holds: a consolidation that
         lands at or under this ceiling always fits the runner, which is what
-        lets an iteration-0 overflow be read as "consolidation failed".
+        lets an iteration-0 overflow be read as "consolidation failed". When
+        a context_block_limit is set the runner's budget is that limit, so
+        the ceiling is also held one buffer under it.
         """
-        # ``max_completion_tokens`` of 0 means "provider default, unset"; it
-        # reserves nothing, matching the budget this ceiling replaced.
-        reservation = min(
-            max(0, int(self.max_completion_tokens)),
-            self._MAX_TRIGGER_OUTPUT_RESERVATION,
-        )
-        return self.context_window_tokens - reservation - (2 * self._SAFETY_BUFFER)
+        ceiling = self._window_ceiling_for(limits)
+        limit_ceiling = self._block_limit_ceiling
+        return ceiling if limit_ceiling is None else min(ceiling, limit_ceiling)
 
     @property
-    def _effective_compact_ratio(self) -> float:
+    def _preemptive_ceiling(self) -> int:
+        return self._ceiling_for(self._limits())
+
+    def _ratio_for(self, limits: CompactionLimits) -> float:
         """Configured trigger ratio, raised to the small-window floor."""
-        ratio = self.preemptive_compact_ratio
+        ratio = limits.ratio
         if not isinstance(ratio, (int, float)) or ratio <= 0:
             return 0.0
         ratio = float(ratio)
-        if 0 < self.context_window_tokens < self._SMALL_CTX_WINDOW_LIMIT:
+        if 0 < limits.context_window_tokens < self._SMALL_CTX_WINDOW_LIMIT:
             return max(ratio, self._SMALL_CTX_MIN_RATIO)
         return ratio
 
     @property
-    def _preemptive_trigger_tokens(self) -> int:
-        """Token count at which a turn forces consolidation before the
-        LLM call.
+    def _effective_compact_ratio(self) -> float:
+        return self._ratio_for(self._limits())
 
-        Bounded above by ``_preemptive_ceiling`` so a misconfigured ratio
-        (e.g. 0.99) can't push the trigger past the point where the resulting
-        prompt still fits the runner — context overflow still triggers even if
-        the ratio would have skipped.
+    @property
+    def _preemptive_trigger_tokens(self) -> int:
+        """Token count at which a turn on the loop's own model forces
+        consolidation before the LLM call."""
+        return self._trigger_for(self._limits())[0]
+
+    def _preemptive_trigger(self) -> tuple[int, CompactionTriggerBound]:
+        """The loop's own model's trigger and the bound that set it."""
+        return self._trigger_for(self._limits())
+
+    def _trigger_for(self, limits: CompactionLimits) -> tuple[int, CompactionTriggerBound]:
+        """The pre-emptive trigger in tokens, and the bound that set it.
+
+        The trigger is the smallest of four bounds, named in the second
+        element: the window times the configured ratio (``ratio``, or
+        ``floor`` when the small-window floor raised that ratio), the absolute
+        cap (``cap``), the window's ceiling (``ceiling``) and the ceiling a
+        context_block_limit sets (``block_limit``). The ceilings keep a
+        misconfigured ratio (e.g. 0.99) or cap from pushing the trigger past
+        the point where the resulting prompt still fits the runner — context
+        overflow still triggers even if the ratio would have skipped. On a tie
+        the earlier bound is named, since the later one changed nothing.
         """
-        if self.context_window_tokens <= 0:
-            return 0
-        ceiling = self._preemptive_ceiling
-        if ceiling <= 0:
-            # Window smaller than the reservation: nothing sane to derive.
-            return max(1, self._input_token_budget)
-        ratio = self._effective_compact_ratio
-        if ratio <= 0:
+        window = limits.context_window_tokens
+        if window <= 0:
+            return 0, "ceiling"
+        window_ceiling = self._window_ceiling_for(limits)
+        if self._ceiling_for(limits) <= 0:
+            # Window (or block limit) smaller than the reservation: nothing
+            # sane to derive.
+            bound: CompactionTriggerBound = "ceiling" if window_ceiling <= 0 else "block_limit"
+            return max(1, self._input_budget_for(limits)), bound
+        ratio = self._ratio_for(limits)
+        if ratio > 0:
+            trigger = int(window * ratio)
+            bound = "floor" if ratio > limits.ratio else "ratio"
+        else:
             # 0 / negative / garbage → fall back to legacy behavior (trigger
             # only at the hard ceiling).
-            return max(1, ceiling)
-        threshold = int(self.context_window_tokens * ratio)
-        return max(1, min(threshold, ceiling))
+            trigger, bound = window_ceiling, "ceiling"
+        lower_bounds: tuple[tuple[int | None, CompactionTriggerBound], ...] = (
+            (limits.cap, "cap"),
+            (window_ceiling, "ceiling"),
+            (self._block_limit_ceiling, "block_limit"),
+        )
+        for value, name in lower_bounds:
+            if value is not None and value < trigger:
+                trigger, bound = value, name
+        return max(1, trigger), bound
+
+    def _summarizer_pieces(self, messages: list[dict]) -> list[list[dict]]:
+        """*messages* in order, cut at message boundaries into runs whose
+        text fits one summarizing call (``_input_token_budget``). Those calls
+        run on the loop's own model whatever model the turn ran on, so a chunk
+        sized by a turn on a larger window, or the span several rounds
+        archived, can be many times that budget; handed over whole, all but
+        its head would be cut off and never summarized. A single message over
+        the budget is a run of its own, and the only text still cut."""
+        budget = self._input_token_budget
+        if not messages or budget <= 0:
+            return [messages] if messages else []
+        # Counted as archive() counts the text it sends.
+        return runs_that_fit(
+            messages, budget, line=lambda message: MemoryStore._format_messages([message]),
+            count=summary_token_count,
+        )
+
+    async def archive_pieces(
+        self, messages: list[dict],
+    ) -> tuple[list[str], dict[str, list[str]]]:
+        """Summarize *messages* in as many calls as ``_summarizer_pieces``
+        cuts them into, so none of them is cut: each summary that came back
+        (one block each, like a round's) and the tags of all of them. A call
+        that fails raw-archives its run (``archive``). The placeholders of
+        turns that produced no answer are left out
+        (``without_failure_placeholders``): no call is made for a span of
+        nothing else."""
+        summaries: list[str] = []
+        tags: dict[str, list[str]] = {"entities": [], "topics": []}
+        for piece in self._summarizer_pieces(without_failure_placeholders(messages)):
+            summary, piece_tags = await self.archive(piece)
+            self._collect_tags(tags, piece_tags)
+            if summary:
+                summaries.append(summary)
+        return summaries, tags
+
+    async def _archive_in_pieces(
+        self, session: Session, messages: list[dict],
+    ) -> tuple[list[str], dict[str, list[str]]]:
+        """``archive_pieces``, with the tags also merged into the session's
+        own."""
+        summaries, tags = await self.archive_pieces(messages)
+        self._merge_session_tags(session, tags)
+        return summaries, tags
 
     def _truncate_to_token_budget(self, text: str) -> str:
-        """Truncate text so it fits within the consolidation LLM's token budget."""
+        """Truncate text so it fits within the consolidation LLM's token budget.
+        Counted as _summarizer_pieces counts it, so a run it sized is never
+        cut here: only a single message over the budget is."""
         budget = self._input_token_budget
         if budget <= 0:
             return truncate_text(text, _RAW_ARCHIVE_MAX_CHARS)
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            tokens = enc.encode(text)
-            if len(tokens) <= budget:
-                return text
-            return enc.decode(tokens[:budget]) + "\n... (truncated)"
-        except Exception:
-            return truncate_text(text, budget * 4)
+        return truncate_to_tokens(text, budget)
 
     async def archive(
         self, messages: list[dict]
@@ -1292,21 +1555,46 @@ class Consolidator:
         session: Session,
         *,
         replay_max_messages: int | None = None,
+        force: bool = False,
+        limits: CompactionLimits | None = None,
+        persona_soul: str | None = None,
     ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer
         so the LLM request never exceeds the context window.
+
+        ``limits`` sizes the check for a turn that runs on another model than
+        the loop's own (``run_limits``); without it the loop's model is used.
+        The trigger has to sit under the budget of the run that follows,
+        which is that model's. ``persona_soul`` is the SOUL that turn is
+        built with when a persona sets one: the estimate measures it.
+
+        ``force`` is for a caller holding proof that the prompt does not fit:
+        the runner overflowed before its first call. The idle check and the
+        real-usage vetoes exist to skip needless compactions judged on a
+        rough estimate; that proof is newer than either, so a forced call
+        compacts down to the target whatever the estimate or the provider's
+        last count says. Deferring it left the retry to overflow as well,
+        and every later turn with it.
         """
-        if not session.messages or self.context_window_tokens <= 0:
+        if limits is None:
+            self._session_limits.pop(session.key, None)
+            limits = self._limits()
+        else:
+            self._bounded_put(self._session_limits, session.key, limits)
+        if not session.messages or limits.context_window_tokens <= 0:
             return
         with self._bound_telemetry(session.key):
-            await self._consolidate_by_tokens(session, replay_max_messages)
+            await self._consolidate_by_tokens(session, replay_max_messages, force, limits, persona_soul)
 
     async def _consolidate_by_tokens(
         self,
         session: Session,
         replay_max_messages: int | None,
+        force: bool,
+        limits: CompactionLimits,
+        persona_soul: str | None,
     ) -> None:
         lock = self.get_lock(session.key)
         # Tier 2 A3: bounded lock acquisition. A prior compaction that
@@ -1344,8 +1632,24 @@ class Consolidator:
             # the hard budget ceiling. ``target`` is computed off the trigger
             # so each compaction round does meaningful work (compacting down
             # by ``consolidation_ratio`` of the trigger).
-            trigger = self._preemptive_trigger_tokens
+            trigger, trigger_bound = self._trigger_for(limits)
             target = max(1, int(trigger * self.consolidation_ratio))
+            # Read with the trigger, from the same limits, before anything
+            # awaits: a preset switch while this call waits on the summary
+            # must not pair the trigger with another preset's numbers in the
+            # events below.
+            cap_tokens = limits.cap
+            ceiling = self._ceiling_for(limits)
+            window = limits.context_window_tokens
+            effective_ratio = self._ratio_for(limits)
+            # A compaction has made room when it leaves this much under the
+            # trigger (see _FIXED_PROMPT_MIN_ROOM).
+            min_room = (trigger - target) * self._FIXED_PROMPT_MIN_ROOM
+            remembered = self._compaction_floor.get(session.key)
+            if remembered is not None and remembered[1] != limits:
+                # Reached under another model's window or another ratio or
+                # cap: that level says nothing about this trigger.
+                self._compaction_floor.pop(session.key, None)
             new_summaries: list[str] = []
             # This call's tags, unioned across every archive round below and
             # handed to the session-summary store with the blocks.
@@ -1355,13 +1659,12 @@ class Consolidator:
                 replay_max_messages,
             )
             if replay_round is not None:
-                replay_summary, replay_tags = replay_round
+                replay_summaries, replay_tags = replay_round
                 self._collect_tags(new_tags, replay_tags)
-                if replay_summary:
-                    new_summaries.append(replay_summary)
+                new_summaries.extend(replay_summaries)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
-                    session,
+                    session, persona_soul=persona_soul, limits=limits,
                 )
             except Exception:
                 logger.exception("Token estimation failed for {}", session.key)
@@ -1389,13 +1692,19 @@ class Consolidator:
                 self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
-            if estimated < trigger:
+            if estimated < trigger and not force:
+                if trigger - estimated >= min_room:
+                    # Room under the trigger again: the prompt's fixed part
+                    # has shrunk since the level was reached (a shorter
+                    # AGENTS.md, fewer tools), so a compaction at the trigger
+                    # would make room now.
+                    self._compaction_floor.pop(session.key, None)
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, trigger={}, msgs={}",
                     session.key,
                     estimated,
-                    self.context_window_tokens,
+                    window,
                     source,
                     trigger,
                     unconsolidated_count,
@@ -1405,8 +1714,13 @@ class Consolidator:
                 return
             # The rough estimate is over the trigger — but it measures the raw
             # tail, not the copy the runner ships. Let the provider's own
-            # counts veto a compaction the real prompt does not need.
-            deferral = self._defer_to_real_usage(session, estimated, trigger)
+            # counts veto a compaction the real prompt does not need, unless
+            # an overflow has already proved it does.
+            deferral = None if force else self._defer_to_real_usage(session, estimated, trigger)
+            if deferral is None and not force:
+                remembered = self._compaction_floor.get(session.key)
+                if remembered is not None and estimated < min(remembered[0] + (trigger - target), ceiling):
+                    deferral = "fixed_prompt"
             if deferral is not None:
                 logger.debug(
                     "Token consolidation deferred ({}) for {}: rough={} trigger={}",
@@ -1423,14 +1737,17 @@ class Consolidator:
                             "reason": deferral,
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": cap_tokens,
                         })
                 self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             # Visibility into how often the pre-emptive threshold does actual
             # work: it fires below the ceiling that would have been the only
-            # trigger under legacy (ratio-less) behavior.
-            if estimated < self._preemptive_ceiling:
+            # trigger under legacy (ratio-less) behavior. A forced run was set
+            # off by an overflow, not by this threshold.
+            if not force and estimated < ceiling:
                 _logger = current_telemetry()
                 if _logger is not None:
                     with suppress(Exception):
@@ -1438,9 +1755,11 @@ class Consolidator:
                             "session_key": session.key,
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
-                            "budget_tokens": self._preemptive_ceiling,
-                            "context_window_tokens": self.context_window_tokens,
-                            "ratio": self._effective_compact_ratio,
+                            "budget_tokens": ceiling,
+                            "context_window_tokens": window,
+                            "ratio": effective_ratio,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": cap_tokens,
                         })
 
             estimated_before = estimated
@@ -1476,36 +1795,36 @@ class Consolidator:
                     round_num,
                     session.key,
                     estimated,
-                    self.context_window_tokens,
+                    window,
                     source,
                     len(chunk),
                 )
                 pending = self._unsummarized(session, chunk)
-                summary, tags = await self.archive(pending)
+                summaries, tags = await self._archive_in_pieces(session, pending)
                 # Advance the cursor either way: on success the chunk was
                 # summarized; on failure archive() already raw-archived it as
                 # a breadcrumb. Re-archiving the same chunk on the next call
                 # would just emit duplicate [RAW] entries.
-                if summary:
-                    new_summaries.append(summary)
-                self._merge_session_tags(session, tags)
+                new_summaries.extend(summaries)
                 self._collect_tags(new_tags, tags)
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 rounds_run += 1
-                if not summary:
+                if not summaries and (not pending or without_failure_placeholders(pending)):
                     # No summary has two causes. An empty chunk means the
                     # nightly session-summary pass already covered this span,
                     # so archive() never called an LLM and nothing failed —
                     # the cursor moved and the work is done. Otherwise the LLM
                     # is degraded: stop hammering it this call and let the next
-                    # invocation retry a fresh chunk.
+                    # invocation retry a fresh chunk. A chunk of failure
+                    # placeholders alone has nothing to summarize, so no
+                    # summary came back for it and the rounds go on.
                     exit_reason = "already_summarized" if not pending else "summary_failed"
                     break
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
-                        session,
+                        session, persona_soul=persona_soul, limits=limits,
                     )
                 except Exception:
                     logger.exception("Token estimation failed for {}", session.key)
@@ -1515,6 +1834,18 @@ class Consolidator:
                     break
 
             if rounds_run:
+                # The estimate is only fresh after a round that ran to its
+                # re-measure. A compaction that left less than a meaningful
+                # part of a normal runway under the trigger, or none, could
+                # not make room, and the next one waits for a runway past the
+                # level it reached. One that ran out of rounds was still
+                # archiving: that is a backlog, not a fixed prompt, and it
+                # goes on compacting on the next turn.
+                if exit_reason in ("target_reached", "no_boundary", "max_rounds"):
+                    if exit_reason != "max_rounds" and trigger - estimated < min_room:
+                        self._bounded_put(self._compaction_floor, session.key, (estimated, limits))
+                    else:
+                        self._compaction_floor.pop(session.key, None)
                 # The real-usage park is armed in _post_compaction_hooks, which
                 # also covers the replay-window path.
                 _logger = current_telemetry()
@@ -1528,8 +1859,10 @@ class Consolidator:
                             "estimated_before": estimated_before,
                             "estimated_after": estimated,
                             "trigger_tokens": trigger,
+                            "trigger_bound": trigger_bound,
+                            "cap_tokens": cap_tokens,
                             "target_tokens": target,
-                            "context_window_tokens": self.context_window_tokens,
+                            "context_window_tokens": window,
                         })
 
             # Persist the last summary to session metadata so it can be injected
@@ -1597,14 +1930,21 @@ class Consolidator:
                     "post-compaction hook raised for {}",
                     session.key,
                 )
-        # Concern B (task-state anchor): one LLM call per compaction
-        # extracts key decisions/findings from the span just archived
-        # and appends them to the decision log so they survive in
+        # The span is everything this call archived, over all its rounds:
+        # each extraction below reads it in the same summarizer-sized runs a
+        # round's chunk is summarized in, so no call sees only its head.
+        extracting = self.decision_log_enabled or self.compaction_learnings_enabled
+        pieces = self._summarizer_pieces(without_failure_placeholders(span)) if extracting else []
+        # Concern B (task-state anchor): one LLM call per compaction (per run
+        # of the span) extracts key decisions/findings from the span just
+        # archived and appends them to the decision log so they survive in
         # runtime context after the raw messages leave the window.
         # Best-effort: failures must never break consolidation.
         if self.decision_log_enabled:
             try:
-                decisions = await self.extract_decisions(span)
+                decisions: list[str] = []
+                for piece in pieces:
+                    decisions.extend(await self.extract_decisions(piece))
                 if decisions:
                     from datetime import timezone
 
@@ -1644,7 +1984,9 @@ class Consolidator:
         # feedback entities; we rely on it.
         if self.compaction_learnings_enabled:
             try:
-                learnings = await self.extract_learnings(span)
+                learnings: list[dict[str, str]] = []
+                for piece in pieces:
+                    learnings.extend(await self.extract_learnings(piece))
                 if learnings:
                     from datetime import timezone
 

@@ -1124,12 +1124,23 @@ async def test_overflow_rebuild_keeps_the_prefetch_block(tmp_path: Path, monkeyp
     a real prefetch search: the retried call's messages must still carry the
     block, and the search behind it must not run a second time.
     """
+    from durin.agent.runner import _PERSISTED_OVERFLOW_PLACEHOLDER
+
     fake = _FakeSearch(total=1)
     loop, _captured, _rec = _make_loop(tmp_path, monkeypatch, fake=fake)
-    loop._run_agent_loop = AsyncMock(side_effect=[
-        ("Error: prompt overflow before LLM call.", [], [], "mid_turn_precheck_overflow", False, []),
-        ("Done.", [], [{"role": "assistant", "content": "Done."}], "completed", False, []),
+    outcomes = iter([
+        ("Error: prompt overflow before LLM call.", "mid_turn_precheck_overflow",
+         _PERSISTED_OVERFLOW_PLACEHOLDER),
+        ("Done.", "completed", "Done."),
     ])
+
+    async def _attempt(initial_messages, **_kwargs):
+        # As the runner returns them: the messages it was given, plus its own.
+        content, stop_reason, last = next(outcomes)
+        messages = [*initial_messages, {"role": "assistant", "content": last}]
+        return content, [], messages, stop_reason, False, []
+
+    loop._run_agent_loop = AsyncMock(side_effect=_attempt)
 
     await loop._process_message(
         InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)

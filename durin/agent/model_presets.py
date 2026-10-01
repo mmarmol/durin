@@ -7,7 +7,7 @@ from typing import Any
 
 from durin.config.schema import Config, ModelPresetConfig
 from durin.providers.base import LLMProvider
-from durin.providers.factory import ProviderSnapshot, build_provider_snapshot
+from durin.providers.factory import CompactionDefaults, ProviderSnapshot, build_provider_snapshot
 
 # Loaders receive the preset name and the in-memory preset object (when one is
 # known). Forwarding the object lets a runtime-injected preset — one the loader
@@ -18,6 +18,15 @@ PresetSnapshotLoader = Callable[..., ProviderSnapshot]
 
 def default_selection_signature(signature: tuple[object, ...] | None) -> tuple[object, ...] | None:
     return signature[:2] if signature else None
+
+
+def snapshot_selection(snapshot: ProviderSnapshot) -> tuple[object, ...] | None:
+    """What the config selected when *snapshot* was built: the preset's name
+    and own settings (``ProviderSnapshot.selection``), or, for a snapshot
+    built without them, its model and provider."""
+    if snapshot.selection is not None:
+        return snapshot.selection
+    return default_selection_signature(snapshot.signature)
 
 
 def configured_model_presets(config: Any) -> dict[str, ModelPresetConfig]:
@@ -55,6 +64,8 @@ def build_static_preset_snapshot(
         context_window_tokens=preset.context_window_tokens,
         signature=("model_preset", name, preset.model_dump_json()),
         preemptive_compact_ratio=preset.preemptive_compact_ratio,
+        preemptive_compact_max_tokens=preset.preemptive_compact_max_tokens,
+        compaction_defaults=CompactionDefaults.of(config) if isinstance(config, Config) else None,
     )
 
 

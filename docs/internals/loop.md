@@ -229,7 +229,26 @@ result, and the wait goes on. The reply to a system message goes to the chat
 its `chat_id` names, in the thread its session key scopes: the loop re-derives
 a Slack `thread_ts`, an email thread and a Telegram forum topic
 (`message_thread_id`) from the key, since the message itself carries no
-channel metadata. An answer carries its
+channel metadata. A system message that starts a turn of its own is a turn
+of the session's: it runs on the model and with the SOUL the session's own
+turns run with (`_session_persona`), and its compaction checks and history
+replay are sized by that model. Those are the model and persona the
+session's latest turn was given for itself, when it was given any: BUILD
+records them on the session (`turn_overrides` in its metadata) and a turn
+given neither clears them. A cron job's turn is given the job's own, so a
+sub-agent's or a background workflow's result that lands on the run's
+session later runs as the job's turn did. Otherwise they are the session's
+persona's, resolved as BUILD resolves them. The persona's name comes from
+`durin.personas.resolve.session_persona_name`, which the webui's thread view
+shows as the session's persona too. Like BUILD, it reads the session
+summary after its check, so a compaction that check ran is summarized in the
+prompt it builds. It is saved
+once, as its own entry: a sub-agent's result as the assistant message saved
+before its prompt is built (its entry in the prompt carries only the runtime
+context and is not saved), anything else as a user message; the run's
+messages are saved from the end of the prompt actually built, which is one
+entry shorter when the build merged the message into a trailing one of the
+same role. An answer carries its
 message's `origin` through `pending_answers.resolve`, and the waiting tool
 notes it as the turn's input in the turn's own context
 (`approval.note_turn_input`), so an API client's answer to a question marks
@@ -409,9 +428,15 @@ The handlers, in order:
   reply (both tagged `_command` so they are filtered out of LLM history),
   saves the session, and returns `"shortcut"` → `DONE`. Otherwise `"dispatch"`
   → `BUILD`.
-- **`_state_build`** — runs `maybe_consolidate_by_tokens` (compacting before
-  building so the prompt fits), sets the per-tool request context, slices
-  history (`session.get_history`), then resolves the session's frozen eager
+- **`_state_build`** — resolves the active persona and the model the turn
+  runs on (a per-turn ref, else the persona's model; `ctx.run_snapshot` when
+  that is not the loop's own), records on the session the per-turn ref and
+  persona the turn was given (`turn_overrides`, cleared when it was given
+  neither) for the system messages that land on it later, then runs
+  `maybe_consolidate_by_tokens` sized
+  by that model (compacting before building so the prompt fits), sets the
+  per-tool request context, slices history (`session.get_history`, within
+  the same model's input budget), then resolves the session's frozen eager
   memory surface (the pinned block and hot layer rendered on the session's
   first build, `memory.eager_surface`) and binds it for the turn (task-scoped,
   released in `_state_save`) before any search runs, so `memory_search`'s
@@ -434,18 +459,40 @@ The handlers, in order:
 - **`_state_run`** — calls `_run_agent_loop`, which delegates to
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
-  is stored on the context. An overflow that aborted *before any tool ran*
-  (the consolidator's trigger ceiling is held strictly under the runner's input
-  budget, so a successful BUILD consolidation always fits — an iteration-0
-  overflow means it failed) triggers one bounded retry: force a fresh
+  is stored on the context. An overflow before the turn's first model call
+  (the consolidator's trigger ceiling is held strictly under the input budget
+  of the run that follows, sized by the model the turn runs on, so a
+  successful BUILD consolidation always fits — an iteration-0 overflow means
+  it failed) triggers one bounded retry: force a fresh
   consolidation, rebuild the context, re-run
-  (`overflow_retry.forced_consolidation`); skipped once a tool has run, so
-  side-effecting tools never re-fire.
+  (`overflow_retry.forced_consolidation`). The rebuild has BUILD's shape:
+  the turn's own message, which BUILD has saved by then, stays out of the
+  replayed history (`get_history` stops at the position BUILD saved it at)
+  and is added once, as the current message. Only an attempt that appended
+  nothing but the runner's overflow placeholder is retried, since the
+  rebuild starts the turn over: a tool that ran would run again, an answer
+  already given would be given twice, and a queued message the attempt took
+  into the turn would be lost. The forced consolidation skips the
+  idle check and the real-usage vetoes below: the overflow is newer proof
+  than the provider's last count, and a vetoed retry would overflow again,
+  as would every later turn of the session. An overflow the runner reports
+  as unfixable by compaction (`fits_without_history=False`: the system
+  prompt, the tool definitions and the request alone are over the budget) is
+  not retried: a compaction only removes history, so the turn fails at once,
+  its error naming the prompt's largest parts from the build's
+  `context.composition` (AGENTS.md, the tool definitions, the message...).
 - **`_state_save`** — finalizes plan/stall/goal bookkeeping, records skill-usage
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
   the `.meta.json` sidecar), then schedules a background
-  `maybe_consolidate_by_tokens`. A tool result too large for the persisted
+  `maybe_consolidate_by_tokens`. The new messages are everything the run
+  appended after the prompt it started from, so the save starts at that
+  prompt's length whatever its shape: the build merges the current message
+  into the last history message when both are user messages, and BUILD has
+  already saved the current message itself. A turn that fails on an overflow
+  saves the runner's overflow placeholder, an assistant message saying so,
+  so the session does not end on the unanswered message and the next turn's
+  message is not merged into it. A tool result too large for the persisted
   transcript is spilled to a recoverable file *before* it is truncated, and the
   pointer back to the full output leads the saved text, whose whole length
   stays within the cap. A later turn previews an over-cap entry from its head,
@@ -460,8 +507,9 @@ The handlers, in order:
 ### The iteration core: `AgentRunner`
 
 `_run_agent_loop` is the bridge from loop to runner. It builds the hook,
-resolves the agent-mode provider, the compaction-grace probe, and any per-turn
-model override, then calls `self.runner.run(AgentRunSpec(...))`.
+resolves the agent-mode provider and the compaction-grace probe, takes the
+per-turn model BUILD resolved (the loop's own when there is none), then
+calls `self.runner.run(AgentRunSpec(...))`.
 
 `AgentRunner` ([`durin/agent/runner.py`](../../durin/agent/runner.py)) is the
 shared, product-agnostic LLM loop. It iterates up to `max_iterations` (200 by
@@ -486,19 +534,46 @@ the full copy.
 (`_output_reservation`, not the full configured `max_tokens` ceiling), so a high
 ceiling never collapses the usable input; the request then sends a *dynamic*
 `max_tokens` sized to the room the prompt actually leaves (resolving the ceiling
-from the provider when the spec leaves it unset). A mid-turn precheck estimates
-the post-sanitize prompt each iteration: when it is over budget the runner
+from the provider when the spec leaves it unset). When a request is over that
+budget, the history snip (`_snip_history`) drops history, oldest first: the
+messages before the run's own request, the last user message of the prompt it
+started from. That request and everything after it, the system prompt, the
+task state a request appends and the tool schemas are all sent, so the
+history gets what they leave, starting at a user message on a legal tool-call
+boundary. It counts each message as the precheck's estimate of the whole
+request does, the newline that joins it to the next one included, so a
+history of many short messages is not kept over the budget by a token a
+message. A caller that compacts and retries sets
+`caller_compacts_on_overflow`: the chat loop's turn does, on every attempt but
+its last, so its first request keeps the replayed history whole and an
+overflow there is answered by a compaction that summarizes what the snip
+would have dropped; the last attempt snips rather than fail on a history
+compaction could not shrink. A mid-turn precheck estimates
+the post-sanitize request each iteration, the task state it appends
+included, so neither the budget check nor the dynamic `max_tokens` it sizes
+leaves that block out: when it is over budget the runner
 emergency-trims the largest string tool results on the model-facing copy and
 proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't
 recover does it abort *before* the LLM call with
 `stop_reason=mid_turn_precheck_overflow` and an overflow-specific placeholder.
 The abort leaves the request unfinished and nothing re-sends it; the error tells
 the user to send it again, and the next turn runs on a compacted context.
+Unless the request is over the budget even without the history before the
+run's own request (the system prompt, the tool definitions and the run's own
+messages alone, `mid_turn_precheck.overflow`'s `fixed_tokens`): no compaction
+can make that fit, so the error says what the request needs and what each of
+those parts takes instead, the placeholder says the request was not answered,
+and the result carries `fits_without_history=False`.
 
 The estimate (`estimate_prompt_tokens_chain`) prefers the provider's own count.
 Every assistant message the runner persists is stamped with
 `usage_prompt_tokens`, the provider's count for the prompt that *produced* it:
-system prompt, tool definitions and every earlier message. From the second call
+system prompt, tool definitions and every earlier message. The task state that
+request appended is taken out of the stamp: the conversation never keeps it,
+and each request appends the block as it is then, so a stamp that kept it
+would count it twice. A reply from the no-tools finalization retry carries
+the count of the request with tools whose blank answer the retry replaced,
+not the two requests' counts added together. From the second call
 of a turn onward the estimate is that stamp plus a tiktoken estimate of the
 stamped message and everything after it, *without* the tool definitions, which
 the stamp already contains. Before any call has been made (iteration 0, and the
@@ -540,7 +615,10 @@ file only in rare batches (`_microcompact`, with a per-run `_PruneState`):
   results. Those are dropped from the model-facing copy (they are never
   sent), so the request is counted from scratch: the pruning check, the
   history snip and the mid-turn precheck see the prompt actually sent, never
-  one that looks smaller or larger than it is.
+  one that looks smaller or larger than it is. Nor is the stamp on the reply
+  to a request the history snip shortened trusted: it measured the snipped
+  view, while the next view is built from all the messages again and
+  snipped anew, so `_PruneState.trusted_from` moves past that reply.
 - **No window, no pruning.** A run without a known context window has no
   budget to measure against and prunes nothing.
 - **Telemetry.** Each batch writes one `tool_results.pruned` event (iteration,
@@ -606,7 +684,14 @@ Two behaviors connect the runner back to the loop:
   the final response it drains both queues — deferred user messages last, so
   the model answers them with all results already in context — and websocket
   clients get a `queued_consumed` ack. Drained messages are appended as user
-  turns so the run continues without a new dispatch. Injection is bounded — at
+  turns so the run continues without a new dispatch. When the call before
+  that drain produced no reply (an error, or an empty reply after its
+  retries), what the turn keeps without a queued message for that missing
+  reply (the model-error placeholder, or the empty-reply text) is appended
+  first, so a drained message is never merged into the user message before
+  it: when the first call failed that is the turn's own message, which the
+  loop does not save, and the drained message would reach the model but not
+  the session. Injection is bounded — at
   most `_MAX_INJECTIONS_PER_TURN` messages drained per cycle and
   `_MAX_INJECTION_CYCLES` cycles — so an injection chain cannot run forever.
 - **Per-turn provider snapshot.** `AgentRunSpec.provider` carries the provider
@@ -688,7 +773,8 @@ The active persona for a turn is resolved once in `_state_build` by
 
 1. **Cron job** — `job.payload.persona`, set per job in the cron panel or the
    `cron` tool; applies only to that job's run (mutually exclusive with the
-   job's per-run model).
+   job's per-run model), the system messages that land on the run's session
+   after its turn included.
 2. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
    <name>` and cleared by `/persona durin` (`default`/`none` also work as reset
    keywords).
@@ -702,7 +788,11 @@ The active persona for a turn is resolved once in `_state_build` by
    pre-persona behavior.
 
 The resolved persona's soul body replaces the default SOUL in the stable system-
-prompt layer (via `ContextBuilder`). Its model ref is passed to the existing
+prompt layer (via `ContextBuilder`), and the compaction checks of the session's
+turns measure the prompt with it (`maybe_consolidate_by_tokens(persona_soul=…)`),
+as `/status` does: a persona's SOUL can be many times the default's size, and
+measured with the default one the session would compact late and overflow.
+Its model ref is passed to the existing
 per-turn model-override path alongside any explicit `/model` or cron per-job
 model; the most-specific reference wins (`ctx.model_preset_override or
 ctx.persona_model_ref`) — an explicit `/model` switch always overrides the
@@ -881,11 +971,47 @@ Two metadata splits matter:
   log — see below).
 - **Compaction never edits messages in place.** When the consolidator archives
   a span it advances `last_consolidated` and appends the span's summary as a
-  new block onto the session-summary projection (bounded; oldest blocks
+  new block (one per summarizing call, when the span took several; see the
+  compaction thresholds below) onto the session-summary projection (bounded; oldest blocks
   evicted as the cap is hit, their discovered-path trailers salvaged into a
   synthetic head block rather than lost). Only the part of the span the
   nightly session-summary pass has not already summarized is sent to the LLM;
   a span it fully covered advances the cursor with no call and no new block.
+  The placeholders of turns that produced no answer (a model error, an
+  overflow, a request no compaction could make fit) are left out of what is
+  summarized and of the decision and learnings extraction
+  (`without_failure_placeholders`), and so of what the nightly
+  session-summary pass writes into the same store: in a bounded summary every
+  block spent on them would evict an older, real one, and a span of nothing
+  else makes no call. The user's messages always stay, answered or not: a later turn often
+  retries one ("try again") and means nothing without it.
+  The projection's own bound is in characters, whatever the window. A prompt
+  carries the summary whole when it fits in what the rest of the system
+  prompt and the tool definitions leave of the turn model's input budget
+  beside the replayed history and the turn's own message (its runtime context
+  and task state included, the decision log already cut to fit the message,
+  see below), the message counted as at least a fixed allowance
+  (`_MESSAGE_ALLOWANCE`). Otherwise it carries the summary cut to a quarter
+  of what the system prompt, the tool definitions and that message leave
+  (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks are
+  left out first, after a line saying so, and the head block carrying the
+  paths of evicted blocks goes last, so those paths outlive the cut as they
+  outlive the eviction; it never makes the turn too large to send whatever
+  history goes. On a small window the whole projection alone could
+  otherwise leave a turn no room, or no turn room to be sent at all. The
+  allowance keeps the cut from following each message's length: the summary
+  sits in the system prompt, the head of every provider's prompt cache, so a
+  cut that changed with the message would miss the cache for the whole
+  prompt on every turn; it moves only with a message larger than the
+  allowance, with the stored summary, and once when the history grows past
+  what leaves the whole summary room. The compaction probe measures the
+  session's own summary the same way, framed as the loop frames it
+  (`pending_summary_for_session`, `AgentLoop._format_own_summary`) and
+  bounded by the same room, the tool definitions counted as in the turn's
+  build, with its probe message in place of the turn's. It leaves out the
+  previous session's summary a fresh session carries for its first turns:
+  finding it scans the whole summary store, and a session that fresh is far
+  from compacting.
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact
@@ -908,6 +1034,14 @@ Two metadata splits matter:
   `auto` present and evicts *itself*, making the write a no-op), and an `auto`
   append that could only fit by evicting a manual anchor is rejected instead —
   still counted as a drop, so `decision_log.capped` records the loss.
+  Its caps are in characters whatever the window, so a prompt whose message
+  would not fit with the whole log carries it cut, in the same order (the
+  oldest auto entries first): `build_messages` cuts it to what the system
+  prompt's fixed tiers, the tool definitions and the rest of the message
+  leave of the turn model's input budget, records the bound
+  (`ContextBuilder.last_decision_log_tokens`), and the run's
+  `task_state_provider` renders the block it appends mid-turn with the same
+  bound, so an unchanged task state is still recognised as the one shown.
 - **A finished goal still leaves a trace in the anchor.** A session rarely ends
   when its goal does, and rendering only `status == "active"` would erase the
   session's stated purpose the moment it succeeded, leaving the work that
@@ -925,9 +1059,47 @@ distinct:
 
 | Number | Formula | What it bounds |
 |---|---|---|
-| `_input_token_budget` | `window − max_completion_tokens − buffer` | Size of the text handed to the consolidation LLM. Reserves the *real* completion ceiling, because that call has to fit too. |
-| `_preemptive_ceiling` | `window − min(max_completion_tokens, cap) − 2×buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. |
-| `_preemptive_trigger_tokens` | `min(window × effective_ratio, ceiling)` | Where compaction actually fires. |
+| `_input_token_budget` | `window − max_completion_tokens − buffer`, and at most `context_block_limit − buffer` | Size of the text handed to one summarizing call. Reserves the *real* completion ceiling, because that call has to fit too. Sized by the loop's own model, which does the summarizing. |
+| `_preemptive_ceiling` | `window − min(max_completion_tokens, reservation cap) − 2×buffer`, and at most `context_block_limit − buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. A `context_block_limit` replaces the runner's window-derived budget outright when set, which is why the ceiling also stays one buffer under it. |
+| `_preemptive_trigger_tokens` | `min(window × effective_ratio, preemptive_compact_max_tokens, ceiling)` | Where compaction actually fires. |
+
+The history replayed into a turn is bounded the same way: by the window's input
+budget, and by `context_block_limit` when that is set.
+
+The trigger, its ceiling and the replay budget belong to the model the turn
+runs on. A turn on another model than the loop's own (a cron job's per-job
+model, a persona's model, also for a system message's turn on a persona
+session or on a cron run's) sizes its compaction and its history replay by that
+model's window and output ceiling, and by its preset's ratio and cap
+(`Consolidator.run_limits`), from BUILD to the compaction scheduled after
+SAVE. Sizing it by the loop's model would put the trigger above the smaller
+model's budget whenever the loop's model has the larger window. The context
+gauges follow the same model: `/status` measures a session against the
+trigger its next turn compacts at (`AgentLoop.session_compaction_trigger`
+resolves the model the session's turns run on as a system message's turn
+does, `_session_persona`), and the CLI footer,
+which renders too often to build a provider snapshot each time, against the
+trigger its latest check was sized by (`Consolidator.session_trigger`: the
+loop's own model's until the session's first turn in the process). Every
+check of a session's turns, a system message's included, is sized by the
+model those turns run on, so the footer keeps that model's trigger.
+
+`_input_token_budget` does not follow the turn: the summary, the decision-log
+extraction and the learnings extraction all run on the loop's own model. A
+chunk sized by a turn on a larger window than the loop's, or the span several
+rounds archived, can be many times that budget, so each is cut at message
+boundaries into runs that fit it (`_summarizer_pieces`) and summarized one
+run per call, each summary its own block. A run is counted as the
+summarizing call counts the text it receives, its lines joined with no
+newline after the last, so a span that fills one call exactly is one call. `/compact` and the record `/new`
+files go through the same cut (`Consolidator.archive_pieces`): they summarize
+the whole unconsolidated conversation at once, so a long one takes several
+calls rather than being cut to what one takes. Only a single message larger
+than the budget is still truncated. Like automatic compaction, both first
+leave out the head the nightly session-summary pass already summarized
+(`Consolidator._unsummarized`): its block is already in the key's summary,
+and a second one of the same turns would evict an older block from the
+bounded store. `/new` resolves that head before it clears the session.
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a
@@ -939,8 +1111,73 @@ every ratio above a low value to the same trigger.
 prompt (system + tool schemas + summary + task state) is a large fraction of
 the whole, so a low ratio leaves almost no runway between the post-compaction
 floor and the next trigger, and the session thrashes. An explicitly configured
-higher ratio is always honoured; large-window models are untouched, where a
-high ratio would mean shipping a huge prompt every turn.
+higher ratio is honoured, up to the absolute cap below; large-window models
+are untouched, where a high ratio would mean shipping a huge prompt every turn.
+
+**The absolute cap.** A ratio stops bounding cost on the largest windows: 0.5
+of a 1M window fires only at 500K, so every long turn would ship up to half a
+million tokens before anything is summarized. `preemptive_compact_max_tokens`
+bounds the trigger in tokens whatever the window; `null` or `0` removes it (on
+a preset `null` inherits, so there only `0` does). It only ever lowers the
+trigger, so a window whose ratio trigger is already below it is unaffected. It
+applies after the small-window floor: on a window under
+`_SMALL_CTX_WINDOW_LIMIT` whose floored trigger would pass the cap, the cap
+wins. As one more term of the `min` it cannot lift the trigger past the
+ceiling, so the overflow invariant holds with it.
+
+The cap never goes under `PREEMPTIVE_COMPACT_MIN_TOKENS`: a cap at or under the
+prompt's fixed part (system prompt, tool schemas, summary) would compact on
+every turn, each compaction able to archive only the turn before it. The schema
+refuses a lower value on write, the loader raises a hand-edited one to the
+minimum rather than reject the whole file, and the consolidator applies the
+same floor to a loop built in code. No hand-edited value of the key can cost
+the rest of the file or fail the load: the loader reads a number written as a
+string as that number and drops anything that is no finite number (NaN, the
+infinities JSON accepts, an exponent too large for a float), which then
+takes the default.
+
+A preset's own `preemptive_compact_ratio` and `preemptive_compact_max_tokens`
+replace the `agents.defaults` ones while that preset is active; a key the
+preset leaves unset takes the `agents.defaults` value, whatever the previous
+preset set. The `agents.defaults` values travel in the provider snapshot
+(`compaction_defaults`), and the snapshot's signature includes them and the
+preset's own, so the per-turn snapshot refresh applies an edit to them on the
+next turn. That refresh (`_refresh_provider_snapshot`) runs only in a loop
+given the snapshot loaders, which the gateway wires and the TUI does not. A
+preset's own values come from wherever it takes the preset. While the loop holds a
+preset (`_active_preset`: the one `agents.defaults.model_preset` named at
+start, which `from_config` activates, or one set with `/model`, the model
+picker or the settings' default model) and the config still selects what it
+selected when the loop last looked, the snapshot is rebuilt from the loop's
+own preset object, which only `reload_app_config` replaces (a persona, the
+default model or a concurrency limit saved through the settings) besides a
+restart. The selection is `ProviderSnapshot.selection`: the name of the
+preset the config selects and that preset's settings as configured, before
+its window and output limit are resolved against the model catalog (a
+catalog refresh changes no choice), recorded from the
+config's snapshot, never from the held preset's (the gateway hands the loop
+its startup snapshot's). Once it changes (another preset, or an edit to the
+selected one, so also to the preset named at start), the loop drops the held
+preset and takes the config's snapshot every turn. `agents.defaults`' own
+ratio and cap are not part of it: they reach every turn through
+`compaction_defaults` without dropping a runtime pick. The `default` preset
+is re-read from the file every turn either way.
+
+The cap governs the loop's session compaction only: workflow nodes and
+subagents prune by the runner's input budget instead.
+
+Compaction runs at turn boundaries: in BUILD, in the background after SAVE,
+and on the overflow retry. Inside one long agentic turn the prompt grows with
+every tool round, and there the runner's own microcompaction, at its pressure
+share of the input budget, is what trims it. So the cap bounds what each turn
+starts from, not what a single turn may reach.
+
+`compaction.preemptive_trigger`, `compaction.deferred` and
+`compaction.completed` name the bound that set the trigger in `trigger_bound`
+(`ratio`; `floor` when the small-window floor raised the ratio; `cap`;
+`ceiling`; `block_limit` when a `context_block_limit` held it under the
+runner's budget) and carry the cap in force as `cap_tokens`, `null` when there
+is none.
 
 **The real-usage veto.** `estimate_session_prompt_tokens` probes the *raw*
 unconsolidated tail — it does not apply microcompaction or the tool-result
@@ -957,6 +1194,36 @@ consolidating (`compaction.deferred` records either):
   happened since, so the newest anchor still describes the *pre*-compaction
   prompt. Without this, reading that stale anchor fires a second compaction
   against an already-shortened conversation. Parked for exactly one turn.
+
+Neither veto applies to the consolidation forced after an iteration-0
+overflow. The vetoes guard against a rough estimate that runs high; the
+overflow is the runner's own measurement, taken after the provider's last
+count, and it says the prompt does not fit.
+
+**The fixed-prompt floor.** No minimum on the cap can know the prompt: a
+large system prompt, many tool schemas or a long summary can put the part
+compaction may not archive over the trigger, or just under it (a low ratio on
+a big window is enough). Such a prompt cannot be compacted far enough under
+the trigger: each compaction could archive only the turn before it, and the
+next turn would compact again. When a compaction ends over its trigger, or
+under it by less than a quarter of a normal cycle's runway (trigger −
+target), the level it reached is remembered per session (in memory, bounded
+like the veto state), and the session's next compaction waits until the
+prompt has grown past that level by that runway, or reaches the ceiling
+(`compaction.deferred` with reason `fixed_prompt`). Between two compactions
+such a session's prompt therefore runs past its trigger, by up to a runway,
+instead of compacting on every turn. The ceiling cuts that wait short: where
+the fixed part leaves less than a runway under the ceiling, the session
+compacts whenever its prompt reaches the ceiling, which with room for one
+exchange of history means nearly every turn. A compaction that leaves more room
+clears the level, and so does one that ran out of rounds while still
+archiving: that is a backlog, which keeps compacting on the next turn. A
+forced compaction ignores the level. The level is kept with the limits it
+was reached under, and forgotten when it stops describing the prompt: by a
+check under other limits (a turn on another model, another ratio or cap), by
+a check that finds that much room under the trigger again (the fixed part
+shrank: a shorter `AGENTS.md`, fewer tools), and by `/new` and `/compact`
+(`Consolidator.forget_session`, which also drops the real-usage veto state).
 
 ### After DONE (post-processing in `_dispatch`)
 
@@ -1028,9 +1295,10 @@ Loop-relevant `agents.defaults.*` keys (see
 | `unified_session` | `false` | Collapse all channels to one shared session. |
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
+| `preemptive_compact_max_tokens` | `256000` | Absolute cap on the preemptive trigger, in tokens (at least `64000`): compaction fires at the smaller of this and the ratio's trigger; `null` or `0` for the ratio alone — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
-| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |
+| `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. A set `context_block_limit` is the whole input budget of the loop's runs and its subagents', and compaction and history replay stay under it — see [Compaction thresholds](#compaction-thresholds). An unset `max_tool_result_chars` follows the model's context window (see [tools.md](tools.md), Paging under the run's cap). |
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns in flight at once, across all sessions. `DURIN_MAX_CONCURRENT_REQUESTS` overrides this at runtime. |
 | `concurrency_ceiling` | `12` | Global ceiling: total in-flight turns *and* subagents across all lanes (see [Concurrency](concurrency.md)). |
 | `max_concurrent_subagents` | `3` | Process-wide subagent-lane cap, checked at spawn time (`spawn.py`); independent of the global ceiling above. |

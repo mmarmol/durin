@@ -143,7 +143,8 @@ implicit preset from `agents.defaults` fields, layering in any per-model paramet
 overrides declared under the active provider's `models` dict. The result is a
 `ModelPresetConfig` — a bundle of `model`, `provider`, `max_tokens`,
 `context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
-`top_p`, `top_k`, `repeat_penalty`, and `preemptive_compact_ratio`.
+`top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio`, and
+`preemptive_compact_max_tokens`.
 
 **Model limits.** `context_window_tokens` and `max_tokens` are optional on a
 `ModelPresetConfig` (and on an `InlineFallbackConfig`); `None` means "the model's
@@ -533,12 +534,12 @@ Provider rules the serialization honors:
 | `ModelCapabilities` | `durin/providers/capabilities.py` | Frozen capability snapshot: vision, audio, pdf, video, function calling, reasoning, prompt caching, `source` provenance field |
 | `get_model_capabilities` | `durin/providers/capabilities.py` | Four-tier capability lookup entry point |
 | `model_capabilities.json` | `durin/providers/data/model_capabilities.json` | Vendored consensus snapshot (LiteLLM + OpenRouter + models.dev); keyed by bare lowercased model name |
-| `ProviderSnapshot` | `durin/providers/factory.py` | Immutable result: `provider`, `model`, `context_window_tokens`, `signature`, `preemptive_compact_ratio` |
+| `ProviderSnapshot` | `durin/providers/factory.py` | Immutable result: `provider`, `model`, `context_window_tokens`, `signature`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` (`None` = the preset sets none, and the `agents.defaults` value applies), `compaction_defaults` (the `agents.defaults` ratio and cap it was built with; the signature covers all four, so an edit re-applies the snapshot), `selection` (on a snapshot of what the config selects: that preset's name and its settings as configured, before its window and output limit are resolved against the model catalog, which a running loop compares to notice a new choice, so a catalog refresh is none; `None` on a snapshot of a preset asked for by name) |
 | `build_provider_snapshot` | `durin/providers/factory.py` | Primary factory: resolve preset → match provider → instantiate backend → wrap in FallbackProvider |
 | `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |
 | `ProvidersConfig` | `durin/config/schema.py` | Container with one `ProviderConfig` field per provider name |
-| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens` (both `None` = the model's own limits), `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio` |
+| `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens` (both `None` = the model's own limits), `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` |
 | `AuxModelConfig` | `durin/config/schema.py` | Aux bridge config: `preset` (named preset ref) or inline `model` + `provider` |
 | `AuxModelsConfig` | `durin/config/schema.py` | Container: `vision`, `audio`, `memory`, `subagents`, `automations`, and legacy `loops` (each an optional `AuxModelConfig`) |
 | `Config._match_provider` | `durin/config/schema.py` | Ordered provider walk returning `(ProviderConfig, spec_name)` |
@@ -578,6 +579,7 @@ model_presets:
     temperature: 0.1
     reasoning_effort: null
     preemptive_compact_ratio: 0.5
+    preemptive_compact_max_tokens: null  # optional: unset takes agents.defaults', 0 = no cap
 ```
 
 **Provider credentials**

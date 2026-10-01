@@ -21,7 +21,7 @@ from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, begin_turn_input, 
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
-from durin.agent.memory import Consolidator
+from durin.agent.memory import CompactionLimits, Consolidator
 from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import (
     _MAX_INJECTIONS_PER_TURN,
@@ -102,6 +102,25 @@ _NON_STREAMED_STOP_REASONS = frozenset({
 # surfacing the error. Only retried when no tool has executed (re-running
 # would re-fire side-effecting tools).
 _MAX_OVERFLOW_RETRIES = 1
+
+
+def _prompt_parts_note(composition: dict[str, Any] | None) -> str:
+    """The largest parts of a turn's prompt, named for the error of a request
+    that cannot fit even without the conversation history, so the user knows
+    what to shrink; empty when the build left no composition to read."""
+    if not composition:
+        return ""
+    from durin.agent.context import summarize_composition
+
+    summary = summarize_composition(composition)
+    parts = {**summary["infra_breakdown"], **summary["conversation_breakdown"]}
+    parts.pop("Prior turns", None)
+    names = {"Bootstrap files": ", ".join(ContextBuilder.BOOTSTRAP_FILES)}
+    largest = sorted(((label, tokens) for label, tokens in parts.items() if tokens), key=lambda kv: -kv[1])[:4]
+    if not largest:
+        return ""
+    named = [f"{names.get(label, label)} {tokens:,}" for label, tokens in largest]
+    return f" The prompt's largest parts: {named[0]} tokens" + "".join(f"; {part}" for part in named[1:]) + "."
 
 
 def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -> str:
@@ -365,6 +384,14 @@ class TurnContext:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     initial_messages: list[dict[str, Any]] = field(default_factory=list)
+    # The context.composition payload of the build that made
+    # initial_messages: what each part of the prompt costs, which names the
+    # parts to the user when the prompt cannot fit even without history.
+    composition: dict[str, Any] | None = None
+    # The token bound that build put on the decision log to make the turn
+    # fit (None: it carried the log whole); the run cuts the task state it
+    # appends mid-turn the same way.
+    decision_log_tokens: int | None = None
 
     # Hits of the automatic search this turn ran with the user message,
     # fenced for the wire copy of that message only (never stored). Resolved
@@ -404,6 +431,10 @@ class TurnContext:
     usage: dict[str, int] = field(default_factory=dict)
 
     user_persisted_early: bool = False
+    # Where BUILD saved the turn's own message in session.messages (None: not
+    # saved). The overflow retry's history stops before it, since the rebuilt
+    # prompt adds that message again as its current one, as BUILD's did.
+    user_message_index: int | None = None
     save_skip: int = 0
 
     outbound: OutboundMessage | None = None
@@ -423,6 +454,11 @@ class TurnContext:
     # this turn sees the same SOUL body + model ref.
     active_persona_soul: str | None = None
     persona_model_ref: str | None = None
+    # The model this turn runs on when it is not the loop's own (the per-turn
+    # ref above, or the persona's model): resolved once in _state_build, then
+    # used by the run, its overflow retry, and every compaction and history
+    # replay of the turn, which must fit that model rather than the loop's.
+    run_snapshot: ProviderSnapshot | None = None
 
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
@@ -503,6 +539,7 @@ class AgentLoop:
         timezone: str | None = None,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        preemptive_compact_max_tokens: int | None = 256_000,
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
@@ -515,6 +552,7 @@ class AgentLoop:
         aux_providers: dict[str, "AuxProviderHandle"] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
+        provider_selection: tuple[object, ...] | None = None,
         model_presets: dict[str, ModelPresetConfig] | None = None,
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
@@ -541,7 +579,14 @@ class AgentLoop:
         self._default_preset_loader = default_preset_loader
         self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
-        self._default_selection_signature = preset_helpers.default_selection_signature(provider_signature)
+        # What the config selected when the loop started (the snapshot's
+        # selection, or its model and provider when given only a signature):
+        # the refresh follows the config again once this changes.
+        self._default_selection_signature = (
+            provider_selection
+            if provider_selection is not None
+            else preset_helpers.default_selection_signature(provider_signature)
+        )
         self.workspace = workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = (
@@ -591,6 +636,9 @@ class AgentLoop:
         # _run_agent_loop returns is shared by several callers/tests, so new
         # per-turn telemetry rides this side channel instead of growing it.
         self._pending_usage: dict[str, dict[str, int]] = {}
+        # The same handoff for the last run's AgentRunResult.fits_without_history:
+        # False when a precheck overflow could not be cured by any compaction.
+        self._pending_fits_without_history: dict[str, bool | None] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
@@ -690,9 +738,12 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             eager_snapshot_for_session=self.eager_snapshot_for_session,
+            pending_summary_for_session=self._format_own_summary,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
+            preemptive_compact_max_tokens=preemptive_compact_max_tokens,
+            context_block_limit=self.context_block_limit,
             decision_log_enabled=decision_log_enabled,
             decision_log_max_entries=decision_log_max_entries,
             decision_log_max_chars=decision_log_max_chars,
@@ -1160,6 +1211,7 @@ class AgentLoop:
             disabled_skills=defaults.disabled_skills,
             consolidation_ratio=defaults.consolidation_ratio,
             preemptive_compact_ratio=defaults.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=defaults.preemptive_compact_max_tokens,
             decision_log_enabled=defaults.decision_log_enabled,
             decision_log_max_entries=defaults.decision_log_max_entries,
             decision_log_max_chars=defaults.decision_log_max_chars,
@@ -1202,6 +1254,8 @@ class AgentLoop:
             model,
             context_window_tokens,
             preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=snapshot.preemptive_compact_max_tokens,
+            compaction_defaults=snapshot.compaction_defaults,
         )
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:
@@ -1229,7 +1283,14 @@ class AgentLoop:
                 self.model_presets["default"] = self._default_preset_loader()
             except Exception:
                 logger.exception("Failed to refresh default model preset")
-        default_selection = preset_helpers.default_selection_signature(snapshot.signature)
+        # The preset the loop holds (the one it started with, or a runtime
+        # pick) stays while the config selects what it selected before: the
+        # same preset with the same settings. Another preset, or an edit to
+        # the selected one, is a new choice, and the loop follows the config
+        # from then on. What is recorded is always the config's selection,
+        # never the held preset's: recording the held one would read as a new
+        # choice on the next turn and drop a runtime pick.
+        default_selection = preset_helpers.snapshot_selection(snapshot)
         if self._active_preset and self._default_selection_signature in (None, default_selection):
             self._default_selection_signature = default_selection
             try:
@@ -1242,7 +1303,6 @@ class AgentLoop:
             self._default_selection_signature = default_selection
         if snapshot.signature == self._provider_signature:
             return
-        self._default_selection_signature = preset_helpers.default_selection_signature(snapshot.signature)
         self._apply_provider_snapshot(snapshot)
 
     @property
@@ -1859,6 +1919,31 @@ class AgentLoop:
         soul_body, model_ref, _temperature = resolve_persona(self.app_config, name, self.workspace)
         return soul_body, model_ref
 
+    def _session_persona(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """``(soul_body, model_ref)`` of the session's own turns, for a turn
+        that brings no model or persona of its own (a system message's) and
+        for what measures the session's next turn (/status, its estimate).
+
+        The model and persona the session's latest turn was given for itself
+        (a cron job's own) when it was given any, else the session's persona,
+        each resolved as BUILD resolves them: a cron run's session gets the
+        system messages of what its turn started (a sub-agent's result, a
+        background workflow's), and those turns run as the job's did. The
+        name is ``session_persona_name``'s, which the webui's thread view
+        shows as well."""
+        from durin.personas.resolve import session_persona_name, session_turn_overrides
+        from durin.workflow.persona_resolve import resolve_persona
+
+        name = session_persona_name(self.app_config, session.metadata, channel=channel, chat_id=chat_id)
+        soul_body, model_ref, _temperature = resolve_persona(self.app_config, name, self.workspace)
+        return soul_body, session_turn_overrides(session.metadata).get("model_preset") or model_ref
+
     def _build_initial_messages(
         self,
         msg: InboundMessage,
@@ -1868,6 +1953,7 @@ class AgentLoop:
         active_persona_soul: str | None = None,
         memory_prefetch: str | None = None,
         eager_snapshot: "EagerSnapshot | None" = None,
+        input_budget_tokens: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         audio_mode, supports_audio = self._audio_build_args()
@@ -1888,6 +1974,7 @@ class AgentLoop:
             active_persona_soul=active_persona_soul,
             memory_prefetch=memory_prefetch,
             eager_snapshot=eager_snapshot,
+            input_budget_tokens=input_budget_tokens,
         )
 
     async def _dispatch_command_inline(
@@ -2042,17 +2129,86 @@ class AgentLoop:
             return UNIFIED_SESSION_KEY
         return msg.session_key
 
-    def _replay_token_budget(self) -> int:
-        """Derive a token budget for session history replay from the context window."""
-        if self.context_window_tokens <= 0:
+    def _replay_token_budget(self, run_snapshot: ProviderSnapshot | None = None) -> int:
+        """Derive a token budget for session history replay from the context
+        window of the model the turn runs on: *run_snapshot*'s when the turn
+        runs on another model than the loop's own, else the loop's."""
+        window = run_snapshot.context_window_tokens if run_snapshot else self.context_window_tokens
+        provider = run_snapshot.provider if run_snapshot else self.provider
+        if window <= 0:
             return 0
         from durin.agent.runner import _output_reservation
-        max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+        max_output = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
         # Cap the output reservation so a large configured ceiling does not
         # collapse the replay budget (mirrors the runner's input budgeting).
         reserved_output = _output_reservation(max_output)
-        budget = self.context_window_tokens - reserved_output - 1024
-        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+        budget = window - reserved_output - 1024
+        # A context_block_limit is the runner's whole input budget when set:
+        # history beyond it could never be sent.
+        limit = self.context_block_limit
+        if isinstance(limit, int) and limit > 0:
+            budget = min(budget, limit)
+        return budget if budget > 0 else max(128, window // 2)
+
+    def _turn_input_budget(self, run_snapshot: ProviderSnapshot | None = None) -> int | None:
+        """The runner's input budget for a turn on *run_snapshot*'s model,
+        else on the loop's own."""
+        window = run_snapshot.context_window_tokens if run_snapshot else self.context_window_tokens
+        provider = run_snapshot.provider if run_snapshot else self.provider
+        return input_budget_tokens(window, provider_max_output(provider), self.context_block_limit)
+
+    def _turn_model_snapshot(self, ref: str | None) -> ProviderSnapshot | None:
+        """The snapshot of the model a turn runs on when *ref* (a per-turn
+        model or a persona's) names another one than the loop's own; None
+        when the turn runs on the loop's model, or *ref* does not resolve."""
+        if ref and ref != self.model_preset:
+            return self._resolve_model_override(ref)
+        return None
+
+    def session_compaction_trigger(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> int:
+        """The trigger the session's next turn compacts at: the one of the
+        model its turns run on (``_session_persona``) when that is not the
+        loop's own, else the loop's own model's. Resolving builds that
+        model's provider snapshot, so a display that renders often reads
+        ``Consolidator.session_trigger`` instead."""
+        _soul, model_ref = self._session_persona(session, channel=channel, chat_id=chat_id)
+        limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
+        return self.consolidator._trigger_for(limits or self.consolidator._limits())[0]
+
+    def session_prompt_estimate(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> int:
+        """The session's prompt as its next turn would build it, estimated
+        the way its compaction check measures it: with the SOUL of the
+        persona it runs under, and its summary bounded by the input budget
+        of the model it runs on (``_session_persona``)."""
+        soul, model_ref = self._session_persona(session, channel=channel, chat_id=chat_id)
+        limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
+        return self.consolidator.estimate_session_prompt_tokens(
+            session, persona_soul=soul, limits=limits,
+        )[0]
+
+    def _compaction_limits(self, run_snapshot: ProviderSnapshot | None) -> CompactionLimits | None:
+        """What compaction is sized by for a turn on *run_snapshot*'s model;
+        None (the loop's own model) when the turn runs on the loop's."""
+        if run_snapshot is None:
+            return None
+        return self.consolidator.run_limits(
+            run_snapshot.context_window_tokens,
+            provider_max_output(run_snapshot.provider),
+            preemptive_compact_ratio=run_snapshot.preemptive_compact_ratio,
+            preemptive_compact_max_tokens=run_snapshot.preemptive_compact_max_tokens,
+        )
 
     async def _run_agent_loop(
         self,
@@ -2069,9 +2225,24 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queues: PendingQueues | None = None,
-        model_preset: str | None = None,
+        override_snapshot: ProviderSnapshot | None = None,
+        compacts_on_overflow: bool = False,
+        decision_log_tokens: int | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
+
+        *override_snapshot*: the model this run uses when it is not the
+        loop's own (a turn resolves it once, in BUILD); None runs on the
+        loop's model.
+
+        *compacts_on_overflow*: the caller compacts and retries when the
+        run's first request does not fit, so the runner stops there instead
+        of trimming the history it was given.
+
+        *decision_log_tokens*: the bound the prompt's build put on the
+        decision log (``ContextBuilder.last_decision_log_tokens``); the task
+        state the run appends when it changes mid-turn is cut the same way,
+        so an unchanged state is recognised as the one the prompt shows.
 
         *on_stream*: called with each content delta during streaming.
         *on_stream_end(resuming)*: called when a streaming session finishes.
@@ -2321,13 +2492,10 @@ class AgentLoop:
             lock = self.consolidator.get_lock(_session_key_for_compact)
             return lock.locked()
 
-        # Per-turn model override (cron per-job model): resolve the picker ref to
-        # a full provider snapshot for THIS turn only — provider + model + context
-        # window — without touching global model state. Falls back to the agent
-        # default if no override is given or the ref cannot be resolved.
-        override_snapshot = None
-        if model_preset and model_preset != self.model_preset:
-            override_snapshot = self._resolve_model_override(model_preset)
+        # The turn's own model when it is not the loop's (a cron job's per-job
+        # model, a persona's): a full provider snapshot for THIS run only —
+        # provider + model + context window — without touching global model
+        # state. None runs on the agent default.
         if override_snapshot is not None:
             effective_provider = override_snapshot.provider
             effective_model = override_snapshot.model
@@ -2360,7 +2528,9 @@ class AgentLoop:
                 injection_callback=_drain_pending,
                 mode_provider=_mode_provider if session is not None else None,
                 task_state_provider=(
-                    (lambda: task_state_runtime_lines(session.metadata))
+                    (lambda: task_state_runtime_lines(
+                        session.metadata, decision_log_max_tokens=decision_log_tokens,
+                    ))
                     if session is not None else None
                 ),
                 # Sustained goals may legitimately exceed DURIN_LLM_TIMEOUT_S; idle stall
@@ -2372,6 +2542,7 @@ class AgentLoop:
                 ),
                 is_compacting=_is_compacting,
                 post_compaction_guard=self.consolidator.post_compaction_guard,
+                caller_compacts_on_overflow=compacts_on_overflow,
             ))
         finally:
             reset_file_states(file_state_token)
@@ -2395,6 +2566,7 @@ class AgentLoop:
             # (test doubles) defaults to 0.0 — the breakdown just shows no LLM time.
             self._pending_llm_ms[session_key] = getattr(result, "llm_ms", 0.0)
             self._pending_usage[session_key] = dict(result.usage)
+            self._pending_fits_without_history[session_key] = getattr(result, "fits_without_history", None)
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
             # Push final content through stream so a streaming channel updates
@@ -2995,14 +3167,28 @@ class AgentLoop:
         if self._restore_pending_user_turn(session):
             self.sessions.save(session)
 
-        pending = self._format_pending_summary(session)
-        if pending:
-            logger.info("Memory compact triggered for session {}", key)
-
+        # The persona and the model the session's own turns run with: this
+        # turn is one of them. Run on the loop's model, its compaction check
+        # replaced the limits those turns recorded and forgot the
+        # fixed-prompt level they reached, so the next one compacted again at
+        # once.
+        persona_soul, persona_model_ref = self._session_persona(
+            session, channel=channel, chat_id=chat_id,
+        )
+        run_snapshot = self._turn_model_snapshot(persona_model_ref)
+        limits = self._compaction_limits(run_snapshot)
         await self.consolidator.maybe_consolidate_by_tokens(
             session,
             replay_max_messages=self._max_messages,
+            limits=limits,
+            persona_soul=persona_soul,
         )
+        # Read after the check, as BUILD reads it: a compaction it ran wrote
+        # the summary of the turns it archived, which the history built below
+        # no longer holds.
+        pending = self._format_pending_summary(session)
+        if pending:
+            logger.info("Memory compact triggered for session {}", key)
         is_subagent = msg.sender_id == "subagent"
         if is_subagent and self._persist_subagent_followup(session, msg):
             logger.debug("Subagent result persisted for session {}", key)
@@ -3013,7 +3199,7 @@ class AgentLoop:
         )
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(run_snapshot),
             "include_timestamps": True,
         }
         history = session.get_history(**_hist_kwargs)
@@ -3045,8 +3231,11 @@ class AgentLoop:
             iteration=0,
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
+            active_persona_soul=persona_soul,
             eager_snapshot=eager_snapshot,
+            input_budget_tokens=self._turn_input_budget(run_snapshot),
         )
+        decision_log_tokens = self.context.last_decision_log_tokens
         if freezes and eager_snapshot is None:
             # This build rendered live (no snapshot stored yet, or none to
             # resolve): freeze it now so the next build of this session —
@@ -3068,13 +3257,23 @@ class AgentLoop:
                 metadata=msg.metadata,
                 session_key=key,
                 pending_queues=pending_queues,
+                override_snapshot=run_snapshot,
+                decision_log_tokens=decision_log_tokens,
             )
         finally:
             reset_turn_eager_surface(surface_token)
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
+        # The run's own messages are everything after the prompt it was given,
+        # whatever that prompt's shape: the build merges the current message
+        # into a trailing message of the same role. The current message is
+        # saved on its own, once: a subagent's result was saved above (its
+        # entry in the prompt carries only the runtime context, nothing to
+        # keep), and anything else is the user message it came as.
+        if not is_subagent and isinstance(msg.content, str) and msg.content.strip():
+            session.add_message("user", msg.content)
         self._save_turn(
-            session, all_msgs, 1 + len(history),
+            session, all_msgs, len(messages),
             turn_latency_ms=latency_ms,
             tool_events=tool_events,
         )
@@ -3090,6 +3289,8 @@ class AgentLoop:
             self.consolidator.maybe_consolidate_by_tokens(
                 session,
                 replay_max_messages=self._max_messages,
+                limits=limits,
+                persona_soul=persona_soul,
             )
         )
         content = final_content or "Background task completed."
@@ -3746,9 +3947,41 @@ class AgentLoop:
             await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
 
     async def _state_build(self, ctx: TurnContext) -> str:
+        # Resolve the active persona once for this turn: its SOUL body feeds the
+        # context build (here and on overflow-retry) and its model ref, unless
+        # an explicit per-turn ref overrides it, names the model this turn runs
+        # on. No persona configured → both stay None → default SOUL + default
+        # model (unchanged behavior). Resolved before anything is sized: the
+        # consolidation below and the history replay must fit the turn's own
+        # model, which a cron job or a persona may set apart from the loop's.
+        ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
+            ctx.session, ctx.persona_override,
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        )
+        # Most specific wins: an explicit per-turn ref (cron per-job model or
+        # /model) overrides the active persona's model.
+        ctx.run_snapshot = self._turn_model_snapshot(
+            ctx.model_preset_override or ctx.persona_model_ref,
+        )
+        # What this turn was given for itself stays on its session for the
+        # turns that bring nothing of their own (_session_persona), until a
+        # turn that is given nothing puts the session back on its persona.
+        from durin.personas.resolve import TURN_OVERRIDES_KEY
+
+        given = {
+            name: value
+            for name, value in (("model_preset", ctx.model_preset_override), ("persona", ctx.persona_override))
+            if value
+        }
+        if given:
+            ctx.session.metadata[TURN_OVERRIDES_KEY] = given
+        else:
+            ctx.session.metadata.pop(TURN_OVERRIDES_KEY, None)
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
             replay_max_messages=self._max_messages,
+            limits=self._compaction_limits(ctx.run_snapshot),
+            persona_soul=ctx.active_persona_soul,
         )
         # COMPACT read the summary before this consolidation ran. When it
         # archived turns it also wrote or extended the summary, and the
@@ -3769,19 +4002,11 @@ class AgentLoop:
 
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(ctx.run_snapshot),
             "include_timestamps": True,
         }
         ctx.history = ctx.session.get_history(**_hist_kwargs)
 
-        # Resolve the active persona once for this turn: its SOUL body feeds the
-        # context build (here and on overflow-retry) and its model ref feeds the
-        # per-turn model-override path in _run_agent_loop. No persona configured
-        # → both stay None → default SOUL + default model (unchanged behavior).
-        ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
-            ctx.session, ctx.persona_override,
-            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        )
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
         if ctx.on_retry_wait is None:
@@ -3858,7 +4083,10 @@ class AgentLoop:
             active_persona_soul=ctx.active_persona_soul,
             memory_prefetch=ctx.memory_prefetch or None,
             eager_snapshot=ctx.eager_snapshot,
+            input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
         )
+        ctx.composition = self.context.last_composition
+        ctx.decision_log_tokens = self.context.last_decision_log_tokens
         if freezes and ctx.eager_snapshot is None:
             # Immediately after the build: the builder holds one rendering at
             # a time and the background consolidation probe overwrites it with
@@ -3881,6 +4109,8 @@ class AgentLoop:
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
+        if ctx.user_persisted_early:
+            ctx.user_message_index = len(ctx.session.messages) - 1
 
         return "ok"
 
@@ -3901,9 +4131,14 @@ class AgentLoop:
                 metadata=ctx.msg.metadata,
                 session_key=ctx.session_key,
                 pending_queues=ctx.pending_queues,
-                # Most specific wins: an explicit per-turn ref (cron per-job
-                # model or /model) overrides the active persona's model.
-                model_preset=ctx.model_preset_override or ctx.persona_model_ref,
+                # The model BUILD resolved for this turn (None: the loop's).
+                override_snapshot=ctx.run_snapshot,
+                # An attempt that will be retried leaves its history whole on
+                # its first request: an overflow there is answered below by a
+                # compaction that summarizes what a trim would drop. The last
+                # attempt trims, rather than fail on a history it cannot shrink.
+                compacts_on_overflow=attempt < _MAX_OVERFLOW_RETRIES,
+                decision_log_tokens=ctx.decision_log_tokens,
             )
             final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
             ctx.final_content = final_content
@@ -3924,16 +4159,30 @@ class AgentLoop:
                 ctx.session_key, {}
             ).items():
                 ctx.usage[_usage_key] = ctx.usage.get(_usage_key, 0) + _usage_value
+            fits_without_history = self._pending_fits_without_history.pop(ctx.session_key, None)
+            if stop_reason == "mid_turn_precheck_overflow" and fits_without_history is False:
+                # The system prompt, the tool definitions and the request alone
+                # are over the budget: a compaction only removes history, so
+                # forcing one could not make room and the retry would fail the
+                # same way. The turn fails now, saying what fills the budget.
+                ctx.final_content = (final_content or "") + _prompt_parts_note(ctx.composition)
+                break
 
-            # In-turn recovery for an overflow that aborted before any tool
-            # ran: BUILD's consolidation must have failed (the consolidator
+            # In-turn recovery for an overflow before the turn's first model
+            # call: BUILD's consolidation must have failed (the consolidator
             # budget is structurally tighter than the runner's, so a
             # successful consolidation always fits). Force a fresh
-            # consolidation, rebuild the context, and retry — bounded, and
-            # skipped once a tool has run so we never re-fire side effects.
+            # consolidation, rebuild the context, and retry — bounded. Only an
+            # attempt that appended nothing but the runner's overflow
+            # placeholder is retried: the rebuild starts the turn over, so a
+            # tool that ran would run again, an answer already given would be
+            # given twice, and a queued message the attempt took into the
+            # turn (off its queue now) would be lost.
             if (
                 stop_reason == "mid_turn_precheck_overflow"
                 and not tools_used
+                and not had_injections
+                and len(all_msgs) == len(ctx.initial_messages) + 1
                 and attempt < _MAX_OVERFLOW_RETRIES
             ):
                 logger.warning(
@@ -3949,20 +4198,29 @@ class AgentLoop:
                             "attempt": attempt,
                         })
                 await self.consolidator.maybe_consolidate_by_tokens(
-                    ctx.session, replay_max_messages=self._max_messages,
+                    ctx.session, replay_max_messages=self._max_messages, force=True,
+                    limits=self._compaction_limits(ctx.run_snapshot),
+                    persona_soul=ctx.active_persona_soul,
                 )
                 ctx.pending_summary = self._format_pending_summary(ctx.session)
+                # The same shape BUILD built: the turn's own message, saved
+                # since, stays out of the history and is added once, as the
+                # current message; left in, the prompt would carry it twice.
                 ctx.history = ctx.session.get_history(
                     max_messages=self._max_messages,
-                    max_tokens=self._replay_token_budget(),
+                    max_tokens=self._replay_token_budget(ctx.run_snapshot),
                     include_timestamps=True,
+                    end=ctx.user_message_index,
                 )
                 ctx.initial_messages = self._build_initial_messages(
                     ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
                     active_persona_soul=ctx.active_persona_soul,
                     memory_prefetch=ctx.memory_prefetch or None,
                     eager_snapshot=ctx.eager_snapshot,
+                    input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
                 )
+                ctx.composition = self.context.last_composition
+                ctx.decision_log_tokens = self.context.last_decision_log_tokens
                 continue
             break
         return "ok"
@@ -3993,7 +4251,12 @@ class AgentLoop:
         if ctx.final_content is None or not ctx.final_content.strip():
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
-        ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
+        # The run's own messages are everything after the prompt it started
+        # from, whatever that prompt's shape: the current message is its last
+        # entry, or was merged into a user message the history ended on. That
+        # message is in the session already (BUILD saved it; an empty one
+        # carries nothing to save), so the save starts right after the prompt.
+        ctx.save_skip = len(ctx.initial_messages)
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
         merge_turn_media_into_last_assistant(ctx.all_messages, extra)
@@ -4067,6 +4330,8 @@ class AgentLoop:
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
                 replay_max_messages=self._max_messages,
+                limits=self._compaction_limits(ctx.run_snapshot),
+                persona_soul=ctx.active_persona_soul,
             )
         )
         return "ok"
@@ -4331,7 +4596,17 @@ class AgentLoop:
             message.get("thinking_blocks"),
         )
 
-    def _format_pending_summary(self, session: Session) -> str | None:
+    def _format_own_summary(self, session: Session) -> str | None:
+        """The session's own summary as a turn's prompt frames it, without
+        the previous session's that a fresh session falls back to.
+
+        What the compaction probe measures: finding the previous session
+        scans the whole summary store, and a session fresh enough to carry
+        it is far from compacting, so the probe would pay the scan on
+        every check of its first turns for nothing."""
+        return self._format_pending_summary(session, previous_session=False)
+
+    def _format_pending_summary(self, session: Session, *, previous_session: bool = True) -> str | None:
         """Read the consolidator's last summary and wrap it with an
         archive marker so the next turn can distinguish "this is a
         summary" from "this is real conversation".
@@ -4367,7 +4642,7 @@ class AgentLoop:
                     last_active = raw_last if isinstance(raw_last, str) else None
 
         if not text:
-            return self._format_previous_session_summary(session)
+            return self._format_previous_session_summary(session) if previous_session else None
         header = "consolidator"
         if last_active:
             header = f"consolidator, last active {last_active}"

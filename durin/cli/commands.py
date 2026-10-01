@@ -53,6 +53,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -716,6 +717,12 @@ def onboard(
             console.print(f"[yellow]Config exists at {config_path}; nothing to do.[/yellow]")
             console.print("[dim]Re-run without --no-wizard to update interactively.[/dim]")
             return
+        # A config that does not load cleanly is fixed by hand first: the
+        # wizard would start from defaults where it failed, and nothing it
+        # saves may be written over the files that did not load.
+        from durin.cli.config_cmd import refuse_unless_config_loads
+
+        refuse_unless_config_loads(config_path)
     else:
         config = _apply_workspace_override(Config())
         if not wizard_mode:
@@ -876,43 +883,43 @@ def _onboard_plugins(config_path: Path) -> None:
     set so every editable field is visible.
 
     Layout-aware: reads/writes via the shared loader helpers so the
-    split-file layout and the legacy monolith both work.
+    split-file layout and the legacy monolith both work. The read and the
+    write hold ``config_write``: a config that does not load cleanly is
+    left as it is, and the refusal says which files to fix.
     """
     from durin.channels.registry import discover_all
+    from durin.cli.config_cmd import report_config_refusal
     from durin.config.loader import (
-        _is_split_layout,
+        ConfigNotLoadedError,
         _prune_noise_sections,
-        _write_split_layout,
+        config_write,
         read_persisted_config,
+        write_persisted_config,
     )
 
     all_channels = discover_all()
     if not all_channels:
         return
 
-    data = read_persisted_config(config_path)
-    channels = data.get("channels")
-    if isinstance(channels, dict):
-        for name, cls in all_channels.items():
-            section = channels.get(name)
-            # Only touch channels the user has already configured AND
-            # enabled — backfill any missing attributes so the section
-            # is complete + editable. Disabled / absent channels are
-            # left alone (no noise).
-            if isinstance(section, dict) and section.get("enabled"):
-                channels[name] = _merge_missing_defaults(section, cls.default_config())
+    try:
+        with config_write(config_path):
+            data = read_persisted_config(config_path)
+            channels = data.get("channels")
+            if isinstance(channels, dict):
+                for name, cls in all_channels.items():
+                    section = channels.get(name)
+                    # Only touch channels the user has already configured AND
+                    # enabled — backfill any missing attributes so the section
+                    # is complete + editable. Disabled / absent channels are
+                    # left alone (no noise).
+                    if isinstance(section, dict) and section.get("enabled"):
+                        channels[name] = _merge_missing_defaults(section, cls.default_config())
 
-    # Strip any leftover all-default disabled channels / empty providers
-    # so an existing noisy config gets cleaned up on this pass too.
-    data = _prune_noise_sections(data)
-
-    if _is_split_layout(config_path):
-        _write_split_layout(data, config_path)
-    else:
-        import json
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            # Strip any leftover all-default disabled channels / empty providers
+            # so an existing noisy config gets cleaned up on this pass too.
+            write_persisted_config(_prune_noise_sections(data), config_path)
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e, console)
 
 
 def _model_display(config: Config) -> tuple[str, str]:
@@ -1221,6 +1228,21 @@ def _automation_help_body(name: str, kind: str, text: str, proposal: str | None)
     return f"❓ Question — {name}\n{text}"
 
 
+def _log_config_problems_at_startup() -> None:
+    """One error line when the config did not load cleanly: the gateway
+    still starts, on defaults for what failed, and every save to the config
+    is refused until the files named are fixed."""
+    from durin.config.loader import config_load_problems, describe_config_problems, get_config_path
+
+    problems = config_load_problems(get_config_path())
+    if problems:
+        logger.error(
+            "Config did not load cleanly: running on defaults for what failed, and saves to the "
+            "config are refused until these files are fixed: {}",
+            describe_config_problems(problems),
+        )
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -1261,6 +1283,7 @@ def _run_gateway(
         retention_days=config.logging.retention_days,
     )
     install_excepthook()
+    _log_config_problems_at_startup()
     # When the webui is requested via config, ensure the websocket
     # channel (which serves the SPA static files + the WS endpoint) is
     # turned on at RUNTIME — without mutating the persisted config.
@@ -1363,6 +1386,7 @@ def _run_gateway(
             preset,
         ),
         provider_signature=provider_snapshot.signature,
+        provider_selection=provider_snapshot.selection,
     )
     _startup_phase("agent loop and memory services setup")
 
@@ -3219,10 +3243,15 @@ def _status_data(
     data["memory"] = mem_data
 
     # --- Config ------------------------------------------------------
+    from durin.config.loader import config_load_problems
+
     data["config"] = {
         "path": str(config_path),
         "exists": config_path.exists(),
         "layout": "split" if _is_split_layout(config_path) else "single file",
+        # The files that did not load: durin runs on defaults for them and
+        # refuses to save the config until they are fixed.
+        "problems": [{"file": str(p.path), "error": p.error} for p in config_load_problems(config_path)],
     }
     data["workspace"] = str(config.workspace_path)
     return data
@@ -3334,6 +3363,12 @@ def _status_sections(
         if cfg["exists"]
         else "[red]missing — run `durin onboard`[/red]",
     ))
+    if cfg["problems"]:
+        rows.append((
+            "",
+            "[red]did not load — running on defaults for it, and saves are refused until fixed:[/red] "
+            + escape("; ".join(f"{p['file']}: {p['error']}" for p in cfg["problems"])),
+        ))
     rows.append(("Workspace", data["workspace"]))
 
     return rows
@@ -3519,6 +3554,8 @@ def _logout_github_copilot() -> None:
 def _login_openrouter() -> None:
     """Loopback PKCE: the exchange yields a regular API key, stored like a
     manual paste (secret store + ``${secret:}`` ref in config)."""
+    from durin.cli.config_cmd import report_config_refusal
+    from durin.config.loader import ConfigNotLoadedError
     from durin.providers.openrouter_oauth import login_loopback_blocking
 
     try:
@@ -3527,6 +3564,9 @@ def _login_openrouter() -> None:
             "[green]✓ OpenRouter conectado[/green]  "
             "[dim]key guardada en providers.openrouter.api_key[/dim]"
         )
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e, console)
+        raise typer.Exit(1) from None
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1) from None
@@ -3535,10 +3575,17 @@ def _login_openrouter() -> None:
 @_register_logout("openrouter")
 def _logout_openrouter() -> None:
     """Forget the OpenRouter key (config ref + durin-managed secret)."""
+    from durin.cli.config_cmd import report_config_refusal
+    from durin.config.loader import ConfigNotLoadedError
     from durin.providers.openrouter_oauth import disconnect
 
     label = _PROVIDER_DISPLAY["openrouter"]
-    if disconnect():
+    try:
+        removed = disconnect()
+    except ConfigNotLoadedError as e:
+        report_config_refusal(e, console)
+        raise typer.Exit(1) from None
+    if removed:
         console.print(f"[green]✓ Logged out from {label}[/green]")
     else:
         console.print(f"[yellow]! No stored key found for {label}[/yellow]")

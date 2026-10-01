@@ -210,13 +210,17 @@ class Session:
         *,
         max_tokens: int = 0,
         include_timestamps: bool = False,
+        end: int | None = None,
     ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input.
 
         History is sliced by message count first (``max_messages``), then by
-        token budget from the tail (``max_tokens``) when provided.
+        token budget from the tail (``max_tokens``) when provided. ``end``
+        stops it before that index of ``messages`` (None: at the last one),
+        for a prompt whose current message is already saved here and is added
+        to the prompt on its own.
         """
-        unconsolidated = self.messages[self.last_consolidated:]
+        unconsolidated = self.messages[self.last_consolidated:end]
         max_messages = max_messages if max_messages > 0 else 480
         sliced = unconsolidated[-max_messages:]
 

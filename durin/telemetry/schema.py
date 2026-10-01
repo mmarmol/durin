@@ -51,11 +51,15 @@ class CircuitBreakerIdleTimeoutEvent(TypedDict):
 
 class MidTurnPrecheckOverflowEvent(TypedDict):
     """Post-sanitize prompt still exceeded the input budget; turn was
-    aborted BEFORE making the LLM call."""
+    aborted BEFORE making the LLM call. ``fixed_tokens`` is what the request
+    needs with all the history before the run's own request dropped (None
+    when it could not be estimated): over ``budget_tokens``, no compaction
+    can make the request fit."""
     iteration: int
     session_key: NotRequired[str | None]
     estimated_tokens: int
     budget_tokens: int
+    fixed_tokens: NotRequired[int | None]
 
 
 class MidTurnPrecheckRecoveredEvent(TypedDict):
@@ -169,15 +173,29 @@ class SubagentRunEvent(TypedDict):
     context_window_tokens: int | None
 
 
+# Which bound set a compaction trigger, the smallest of: the window times the
+# configured ratio (``ratio``, or ``floor`` when the small-window floor raised
+# that ratio), the absolute cap (``cap``), the ceiling that keeps the resulting
+# prompt inside the runner's budget for the window (``ceiling``), and the one a
+# context_block_limit sets, which is then the runner's whole budget
+# (``block_limit``).
+CompactionTriggerBound = Literal["ratio", "floor", "cap", "ceiling", "block_limit"]
+
+
 class CompactionPreemptiveTriggerEvent(TypedDict):
     """Consolidation fired BEFORE the input budget ceiling because the
-    pre-emptive ratio kicked in."""
+    pre-emptive trigger kicked in. ``ratio`` is the effective ratio (after
+    the small-window floor); ``cap_tokens`` is the absolute cap in force,
+    ``None`` when there is none; ``trigger_bound`` names the bound that set
+    ``trigger_tokens``."""
     session_key: str
     estimated_tokens: int
     trigger_tokens: int
     budget_tokens: int
     context_window_tokens: int
     ratio: float
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
 
 
 class SessionArchivedEvent(TypedDict):
@@ -194,17 +212,22 @@ class SessionArchivedEvent(TypedDict):
 
 
 class CompactionDeferredEvent(TypedDict):
-    """A rough estimate over the trigger was vetoed by the provider's own
-    token accounting, so no consolidation ran this turn.
+    """A rough estimate over the trigger did not lead to a consolidation this
+    turn.
 
     ``reason`` is ``post_compaction`` (a compaction just shortened the
-    conversation and no fresh provider count exists yet) or ``provider_fit``
+    conversation and no fresh provider count exists yet), ``provider_fit``
     (the last real prompt came in under the trigger and the estimate has only
-    drifted modestly since)."""
+    drifted modestly since), or ``fixed_prompt`` (the session's last
+    compaction could not get the prompt under the trigger, and it has not
+    grown by a compaction's runway since). ``trigger_bound`` and
+    ``cap_tokens`` as on ``compaction.preemptive_trigger``."""
     session_key: str
     reason: str
     estimated_tokens: int
     trigger_tokens: int
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
 
 
 class CompactionCompletedEvent(TypedDict):
@@ -214,7 +237,9 @@ class CompactionCompletedEvent(TypedDict):
     ``no_boundary`` (ran out of user-turn boundaries to cut on),
     ``max_rounds``, ``summary_failed``, ``already_summarized`` (the round's
     span was entirely covered by the nightly session-summary pass, so no LLM
-    call was made), ``empty_chunk`` or ``estimate_unavailable``."""
+    call was made), ``empty_chunk`` or ``estimate_unavailable``.
+    ``trigger_bound`` and ``cap_tokens`` as on
+    ``compaction.preemptive_trigger``."""
     session_key: str
     rounds: int
     exit_reason: str
@@ -222,6 +247,8 @@ class CompactionCompletedEvent(TypedDict):
     estimated_before: int
     estimated_after: int
     trigger_tokens: int
+    trigger_bound: CompactionTriggerBound
+    cap_tokens: int | None
     target_tokens: int
     context_window_tokens: int
 

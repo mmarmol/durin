@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -19,6 +19,108 @@ EMPTY_FINAL_RESPONSE_MESSAGE = (
     "I completed the tool steps but couldn't produce a final answer. "
     "Please try again or narrow the task."
 )
+
+# What a turn that produced no answer leaves in the conversation in place of
+# one, so the transcript says why: the model call failed, the prompt exceeded
+# its input budget, or the part of it no compaction can shrink did.
+MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
+OVERFLOW_PLACEHOLDER = (
+    "[Turn stopped before the next model call: the prompt exceeded the input "
+    "budget even after emergency trimming. The request was not finished; the "
+    "next turn starts from a compacted context.]"
+)
+NO_ROOM_PLACEHOLDER = (
+    "[Turn stopped before the next model call: even without the conversation "
+    "history, the system prompt, the tool definitions and this turn's messages "
+    "exceeded the input budget. The request was not finished.]"
+)
+_FAILED_TURN_PLACEHOLDERS = frozenset({MODEL_ERROR_PLACEHOLDER, OVERFLOW_PLACEHOLDER, NO_ROOM_PLACEHOLDER})
+
+
+def without_failure_placeholders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* without the placeholders turns that produced no answer
+    left in place of one.
+
+    A placeholder says nothing worth summarizing, and in a summary bounded
+    in size every block spent on it evicts an older, real one. What the user
+    asked stays, whatever came of it: a later turn often retries it ("try
+    again"), and that turn means nothing without the request."""
+    return [
+        message for message in messages
+        if not (
+            message.get("role") == "assistant"
+            and not message.get("tool_calls")
+            and isinstance(message.get("content"), str)
+            and message["content"].strip() in _FAILED_TURN_PLACEHOLDERS
+        )
+    ]
+
+
+def summary_token_count(text: str) -> int:
+    """*text*'s tokens as a summarizing call's input is counted (cl100k_base;
+    text that spells a special token, "<|endoftext|>" in a pasted document,
+    is ordinary text here); a rough estimate when tiktoken is unavailable."""
+    try:
+        import tiktoken
+
+        return len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+    except Exception:
+        return len(text) // 4 + 1
+
+
+def truncate_to_tokens(text: str, budget: int) -> str:
+    """*text* cut to its first *budget* tokens, as a summarizing call takes a
+    single message larger than its budget, marked "... (truncated)"; whole
+    when it fits."""
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = encoding.encode(text, disallowed_special=())
+        if len(tokens) <= budget:
+            return text
+        return encoding.decode(tokens[:budget]) + "\n... (truncated)"
+    except Exception:
+        from durin.utils.helpers import truncate_text
+
+        return truncate_text(text, budget * 4)
+
+
+def runs_that_fit(
+    messages: list[dict[str, Any]],
+    budget: int,
+    *,
+    line: Callable[[dict[str, Any]], str],
+    count: Callable[[str], int],
+) -> list[list[dict[str, Any]]]:
+    """*messages* in order, cut at message boundaries into runs that each fit
+    one summarizing call: a run's text, its messages' lines joined by
+    newlines, counts at most *budget*. A message whose line alone is over
+    it is a run of its own. *line* renders one message ("" for one with
+    nothing to show), *count* measures a text.
+
+    A run is counted as the call counts the text it receives, with no
+    newline after the last line. Every line starts with a token of its own
+    (the "[" of its timestamp), so that text counts as the run's earlier
+    lines, each with its joining newline, plus its last line alone."""
+    if not messages or budget <= 0:
+        return [messages] if messages else []
+    runs: list[list[dict[str, Any]]] = []
+    run: list[dict[str, Any]] = []
+    closed = text = 0
+    for message in messages:
+        rendered = line(message)
+        grown = closed + count(rendered) if rendered else text
+        if run and grown > budget:
+            runs.append(run)
+            run, closed = [], 0
+            grown = count(rendered) if rendered else 0
+        run.append(message)
+        if rendered:
+            closed += count(rendered + "\n")
+        text = grown
+    runs.append(run)
+    return runs
 
 FINALIZATION_RETRY_PROMPT = (
     "Please provide your response to the user based on the conversation above."

@@ -344,6 +344,67 @@ def append_session_summary_block(
         )
 
 
+# A prompt's frame around the summary blocks: a first line naming it, and an
+# end line after which a note may follow.
+_FRAME_HEAD = re.compile(r"^=== .+ ===$")
+_FRAME_END = re.compile(r"^=== END .+ ===$")
+_ELIDED_BLOCKS = "[… older parts of this summary are left out to fit the context window]"
+
+
+def fit_summary_to_tokens(text: str, max_tokens: int) -> str:
+    """*text*, a session summary as a prompt carries it, cut to at most
+    *max_tokens* tokens by leaving out its oldest blocks.
+
+    A frame around the blocks (a first line ``=== … ===``, and an end line
+    ``=== END … ===`` with what follows it) is kept whole. The newest blocks
+    are kept whole while they fit, after a line saying older ones were left
+    out; when not even the newest one fits, its last lines that do. The
+    head block that carries the paths of blocks the store evicted goes
+    last, after every other block: it exists so those paths outlive the
+    eviction. Empty when not even the frame and that block fit."""
+    from durin.utils.helpers import estimate_text_tokens
+
+    if not text or max_tokens <= 0:
+        return ""
+    if estimate_text_tokens(text) <= max_tokens:
+        return text
+    lines = text.split("\n")
+    head = lines.pop(0) if lines and _FRAME_HEAD.match(lines[0]) else ""
+    end = next((i for i, line in enumerate(lines) if _FRAME_END.match(line)), len(lines))
+    tail = "\n".join(lines[end:])
+    blocks = "\n".join(lines[:end]).split(_SUMMARY_BLOCK_SEP)
+    carried = [blocks.pop(0)] if blocks and blocks[0].startswith(_EVICTED_PATHS_PREFIX) else []
+
+    def framed(parts: list[str]) -> str:
+        body = _SUMMARY_BLOCK_SEP.join([*carried, _ELIDED_BLOCKS, *parts])
+        return "\n".join(part for part in (head, body, tail) if part)
+
+    def most(count: int, build) -> str | None:
+        # The largest n in [1, count] whose build(n) fits; fewer parts never
+        # take more tokens, so bisection finds it.
+        low, high, found = 1, count, None
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = build(middle)
+            if estimate_text_tokens(candidate) <= max_tokens:
+                found, low = candidate, middle + 1
+            else:
+                high = middle - 1
+        return found
+
+    if blocks and blocks != [""]:
+        kept = most(len(blocks), lambda n: framed(blocks[-n:]))
+        if kept is not None:
+            return kept
+        newest = blocks[-1].split("\n")
+        kept = most(len(newest), lambda n: framed(["\n".join(newest[-n:])]))
+        if kept is not None:
+            return kept
+    if carried and estimate_text_tokens(framed([])) <= max_tokens:
+        return framed([])
+    return ""
+
+
 def _load_summary_entry(path: Path) -> Optional[MemoryEntry]:
     """Parse the summary entry at *path*, or ``None`` when it is absent or
     unreadable. Best-effort — a broken file must never break the compaction

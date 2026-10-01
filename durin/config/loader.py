@@ -34,10 +34,13 @@ When ``save_config`` runs, only **non-default** fields are persisted
 """
 
 import json
+import math
 import os
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +48,7 @@ import pydantic
 from loguru import logger
 from pydantic import BaseModel
 
-from durin.config.schema import Config
+from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS, Config
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
@@ -104,24 +107,195 @@ def _is_split_layout(config_path: Path | None = None) -> bool:
     return _split_dir(config_path).is_dir()
 
 
+# -- reading ------------------------------------------------------------------
+
+# Reading a config file fails in more ways than a JSON syntax error: bad UTF-8
+# (a ValueError), nesting deeper than the interpreter's recursion limit, an
+# I/O error. Each means the file cannot be read, and none may crash a load.
+_UNREADABLE = (OSError, ValueError, RecursionError)
+
+
+def _json_int(text: str) -> int | float:
+    """A JSON integer, or ±inf for one with more digits than Python converts
+    to an int: an out-of-range number the loader's cap and limit scrubs drop
+    and validation refuses in any other field, not a file that cannot be
+    read."""
+    try:
+        return int(text)
+    except ValueError:
+        return float(text)
+
+
+class ConfigFileUnreadableError(Exception):
+    """A config file that cannot be read or parsed as JSON, and why."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(f"{path}: {reason}")
+        self.path = path
+        self.reason = reason
+
+
+def parse_config_text(text: str) -> Any:
+    """The JSON *text* holds, parsed as a config file is (``{}`` for none).
+    Raises what JSON parsing raises: a ValueError or a RecursionError."""
+    return json.loads(text, parse_int=_json_int) if text.strip() else {}
+
+
+def read_config_file(path: Path) -> Any:
+    """The JSON one config file holds (an empty file holds ``{}``). Raises
+    ``ConfigFileUnreadableError`` when it cannot be read or parsed, whatever
+    the reason."""
+    try:
+        return parse_config_text(path.read_text(encoding="utf-8"))
+    except _UNREADABLE as exc:
+        reason = "nested too deeply to read" if isinstance(exc, RecursionError) else str(exc)
+        raise ConfigFileUnreadableError(path, reason or type(exc).__name__) from exc
+
+
+@dataclass(frozen=True)
+class ConfigProblem:
+    """A config file that did not load cleanly, and why."""
+
+    path: Path
+    error: str
+
+    def __str__(self) -> str:
+        return f"{self.path}: {self.error}"
+
+
+def describe_config_problems(problems: list[ConfigProblem]) -> str:
+    return "; ".join(str(problem) for problem in problems)
+
+
+class ConfigNotLoadedError(RuntimeError):
+    """A write to the config refused because the config on disk does not
+    load cleanly: the write would overwrite, delete or shadow a file durin
+    could not read, or settings it could not validate."""
+
+    def __init__(self, problems: list[ConfigProblem]) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            "durin did not change the config: it does not load cleanly. Fix or remove "
+            "these files, then try again: " + describe_config_problems(self.problems)
+        )
+
+
+def _section_file(split: Path, key: str) -> Path:
+    """The split file a top-level config key was read from: the one named
+    after it, or after another spelling of it (camelCase or snake_case);
+    the split directory itself when none is."""
+    exact = split / f"{key}.json"
+    if exact.is_file():
+        return exact
+    wanted = key.replace("_", "").lower()
+    for candidate in sorted(split.glob("*.json")):
+        if candidate.stem.replace("_", "").lower() == wanted:
+            return candidate
+    return split
+
+
+def _validate(data: Any, file_of: Callable[[str], Path]) -> tuple[Config, list[ConfigProblem]]:
+    """*data* as a Config, migrated and scrubbed as a load migrates and
+    scrubs it; defaults and what failed when it does not validate, each
+    problem named after the file its setting came from (*file_of* maps a
+    top-level key to it)."""
+    if not isinstance(data, dict):
+        return Config(), [ConfigProblem(file_of(""), "does not hold a JSON object")]
+    try:
+        return Config.model_validate(_migrate_config(data)), []
+    except pydantic.ValidationError as exc:
+        by_file: dict[Path, list[str]] = {}
+        for err in exc.errors():
+            loc = err.get("loc") or ()
+            where = ".".join(str(part) for part in loc) or "config"
+            by_file.setdefault(file_of(str(loc[0]) if loc else ""), []).append(f"{where}: {err.get('msg')}")
+        return Config(), [ConfigProblem(path, "; ".join(messages)) for path, messages in by_file.items()]
+    except (ValueError, TypeError, AttributeError) as exc:
+        return Config(), [ConfigProblem(file_of(""), str(exc) or type(exc).__name__)]
+
+
+def _inspect(path: Path) -> tuple[Config, list[ConfigProblem], str]:
+    """Read and validate the config at *path* as a load does, writing
+    nothing: the Config (defaults for whatever did not load), the files that
+    did not load cleanly and why, and the layout read — ``"split"``,
+    ``"file"``, or ``"none"`` when there is no config yet (or only the
+    marker of a split layout whose directory is gone)."""
+    split = _split_dir(path)
+    try:
+        files = sorted(p for p in split.iterdir() if p.is_file() and p.suffix == ".json") if split.is_dir() else []
+    except OSError as exc:
+        return Config(), [ConfigProblem(split, str(exc))], "split"
+    if files:
+        data: dict[str, Any] = {}
+        problems: list[ConfigProblem] = []
+        for file in files:
+            try:
+                data[file.stem] = read_config_file(file)
+            except ConfigFileUnreadableError as exc:
+                problems.append(ConfigProblem(file, exc.reason))
+        config, invalid = _validate(data, lambda key: _section_file(split, key))
+        return config, problems + invalid, "split"
+    # An empty split directory never shadows a config file next to it.
+    if not path.exists():
+        return Config(), [], "none"
+    try:
+        data = read_config_file(path)
+    except ConfigFileUnreadableError as exc:
+        return Config(), [ConfigProblem(path, exc.reason)], "file"
+    if isinstance(data, dict) and tuple(data.keys()) == ("_layout",):
+        # The marker of a split layout whose directory holds nothing: there
+        # are no settings to read, nor to lose.
+        return Config(), [], "none"
+    config, invalid = _validate(data, lambda key: path)
+    return config, invalid, "file"
+
+
+def config_load_problems(config_path: Path | None = None) -> list[ConfigProblem]:
+    """The files of the config at *config_path* that do not load cleanly,
+    and why: one that cannot be read or parsed, or whose settings fail
+    validation. Empty when the config loads cleanly, or there is none yet."""
+    return _inspect(config_path or get_config_path())[1]
+
+
 def read_persisted_config(config_path: Path | None = None) -> dict[str, Any]:
     """Return the on-disk config as a dict, transparent to layout.
 
     Useful for tests and tooling that want to inspect what got
     written without caring whether the canonical store is a single
-    monolithic file or the split per-topic directory.
+    monolithic file or the split per-topic directory. A file that cannot be
+    read is left out (the whole config, for a single file).
     """
     path = config_path or get_config_path()
     if _is_split_layout(path):
         return _read_split_layout(path)
     try:
-        with path.open(encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        data = read_config_file(path)
+    except ConfigFileUnreadableError:
         return {}
-    if isinstance(data, dict) and tuple(data.keys()) == ("_layout",):
+    if not isinstance(data, dict) or tuple(data.keys()) == ("_layout",):
         return {}
     return data
+
+
+# -- writing ------------------------------------------------------------------
+
+
+@contextmanager
+def config_write(config_path: Path | None = None) -> Iterator[Path]:
+    """Hold the config's lock for a write, refusing it (``ConfigNotLoadedError``)
+    when the config on disk does not load cleanly.
+
+    Every durin writer of the config goes through here. A config that did
+    not load cleanly runs on defaults for what failed, so anything written
+    from it would overwrite, delete or shadow the file it could not use —
+    a hand edit with a typo, gone. Refused, the file stays byte for byte
+    until the person fixes it."""
+    path = config_path or get_config_path()
+    with cross_process_lock(path):
+        problems = config_load_problems(path)
+        if problems:
+            raise ConfigNotLoadedError(problems)
+        yield path
 
 
 def _migrate_to_split_layout(monolith_path: Path) -> None:
@@ -131,35 +305,33 @@ def _migrate_to_split_layout(monolith_path: Path) -> None:
     canonical ``config.json`` as a tiny marker pointing at the split
     layout so downstream readers don't get confused.
     """
-    try:
-        raw = monolith_path.read_text(encoding="utf-8")
-        data = json.loads(raw or "{}")
-    except (OSError, json.JSONDecodeError):
-        return
-    # Already migrated? `_layout` marker means we shouldn't re-split.
-    if isinstance(data, dict) and data.get("_layout") == "split":
-        return
-    split = _split_dir(monolith_path)
-    split.mkdir(parents=True, exist_ok=True)
-    for key, value in data.items():
-        if key.startswith("_") or value is None:
-            continue
-        target = split / f"{key}.json"
-        atomic_write_text(target, json.dumps(value, indent=2, ensure_ascii=False))
-    # Keep the old config as a backup, just renamed. The user can
-    # always `mv config.json.legacy config.json` to revert.
-    backup = monolith_path.with_suffix(".json.legacy")
-    if not backup.exists():
-        try:
-            monolith_path.rename(backup)
-        except OSError:
-            pass
-    # Marker file at the canonical path so tooling sees the layout.
-    atomic_write_text(monolith_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
+    with config_write(monolith_path):
+        data = read_config_file(monolith_path)
+        # Already migrated? `_layout` marker means we shouldn't re-split.
+        if not isinstance(data, dict) or data.get("_layout") == "split":
+            return
+        split = _split_dir(monolith_path)
+        split.mkdir(parents=True, exist_ok=True)
+        for key, value in data.items():
+            if key.startswith("_") or value is None:
+                continue
+            target = split / f"{key}.json"
+            atomic_write_text(target, json.dumps(value, indent=2, ensure_ascii=False))
+        # Keep the old config as a backup, just renamed. The user can
+        # always `mv config.json.legacy config.json` to revert.
+        backup = monolith_path.with_suffix(".json.legacy")
+        if not backup.exists():
+            try:
+                monolith_path.rename(backup)
+            except OSError:
+                pass
+        # Marker file at the canonical path so tooling sees the layout.
+        atomic_write_text(monolith_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
 
 
 def _read_split_layout(config_path: Path) -> dict[str, Any]:
-    """Read all per-topic files from the split dir and merge."""
+    """Read all per-topic files from the split dir and merge; a file that
+    cannot be read is left out, with a warning."""
     split = _split_dir(config_path)
     merged: dict[str, Any] = {}
     if not split.is_dir():
@@ -167,12 +339,10 @@ def _read_split_layout(config_path: Path) -> dict[str, Any]:
     for path in sorted(split.iterdir()):
         if not path.is_file() or path.suffix != ".json":
             continue
-        key = path.stem
         try:
-            with path.open(encoding="utf-8") as f:
-                merged[key] = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Skipping unreadable split-config file {}: {}", path, e)
+            merged[path.stem] = read_config_file(path)
+        except ConfigFileUnreadableError as e:
+            logger.warning("Skipping unreadable split-config file {}", e)
     return merged
 
 
@@ -181,7 +351,8 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
 
     Top-level keys with no content (or only default-derived empty
     dicts) are removed from disk to keep the layout clean — re-loading
-    will fill those sections back in from Pydantic defaults.
+    will fill those sections back in from Pydantic defaults. Callers hold
+    ``config_write``.
     """
     split = _split_dir(config_path)
     split.mkdir(parents=True, exist_ok=True)
@@ -197,11 +368,31 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
     for existing in split.iterdir():
         if existing.is_file() and existing.suffix == ".json" and existing not in seen:
             try:
+                read_config_file(existing)
+            except ConfigFileUnreadableError as e:
+                # Never delete what could not be read: config_write refuses
+                # such a write before it gets here, and this keeps it so.
+                logger.error("Not removing unreadable config file {}", e)
+                continue
+            try:
                 existing.unlink()
             except OSError:
                 pass
     # Maintain the marker so `config.json` always returns split-mode info.
     atomic_write_text(config_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
+
+
+def write_persisted_config(data: dict[str, Any], config_path: Path | None = None) -> None:
+    """Write *data*, the config in its on-disk shape, in the layout on disk,
+    under ``config_write``: for writers that edit the persisted dict rather
+    than a Config."""
+    path = config_path or get_config_path()
+    with config_write(path):
+        if _is_split_layout(path):
+            _write_split_layout(data, path)
+        else:
+            atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+        _invalidate_config_cache(path)
 
 
 # load_config is called from dozens of per-request service paths; each uncached
@@ -274,52 +465,25 @@ def load_config(config_path: Path | None = None) -> Config:
 
 
 def _load_config_uncached(path: Path) -> Config:
-    config = Config()
-
-    # Path A: split layout already exists on disk → read each topic file.
-    if _is_split_layout(path):
-        data = _read_split_layout(path)
-        if data:
-            try:
-                data = _migrate_config(data)
-                config = Config.model_validate(data)
-            except (ValueError, pydantic.ValidationError) as e:
-                logger.warning("Failed to load split config: {}", e)
-                logger.warning("Using default configuration.")
-            _apply_ssrf_whitelist(config)
-            return config
-        # The directory exists but holds no topic files at all yet (created
-        # ahead of a save that never happened, or emptied by hand). Fall
-        # through to Path B instead of returning defaults: a monolith with
-        # real settings may still be sitting on disk, and an empty
-        # directory must never shadow it.
-
-    # Path B: legacy monolith exists (or Path A's split dir was empty).
-    # Read it AND migrate to split transparently so the next save lands in
-    # the new layout.
-    if path.exists():
+    # The split layout when its directory holds topic files; else the single
+    # file (an empty directory never shadows it); else defaults. What did
+    # not load runs on defaults: a file that cannot be read leaves its
+    # section at the defaults, settings that fail validation the whole
+    # config. Saves are refused until it loads cleanly (config_write).
+    config, problems, layout = _inspect(path)
+    if problems:
+        for problem in problems:
+            logger.warning("Config file did not load: {}", problem)
+        logger.warning("Using default configuration for what did not load.")
+    elif layout == "file":
+        # Successful legacy load — migrate to split on the spot so
+        # the user sees the new layout next time they look.
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            # If the marker is the *only* thing in the monolith (e.g.
-            # a half-migrated state where split dir was deleted), bail
-            # to defaults rather than treating `_layout: split` as a
-            # real config field.
-            if isinstance(data, dict) and tuple(data.keys()) == ("_layout",):
-                _apply_ssrf_whitelist(config)
-                return config
-            data = _migrate_config(data)
-            config = Config.model_validate(data)
-        except (json.JSONDecodeError, ValueError, pydantic.ValidationError) as e:
-            logger.warning("Failed to load config from {}: {}", path, e)
-            logger.warning("Using default configuration.")
-        else:
-            # Successful legacy load — migrate to split on the spot so
-            # the user sees the new layout next time they look.
-            try:
-                _migrate_to_split_layout(path)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Could not migrate config to split layout: {}", e)
+            _migrate_to_split_layout(path)
+        except ConfigNotLoadedError as e:
+            logger.error("Could not migrate config to split layout: {}", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not migrate config to split layout: {}", e)
 
     _apply_ssrf_whitelist(config)
     return config
@@ -366,9 +530,10 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     - Else → write the monolith and migrate to split on the next load.
 
     The entire write — including the multi-file split-layout set and the
-    stale-file unlink — is wrapped in ``cross_process_lock(path)`` so
-    concurrent writers are serialized and a concurrent reader under the
-    same lock never sees a torn cross-section state.
+    stale-file unlink — is wrapped in ``config_write(path)``: concurrent
+    writers are serialized, a concurrent reader under the same lock never
+    sees a torn cross-section state, and a config on disk that does not load
+    cleanly is not written at all (``ConfigNotLoadedError``).
 
     .. note::
         A direct ``load_config() → edit → save_config()`` sequence that is
@@ -379,7 +544,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with cross_process_lock(path):
+    with config_write(path):
         data = config.model_dump(mode="json", by_alias=False, exclude_defaults=True)
         data = _prune_noise_sections(data)
         _reject_redacted_credentials(data)
@@ -399,9 +564,11 @@ def mutate_config(
 ) -> Config:
     """Atomic read-modify-write for config, safe across processes.
 
-    Acquires ``cross_process_lock(config_path)``, reloads the config from
-    disk under the lock, applies *mutator* in place, saves, and returns the
-    updated :class:`~durin.config.schema.Config`.
+    Holds ``config_write(config_path)`` (the config's lock, refused with
+    ``ConfigNotLoadedError`` before *mutator* runs when the config on disk
+    does not load cleanly), reloads the config from disk under the lock,
+    applies *mutator* in place, saves, and returns the updated
+    :class:`~durin.config.schema.Config`.
 
     Because ``cross_process_lock`` is reentrant (thread-local guard), the
     inner ``save_config`` call re-taking the lock is safe.
@@ -419,7 +586,7 @@ def mutate_config(
         updated = mutate_config(_set_key)
     """
     path = config_path or get_config_path()
-    with cross_process_lock(path):
+    with config_write(path):
         cfg = load_config(path)
         mutator(cfg)
         save_config(cfg, path)
@@ -600,6 +767,42 @@ def _env_replace(match: re.Match[str]) -> str:
 
 
 _LIMIT_KEYS = ("max_tokens", "maxTokens", "context_window_tokens", "contextWindowTokens")
+_COMPACT_CAP_KEYS = ("preemptive_compact_max_tokens", "preemptiveCompactMaxTokens")
+
+
+def _scrub_compact_cap(block: dict, where: str) -> None:
+    """Make a hand-edited compaction cap loadable: a number written as a
+    string is read as that number, a count under the minimum is raised to
+    it, a fractional one rounded down, and a value that is no finite number
+    at all (NaN and the infinities JSON accepts, or an exponent too large
+    for a float) dropped: the default, or for a preset agents.defaults' cap.
+    0 or less is left for the schema, which reads it as no cap."""
+    for key in _COMPACT_CAP_KEYS:
+        if key not in block:
+            continue
+        value = block[key]
+        if value is None:
+            continue
+        number = value
+        if isinstance(value, str):
+            with suppress(ValueError):
+                number = float(value.strip())
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, (int, float))
+            or (isinstance(number, float) and not math.isfinite(number))
+        ):
+            del block[key]
+            logger.warning("config: {}.{} is {!r}, not a token count; treating it as unset", where, key, value)
+            continue
+        count = int(number)
+        if 0 < count < PREEMPTIVE_COMPACT_MIN_TOKENS:
+            logger.warning(
+                "config: {}.{} is {}, under the {} minimum; raising it to the minimum",
+                where, key, value, PREEMPTIVE_COMPACT_MIN_TOKENS,
+            )
+            count = PREEMPTIVE_COMPACT_MIN_TOKENS
+        block[key] = count
 
 
 def drop_unusable_limits(data: dict) -> dict:
@@ -609,8 +812,10 @@ def drop_unusable_limits(data: dict) -> dict:
     (the model's own limit, or the default) instead of failing validation,
     which would reject the whole config. The schema refuses such a value on
     write; one saved before it did (a settings editor wrote a cleared number
-    as 0) must not stop the config from loading or being edited. Each drop is
-    logged. Mutates and returns *data*."""
+    as 0) must not stop the config from loading or being edited. A compaction
+    cap under ``agents.defaults`` or on a preset is made loadable the same way
+    (``_scrub_compact_cap``). Each change is logged. Mutates and returns
+    *data*."""
 
     def scrub(block: Any, where: str) -> None:
         if not isinstance(block, dict):
@@ -627,6 +832,7 @@ def drop_unusable_limits(data: dict) -> dict:
     defaults = agents.get("defaults") if isinstance(agents, dict) else None
     if isinstance(defaults, dict):
         scrub(defaults, "agents.defaults")
+        _scrub_compact_cap(defaults, "agents.defaults")
         for key in ("fallback_models", "fallbackModels"):
             items = defaults.get(key)
             if isinstance(items, list):
@@ -637,6 +843,8 @@ def drop_unusable_limits(data: dict) -> dict:
         if isinstance(presets, dict):
             for name, preset in presets.items():
                 scrub(preset, f"{key}.{name}")
+                if isinstance(preset, dict):
+                    _scrub_compact_cap(preset, f"{key}.{name}")
     providers = data.get("providers")
     if isinstance(providers, dict):
         for provider, block in providers.items():
@@ -648,41 +856,49 @@ def drop_unusable_limits(data: dict) -> dict:
 
 
 def _migrate_config(data: dict) -> dict:
-    """Migrate old config formats to current."""
+    """Migrate old config formats to current. A section that is not a JSON
+    object is left as it is, for validation to report against its file."""
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
-    exec_cfg = tools.get("exec", {})
-    if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
+    exec_cfg = tools.get("exec", {}) if isinstance(tools, dict) else {}
+    if isinstance(exec_cfg, dict) and "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
 
     # Move tools.myEnabled / tools.mySet → tools.my.{enable, allowSet}.
     # The old flat keys shipped in the initial MyTool landing; wrapping them in a
     # sub-config keeps `web` / `exec` / `my` symmetric and gives room to grow.
-    if "myEnabled" in tools or "mySet" in tools:
+    if isinstance(tools, dict) and ("myEnabled" in tools or "mySet" in tools):
         my_cfg = tools.setdefault("my", {})
-        if "myEnabled" in tools and "enable" not in my_cfg:
-            my_cfg["enable"] = tools.pop("myEnabled")
-        else:
-            tools.pop("myEnabled", None)
-        if "mySet" in tools and "allowSet" not in my_cfg:
-            my_cfg["allowSet"] = tools.pop("mySet")
-        else:
-            tools.pop("mySet", None)
+        if isinstance(my_cfg, dict):
+            if "myEnabled" in tools and "enable" not in my_cfg:
+                my_cfg["enable"] = tools.pop("myEnabled")
+            else:
+                tools.pop("myEnabled", None)
+            if "mySet" in tools and "allowSet" not in my_cfg:
+                my_cfg["allowSet"] = tools.pop("mySet")
+            else:
+                tools.pop("mySet", None)
 
     # Move memory.skillImport → skills.security and memory.skillsHotTier →
     # agents.defaults.skillsHotTier (skills config migration).
     # Handles both camelCase (as persisted) and snake_case keys.
     memory = data.get("memory", {})
+    if not isinstance(memory, dict):
+        return drop_unusable_limits(data)
     for legacy in ("skillImport", "skill_import"):
-        if legacy in memory:
-            security = data.setdefault("skills", {}).setdefault("security", {})
-            for key, value in memory.pop(legacy).items():
-                security.setdefault(key, value)
+        if legacy in memory and isinstance(memory[legacy], dict):
+            skills = data.setdefault("skills", {})
+            security = skills.setdefault("security", {}) if isinstance(skills, dict) else None
+            if isinstance(security, dict):
+                for key, value in memory.pop(legacy).items():
+                    security.setdefault(key, value)
             break
     for legacy in ("skillsHotTier", "skills_hot_tier"):
         if legacy in memory:
-            defaults = data.setdefault("agents", {}).setdefault("defaults", {})
-            defaults.setdefault("skillsHotTier", memory.pop(legacy))
+            agents = data.setdefault("agents", {})
+            defaults = agents.setdefault("defaults", {}) if isinstance(agents, dict) else None
+            if isinstance(defaults, dict):
+                defaults.setdefault("skillsHotTier", memory.pop(legacy))
             break
 
     return drop_unusable_limits(data)
