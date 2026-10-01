@@ -222,8 +222,15 @@ async def test_a_resume_cancelled_after_its_walk_started_keeps_the_engines_recor
         with pytest.raises(asyncio.CancelledError):
             await resume
         gate_file.touch()
-        assert await _until(lambda: run_log.read_manifest(
-            tmp_path, "wf", "paused1")["status"] != "running")
+
+        def finished() -> bool:
+            # The engine rewrites the manifest in place, from the run's thread:
+            # a read that lands mid-write finds it empty, which read_manifest
+            # reports as None. That is not the end of the run; read again.
+            manifest = run_log.read_manifest(tmp_path, "wf", "paused1")
+            return manifest is not None and manifest["status"] != "running"
+
+        assert await _until(finished)
 
     after = run_log.read_manifest(tmp_path, "wf", "paused1")
     assert after["status"] == "completed"
