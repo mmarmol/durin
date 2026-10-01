@@ -78,10 +78,12 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     These probes depend on host state that is irrelevant to the exit-code
     aggregation those tests assert, and make a "clean" run non-deterministic:
 
-    - ``check_embedding_model_loads`` does a real model load+embed. On a box
-      with the ``[memory]`` extra installed but the ~0.45 GB model not yet
-      downloaded it returns ``fail`` (CI runs *without* the extra, so it skips
-      there — the failure only surfaces on dev machines).
+    - ``check_embedding_model`` reads fastembed's catalog. Without the
+      ``[memory]`` extra that read goes through the extras auto-installer,
+      which would install the extra into the environment running the suite.
+    - ``check_embedding_model_loads`` does a real model load+embed: with the
+      ``[memory]`` extra installed it loads the ~0.45 GB model, downloading
+      it first on a machine that does not have it yet.
     - ``check_durin_on_path`` warns when more than one ``durin`` executable is
       on PATH (a dev box with e.g. a pipx + venv install).
     - ``check_gateway_version`` probes the websocket port over HTTP. On a dev
@@ -91,6 +93,10 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     All probes have their own dedicated unit tests; here we stub them to
     their clean result so these tests exercise the aggregation, not the host.
     """
+    monkeypatch.setattr(
+        "durin.cli.doctor.check_embedding_model",
+        lambda: CheckResult("embedding model", "ok", "stubbed in test", category="state"),
+    )
     monkeypatch.setattr(
         "durin.cli.doctor.check_embedding_model_loads",
         lambda: CheckResult("embedding model load", "ok", "stubbed in test"),
@@ -416,7 +422,9 @@ class TestWhatsAppBridgeCheck:
 # ---------------------------------------------------------------------------
 
 
-def test_run_checks_returns_report_with_many_results(valid_config: Path) -> None:
+def test_run_checks_returns_report_with_many_results(
+    valid_config: Path, hermetic_state_probes
+) -> None:
     report = run_checks()
     assert isinstance(report, DoctorReport)
     assert len(report.results) >= 8
@@ -460,13 +468,15 @@ def test_run_doctor_returns_zero_when_clean(
     assert rc == 0
 
 
-def test_run_doctor_returns_one_on_fail(fake_home: Path) -> None:
+def test_run_doctor_returns_one_on_fail(fake_home: Path, hermetic_state_probes) -> None:
     # No config → check_config_file fails.
     rc = run_doctor()
     assert rc == 1
 
 
-def test_run_doctor_json_output(valid_config: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_doctor_json_output(
+    valid_config: Path, capsys: pytest.CaptureFixture[str], hermetic_state_probes
+) -> None:
     rc = run_doctor(as_json=True)
     captured = capsys.readouterr().out
     # Output is one or more JSON objects (Rich may wrap); the first character of
@@ -525,7 +535,56 @@ def test_embedding_model_load_skips_when_fastembed_absent(
     assert result.status != "fail", result.message
 
 
-def test_cli_doctor_exits_one_when_config_invalid(fake_home: Path) -> None:
+def _set_config(valid_config: Path, *path: str, value) -> None:
+    data = json.loads(valid_config.read_text(encoding="utf-8"))
+    node = data
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    valid_config.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_embedding_model_check_finds_the_model_in_the_catalog(valid_config: Path) -> None:
+    from durin.cli.doctor import check_embedding_model
+    from tests.memory.test_embedding import _inject_fake_fastembed
+
+    with _inject_fake_fastembed():
+        result = check_embedding_model()
+    assert result.status == "ok", result.message
+    assert result.message.startswith("intfloat/multilingual-e5-small (384-dim")
+
+
+def test_embedding_model_check_fails_a_model_missing_from_the_catalog(valid_config: Path) -> None:
+    from durin.cli.doctor import check_embedding_model
+    from tests.memory.test_embedding import _inject_fake_fastembed
+
+    _set_config(valid_config, "memory", "embedding", "model", value="no-such/model")
+    with _inject_fake_fastembed():
+        result = check_embedding_model()
+    assert result.status == "fail"
+    assert "'no-such/model' is not in fastembed's catalog" in result.message
+
+
+def test_embedding_model_check_without_fastembed_installs_nothing_when_told_not_to(
+    valid_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the [memory] extra the catalog cannot be read; with automatic
+    installs off nothing is installed and the check leaves the missing extra
+    to the extras checks instead of failing."""
+    import sys
+
+    import durin.memory.embedding as embedding_module
+    from durin.cli.doctor import check_embedding_model
+
+    _set_config(valid_config, "install", "autoInstallExtras", value=False)
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    monkeypatch.setattr(embedding_module, "_CATALOG_CACHE", None)
+    result = check_embedding_model()
+    assert result.status == "ok", result.message
+    assert "[memory] extra not installed" in result.message
+
+
+def test_cli_doctor_exits_one_when_config_invalid(fake_home: Path, hermetic_state_probes) -> None:
     cfg = fake_home / ".durin" / "config.json"
     cfg.parent.mkdir(parents=True)
     cfg.write_text("{ not valid json", encoding="utf-8")

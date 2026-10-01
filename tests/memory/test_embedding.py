@@ -237,7 +237,16 @@ def test_warmup_loads_and_returns_duration() -> None:
 def test_missing_fastembed_raises_clear_error_at_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If fastembed isn't installed, construction fails with a fixable message."""
+    """If fastembed isn't installed, construction fails with a fixable message.
+
+    Automatic installs are turned off in this test's config: on (the
+    default), the missing extra would be installed first."""
+    from durin.config.loader import save_config
+    from durin.config.schema import Config
+
+    config = Config()
+    config.install.auto_install_extras = False
+    save_config(config)
     monkeypatch.setitem(sys.modules, "fastembed", None)
     embedding_module._CATALOG_CACHE = None
     with pytest.raises(RuntimeError, match="fastembed is required"):

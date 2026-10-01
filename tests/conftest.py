@@ -220,6 +220,48 @@ def _ban_catalog_network_fetch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_package_installs(monkeypatch):
+    """Fail the test that reaches the extras installer, naming the command.
+
+    ``ensure_extra`` (durin/extras.py) installs a missing optional extra
+    through ``subprocess.run`` when a feature needs it, gated by
+    ``install.auto_install_extras`` — on by default, so on in every test's
+    fresh home. Code under test that reaches it for real (``durin doctor``
+    reading the embedding catalog without fastembed did) installs into the
+    environment running the suite, mid-run: every later test then sees the
+    extra, and outcomes depend on test order. Here the installer's
+    subprocess is refused with the error a failed install raises, and the
+    test fails at teardown. A test that exercises the installer replaces
+    ``subprocess.run`` on top of this with its own fake.
+    """
+    import subprocess
+    import types
+
+    import durin.extras as _extras
+
+    refused: list = []
+
+    def _refuse(cmd, *args, **kwargs):
+        refused.append(cmd)
+        raise subprocess.CalledProcessError(
+            1, cmd, stderr="installing packages is refused in the test suite")
+
+    monkeypatch.setattr(
+        _extras, "subprocess",
+        types.SimpleNamespace(run=_refuse, CalledProcessError=subprocess.CalledProcessError),
+    )
+    yield
+    if refused:
+        pytest.fail(
+            "test reached the extras installer, which would have run: "
+            + " ".join(str(part) for part in refused[0])
+            + ". Tests never install packages: fake the missing extra, or "
+            "the installer, at the boundary the code uses.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
 def _remove_loguru_sinks_left_by_a_test():
     """Remove every loguru sink a test added and left behind.
 
