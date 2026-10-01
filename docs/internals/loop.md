@@ -969,13 +969,16 @@ Two metadata splits matter:
   spent on them would evict an older, real one, and a span of nothing else
   makes no call. A failed turn that ran tools keeps that work.
   The projection's own bound is in characters, whatever the window, so a
-  prompt carries the summary cut to a quarter of the room the rest of the
-  system prompt and the tool definitions leave of the turn model's input
-  budget (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks
-  are left out first, after a line saying so. On a small window the whole
-  projection alone could otherwise leave a turn no room for its own message.
-  The compaction probe measures the summary the same way, framed as the
-  loop frames it (`pending_summary_for_session`).
+  prompt carries the summary cut to a quarter of what the rest of the system
+  prompt, the tool definitions and the turn's own message (its runtime
+  context and task state included) leave of the turn model's input budget
+  (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks are
+  left out first, after a line saying so, and it never makes the turn too
+  large to send whatever history goes. On a small window the whole
+  projection alone could otherwise leave a turn no room, or no turn room to
+  be sent at all. The compaction probe measures the summary the same way,
+  framed as the loop frames it (`pending_summary_for_session`), with its
+  probe message in place of the turn's.
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact

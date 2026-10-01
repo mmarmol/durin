@@ -26,12 +26,14 @@ from durin.utils.prompt_templates import render_template
 logger = logging.getLogger(__name__)
 
 # The share of a turn's input budget the archived session summary may take
-# of what the rest of the system prompt and the tool definitions leave: the
-# turn's own message, its task state and the replayed history share the
-# rest. The summary store caps the summary by characters whatever the
-# window, so on a small window the summary alone would otherwise leave a
-# turn no room.
+# of what the rest of the system prompt, the tool definitions and the turn's
+# own message (its runtime context and task state included) leave, less a
+# margin for how the request's estimate joins its parts: the replayed
+# history gets the rest. The summary store caps the summary by characters
+# whatever the window, so on a small window the summary alone would
+# otherwise leave a turn no room, or make it too large to send at all.
 _SUMMARY_ROOM_SHARE = 0.25
+_SUMMARY_JOIN_MARGIN = 64
 
 # The stable tier's sub-block labels for the ``/status`` composition
 # breakdown (see ``summarize_composition`` below).
@@ -256,6 +258,7 @@ class ContextBuilder:
         eager_snapshot: EagerSnapshot | None = None,
         input_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
+        turn_tokens: int = 0,
     ) -> str:
         """Build the system prompt in 3 cache-friendly tiers.
 
@@ -289,8 +292,10 @@ class ContextBuilder:
 
         ``input_budget_tokens`` is the input budget of the model the prompt
         is for. With it, the session summary is cut to its share
-        (``_SUMMARY_ROOM_SHARE``) of what the other two tiers and *tools*
-        leave of that budget, its oldest blocks left out first.
+        (``_SUMMARY_ROOM_SHARE``) of what the other two tiers, *tools* and
+        *turn_tokens* (what the turn's own message takes) leave of that
+        budget, its oldest blocks left out first: it never makes the turn
+        too large to send, whatever history goes.
         """
         # Reset the per-call breakdown — each layer fills its slot.
         self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
@@ -304,7 +309,7 @@ class ContextBuilder:
             fixed = estimate_text_tokens("\n\n---\n\n".join(p for p in (stable, context) if p))
             if tools:
                 fixed += estimate_prompt_tokens([], tools)
-            room = max(0, input_budget_tokens - fixed)
+            room = max(0, input_budget_tokens - fixed - turn_tokens - _SUMMARY_JOIN_MARGIN)
             session_summary = fit_summary_to_tokens(session_summary, int(room * _SUMMARY_ROOM_SHARE))
         volatile = self._build_volatile_layer(session_summary=session_summary)
         return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
@@ -723,6 +728,9 @@ class ContextBuilder:
                     eager_snapshot=eager_snapshot,
                     input_budget_tokens=input_budget_tokens,
                     tools=tools,
+                    # Counted as the runner's precheck counts it: the text,
+                    # not an attached image's encoding.
+                    turn_tokens=estimate_prompt_tokens([{"role": current_role, "content": merged}]),
                 ),
             },
             *history,

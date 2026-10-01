@@ -275,6 +275,23 @@ async def test_a_small_window_session_keeps_answering_as_its_summary_grows(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_a_summary_never_crowds_out_the_turn_it_is_carried_by(tmp_path):
+    """With 1,900 tokens of the input budget beside the system prompt and
+    the tool definitions, a turn's message (about 1,600 tokens with its
+    runtime context) fits, but not with a quarter of that room taken by the
+    summary as well: from the first summary on, every turn failed even after
+    a compaction dropped all of its history. The summary now gives way to
+    the turn's own message."""
+    window = _window_leaving(tmp_path, 1_900)
+    result = await _run_turns(tmp_path, turns=6, window=window)
+
+    failed = [i for i, r in enumerate(result["replies"]) if not r or r.startswith(_OVERFLOW_REPLY)]
+    assert failed == []
+    assert sum(result["compactions"]) >= 1
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
 async def test_a_rescued_turn_that_used_tools_is_saved_whole(tmp_path):
     """A turn rescued by the overflow retry that calls a tool: the assistant
     message carrying the call is saved with its result, not the result alone."""

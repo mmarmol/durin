@@ -192,8 +192,9 @@ every turn. It stops waiting once there is room again (a shorter
 with other limits.
 
 On a small window the summary so far would take much of that room by itself,
-so a prompt carries it cut to a quarter of what the system prompt and the
-tool schemas leave of the input budget, its oldest parts left out first.
+so a prompt carries it cut to a quarter of what the system prompt, the tool
+schemas and the turn's own message leave of the input budget, its oldest
+parts left out first.
 
 When the system prompt, the tool schemas and the message alone are over the
 input budget, no compaction can make the turn fit: it fails at once, and the
