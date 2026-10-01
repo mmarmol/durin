@@ -67,3 +67,39 @@ def test_opted_out_config_blocks_install_when_fastembed_missing(monkeypatch):
     with pytest.raises(RuntimeError, match=r"durin-agent\[memory\]"):
         emb.list_supported_models()
     assert run_calls == []  # opt-out honored: no installer subprocess
+
+
+def test_check_path_asks_without_installing(memory_extra_missing, monkeypatch):
+    """A caller that only checks (doctor, the onboarding probe) asks with
+    install=False: the missing extra raises, and nothing is installed even
+    with install.auto_install_extras on (the default config)."""
+    noted = []
+    monkeypatch.setattr(
+        emb, "ensure_or_note", lambda feature, *, config: noted.append(feature)
+    )
+    with pytest.raises(RuntimeError, match=r"durin-agent\[memory\]"):
+        emb.list_supported_models(install=False)
+    assert memory_extra_missing.calls == []
+    assert noted == []
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        pytest.param(
+            lambda: emb.FastembedProvider(model=emb.FastembedProvider.DEFAULT_MODEL,
+                                          isolation="inline"),
+            id="provider-construction",
+        ),
+        pytest.param(
+            lambda: emb.model_dimensions(emb.FastembedProvider.DEFAULT_MODEL),
+            id="model-dimensions",
+        ),
+    ],
+)
+def test_activation_path_still_installs(memory_extra_missing, use):
+    """Using vector memory with the extra missing installs it (gate on by
+    default) and then works on the installed package."""
+    use()
+    assert len(memory_extra_missing.calls) == 1
+    assert any(spec.startswith("fastembed") for spec in memory_extra_missing.calls[0])

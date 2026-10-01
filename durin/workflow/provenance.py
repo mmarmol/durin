@@ -14,6 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
 FILENAME = ".provenance.json"
@@ -141,12 +142,22 @@ def load(work_dir: Path) -> dict[str, dict]:
         return {}
 
 
+def _write(work_dir: Path, data: dict) -> None:
+    """Replace FILENAME in one step (a temporary file renamed over it). load()
+    reads without the lock, while a run is writing, and takes a torn file for
+    an empty one; and a writer killed mid-write must not leave a truncated
+    file, from which the next record() would rebuild with every other entry
+    lost. The temporary file exists only during this call, and the engine
+    snapshots the folder's files only between its own record() calls, so it
+    never takes that file for a node's artifact."""
+    atomic_write_text(Path(work_dir) / FILENAME, json.dumps(data, ensure_ascii=False, indent=1))
+
+
 def record(work_dir: Path, filename: str, entry: dict) -> None:
     with cross_process_lock(_lock_target(work_dir), timeout=_LOCK_TIMEOUT_S):
         data = load(work_dir)
         data[filename] = entry
-        (Path(work_dir) / FILENAME).write_text(
-            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        _write(work_dir, data)
 
 
 def drop(work_dir: Path, filename: str) -> None:
@@ -163,7 +174,6 @@ def drop(work_dir: Path, filename: str) -> None:
             data = load(work_dir)
             if filename in data:
                 del data[filename]
-                (Path(work_dir) / FILENAME).write_text(
-                    json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+                _write(work_dir, data)
     except Exception:  # noqa: BLE001 - cleanup is best-effort, never fatal
         pass

@@ -70,23 +70,22 @@ def test_record_serializes_concurrent_load_mutate_write(tmp_path, monkeypatch):
     the lock B's own write never blocks on anything and finishes in well under a
     second) until A's write completes."""
     import threading
-    from pathlib import Path as _Path
 
     from durin.workflow import provenance
 
     first_writing = threading.Event()
     release_first = threading.Event()
     triggered = {"done": False}
-    real_write_text = _Path.write_text
+    real_write = provenance._write
 
-    def patched_write_text(self, *a, **kw):
-        if self.name == provenance.FILENAME and not triggered["done"]:
+    def paused_write(work_dir, data):
+        if not triggered["done"]:
             triggered["done"] = True
             first_writing.set()
             assert release_first.wait(timeout=10), "release signal never sent"
-        return real_write_text(self, *a, **kw)
+        return real_write(work_dir, data)
 
-    monkeypatch.setattr(_Path, "write_text", patched_write_text)
+    monkeypatch.setattr(provenance, "_write", paused_write)
 
     def writer_a():
         record(tmp_path, "a.json", {"run_id": "a"})

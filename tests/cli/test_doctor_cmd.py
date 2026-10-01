@@ -21,6 +21,7 @@ from durin.cli.doctor import (
     check_config_file,
     check_config_parses,
     check_default_model_resolvable,
+    check_embedding_model,
     check_executable,
     check_optional_extra,
     check_python_version,
@@ -78,9 +79,9 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     These probes depend on host state that is irrelevant to the exit-code
     aggregation those tests assert, and make a "clean" run non-deterministic:
 
-    - ``check_embedding_model`` reads fastembed's catalog. Without the
-      ``[memory]`` extra that read goes through the extras auto-installer,
-      which would install the extra into the environment running the suite.
+    - ``check_embedding_model`` reads fastembed's catalog, and without the
+      ``[memory]`` extra installs it (``install.auto_install_extras`` is on in
+      a fresh test home): an install into the environment running the suite.
     - ``check_embedding_model_loads`` does a real model load+embed: with the
       ``[memory]`` extra installed it loads the ~0.45 GB model, downloading
       it first on a machine that does not have it yet.
@@ -569,8 +570,8 @@ def test_embedding_model_check_without_fastembed_installs_nothing_when_told_not_
     valid_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Without the [memory] extra the catalog cannot be read; with automatic
-    installs off nothing is installed and the check leaves the missing extra
-    to the extras checks instead of failing."""
+    installs off nothing is installed, and the row reports the extra as not
+    installed, with the fix, as a warning rather than a failure."""
     import sys
 
     import durin.memory.embedding as embedding_module
@@ -580,8 +581,91 @@ def test_embedding_model_check_without_fastembed_installs_nothing_when_told_not_
     monkeypatch.setitem(sys.modules, "fastembed", None)
     monkeypatch.setattr(embedding_module, "_CATALOG_CACHE", None)
     result = check_embedding_model()
-    assert result.status == "ok", result.message
-    assert "[memory] extra not installed" in result.message
+    assert result.status == "warn", result.message
+    assert "the [memory] extra is not installed" in result.message
+    assert "durin doctor --install-missing -y" in (result.fix or "")
+    assert "pipx inject durin-agent" in (result.fix or "")
+
+
+# ---------------------------------------------------------------------------
+# check_embedding_model — vector memory on, [memory] extra missing, installs on
+# ---------------------------------------------------------------------------
+
+
+def test_embedding_check_installs_the_missing_memory_extra_and_says_so(
+    valid_config: Path, memory_extra_missing
+) -> None:
+    """auto_install_extras on (default): doctor installs the extra through
+    ensure_extra, explicitly, and the row says it did and what comes next."""
+    r = doctor.check_embedding_model()
+    assert len(memory_extra_missing.calls) == 1
+    assert any(s.startswith("fastembed") for s in memory_extra_missing.calls[0])
+    assert r.status == "warn"
+    assert "installed the [memory] extra" in r.message
+    assert "restart the gateway" in r.message
+
+
+def test_embedding_check_reports_a_failed_install_with_the_manual_command(
+    valid_config: Path, memory_extra_missing
+) -> None:
+    from durin.cli.upgrade import install_hint
+
+    memory_extra_missing.succeeds = False
+    r = doctor.check_embedding_model()
+    assert len(memory_extra_missing.calls) == 1
+    assert r.status == "warn"
+    assert "could not install the [memory] extra" in r.message
+    assert "simulated install failure" in r.message
+    assert "durin doctor --install-missing -y" in (r.fix or "")
+    assert install_hint(["memory"]) in (r.fix or "")
+
+
+def test_embedding_check_with_memory_off_installs_nothing(
+    valid_config: Path, memory_extra_missing
+) -> None:
+    _set_config(valid_config, "memory", "enabled", value=False)
+    r = doctor.check_embedding_model()
+    assert memory_extra_missing.calls == []
+    assert r.status == "ok"
+
+
+def test_doctor_report_reflects_the_memory_extra_it_installed(
+    valid_config: Path,
+    fake_home: Path,
+    hermetic_state_probes,
+    memory_extra_missing,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The extras rows describe the install doctor itself just did, so the
+    report does not both say "installed" and ask for the same install."""
+    # The aggregate stubs replace the embedding check; its install is what
+    # this test is about, so it runs for real.
+    monkeypatch.setattr(doctor, "check_embedding_model", check_embedding_model)
+    report = run_checks()
+    rows = {r.name: r for r in report.results}
+    assert len(memory_extra_missing.calls) == 1
+    assert "installed the [memory] extra" in rows["embedding model"].message
+    assert rows["fastembed"].status == "ok"
+    assert rows["lancedb"].status == "ok"
+    assert "memory" not in doctor.collect_missing_extras(report)
+
+
+def test_install_missing_does_not_install_the_memory_extra_twice(
+    valid_config: Path,
+    fake_home: Path,
+    hermetic_state_probes,
+    memory_extra_missing,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(doctor, "check_embedding_model", check_embedding_model)
+    requested: list[list[str]] = []
+    monkeypatch.setattr(
+        doctor, "install_missing_extras",
+        lambda extras, **kwargs: requested.append(list(extras)) or 0,
+    )
+    run_doctor(install_missing=True, assume_yes=True)
+    assert len(memory_extra_missing.calls) == 1
+    assert all("memory" not in extras for extras in requested)
 
 
 def test_cli_doctor_exits_one_when_config_invalid(fake_home: Path, hermetic_state_probes) -> None:

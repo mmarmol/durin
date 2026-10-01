@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
+from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader, forget_skill_metadata
 from durin.agent.skills_frontmatter import (
     ensure_durin,
     frontmatter_broken,
@@ -114,11 +114,21 @@ def _today() -> str:
     return _dt.date.today().isoformat()
 
 
+def _write_skill_file(path: Path, text: str) -> None:
+    """Write a file of a skill and drop the loader's cached parse of it.
+
+    The loader trusts a cached parse while the file's (mtime, size) hold, and a
+    same-size rewrite within the filesystem's mtime granularity keeps both, so
+    every store write says so explicitly."""
+    path.write_text(text, encoding="utf-8")
+    forget_skill_metadata(path)
+
+
 def _update_md(path: Path, mutate) -> None:
     text = path.read_text(encoding="utf-8")
     data, body = split_frontmatter(text)
     mutate(data)
-    path.write_text(join_frontmatter(data, body), encoding="utf-8")
+    _write_skill_file(path, join_frontmatter(data, body))
 
 
 def _durin_blob(text: str) -> dict:
@@ -429,7 +439,7 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
     if target is None:
         return {"error": "file escapes skill directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    _write_skill_file(target, content)
     _mark_scripts_executable(target)
     if scan.new_findings:
         _void_verdict_cleared(dest / "SKILL.md")
@@ -911,7 +921,7 @@ def write_skill_edit(
     scan = scan_skill_write(dest, {file: edit["after"]})
     target = (dest / file).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(edit["after"], encoding="utf-8")
+    _write_skill_file(target, edit["after"])
     _mark_scripts_executable(target)
     if scan.new_findings:
         _void_verdict_cleared(dest / "SKILL.md")
@@ -1180,7 +1190,7 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         return {"error": f"composition gate: {reason}", "composition_rejected": True}
     _store_init(workspace)  # ensure git repo exists (on the clean tree) before writing files
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text(content, encoding="utf-8")
+    _write_skill_file(md, content)
     if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
         md.unlink()
         return {"error": "skill body has no derivable description"}
@@ -1282,7 +1292,7 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name, loader)
     md = dest / "SKILL.md"
-    md.write_text(content, encoding="utf-8")
+    _write_skill_file(md, content)
     for rel, body in files.items():
         target = (dest / rel).resolve()
         if not target.is_relative_to(dest.resolve()):
@@ -1376,7 +1386,7 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     store = _store_init(workspace)
     md = _skill_md(workspace, target)
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text(content, encoding="utf-8")
+    _write_skill_file(md, content)
     for rel, body in merged_files.items():
         t = (md.parent / rel).resolve()
         if not t.is_relative_to(md.parent.resolve()):
@@ -1415,11 +1425,12 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
             # disable_model_invocation lives at the TOP level of the
             # frontmatter (SkillsLoader reads it from get_skill_metadata,
             # not from metadata.durin); provenance stays under metadata.durin.
-            (tomb / "SKILL.md").write_text(
+            _write_skill_file(
+                tomb / "SKILL.md",
                 f"---\nname: {s}\ndisable_model_invocation: true\n"
                 f"metadata:\n  durin:\n    mode: auto\n"
                 f"    provenance:\n      source: dream\n      fused_into: {target}\n"
-                f"---\nFused into `{target}`.\n", encoding="utf-8")
+                f"---\nFused into `{target}`.\n")
     sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]",
                             trailers=attribution_to_trailers(attribution))
     # Multi-op index fan-out: the new target enters the index; every source

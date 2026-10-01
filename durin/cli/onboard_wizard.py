@@ -988,7 +988,10 @@ def _maybe_warm_embedding_model(model: str, size_label: str) -> None:
     """
     try:
         from durin.memory.embedding import FastembedProvider, list_supported_models
-        list_supported_models()  # raises if fastembed missing
+        # Only a probe: raises when fastembed is missing and never installs
+        # it. Installing the extra is the explicit step `durin onboard`
+        # offers once the wizard ends.
+        list_supported_models(install=False)
     except (ImportError, RuntimeError):
         print(
             f"  · Model {model} will be downloaded ({size_label}) on first "

@@ -209,7 +209,13 @@ def _write_pending(workspace, name: str, *, rec_id: str, kind: str,
         record["script"] = script
     if previous_content is not None:
         record["previous_content"] = previous_content
-    p.write_text(json.dumps(record), encoding="utf-8")
+    # Replaced in one step (temporary file renamed over it): a pass killed
+    # mid-write (the dream worker's memory watchdog ends it) must not leave a
+    # truncated record, which the next pass would read as "nothing pending" and
+    # so never judge, or revert, the edit it describes.
+    from durin.utils.atomic_write import atomic_write_text
+
+    atomic_write_text(p, json.dumps(record))
 
 
 def _read_pending(workspace, name: str) -> dict | None:

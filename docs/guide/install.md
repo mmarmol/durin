@@ -385,6 +385,13 @@ it into CI. The services category compares the running gateway's version
 against the installed CLI, so a reinstall that forgot to restart the gateway
 shows up as a warning instead of stale webui confusion.
 
+When vector memory is on and its `[memory]` extra is missing, `durin doctor`
+installs it and says so in the report ("installed the [memory] extra; restart
+the gateway to activate it"), or reports why it could not, with the command to
+run by hand. With `install.auto_install_extras` set to `false` it installs
+nothing and reports the extra as missing, with the fix: `durin doctor
+--install-missing -y`.
+
 The complementary snapshot is `durin status` — "what do I have and is it
 running?" with no judgement. It probes the live gateway for version, uptime,
 per-channel connection state, and scheduled cron jobs, falling back to

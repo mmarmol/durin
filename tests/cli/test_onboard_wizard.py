@@ -307,6 +307,18 @@ def test_hub_memory_enable_and_change_embedding(monkeypatch) -> None:
     assert result.config.memory.embedding.model == "intfloat/multilingual-e5-large"
 
 
+def test_embedding_probe_never_installs_the_memory_extra(memory_extra_missing, capsys) -> None:
+    """Picking an embedding model only probes for fastembed. With the [memory]
+    extra missing the wizard says the model comes after the extra, and installs
+    nothing here: installing is the explicit step `durin onboard` offers when
+    the wizard ends."""
+    from durin.cli import onboard_wizard
+
+    onboard_wizard._maybe_warm_embedding_model("intfloat/multilingual-e5-small", "~115 MB")
+    assert memory_extra_missing.calls == []
+    assert "after the [memory] extra is installed" in capsys.readouterr().out
+
+
 def test_hub_memory_enable_with_default_embedding_reports_on() -> None:
     """Regression: enabling memory WITHOUT changing the embedding must
     still register as on — the hub state read the wrong signal before."""
