@@ -760,7 +760,11 @@ The active persona for a turn is resolved once in `_state_build` by
    pre-persona behavior.
 
 The resolved persona's soul body replaces the default SOUL in the stable system-
-prompt layer (via `ContextBuilder`). Its model ref is passed to the existing
+prompt layer (via `ContextBuilder`), and the compaction checks of the session's
+turns measure the prompt with it (`maybe_consolidate_by_tokens(persona_soul=…)`),
+as `/status` does: a persona's SOUL can be many times the default's size, and
+measured with the default one the session would compact late and overflow.
+Its model ref is passed to the existing
 per-turn model-override path alongside any explicit `/model` or cron per-job
 model; the most-specific reference wins (`ctx.model_preset_override or
 ctx.persona_model_ref`) — an explicit `/model` switch always overrides the

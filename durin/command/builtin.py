@@ -364,7 +364,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     ctx_est = 0
     with suppress(Exception):
-        ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
+        ctx_est = loop.session_prompt_estimate(
+            session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        )
     if ctx_est <= 0:
         ctx_est = loop._last_usage.get("prompt_tokens", 0)
 

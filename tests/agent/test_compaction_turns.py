@@ -436,6 +436,38 @@ async def test_status_and_the_footer_measure_against_the_trigger_the_turns_use(t
 
 
 @pytest.mark.asyncio
+async def test_a_persona_session_is_measured_with_the_persona_soul(tmp_path):
+    """A persona's turns are built with its own SOUL, but the compaction
+    check measured the session with the default one. With a SOUL of about
+    15,000 tokens the check under-counted every prompt by that much: no turn
+    compacted at the trigger, and the prompt grew until a request overflowed
+    the budget at the precheck and the turn had to compact and retry."""
+    from durin.config.schema import Config, ModelPresetConfig, PersonaConfig
+    from durin.souls.store import SoulStore
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+        "small": ModelPresetConfig(model="test-model", context_window_tokens=64_000),
+    }
+    config = Config()
+    config.memory.file_watcher.enabled = False
+    config.personas["long"] = PersonaConfig(soul="long", model="small")
+    SoulStore(tmp_path).write("long", "You are Long. " + "rule " * 15_000)
+    result = await _run_turns(
+        tmp_path, turns=14, window=1_000_000, model_presets=presets, app_config=config,
+        session_metadata={"persona": "long"},
+    )
+
+    assert [a["stop_reason"] for a in result["attempts"]] == ["completed"] * 14
+    assert sum(result["compactions"]) >= 1
+    # /status measures the session the same way: with the persona's SOUL.
+    loop, session = result["loop"], result["session"]
+    estimate = loop.session_prompt_estimate(session, channel="cli", chat_id="sim")
+    default_soul, _ = loop.consolidator.estimate_session_prompt_tokens(session)
+    assert estimate - default_soul > 14_000, (estimate, default_soul)
+
+
+@pytest.mark.asyncio
 async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(tmp_path):
     """A sub-agent's result on a persona session starts a turn of its own,
     which ran on the loop's model with the default SOUL and checked

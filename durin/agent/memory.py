@@ -1023,8 +1023,14 @@ class Consolidator:
     def estimate_session_prompt_tokens(
         self,
         session: Session,
+        *,
+        persona_soul: str | None = None,
     ) -> tuple[int, str]:
-        """Estimate prompt size from the full unconsolidated session tail."""
+        """Estimate prompt size from the full unconsolidated session tail.
+
+        ``persona_soul`` is the SOUL the session's turns are built with when
+        a persona sets one (None: the default SOUL); a persona's SOUL can be
+        many times the default's size."""
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
@@ -1069,6 +1075,7 @@ class Consolidator:
             session_metadata=session.metadata,
             probe=True,
             eager_snapshot=eager_snapshot,
+            active_persona_soul=persona_soul,
         )
         return estimate_prompt_tokens_chain(
             self.provider,
@@ -1547,6 +1554,7 @@ class Consolidator:
         replay_max_messages: int | None = None,
         force: bool = False,
         limits: CompactionLimits | None = None,
+        persona_soul: str | None = None,
     ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
@@ -1556,7 +1564,8 @@ class Consolidator:
         ``limits`` sizes the check for a turn that runs on another model than
         the loop's own (``run_limits``); without it the loop's model is used.
         The trigger has to sit under the budget of the run that follows,
-        which is that model's.
+        which is that model's. ``persona_soul`` is the SOUL that turn is
+        built with when a persona sets one: the estimate measures it.
 
         ``force`` is for a caller holding proof that the prompt does not fit:
         the runner overflowed before its first call. The idle check and the
@@ -1574,7 +1583,7 @@ class Consolidator:
         if not session.messages or limits.context_window_tokens <= 0:
             return
         with self._bound_telemetry(session.key):
-            await self._consolidate_by_tokens(session, replay_max_messages, force, limits)
+            await self._consolidate_by_tokens(session, replay_max_messages, force, limits, persona_soul)
 
     async def _consolidate_by_tokens(
         self,
@@ -1582,6 +1591,7 @@ class Consolidator:
         replay_max_messages: int | None,
         force: bool,
         limits: CompactionLimits,
+        persona_soul: str | None,
     ) -> None:
         lock = self.get_lock(session.key)
         # Tier 2 A3: bounded lock acquisition. A prior compaction that
@@ -1651,7 +1661,7 @@ class Consolidator:
                 new_summaries.extend(replay_summaries)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
-                    session,
+                    session, persona_soul=persona_soul,
                 )
             except Exception:
                 logger.exception("Token estimation failed for {}", session.key)
@@ -1809,7 +1819,7 @@ class Consolidator:
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
-                        session,
+                        session, persona_soul=persona_soul,
                     )
                 except Exception:
                     logger.exception("Token estimation failed for {}", session.key)

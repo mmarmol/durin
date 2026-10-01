@@ -2116,6 +2116,19 @@ class AgentLoop:
         limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
         return self.consolidator._trigger_for(limits or self.consolidator._limits())[0]
 
+    def session_prompt_estimate(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> int:
+        """The session's prompt as its next turn would build it, estimated
+        the way its compaction check measures it: with the SOUL of the
+        persona it runs under."""
+        soul, _model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
+        return self.consolidator.estimate_session_prompt_tokens(session, persona_soul=soul)[0]
+
     def _compaction_limits(self, run_snapshot: ProviderSnapshot | None) -> CompactionLimits | None:
         """What compaction is sized by for a turn on *run_snapshot*'s model;
         None (the loop's own model) when the turn runs on the loop's."""
@@ -3094,6 +3107,7 @@ class AgentLoop:
             session,
             replay_max_messages=self._max_messages,
             limits=limits,
+            persona_soul=persona_soul,
         )
         is_subagent = msg.sender_id == "subagent"
         if is_subagent and self._persist_subagent_followup(session, msg):
@@ -3193,6 +3207,7 @@ class AgentLoop:
                 session,
                 replay_max_messages=self._max_messages,
                 limits=limits,
+                persona_soul=persona_soul,
             )
         )
         content = final_content or "Background task completed."
@@ -3869,6 +3884,7 @@ class AgentLoop:
             ctx.session,
             replay_max_messages=self._max_messages,
             limits=self._compaction_limits(ctx.run_snapshot),
+            persona_soul=ctx.active_persona_soul,
         )
         # COMPACT read the summary before this consolidation ran. When it
         # archived turns it also wrote or extended the summary, and the
@@ -4075,6 +4091,7 @@ class AgentLoop:
                 await self.consolidator.maybe_consolidate_by_tokens(
                     ctx.session, replay_max_messages=self._max_messages, force=True,
                     limits=self._compaction_limits(ctx.run_snapshot),
+                    persona_soul=ctx.active_persona_soul,
                 )
                 ctx.pending_summary = self._format_pending_summary(ctx.session)
                 # The same shape BUILD built: the turn's own message, saved
@@ -4202,6 +4219,7 @@ class AgentLoop:
                 ctx.session,
                 replay_max_messages=self._max_messages,
                 limits=self._compaction_limits(ctx.run_snapshot),
+                persona_soul=ctx.active_persona_soul,
             )
         )
         return "ok"

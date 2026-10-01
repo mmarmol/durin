@@ -91,7 +91,7 @@ async def test_a_turn_that_reads_a_skill_records_skill_used(tmp_path, monkeypatc
     loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
     loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
 
-    async def _keep(sess, *, replay_max_messages=None, force=False, limits=None):
+    async def _keep(sess, *, replay_max_messages=None, force=False, limits=None, persona_soul=None):
         return None
 
     loop.consolidator.maybe_consolidate_by_tokens = _keep  # type: ignore[method-assign]

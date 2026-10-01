@@ -416,7 +416,7 @@ async def test_preemptive_trigger_fires_below_input_budget(tmp_path, monkeypatch
     session = _session_with_messages(loop, count=10)
 
     estimates = [150, 40]  # 150 >= trigger(150); after archive, 40 <= target(75)
-    def mock_estimate(_session, *, session_summary=None):
+    def mock_estimate(_session, *, session_summary=None, persona_soul=None):
         return (estimates.pop(0), "test")
     loop.consolidator.estimate_session_prompt_tokens = mock_estimate
     monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100)

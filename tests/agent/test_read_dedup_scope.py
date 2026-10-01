@@ -201,11 +201,13 @@ async def test_a_turn_after_compaction_reads_the_file_again(tmp_path: Path) -> N
 
     async def _keep(
         sess: Any, *, replay_max_messages: Any = None, force: bool = False, limits: Any = None,
+        persona_soul: Any = None,
     ) -> None:
         return None
 
     async def _archive(
         sess: Any, *, replay_max_messages: Any = None, force: bool = False, limits: Any = None,
+        persona_soul: Any = None,
     ) -> None:
         # What a real consolidation does: the earlier turns leave the history.
         sess.messages = []
