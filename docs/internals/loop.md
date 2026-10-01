@@ -541,7 +541,9 @@ Every assistant message the runner persists is stamped with
 system prompt, tool definitions and every earlier message. The task state that
 request appended is taken out of the stamp: the conversation never keeps it,
 and each request appends the block as it is then, so a stamp that kept it
-would count it twice. From the second call
+would count it twice. A reply from the no-tools finalization retry carries
+the count of the request with tools whose blank answer the retry replaced,
+not the two requests' counts added together. From the second call
 of a turn onward the estimate is that stamp plus a tiktoken estimate of the
 stamped message and everything after it, *without* the tool definitions, which
 the stamp already contains. Before any call has been made (iteration 0, and the

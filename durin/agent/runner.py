@@ -923,6 +923,10 @@ class AgentRunner:
                 )
             total_llm_ms += (time.monotonic() - _llm_started) * 1000.0
             raw_usage = self._usage_dict(response.usage)
+            # Taken from this request alone: a no-tools finalization retry
+            # below adds its own request's count to raw_usage, and a reply
+            # it produces still stands on this request's prompt.
+            stamp_tokens = self._stamp_tokens(raw_usage, appended_tokens)
             context.response = response
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
@@ -1052,7 +1056,7 @@ class AgentRunner:
                     tool_calls=[tc.to_openai_tool_call() for tc in response.tool_calls],
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
+                    prompt_tokens=stamp_tokens,
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in response.tool_calls)
@@ -1349,7 +1353,7 @@ class AgentRunner:
                     clean,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
+                    prompt_tokens=stamp_tokens,
                 )
 
             # Check for mid-turn injections BEFORE signaling stream end.
@@ -1421,7 +1425,7 @@ class AgentRunner:
                 clean,
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
-                prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
+                prompt_tokens=stamp_tokens,
             ))
             await self._emit_checkpoint(
                 spec,
