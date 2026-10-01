@@ -868,6 +868,48 @@ async def test_a_run_its_trim_can_fit_is_sent_not_stopped():
 
 
 @pytest.mark.asyncio
+async def test_a_request_with_its_task_state_never_asks_past_the_window():
+    """A request appends the task state when it changed during the run. The
+    precheck, and the output cap it sizes, counted the request without it.
+    With an output ceiling above the reserved share of the window, that cap
+    fills what the counted prompt leaves, and a task state longer than the
+    safety buffer took the request past the window."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    messages = [{"role": "system", "content": "system prompt"}]
+    for i in range(13):
+        messages += [
+            {"role": "user", "content": f"question {i} " + "words " * 1500},
+            {"role": "assistant", "content": f"answer {i}"},
+        ]
+    messages.append({"role": "user", "content": "the current question " + "words " * 2500})
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=60_000,
+        max_tokens=50_000,
+        task_state_provider=lambda: [f"- decision {i}: " + "detail " * 40 for i in range(70)],
+    )
+    requests: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, max_tokens=None, **_kwargs):
+        requests.append(estimate_prompt_tokens(messages, tools) + max_tokens)
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    await AgentRunner(provider).run(spec)
+
+    assert requests and max(requests) <= 60_000
+
+
+@pytest.mark.asyncio
 async def test_a_caller_that_compacts_gets_the_overflow_instead_of_a_trim():
     """The chat loop compacts the history it replays and retries when its
     first request does not fit: it summarizes what a trim would drop. For

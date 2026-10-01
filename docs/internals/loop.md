@@ -525,7 +525,9 @@ its last, so its first request keeps the replayed history whole and an
 overflow there is answered by a compaction that summarizes what the snip
 would have dropped; the last attempt snips rather than fail on a history
 compaction could not shrink. A mid-turn precheck estimates
-the post-sanitize prompt each iteration: when it is over budget the runner
+the post-sanitize request each iteration, the task state it appends
+included, so neither the budget check nor the dynamic `max_tokens` it sizes
+leaves that block out: when it is over budget the runner
 emergency-trims the largest string tool results on the model-facing copy and
 proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't
 recover does it abort *before* the LLM call with

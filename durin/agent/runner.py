@@ -1537,12 +1537,7 @@ class AgentRunner:
         if budget is None or budget <= 0:
             return None
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                _provider,
-                spec.model,
-                messages,
-                self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, messages, _provider)
         except Exception:
             # Token estimation is best-effort; never block a turn on the
             # estimator failing. Let the provider's own 400 handle it.
@@ -1653,12 +1648,7 @@ class AgentRunner:
         """Estimate the prompt size for ``messages`` (best-effort, returns
         ``None`` on estimator failure)."""
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                provider,
-                spec.model,
-                messages,
-                self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, messages, provider)
         except Exception:
             return None
         return estimate
@@ -1688,6 +1678,21 @@ class AgentRunner:
             d for d in all_defs
             if mode.is_tool_allowed(ToolRegistry._schema_name(d))
         ]
+
+    def _request_estimate(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None,
+    ) -> int:
+        """Tokens of the request a run sends on *messages*: them, the task
+        state it appends when that changed during the run, and the tool
+        schemas."""
+        added = [m for m in (self._task_state_message(spec, messages),) if m is not None]
+        estimate, _ = estimate_prompt_tokens_chain(
+            provider, spec.model, messages + added, self._active_tool_definitions(spec),
+        )
+        return estimate
 
     def _task_state_message(
         self,
@@ -2900,9 +2905,7 @@ class AgentRunner:
         if len(prunable) < 2:
             return view
         try:
-            estimate, _ = estimate_prompt_tokens_chain(
-                _provider, spec.model, view, self._active_tool_definitions(spec),
-            )
+            estimate = self._request_estimate(spec, view, _provider)
         except Exception:
             return view
         if estimate <= budget * _MICROCOMPACT_PRESSURE_RATIO:
