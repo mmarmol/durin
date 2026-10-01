@@ -970,18 +970,26 @@ Two metadata splits matter:
   block spent on them would evict an older, real one, and a span of nothing
   else makes no call. The user's messages always stay, answered or not: a later turn often
   retries one ("try again") and means nothing without it.
-  The projection's own bound is in characters, whatever the window, so a
-  prompt carries the summary cut to a quarter of what the rest of the system
-  prompt, the tool definitions and the turn's own message (its runtime
-  context and task state included, the decision log already cut to fit the
-  message, see below) leave of the turn model's input budget
+  The projection's own bound is in characters, whatever the window. A prompt
+  carries the summary whole when it fits in what the rest of the system
+  prompt and the tool definitions leave of the turn model's input budget
+  beside the replayed history and the turn's own message (its runtime context
+  and task state included, the decision log already cut to fit the message,
+  see below), the message counted as at least a fixed allowance
+  (`_MESSAGE_ALLOWANCE`). Otherwise it carries the summary cut to a quarter
+  of what the system prompt, the tool definitions and that message leave
   (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks are
   left out first, after a line saying so, and the head block carrying the
   paths of evicted blocks goes last, so those paths outlive the cut as they
   outlive the eviction; it never makes the turn too large to send whatever
-  history goes. On a small window the whole
-  projection alone could otherwise leave a turn no room, or no turn room to
-  be sent at all. The compaction probe measures the summary the same way,
+  history goes. On a small window the whole projection alone could
+  otherwise leave a turn no room, or no turn room to be sent at all. The
+  allowance keeps the cut from following each message's length: the summary
+  sits in the system prompt, the head of every provider's prompt cache, so a
+  cut that changed with the message would miss the cache for the whole
+  prompt on every turn; it moves only with a message larger than the
+  allowance, with the stored summary, and once when the history grows past
+  what leaves the whole summary room. The compaction probe measures the summary the same way,
   framed as the loop frames it (`pending_summary_for_session`) and bounded
   by the same room, the tool definitions counted as in the turn's build,
   with its probe message in place of the turn's.

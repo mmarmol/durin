@@ -192,3 +192,53 @@ def test_a_bounded_decision_log_is_the_one_a_run_appends(builder):
     block = "\n".join(task_state_runtime_lines(metadata, decision_log_max_tokens=bound))
     assert "decision 9:" in block and "decision 0:" not in block
     assert block in messages[-1]["content"]
+
+
+def _long_summary() -> str:
+    blocks = [f"- Span {i}: we worked on item {i}. " + "detail " * 60 for i in range(40)]
+    return (
+        "=== ARCHIVED SUMMARY (consolidator) ===\n" + "\n\n---\n".join(blocks)[:15_900]
+        + "\n=== END ARCHIVED SUMMARY ===\nThe turns summarized above are archived."
+    )
+
+
+def _fixed_tokens(builder) -> int:
+    from durin.utils.helpers import estimate_text_tokens
+
+    return estimate_text_tokens(builder.build_system_prompt())
+
+
+def test_the_summary_a_prompt_carries_does_not_change_with_the_message(builder):
+    """The summary rides in the system prompt, so a cut that changes from one
+    turn to the next misses every provider's prompt cache for the whole
+    prompt. The cut followed each message's length, and the system prompt
+    changed on nearly every turn of a small window."""
+    summary = _long_summary()
+    budget = _fixed_tokens(builder) + 3_500
+
+    short = builder.build_messages(
+        history=[], current_message="ok", session_summary=summary, input_budget_tokens=budget,
+    )
+    longer = builder.build_messages(
+        history=[], current_message="please look at this: " + "note " * 400,
+        session_summary=summary, input_budget_tokens=budget,
+    )
+
+    assert "older parts of this summary are left out" in short[0]["content"]
+    assert longer[0]["content"] == short[0]["content"]
+
+
+def test_a_summary_that_fits_whole_is_carried_whole(builder):
+    """Where the whole summary, the message and the history fit the budget,
+    the prompt carries the summary as it was: the cut is for windows too small
+    for it, not for the windows that always carried it whole."""
+    from durin.utils.helpers import estimate_text_tokens
+
+    summary = _long_summary()
+    budget = _fixed_tokens(builder) + estimate_text_tokens(summary) + 3_000
+
+    messages = builder.build_messages(
+        history=[], current_message="ok", session_summary=summary, input_budget_tokens=budget,
+    )
+
+    assert summary in messages[0]["content"]

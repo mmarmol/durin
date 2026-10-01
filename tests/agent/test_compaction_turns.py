@@ -259,9 +259,10 @@ async def test_a_small_window_session_keeps_answering_as_its_summary_grows(tmp_p
     tokens beside the system prompt and the tool definitions, the summary
     grew until it, the task state and one message no longer fit: from then
     on every turn failed, each after a forced compaction that could not make
-    room. In a prompt the summary now takes a quarter of that room at most."""
+    room. A prompt now carries the summary whole only while it fits beside
+    the message and the history, and a quarter of what the message leaves
+    otherwise."""
     from durin.agent.runner import input_budget_tokens
-    from durin.utils.helpers import estimate_text_tokens
 
     window = _window_leaving(tmp_path, 6_000)
     result = await _run_turns(tmp_path, turns=45, window=window)
@@ -270,11 +271,8 @@ async def test_a_small_window_session_keeps_answering_as_its_summary_grows(tmp_p
     assert failed == []
     assert max(result["main_prompts"]) <= input_budget_tokens(window, 8192)
     _assert_turns_saved(result)
-    summaries = [
-        _text_of(a["prompt"][0]).partition("[Archived Context Summary]")[2] for a in result["attempts"]
-    ]
-    assert any(summaries)
-    assert max(estimate_text_tokens(s) for s in summaries) <= 6_000 // 4
+    summaries = [_summary_part(_text_of(a["prompt"][0])) for a in result["attempts"]]
+    assert any("older parts of this summary are left out" in s for s in summaries)
 
 
 @pytest.mark.asyncio
@@ -324,6 +322,36 @@ async def test_a_decision_log_gives_way_to_the_turn_it_is_carried_by(tmp_path):
 def _summary_part(system: str) -> str:
     start = system.find("=== ARCHIVED SUMMARY")
     return system[start:] if start >= 0 else ""
+
+
+@pytest.mark.asyncio
+async def test_the_system_prompt_holds_across_turns_of_different_lengths(tmp_path):
+    """On a window small enough to cut the summary, the cut followed each
+    message's length: the system prompt changed on nearly every turn whose
+    message differed in length from the one before, though the stored summary
+    had not, and every provider's prompt cache missed the whole prompt. With
+    the summary unchanged, the system prompt now stays the same."""
+    from durin.memory.session_summary_store import write_session_summary
+
+    blocks = [f"- Span {i}: worked on item {i}, fixed /srv/app{i}/config.yaml. " + "detail " * 50 for i in range(60)]
+    write_session_summary(tmp_path, "cli:sim", "\n\n---\n".join(blocks)[-15_900:], last_active="2026-09-30")
+    sizes = [30, 400, 60, 900, 20, 300, 800, 40, 700, 100, 50, 600]
+    texts = [f"turn {i}: " + "note " * n for i, n in enumerate(sizes)]
+    result = await _run_turns(tmp_path, turns=len(texts), window=_window_leaving(tmp_path, 4_000), texts=texts)
+
+    systems: dict[int, str] = {}
+    for attempt in result["attempts"]:
+        if attempt["stop_reason"] == "completed":
+            systems[attempt["turn"]] = _text_of(attempt["prompt"][0])
+    compared = changed = 0
+    for i in range(1, len(texts)):
+        if result["compactions"][i - 1] or result["compactions"][i] or i not in systems or i - 1 not in systems:
+            continue
+        compared += 1
+        changed += systems[i] != systems[i - 1]
+    assert "older parts of this summary are left out" in systems[0]
+    assert compared >= 4, result["compactions"]
+    assert changed == 0, (changed, compared)
 
 
 @pytest.mark.asyncio

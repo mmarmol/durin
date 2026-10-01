@@ -30,13 +30,21 @@ logger = logging.getLogger(__name__)
 # tiers and the tool definitions, bounded by what those leave of the input
 # budget of the model the turn runs on, less a margin for how the request's
 # estimate joins its parts. The decision log rides in the turn's own message
-# and gives way first, its oldest entries left out until the message fits;
-# the archived session summary then takes at most this share of what the
-# message leaves, and the replayed history gets the rest. Both stores cap
+# and gives way first, its oldest entries left out until the message fits.
+# The archived session summary is carried whole when it fits beside the
+# message and the replayed history; otherwise it takes at most this share of
+# what the message leaves, and the history gets the rest. Both stores cap
 # their text by characters whatever the window, so on a small window either
 # could otherwise leave a turn no room, or make it too large to send at all.
 _SUMMARY_ROOM_SHARE = 0.25
 _PROMPT_JOIN_MARGIN = 64
+# What the summary leaves for the turn's own message (its runtime context
+# and task state included) however short the message is. The summary rides
+# in the system prompt, the head of every prompt cache, so a cut that
+# followed each message's length would miss the cache for the whole prompt
+# on every turn; a fixed allowance moves it only for a message larger than
+# that.
+_MESSAGE_ALLOWANCE = 2_048
 
 # The stable tier's sub-block labels for the ``/status`` composition
 # breakdown (see ``summarize_composition`` below).
@@ -644,9 +652,12 @@ class ContextBuilder:
         ``input_budget_tokens``, the input budget of the model the turn runs
         on, bounds what the session adds to the prompt by the room the
         system prompt's fixed tiers and *tools* leave of it: the decision
-        log gives way first, then the archived summary takes its share of
-        what the message leaves (``_SUMMARY_ROOM_SHARE``), so neither makes
-        the turn too large to send, whatever history goes.
+        log gives way first; the archived summary stays whole when it fits
+        beside the message and the history, and otherwise takes its share
+        (``_SUMMARY_ROOM_SHARE``) of what the message, at least
+        ``_MESSAGE_ALLOWANCE``, leaves, so neither makes the turn too large to
+        send, whatever history goes, and the cut does not follow each
+        message's length.
         """
         # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
@@ -758,9 +769,11 @@ class ContextBuilder:
                 merged = _merged(task_state_runtime_lines(session_metadata, decision_log_max_tokens=allowed))
                 turn_tokens = _turn_tokens(merged)
                 self.last_decision_log_tokens = allowed
-            if session_summary:
+            message_tokens = max(_MESSAGE_ALLOWANCE, turn_tokens)
+            history_tokens = estimate_prompt_tokens(history) if history else 0
+            if session_summary and estimate_text_tokens(session_summary) + message_tokens + history_tokens > room:
                 session_summary = fit_summary_to_tokens(
-                    session_summary, int(max(0, room - turn_tokens) * _SUMMARY_ROOM_SHARE),
+                    session_summary, int(max(0, room - message_tokens) * _SUMMARY_ROOM_SHARE),
                 )
         volatile = self._build_volatile_layer(session_summary=session_summary)
         messages = [

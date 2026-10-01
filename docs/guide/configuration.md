@@ -195,10 +195,13 @@ reaches the ceiling, which can be every turn. It stops waiting once there is
 room again (a shorter `AGENTS.md`), after `/new` or `/compact`, and when a
 turn runs on a model with other limits.
 
-On a small window the summary so far would take much of that room by itself,
-so a prompt carries it cut to a quarter of what the system prompt, the tool
+On a small window the summary so far would take much of that room by itself.
+When it does not fit beside the message and the conversation history, a
+prompt carries it cut to a quarter of what the system prompt, the tool
 schemas and the turn's own message leave of the input budget, its oldest
-parts left out first. The decision log rides in the message: when the
+parts left out first. The message is counted as at least a fixed allowance,
+so the cut stays the same from one ordinary message to the next and the
+provider's prompt cache keeps working. The decision log rides in the message: when the
 message would not fit with all of it, the prompt leaves out its oldest
 entries until it does.
 
