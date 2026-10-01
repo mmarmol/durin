@@ -365,7 +365,9 @@ Check categories and representative checks:
   document counts; `~/.cache/durin` byte count (warn at > 10 GB). With vector
   memory on and the `[memory]` extra missing, the embedding-model check
   installs the extra as doctor's own step (`ensure_extra`, gated by
-  `install.auto_install_extras`) and its row reports the outcome: installed,
+  `install.auto_install_extras`, and only once the config loads cleanly: what
+  fails to load runs on defaults, which allow installs) and its row reports
+  the outcome: installed,
   restart the gateway; or the failure with the manual command; or, with the
   setting off, not installed with the fix (`durin doctor --install-missing -y`
   or the pipx/uv command). Reading the catalog never installs anything

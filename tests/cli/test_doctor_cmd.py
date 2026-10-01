@@ -657,6 +657,22 @@ def test_embedding_check_reports_a_failed_install_with_the_manual_command(
     assert install_hint(["memory"]) in (r.fix or "")
 
 
+def test_embedding_check_installs_nothing_while_the_config_does_not_load(
+    valid_config: Path, memory_extra_missing
+) -> None:
+    """A config file that does not load runs on defaults for what failed, and
+    the defaults turn vector memory and installs on: the user's own
+    install.autoInstallExtras, off in the broken file, could not be read.
+    Doctor installs nothing until the config loads cleanly, and says why."""
+    valid_config.write_text('{"install": {"autoInstallExtras": false}, "memory": {', encoding="utf-8")
+
+    r = doctor.check_embedding_model()
+
+    assert memory_extra_missing.calls == []
+    assert r.status == "warn"
+    assert "does not load cleanly" in r.message
+
+
 def test_embedding_check_with_memory_off_installs_nothing(
     valid_config: Path, memory_extra_missing
 ) -> None:

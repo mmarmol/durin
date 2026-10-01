@@ -1245,9 +1245,22 @@ def check_embedding_model() -> CheckResult:
 def _install_memory_extra(cfg: "Config", model_name: str, exc: RuntimeError) -> CheckResult:
     """Vector memory is on but fastembed's catalog did not load: install the
     ``[memory]`` extra as doctor's own step when ``install.auto_install_extras``
-    allows, and report the outcome in the embedding-model row either way."""
+    allows, and report the outcome in the embedding-model row either way.
+
+    Not while the config does not load cleanly: what failed runs on defaults,
+    and the default allows installs, so the user's own setting could not be
+    read and may forbid them."""
+    from durin.config.loader import config_load_problems
     from durin.extras import ensure_extra
 
+    if config_load_problems(get_config_path()):
+        return CheckResult(
+            "embedding model", "warn",
+            f"configured as {model_name}, but the [memory] extra is not installed; doctor installs "
+            "nothing while the config does not load cleanly (see config valid)",
+            fix="Fix the config, then `durin doctor --install-missing -y`.",
+            category="state",
+        )
     res = ensure_extra("memory_vector", config=cfg)
     if res.status == "installed":
         return CheckResult(

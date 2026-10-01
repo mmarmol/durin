@@ -406,7 +406,8 @@ installs it and says so in the report ("installed the [memory] extra; restart
 the gateway to activate it"), or reports why it could not, with the command to
 run by hand. With `install.auto_install_extras` set to `false` it installs
 nothing and reports the extra as missing, with the fix: `durin doctor
---install-missing -y`.
+--install-missing -y`. Nor does it install while the config does not load
+cleanly: what failed runs on defaults, so your own setting could not be read.
 
 The complementary snapshot is `durin status` — "what do I have and is it
 running?" with no judgement. It probes the live gateway for version, uptime,
