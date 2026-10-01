@@ -636,10 +636,9 @@ class Consolidator:
         # probe render live, which is what a session without a frozen surface
         # gets anyway.
         self._eager_snapshot_for_session = eager_snapshot_for_session
-        # The session summary as the session's next prompt carries it (the
-        # loop's framing, or the previous session's for a fresh one), so the
-        # probe measures that text. None (a test scaffold, an ad-hoc runner)
-        # reads the session's own summary unframed.
+        # The session's own summary framed as its next prompt carries it, so
+        # the probe measures that text. None (a test scaffold, an ad-hoc
+        # runner) reads the session's own summary unframed.
         self._pending_summary_for_session = pending_summary_for_session
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()

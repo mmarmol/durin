@@ -39,6 +39,18 @@ def _text_of(message: dict[str, Any]) -> str:
     return ""
 
 
+async def _settle(scheduled: list) -> None:
+    """Run what a turn scheduled in the background after it, as a quiet
+    gateway would between turns: its compaction check is awaited, anything
+    else is closed, so no coroutine is left unawaited."""
+    while scheduled:
+        coro = scheduled.pop(0)
+        if getattr(getattr(coro, "cr_code", None), "co_name", "") == "maybe_consolidate_by_tokens":
+            await coro
+        else:
+            coro.close()
+
+
 def _window_leaving(tmp_path, room: int) -> int:
     """The window whose input budget leaves *room* tokens beside the system
     prompt and the tool definitions a session in *tmp_path* starts with.
@@ -395,6 +407,44 @@ async def test_the_compaction_probe_carries_the_summary_the_turn_carries(tmp_pat
     probe_summary = _summary_part(_text_of(probes[0][0]))
     assert turn_summary, "the window should cut the summary, not drop it"
     assert estimate_text_tokens(probe_summary) == estimate_text_tokens(turn_summary)
+
+
+@pytest.mark.asyncio
+async def test_the_compaction_probe_does_not_look_for_the_previous_session(tmp_path, monkeypatch):
+    """A fresh session on a single-user channel carries the previous
+    session's summary for its first turns, found by scanning the summary
+    store, a fraction of a second of disk reads on a store of thousands.
+    The compaction probe framed its summary through the same lookup, adding
+    one or two scans to each of those turns' two."""
+    import durin.memory.session_summary_store as store
+
+    store.write_session_summary(
+        tmp_path, "websocket:old", "- earlier work on billing", last_active="2026-09-20",
+        source_key="websocket:old",
+    )
+    lookups = {"n": 0}
+    real_find = store.find_previous_session_summary
+
+    def _counting(*args, **kwargs):
+        lookups["n"] += 1
+        return real_find(*args, **kwargs)
+
+    monkeypatch.setattr(store, "find_previous_session_summary", _counting)
+    result = await _run_turns(tmp_path, turns=0, window=128_000)
+    loop = result["loop"]
+    scheduled: list = []
+    loop._schedule_background = scheduled.append  # type: ignore[method-assign]
+    per_turn = []
+    for i in range(4):
+        before = lookups["n"]
+        await loop.process_direct(
+            f"question {i} about the billing work", session_key="websocket:fresh",
+            channel="websocket", chat_id="fresh",
+        )
+        await _settle(scheduled)
+        per_turn.append(lookups["n"] - before)
+
+    assert per_turn == [2, 2, 2, 0]
 
 
 @pytest.mark.asyncio

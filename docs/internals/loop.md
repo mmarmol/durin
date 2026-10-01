@@ -989,10 +989,14 @@ Two metadata splits matter:
   cut that changed with the message would miss the cache for the whole
   prompt on every turn; it moves only with a message larger than the
   allowance, with the stored summary, and once when the history grows past
-  what leaves the whole summary room. The compaction probe measures the summary the same way,
-  framed as the loop frames it (`pending_summary_for_session`) and bounded
-  by the same room, the tool definitions counted as in the turn's build,
-  with its probe message in place of the turn's.
+  what leaves the whole summary room. The compaction probe measures the
+  session's own summary the same way, framed as the loop frames it
+  (`pending_summary_for_session`, `AgentLoop._format_own_summary`) and
+  bounded by the same room, the tool definitions counted as in the turn's
+  build, with its probe message in place of the turn's. It leaves out the
+  previous session's summary a fresh session carries for its first turns:
+  finding it scans the whole summary store, and a session that fresh is far
+  from compacting.
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact

@@ -738,7 +738,7 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             eager_snapshot_for_session=self.eager_snapshot_for_session,
-            pending_summary_for_session=self._format_pending_summary,
+            pending_summary_for_session=self._format_own_summary,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
@@ -4557,7 +4557,17 @@ class AgentLoop:
             message.get("thinking_blocks"),
         )
 
-    def _format_pending_summary(self, session: Session) -> str | None:
+    def _format_own_summary(self, session: Session) -> str | None:
+        """The session's own summary as a turn's prompt frames it, without
+        the previous session's that a fresh session falls back to.
+
+        What the compaction probe measures: finding the previous session
+        scans the whole summary store, and a session fresh enough to carry
+        it is far from compacting, so the probe would pay the scan on
+        every check of its first turns for nothing."""
+        return self._format_pending_summary(session, previous_session=False)
+
+    def _format_pending_summary(self, session: Session, *, previous_session: bool = True) -> str | None:
         """Read the consolidator's last summary and wrap it with an
         archive marker so the next turn can distinguish "this is a
         summary" from "this is real conversation".
@@ -4593,7 +4603,7 @@ class AgentLoop:
                     last_active = raw_last if isinstance(raw_last, str) else None
 
         if not text:
-            return self._format_previous_session_summary(session)
+            return self._format_previous_session_summary(session) if previous_session else None
         header = "consolidator"
         if last_active:
             header = f"consolidator, last active {last_active}"
