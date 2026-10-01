@@ -37,28 +37,23 @@ NO_ROOM_PLACEHOLDER = (
 _FAILED_TURN_PLACEHOLDERS = frozenset({MODEL_ERROR_PLACEHOLDER, OVERFLOW_PLACEHOLDER, NO_ROOM_PLACEHOLDER})
 
 
-def without_failed_exchanges(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """*messages* without what turns that produced no answer left: each
-    failure placeholder, and the user message it stands in the answer to
-    when nothing came between them.
+def without_failure_placeholders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* without the placeholders turns that produced no answer
+    left in place of one.
 
-    They hold nothing to summarize, and in a summary bounded in size every
-    block spent on them evicts an older, real one. A turn that called tools
-    before it failed keeps them: that work happened."""
-    kept: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content")
-        if (
+    A placeholder says nothing worth summarizing, and in a summary bounded
+    in size every block spent on it evicts an older, real one. What the user
+    asked stays, whatever came of it: a later turn often retries it ("try
+    again"), and that turn means nothing without the request."""
+    return [
+        message for message in messages
+        if not (
             message.get("role") == "assistant"
             and not message.get("tool_calls")
-            and isinstance(content, str)
-            and content.strip() in _FAILED_TURN_PLACEHOLDERS
-        ):
-            while kept and kept[-1].get("role") == "user":
-                kept.pop()
-            continue
-        kept.append(message)
-    return kept
+            and isinstance(message.get("content"), str)
+            and message["content"].strip() in _FAILED_TURN_PLACEHOLDERS
+        )
+    ]
 
 FINALIZATION_RETRY_PROMPT = (
     "Please provide your response to the user based on the conversation above."

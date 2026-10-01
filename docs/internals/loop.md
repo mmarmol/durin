@@ -962,12 +962,13 @@ Two metadata splits matter:
   synthetic head block rather than lost). Only the part of the span the
   nightly session-summary pass has not already summarized is sent to the LLM;
   a span it fully covered advances the cursor with no call and no new block.
-  The exchanges of turns that produced no answer (a model error or an
-  overflow placeholder, and the user message it stands in the answer to) are
-  left out of what is summarized and of the decision and learnings
-  extraction (`without_failed_exchanges`): in a bounded summary every block
-  spent on them would evict an older, real one, and a span of nothing else
-  makes no call. A failed turn that ran tools keeps that work.
+  The placeholders of turns that produced no answer (a model error, an
+  overflow, a request no compaction could make fit) are left out of what is
+  summarized and of the decision and learnings extraction
+  (`without_failure_placeholders`): in a bounded summary every block spent on
+  them would evict an older, real one, and a span of nothing else makes no
+  call. The user's messages always stay, answered or not: a later turn often
+  retries one ("try again") and means nothing without it.
   The projection's own bound is in characters, whatever the window, so a
   prompt carries the summary cut to a quarter of what the rest of the system
   prompt, the tool definitions and the turn's own message (its runtime

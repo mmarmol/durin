@@ -759,9 +759,10 @@ async def test_a_turn_on_a_larger_model_is_summarized_whole(tmp_path):
 @pytest.mark.asyncio
 async def test_a_failed_exchange_is_not_summarized(tmp_path):
     """A turn that failed (its prompt overflowed, or the model call failed)
-    leaves the user's message and a placeholder in the session. Compaction
-    summarized them like any exchange, and every block they took pushed an
-    older, real one out of the bounded summary."""
+    leaves the user's message and a placeholder in the session. The
+    placeholder says nothing worth summarizing, so compaction leaves it out;
+    the user's message is what they asked, which a later turn may retry, so
+    it is summarized like any other."""
     from durin.agent.runner import (
         _PERSISTED_MODEL_ERROR_PLACEHOLDER,
         _PERSISTED_OVERFLOW_PLACEHOLDER,
@@ -789,6 +790,49 @@ async def test_a_failed_exchange_is_not_summarized(tmp_path):
     summarized = "\n".join(text for system, text in result["side_calls"] if system == archive_prompt)
     assert result["session"].last_consolidated > 30
     assert "turn 2:" in summarized
-    assert "FAILED-" not in summarized
+    assert "FAILED-0 " in summarized and "FAILED-10 " in summarized
     assert "[Turn stopped" not in summarized
     assert "[Assistant reply unavailable" not in summarized
+
+
+@pytest.mark.asyncio
+async def test_a_request_retried_after_a_model_error_is_summarized(tmp_path):
+    """The model call fails, the user answers "try again" and the retry
+    succeeds. Compaction summarized the span without the user's original
+    message, which it dropped with the failure placeholder: the summary had
+    "try again" and the answer, and never the request it answered."""
+    from durin.utils.prompt_templates import render_template
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=8192)
+    provider.estimate_prompt_tokens.return_value = (0, "none")
+    calls = {"main": 0}
+    summarized: list[str] = []
+    archive_prompt = render_template("agent/consolidator_archive.md", strip=True)
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        if not tools:
+            if _text_of(messages[0]) == archive_prompt:
+                summarized.append(_text_of(messages[-1]))
+            return LLMResponse(content="- summary bullet", usage={"prompt_tokens": 10, "completion_tokens": 5})
+        calls["main"] += 1
+        if calls["main"] == 1:
+            return LLMResponse(content="Error calling LLM: 503 overloaded", finish_reason="error", usage={})
+        return LLMResponse(content="Done: the billing service is configured.",
+                           usage={"prompt_tokens": 100, "completion_tokens": 5})
+
+    provider.chat_with_retry = _chat
+    provider.chat_stream_with_retry = _chat
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+                     context_window_tokens=200_000)
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    request = "Set up the new billing service: blue theme, port 8443, vault path secret/billing/prod."
+    await loop.process_direct(request, session_key="cli:retry")
+    await loop.process_direct("try again", session_key="cli:retry")
+    await loop.process_direct("/compact", session_key="cli:retry")
+
+    text = "\n".join(summarized)
+    assert "port 8443, vault path secret/billing/prod" in text
+    assert "try again" in text
+    assert "[Assistant reply unavailable" not in text
