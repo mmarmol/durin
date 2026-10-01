@@ -868,6 +868,54 @@ async def test_a_run_its_trim_can_fit_is_sent_not_stopped():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("words", [3, 20])
+async def test_a_history_of_many_short_messages_is_trimmed_to_fit(words):
+    """The precheck's estimate joins every message's text with a newline,
+    a token of its own per message; the trim summed the messages one by one
+    without it. On a history of short messages it kept a view over the
+    budget by about one token per message kept, which no tool result could
+    make up for, so the precheck stopped the run instead of sending it."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {
+            "name": "tool", "description": "does a thing " * 200,
+            "parameters": {"type": "object", "properties": {}},
+        }},
+    ]
+    messages = [{"role": "system", "content": "system prompt " * 300}]
+    for i in range(3_000):
+        # No trailing space: one would absorb the newline into its token.
+        messages += [
+            {"role": "user", "content": f"question {i} " + ("short words " * words).strip()},
+            {"role": "assistant", "content": f"answer {i} " + ("fine " * words).strip()},
+        ]
+    messages.append({"role": "user", "content": "the current question"})
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        sent.append(estimate_prompt_tokens(messages, tools))
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=200_000,
+        context_block_limit=30_000,
+    ))
+
+    assert result.stop_reason == "completed"
+    assert sent and max(sent) <= 30_000
+
+
+@pytest.mark.asyncio
 async def test_a_request_with_its_task_state_never_asks_past_the_window():
     """A request appends the task state when it changed during the run. The
     precheck, and the output cap it sizes, counted the request without it.

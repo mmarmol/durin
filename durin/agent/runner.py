@@ -274,6 +274,18 @@ def _message_text(message: dict[str, Any]) -> str:
     return ""
 
 
+def _request_message_tokens(message: dict[str, Any]) -> int:
+    """Tokens *message* adds to the estimate of a request that sends it.
+
+    The request estimate (``estimate_prompt_tokens``) joins the text of all
+    messages, and then the tool schemas, with a newline, which tiktoken
+    counts as a token of its own unless a neighbouring space absorbs it;
+    the message's own estimate has no such separator. Summing own
+    estimates alone undercounts a request by about one token per message,
+    which on a history of many short messages is more than any margin."""
+    return estimate_message_tokens(message) + 1
+
+
 def _turn_budget_chars() -> int:
     raw = os.getenv("DURIN_TURN_BUDGET_CHARS")
     if raw is None:
@@ -3178,13 +3190,13 @@ class AgentRunner:
         if not non_system:
             return messages
 
-        fixed_tokens = sum(estimate_message_tokens(msg) for msg in system_messages + added)
+        fixed_tokens = sum(_request_message_tokens(msg) for msg in system_messages + added)
         if tools:
             fixed_tokens += estimate_prompt_tokens([], tools)
         request_at = self._run_request_index(spec, non_system)
         if request_at is not None:
             turn = non_system[request_at:]
-            room = budget - fixed_tokens - sum(estimate_message_tokens(msg) for msg in turn)
+            room = budget - fixed_tokens - sum(_request_message_tokens(msg) for msg in turn)
             kept = self._newest_history_within(non_system[:request_at], room) + turn
             if len(kept) == len(non_system):
                 return messages
@@ -3194,7 +3206,7 @@ class AgentRunner:
         kept: list[dict[str, Any]] = []
         kept_tokens = 0
         for message in reversed(non_system):
-            msg_tokens = estimate_message_tokens(message)
+            msg_tokens = _request_message_tokens(message)
             if kept and kept_tokens + msg_tokens > remaining_budget:
                 break
             kept.append(message)
@@ -3259,7 +3271,7 @@ class AgentRunner:
         kept: list[dict[str, Any]] = []
         used = 0
         for message in reversed(history):
-            tokens = estimate_message_tokens(message)
+            tokens = _request_message_tokens(message)
             if used + tokens > room:
                 break
             kept.append(message)

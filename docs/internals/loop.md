@@ -519,7 +519,10 @@ messages before the run's own request, the last user message of the prompt it
 started from. That request and everything after it, the system prompt, the
 task state a request appends and the tool schemas are all sent, so the
 history gets what they leave, starting at a user message on a legal tool-call
-boundary. A caller that compacts and retries sets
+boundary. It counts each message as the precheck's estimate of the whole
+request does, the newline that joins it to the next one included, so a
+history of many short messages is not kept over the budget by a token a
+message. A caller that compacts and retries sets
 `caller_compacts_on_overflow`: the chat loop's turn does, on every attempt but
 its last, so its first request keeps the replayed history whole and an
 overflow there is answered by a compaction that summarizes what the snip
