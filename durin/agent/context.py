@@ -38,9 +38,12 @@ _SUMMARY_ROOM_SHARE = 0.25
 STABLE_LABELS: tuple[tuple[str, str], ...] = (
     ("identity", "Identity"),
     ("bootstrap", "Bootstrap files"),
+    ("soul", "SOUL"),
+    ("operating_floor", "Operating rules"),
     ("skills_active", "Skills (active)"),
     ("skills_catalog", "Skills catalog"),
     ("memory_pinned", "Memory pinned"),
+    ("rich_output", "Rich output guide"),
     ("memory_hot", "Memory hot layer"),
 )
 

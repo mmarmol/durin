@@ -131,8 +131,9 @@ a "Last turn — composition" block that splits its prompt into two buckets:
 what the conversation contributed (prior turns, the current message, and the
 per-turn volatile blocks — active memory, the automatic memory prefetch, recent
 history, an archived session summary) and what infrastructure contributed
-(identity, bootstrap files, skills, the memory pinned and hot layers, the agent
-mode, tool definitions). The figures come from the turn's `context.composition`
+(identity, bootstrap files, the SOUL, the operating rules, skills, the rich
+output guide, the memory pinned and hot layers, the agent mode, tool
+definitions: every part of the system prompt's stable tier). The figures come from the turn's `context.composition`
 payload, rolled into the two buckets by `summarize_composition`
 (`durin/agent/context.py`) — the same rollup the TUI footer reads. The automatic
 prefetch gets a line of its own even though its block rides inside the current
