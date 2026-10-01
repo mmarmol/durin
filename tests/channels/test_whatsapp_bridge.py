@@ -2,6 +2,8 @@
 
 import asyncio
 import hashlib
+import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -285,8 +287,13 @@ class TestPairingSession:
     async def test_concurrent_start_leaves_one_live_process(self, tmp_path):
         from durin.channels.whatsapp_bridge import PairingSession
 
+        # Each bridge records its pid. exec: the bridge process itself sleeps,
+        # so terminating it ends it; a shell child would outlive the shell,
+        # hold stdout open, and cancel() would wait out its 5 s kill timeout.
+        pids = tmp_path / "pids"
         binary = self._fake_qr_bridge(
-            tmp_path, 'echo \'{"type":"qr","code":"X"}\'; sleep 5')
+            tmp_path,
+            f'echo $$ >> \'{pids}\'; echo \'{{"type":"qr","code":"X"}}\'; exec sleep 5')
         with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
                    return_value=binary):
             sess = PairingSession(auth_dir=tmp_path, token="t")
@@ -296,6 +303,15 @@ class TestPairingSession:
             await _wait_status(sess, "waiting_scan")
             await sess.cancel()
             assert sess._proc is None
+        alive = []
+        for pid in map(int, pids.read_text().split()):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            alive.append(pid)
+            os.kill(pid, signal.SIGKILL)
+        assert alive == [], f"bridge processes left running: {alive}"
 
     @pytest.mark.asyncio
     async def test_setup_error_surfaces_as_error_status(self, tmp_path):
