@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,15 +39,13 @@ class _NoopTimer:
 
 
 @pytest.fixture
-def mock_paths():
+def mock_paths(tmp_path):
     """Mock config/workspace paths for test isolation."""
     with patch("durin.config.loader.get_config_path") as mock_cp, \
          patch("durin.config.loader.save_config") as mock_sc, \
          patch("durin.config.loader.load_config") as mock_lc, \
          patch("durin.cli.commands.get_workspace_path") as mock_ws:
-        base_dir = Path("./test_onboard_data")
-        if base_dir.exists():
-            shutil.rmtree(base_dir)
+        base_dir = tmp_path / "test_onboard_data"
         base_dir.mkdir()
 
         config_file = base_dir / "config.json"
@@ -66,9 +63,6 @@ def mock_paths():
         mock_sc.side_effect = _save_config
 
         yield config_file, workspace_dir, mock_ws
-
-        if base_dir.exists():
-            shutil.rmtree(base_dir)
 
 
 def test_onboard_fresh_install(mock_paths):
