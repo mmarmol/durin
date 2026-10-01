@@ -1940,6 +1940,32 @@ class Config(BaseSettings):
         provider = self.routed_provider(d.provider, d.model)
         entry, caps = self._resolve_model_params(provider, d.model)
         ctx, mt, _known = self._model_limits(provider, d.model, entry, caps)
+        return self._default_preset(entry, context_window_tokens=ctx, max_tokens=mt)
+
+    def configured_default_preset(self) -> ModelPresetConfig:
+        """The implicit `default` preset as the configuration states it: as
+        ``resolve_default_preset`` builds it, but with the window and output
+        limit the configuration sets (the model's ``providers.<provider>.models``
+        entry, else ``agents.defaults``) instead of ones resolved against the
+        catalog, whose rows are refreshed without the configuration
+        changing."""
+        d = self.agents.defaults
+        entry, _caps = self._resolve_model_params(self.routed_provider(d.provider, d.model), d.model)
+        ctx = entry.context_window_tokens if entry and entry.context_window_tokens is not None else None
+        mt = entry.max_tokens if entry and entry.max_tokens is not None else None
+        return self._default_preset(
+            entry,
+            context_window_tokens=d.context_window_tokens if ctx is None else ctx,
+            max_tokens=d.max_tokens if mt is None else mt,
+        )
+
+    def _default_preset(
+        self, entry: ModelEntry | None, *, context_window_tokens: int, max_tokens: int,
+    ) -> ModelPresetConfig:
+        """The implicit `default` preset with the given limits: the model and
+        settings of ``agents.defaults``, each overridden by the model's
+        ``providers.<provider>.models`` entry where that sets one."""
+        d = self.agents.defaults
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None
@@ -1947,8 +1973,8 @@ class Config(BaseSettings):
         top_k = entry.top_k if entry and entry.top_k is not None else None
         repeat_penalty = entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
         return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=mt,
-            context_window_tokens=ctx, temperature=temp, reasoning_effort=eff,
+            model=d.model, provider=d.provider, max_tokens=max_tokens,
+            context_window_tokens=context_window_tokens, temperature=temp, reasoning_effort=eff,
             request_timeout_s=timeout,
             top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
         )

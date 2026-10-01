@@ -206,7 +206,8 @@ is held as it was loaded: an edit to it applies after a restart
 (`durin gateway restart`), or sooner when a settings change reloads the
 presets (saving a persona, the default model or a concurrency limit). A
 change to what the configuration selects (another preset, or an edit to the
-selected one) replaces such a pick from the next turn.
+selected one) replaces such a pick from the next turn. New limits for a
+model in the refreshed model catalog are not such a change.
 
 **`agents.aux_models`** — optional auxiliary model bridges (used only when the primary model lacks the modality):
 

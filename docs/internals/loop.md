@@ -1064,7 +1064,9 @@ selected when the loop last looked, the snapshot is rebuilt from the loop's
 own preset object, which only `reload_app_config` replaces (a persona, the
 default model or a concurrency limit saved through the settings) besides a
 restart. The selection is `ProviderSnapshot.selection`: the name of the
-preset the config selects and that preset's own settings, recorded from the
+preset the config selects and that preset's settings as configured, before
+its window and output limit are resolved against the model catalog (a
+catalog refresh changes no choice), recorded from the
 config's snapshot, never from the held preset's (the gateway hands the loop
 its startup snapshot's). Once it changes (another preset, or an edit to the
 selected one, so also to the preset named at start), the loop drops the held

@@ -160,3 +160,30 @@ def test_a_runtime_pick_survives_its_own_reload_and_edits_elsewhere(tmp_path: Pa
     assert _cap(loop) == 500_000
     assert _cap(loop) == 500_000
     assert loop.model_preset == "big"
+
+
+def test_a_runtime_pick_survives_a_catalog_change_to_the_default_models_limits(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The catalog the model limits come from is refreshed daily. The
+    selection the refresh compares held the default preset with the window
+    and output limit resolved from it, so a new catalog row for the default
+    model read as a new choice in the file and dropped a /model pick."""
+    import durin.providers.provider_catalog as catalog
+
+    windows = {"gpt-4.1": 1_047_576}
+
+    def _limits(_provider: str, model: str):
+        if model not in windows:
+            return None
+        return SimpleNamespace(max_input_tokens=windows[model], max_output_tokens=32_768)
+
+    monkeypatch.setattr(catalog, "catalog_model_limits", _limits)
+    config = _config(tmp_path, None, {"big": 400_000})
+    loop, _path = _gateway(tmp_path, config, startup_selection=True)
+    loop.set_model_preset("big", publish_update=False)
+    assert _cap(loop) == 400_000
+
+    windows["gpt-4.1"] = 1_000_000
+    assert _cap(loop) == 400_000
+    assert loop.model_preset == "big"

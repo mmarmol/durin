@@ -69,6 +69,17 @@ class ProviderSnapshot:
     selection: tuple[object, ...] | None = None
 
 
+def _configured_selection(config: Config) -> tuple[str, str]:
+    """What the configuration selects: the active preset's name and its
+    settings as configured, before its window and output limit are resolved
+    against the model catalog. The catalog is refreshed without the
+    configuration changing, and a running loop reads a new selection as a
+    new choice that replaces a preset picked with /model."""
+    name = config.agents.defaults.model_preset or "default"
+    preset = config.configured_default_preset() if name == "default" else config.model_presets[name]
+    return name, preset.model_dump_json()
+
+
 def _resolve_model_preset(
     config: Config,
     *,
@@ -364,7 +375,7 @@ def build_provider_snapshot(
     fallbacks = _resolve_fallbacks(config, resolved)
     selection = None
     if preset_name is None and preset is None:
-        selection = (config.agents.defaults.model_preset or "default", resolved.model_dump_json())
+        selection = _configured_selection(config)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
