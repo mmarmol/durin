@@ -319,7 +319,10 @@ def register(app: typer.Typer) -> None:
             "credentials (secrets.json, api_tokens.json, oauth/).",
         ),
         keep_workspace: bool = typer.Option(False, "--keep-workspace", help="Preserve ~/.durin/workspace/."),
-        keep_cache: bool = typer.Option(False, "--keep-cache", help="Preserve ~/.cache/durin/."),
+        keep_cache: bool = typer.Option(
+            False, "--keep-cache",
+            help="Preserve the caches: this install's telemetry and, for the default install, ~/.cache/durin/.",
+        ),
         workspace: str | None = typer.Option(
             None,
             "--workspace",
