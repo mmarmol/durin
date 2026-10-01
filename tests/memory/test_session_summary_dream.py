@@ -128,6 +128,10 @@ def _question(i: int, words: int = 1_000) -> str:
     return f"question {i}: " + "detail " * words
 
 
+# A summarizing call's input budget a few of those questions fill.
+_PIECE_BUDGET = 4_000
+
+
 def _numbered(prompts: list[str]):
     """An invoke that records each prompt and answers with a numbered block."""
 
@@ -146,7 +150,7 @@ def test_a_span_longer_than_one_call_is_summarized_whole_and_in_order(tmp_path: 
     path = _long_session(tmp_path, "websocket:long", n_pairs=20)
     prompts: list[str] = []
 
-    result = summarize_session(tmp_path, path, llm_invoke=_numbered(prompts))
+    result = summarize_session(tmp_path, path, llm_invoke=_numbered(prompts), budget_tokens=_PIECE_BUDGET)
 
     assert result["written"] is True
     assert len(prompts) > 1
@@ -174,12 +178,12 @@ def test_a_failed_call_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None
         return numbered(prompt)
 
     with pytest.raises(RuntimeError):
-        summarize_session(tmp_path, path, llm_invoke=flaky)
+        summarize_session(tmp_path, path, llm_invoke=flaky, budget_tokens=_PIECE_BUDGET)
     stored = [i for i in range(20) if _question(i) in prompts[0]]
     assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
 
     rest: list[str] = []
-    summarize_session(tmp_path, path, llm_invoke=_numbered(rest))
+    summarize_session(tmp_path, path, llm_invoke=_numbered(rest), budget_tokens=_PIECE_BUDGET)
     assert _question(stored[-1] + 1) in rest[0]
     assert not any(_question(i) in p for p in rest for i in stored)
     assert get_summary_cursor(path) == 40
@@ -193,16 +197,81 @@ def test_the_time_budget_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> No
     path = _long_session(tmp_path, "websocket:slow", n_pairs=20)
     prompts: list[str] = []
 
-    first = summarize_session(tmp_path, path, llm_invoke=_numbered(prompts), deadline=time.perf_counter())
+    first = summarize_session(
+        tmp_path, path, llm_invoke=_numbered(prompts), deadline=time.perf_counter(), budget_tokens=_PIECE_BUDGET,
+    )
 
     assert first["yielded"] is True
     assert len(prompts) == 1
     stored = [i for i in range(20) if _question(i) in prompts[0]]
     assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
     rest: list[str] = []
-    summarize_session(tmp_path, path, llm_invoke=_numbered(rest))
+    summarize_session(tmp_path, path, llm_invoke=_numbered(rest), budget_tokens=_PIECE_BUDGET)
     assert _question(stored[-1] + 1) in rest[0]
     assert get_summary_cursor(path) == 40
+
+
+def test_a_message_larger_than_the_budget_is_cut_alone_and_summarized(tmp_path: Path) -> None:
+    """A message larger than the memory model takes was sent whole: on a
+    model with a smaller window its call failed every night, the cursor
+    stayed before it, and the nightly pass never summarized that session
+    again. It is now cut alone, exactly as compaction cuts one, summarized,
+    and the cursor moves past it."""
+    from durin.memory.session_summary_dream import _format_turns
+    from durin.utils.prompt_templates import render_template
+    from durin.utils.runtime import truncate_to_tokens
+
+    path = _write_session(tmp_path, "websocket:big", n_pairs=0)
+    rows = path.read_text(encoding="utf-8").splitlines()
+    ts = json.loads(rows[0])["updated_at"]
+    messages = [
+        {"role": "user", "content": "question 0: a short one", "timestamp": ts},
+        {"role": "assistant", "content": "answer 0", "timestamp": ts},
+        {"role": "user", "content": _question(1, words=3_000), "timestamp": ts},
+        {"role": "assistant", "content": "answer 1", "timestamp": ts},
+        {"role": "user", "content": "question 2: another short one", "timestamp": ts},
+        {"role": "assistant", "content": "answer 2", "timestamp": ts},
+    ]
+    path.write_text("\n".join(rows + [json.dumps(m) for m in messages]) + "\n", encoding="utf-8")
+    prompts: list[str] = []
+
+    summarize_session(tmp_path, path, llm_invoke=_numbered(prompts), budget_tokens=1_000)
+
+    head = render_template("agent/consolidator_archive.md", strip=True) + "\n\n"
+    sent = [p[len(head):] for p in prompts]
+    assert truncate_to_tokens(_format_turns([messages[2]]), 1_000) in sent
+    assert any("question 0: a short one" in s for s in sent)
+    assert any("question 2: another short one" in s for s in sent)
+    assert get_summary_cursor(path) == 6
+
+
+def test_the_dream_sizes_the_pass_by_the_memory_model(tmp_path: Path, monkeypatch) -> None:
+    """The dream gives the pass the input budget of the model it summarizes
+    with, sized as compaction sizes its calls: the window less the output
+    ceiling and compaction's safety buffer."""
+    from durin.agent.memory import Consolidator
+    from durin.config.schema import AuxModelConfig, Config, ModelPresetConfig
+    from durin.memory import session_summary_dream
+    from durin.memory.session_summary_dream import memory_input_budget
+
+    config = Config()
+    config.model_presets["dream"] = ModelPresetConfig(
+        model="gpt-4.1-mini", provider="openai", context_window_tokens=32_768, max_tokens=4_096,
+    )
+    config.agents.aux_models.memory = AuxModelConfig(preset="dream")
+    assert memory_input_budget(config) == 32_768 - 4_096 - Consolidator._SAFETY_BUFFER
+
+    seen: list[int | None] = []
+    real = session_summary_dream.summarize_session
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("budget_tokens"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(session_summary_dream, "summarize_session", spy)
+    _write_session(tmp_path, "websocket:a")
+    run_session_summary_pass(tmp_path, llm_invoke=_invoke, budget_tokens=27_648)
+    assert seen == [27_648]
 
 
 def test_active_session_is_left_to_the_compactor(tmp_path: Path) -> None:

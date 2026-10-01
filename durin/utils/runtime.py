@@ -56,6 +56,36 @@ def without_failure_placeholders(messages: list[dict[str, Any]]) -> list[dict[st
     ]
 
 
+def summary_token_count(text: str) -> int:
+    """*text*'s tokens as a summarizing call's input is counted (cl100k_base;
+    text that spells a special token, "<|endoftext|>" in a pasted document,
+    is ordinary text here); a rough estimate when tiktoken is unavailable."""
+    try:
+        import tiktoken
+
+        return len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+    except Exception:
+        return len(text) // 4 + 1
+
+
+def truncate_to_tokens(text: str, budget: int) -> str:
+    """*text* cut to its first *budget* tokens, as a summarizing call takes a
+    single message larger than its budget, marked "... (truncated)"; whole
+    when it fits."""
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = encoding.encode(text, disallowed_special=())
+        if len(tokens) <= budget:
+            return text
+        return encoding.decode(tokens[:budget]) + "\n... (truncated)"
+    except Exception:
+        from durin.utils.helpers import truncate_text
+
+        return truncate_text(text, budget * 4)
+
+
 def runs_that_fit(
     messages: list[dict[str, Any]],
     budget: int,

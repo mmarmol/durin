@@ -48,3 +48,46 @@ async def test_every_turn_keeps_the_invariants(tmp_path, seed):
     # A scenario that never reached what it was built to exercise would
     # pass every check without testing it.
     assert scenario_health(driver) == [], scenario.describe()
+
+
+def _losing_pass(monkeypatch, how: str) -> None:
+    """Make the nightly pass lose each message larger than its budget: leave
+    it out of the span (``skips``), or make no call for it and still move
+    its cursor past it (``cursor``)."""
+    import durin.memory.session_summary_dream as nightly
+    from durin.utils.runtime import summary_token_count
+
+    if how == "skips":
+        real = nightly.runs_that_fit
+
+        def runs(messages, budget, *, line, count):
+            return real([m for m in messages if count(line(m)) <= budget], budget, line=line, count=count)
+
+        monkeypatch.setattr(nightly, "runs_that_fit", runs)
+    else:
+        monkeypatch.setattr(
+            nightly, "truncate_to_tokens", lambda text, budget: text if summary_token_count(text) <= budget else "",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["skips", "cursor"])
+async def test_the_invariant_catches_a_nightly_pass_that_loses_a_large_message(tmp_path, monkeypatch, how):
+    """A dream whose memory model is smaller than the loop's covers messages
+    larger than that model takes. A nightly pass that left such a message
+    out, or moved its cursor past it without summarizing it, would lose it
+    for good: compaction skips whatever the cursor covers. content.no_loss
+    catches both, on the scenario the real pass keeps clean."""
+    from tests.agent.turn_harness import profile_small_dream
+
+    seed = next(s for s in range(len(PROFILES)) if PROFILES[s] is profile_small_dream)
+    (tmp_path / "real").mkdir()
+    (tmp_path / "losing").mkdir()
+    assert await TurnDriver(generate(seed), tmp_path / "real").run() == []
+
+    _losing_pass(monkeypatch, how)
+    violations = await TurnDriver(generate(seed), tmp_path / "losing").run()
+
+    lost = [v for v in violations if v.invariant == "content.no_loss"]
+    assert lost, _report(generate(seed).describe(), violations, seed)
+    assert all("no summarizing call received it at all" in v.detail for v in lost), lost

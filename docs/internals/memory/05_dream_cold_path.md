@@ -371,10 +371,17 @@ The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**
 (`agent/consolidator_archive.md`), so both paths produce the same shape of
 bullet summary plus trailing entity/topic tags. It goes to the summarizer
-whole: cut at message boundaries by the splitter compaction uses
-(`runs_that_fit`) into pieces of at most `_MAX_SPAN_CHARS` characters, a
-single message larger than that being a piece of its own, and summarized one
-call per piece, in order, each summary its own block. The cursor moves past
+whole, sized as compaction sizes its calls but by the model the dream
+summarizes with: the dream passes the memory model's input budget
+(`memory_input_budget`: its window less its output ceiling and compaction's
+safety buffer), and the span is cut at message boundaries by the splitter
+compaction uses (`runs_that_fit`, `summary_token_count`) into pieces that
+each fit it, summarized one call per piece, in order, each summary its own
+block. A single message larger than the budget is a piece of its own, cut
+to it exactly as compaction cuts one (`truncate_to_tokens`) and summarized:
+sent whole, it would fail its call every night on a memory model that
+cannot take it, the cursor would stay before it, and the session would
+never be summarized again. The cursor moves past
 each piece once its call answered, so a call that fails, or the pass's time
 budget (`memory.dream.max_seconds_per_run`, checked between pieces as well as
 between sessions), leaves the rest of the span for the next pass instead of

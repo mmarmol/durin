@@ -37,10 +37,16 @@ from durin.session.manager import is_workflow_session_file
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.utils.prompt_templates import render_template
-from durin.utils.runtime import runs_that_fit, without_failure_placeholders
+from durin.utils.runtime import (
+    runs_that_fit,
+    summary_token_count,
+    truncate_to_tokens,
+    without_failure_placeholders,
+)
 
 __all__ = [
     "get_summary_cursor",
+    "memory_input_budget",
     "run_session_summary_pass",
     "set_summary_cursor",
     "summarize_session",
@@ -49,9 +55,6 @@ __all__ = [
 LLMInvoke = Callable[..., Any]
 
 _CURSOR_KEY = "summary_cursor"
-# The most span text one summarizing call of this pass takes; a longer span
-# is summarized in pieces of at most this size.
-_MAX_SPAN_CHARS = 48_000
 _SKIP_STEM_PREFIXES = ("workflow_", "subagent_", "cron_", "automation_", "bench_")
 
 
@@ -128,6 +131,18 @@ def _skip_reason(meta: dict, jsonl_path: Path, *, idle_hours: int, now: datetime
     return None
 
 
+def memory_input_budget(config: Any) -> int:
+    """The input budget of the model the dream summarizes with (the memory
+    preset, as the dream's own calls resolve it), sized as compaction sizes
+    its calls: the window less the output ceiling and compaction's safety
+    buffer."""
+    from durin.agent.memory import Consolidator
+    from durin.memory.model_resolve import resolve_aux_preset
+
+    preset = config.resolve_preset_limits(resolve_aux_preset(config, purpose="memory"))
+    return max(1, preset.context_window_tokens - preset.max_tokens - Consolidator._SAFETY_BUFFER)
+
+
 def summarize_session(
     workspace: Path,
     jsonl_path: Path,
@@ -138,16 +153,21 @@ def summarize_session(
     min_new_messages: int = 4,
     now: datetime | None = None,
     deadline: float | None = None,
+    budget_tokens: int | None = None,
 ) -> dict:
     """Summarize one session's unsummarized span; returns a small result dict.
 
-    The span goes to the summarizer whole, cut at message boundaries into
-    pieces of at most ``_MAX_SPAN_CHARS`` (a single message larger than
-    that is a piece of its own): one call per piece, in order, each summary
-    stored as a block of its own. The cursor moves past each piece once its
-    call answered, so a call that raises, or a ``deadline``
-    (``time.perf_counter()``) passed before the next piece, leaves the rest
-    for the next pass instead of skipping it."""
+    The span goes to the summarizer whole, cut at message boundaries as
+    compaction cuts it, into pieces that each fit one call of
+    *budget_tokens* (the summarizing model's input budget; the memory
+    model's, ``memory_input_budget``, when not given): one call per piece,
+    in order, each summary stored as a block of its own. A single message
+    larger than the budget is a piece of its own, cut to it as compaction
+    cuts one — sent whole, it would fail its call every night on a model
+    that cannot take it, and the session would never be summarized again.
+    The cursor moves past each piece once its call answered, so a call that
+    raises, or a ``deadline`` (``time.perf_counter()``) passed before the
+    next piece, leaves the rest for the next pass instead of skipping it."""
     from durin.memory.llm_invoke import default_llm_invoke
 
     llm_invoke = llm_invoke or default_llm_invoke
@@ -179,7 +199,13 @@ def summarize_session(
     # messages, placeholders included, and a piece ends at its last message.
     position = {id(m): i for i, m in enumerate(msgs)}
     instructions = render_template("agent/consolidator_archive.md", strip=True)
-    pieces = runs_that_fit(new, _MAX_SPAN_CHARS, line=lambda m: _format_turns([m]), count=len)
+    if budget_tokens is None:
+        from durin.config.loader import load_config
+
+        budget_tokens = memory_input_budget(load_config())
+    pieces = runs_that_fit(
+        new, budget_tokens, line=lambda m: _format_turns([m]), count=summary_token_count,
+    )
     summarized = written = False
     cursor = start
     for n, piece in enumerate(pieces):
@@ -188,7 +214,7 @@ def summarize_session(
                 "session": key, "written": written, "cursor": cursor,
                 "new_messages": len(span), "yielded": True,
             }
-        text = _format_turns(piece)
+        text = truncate_to_tokens(_format_turns(piece), budget_tokens)
         if text:
             prompt = instructions + "\n\n" + text
             resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
@@ -225,8 +251,10 @@ def run_session_summary_pass(
     max_seconds: int = 0,
     idle_hours: int = 6,
     min_new_messages: int = 4,
+    budget_tokens: int | None = None,
 ) -> dict:
-    """Walk ``sessions/*.jsonl`` and summarize every idle conversation with new turns."""
+    """Walk ``sessions/*.jsonl`` and summarize every idle conversation with new
+    turns, in calls of at most *budget_tokens* of span (``summarize_session``)."""
     t0 = time.perf_counter()
     deadline = t0 + max_seconds if max_seconds else None
     _emit("memory.dream.start", kind="session_summary")
@@ -243,6 +271,7 @@ def run_session_summary_pass(
                 result = summarize_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
                     idle_hours=idle_hours, min_new_messages=min_new_messages, deadline=deadline,
+                    budget_tokens=budget_tokens,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad session must not stop the pass
                 logger.warning("session summary pass: {} failed: {}", jsonl_path.stem, exc)

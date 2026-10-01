@@ -50,6 +50,7 @@ import durin.agent.context as context_module
 import durin.agent.skills as skills_module
 import durin.memory.session_summary_store as session_summary_store
 from durin.agent.loop import AgentLoop
+from durin.agent.memory import Consolidator
 from durin.agent.runner import (
     _PERSISTED_MODEL_ERROR_PLACEHOLDER,
     _PERSISTED_OVERFLOW_PLACEHOLDER,
@@ -319,6 +320,9 @@ class Scenario:
     data_file_tokens: int = 0
     # Small files notes/file<i>.txt for read_file calls to name.
     small_files: int = 0
+    # The model the dream's nightly pass summarizes with, when not the
+    # loop's own (a memory preset of its own): it sizes the pass's calls.
+    dream_model: ModelSpec | None = None
     turns: list[TurnPlan] = field(default_factory=list)
 
     def describe(self) -> str:
@@ -328,6 +332,7 @@ class Scenario:
             f"ratio={self.ratio} cap={self.cap} block_limit={self.block_limit} "
             f"max_messages={self.max_messages} agents_words={self.agents_words} "
             f"turns={len(self.turns)} presets={[(p.name, p.window) for p in self.presets]}"
+            + (f" dream=({self.dream_model.window}, {self.dream_model.max_out})" if self.dream_model else "")
         )
 
 
@@ -515,8 +520,9 @@ class TurnDriver:
         self.user_texts: dict[str, str] = {}
         # Every reply the model produced, in order: (mark, record index).
         self.replies: list[tuple[str, int]] = []
-        # Every text a summarizing call received.
-        self.archive_inputs: list[str] = []
+        # Every text a summarizing call received, with the input budget of
+        # the call: compaction's (the loop model's) or the nightly pass's.
+        self.summarized: list[tuple[str, int]] = []
         # Sub-agent results that landed between turns: (text, record index).
         self.system_results: list[tuple[str, int]] = []
         self.windows: dict[str, int] = {}
@@ -534,6 +540,12 @@ class TurnDriver:
         self._archive_prompt = render_template("agent/consolidator_archive.md", strip=True)
         self.loop: AgentLoop | None = None
         self.summarizer_budget = 0
+        # The nightly pass's calls: the model it summarizes with, and the
+        # input budget the dream gives it.
+        self.nightly_model = LOOP_MODEL
+        self.nightly_window = 0
+        self.nightly_max_out = 0
+        self.nightly_budget = 0
         self.base = 0
 
     # -- building the loop ---------------------------------------------------
@@ -594,6 +606,16 @@ class TurnDriver:
         self._write_agents_md(sc.agents_words, loop)
         self._hook(loop)
         self.summarizer_budget = loop.consolidator._input_token_budget
+        dream = sc.dream_model
+        if dream is None:
+            # By default the memory preset is the loop's own model: the pass
+            # is sized as compaction is.
+            self.nightly_window, self.nightly_max_out = sc.loop_model.window, sc.loop_model.max_out
+            self.nightly_budget = self.summarizer_budget
+        else:
+            self.nightly_model = dream.model
+            self.nightly_window, self.nightly_max_out = dream.window, dream.max_out
+            self.nightly_budget = dream.window - dream.max_out - Consolidator._SAFETY_BUFFER
         return loop
 
     def _hook(self, loop: AgentLoop) -> None:
@@ -747,7 +769,7 @@ class TurnDriver:
             return self._main_answer(request)
         if kind == "archive":
             request.input = text_of(messages[-1])
-            self.archive_inputs.append(request.input)
+            self.summarized.append((request.input, self.summarizer_budget))
             self._summaries += 1
             content = f"- Span {self._summaries}: " + filler(self.rng, self.scenario.summary_tokens)
             return LLMResponse(content=content, finish_reason="stop", usage=self._usage(tokens, content))
@@ -912,17 +934,19 @@ class TurnDriver:
 
         def invoke(prompt: str, model: str | None = None) -> str:
             text = prompt[len(self._archive_prompt):].lstrip("\n") if prompt.startswith(self._archive_prompt) else prompt
-            self.archive_inputs.append(text)
+            self.summarized.append((text, self.nightly_budget))
             self.record.requests.append(Request(
-                kind="nightly", model=LOOP_MODEL, window=None, tokens=estimate_text_tokens(prompt),
-                max_tokens=None, default_max=0, input=text,
+                kind="nightly", model=self.nightly_model, window=self.nightly_window,
+                tokens=estimate_text_tokens(prompt), max_tokens=None, default_max=self.nightly_max_out, input=text,
             ))
             self._summaries += 1
             return f"- Span {self._summaries} (nightly): " + filler(self.rng, self.scenario.summary_tokens)
 
+        # The dream gives the pass the input budget of the model it
+        # summarizes with.
         summarize_session(
             self.workspace, self.loop.sessions._get_session_path(KEY), llm_invoke=invoke,
-            idle_hours=0, min_new_messages=1,
+            idle_hours=0, min_new_messages=1, budget_tokens=self.nightly_budget,
         )
 
     async def _bus_turn(self, msg: InboundMessage) -> Any:
@@ -1059,11 +1083,6 @@ def _roles(messages: list[dict[str, Any]]) -> str:
     return roles if len(roles) <= 40 else f"...{roles[-40:]} (last 40 of {len(roles)})"
 
 
-def _oversized(driver: TurnDriver, text: str) -> bool:
-    """A message no single summarizing call can take whole."""
-    return estimate_text_tokens(text) + 64 > driver.summarizer_budget
-
-
 def check_record(driver: TurnDriver, record: TurnRecord) -> list[Violation]:
     out: list[Violation] = []
 
@@ -1163,13 +1182,19 @@ def check_record(driver: TurnDriver, record: TurnRecord) -> list[Violation]:
         positions = [i for i, m in enumerate(session) if mark in text_of(m)]
         if positions and positions[0] >= lc:
             continue
-        if _oversized(driver, text):
+        received = [(given, budget) for given, budget in driver.summarized if mark in given]
+        if any(text in given for given, _ in received):
             continue
-        if not any(text in archived for archived in driver.archive_inputs):
-            where = "archived" if positions else "gone from the session"
-            fail("content.no_loss",
-                 f"user message {mark} ({estimate_text_tokens(text)} tokens) is {where} but no summarizing "
-                 f"call received it whole")
+        # A message larger than the call that covered it takes reaches that
+        # call cut, alone, measured against that call's budget: compaction's
+        # or the nightly pass's. One no call received at all is lost.
+        tokens = estimate_text_tokens(text)
+        if any(tokens + 64 > budget for _, budget in received):
+            continue
+        where = "archived" if positions else "gone from the session"
+        fail("content.no_loss",
+             f"user message {mark} ({tokens} tokens) is {where} but no summarizing call received it "
+             + ("whole" if received else "at all"))
     for request in record.requests:
         if request.kind not in ("archive", "nightly"):
             continue
@@ -1196,7 +1221,7 @@ def check_record(driver: TurnDriver, record: TurnRecord) -> list[Violation]:
             if request.estimate is not None and abs(request.estimate - request.tokens) > ESTIMATE_TOLERANCE:
                 fail("budget.precheck_accuracy",
                      f"the precheck sized a request of {request.tokens} tokens as {request.estimate}")
-        elif request.kind in ("archive", "decisions", "learnings") and request.window:
+        elif request.kind in ("archive", "decisions", "learnings", "nightly") and request.window:
             if request.tokens + request.default_max > request.window:
                 fail("budget.window",
                      f"a {request.kind} call of {request.tokens} tokens with {request.default_max} of output "
@@ -1441,6 +1466,17 @@ def scenario_health(driver: TurnDriver) -> list[str]:
             problems.append("the stalled turn did not replay a long history")
     if profile == "cache" and not any(_system_parts(a)[1] for r in records for a in r.attempts):
         problems.append("no prompt carried the summary")
+    if profile == "small_dream":
+        cut = {
+            mark for r in records for q in r.requests
+            if q.kind == "nightly" and q.input.rstrip().endswith(TRUNCATED) for mark in USER_MARK.findall(q.input)
+        }
+        last = records[-1] if records else None
+        archived = last.session[:last.last_consolidated] if last else []
+        if not cut:
+            problems.append("the nightly pass never cut a message larger than its model takes")
+        elif not any(mark in text_of(m) for mark in cut for m in archived):
+            problems.append("no compaction archived a message the nightly pass cut")
     return problems
 
 
@@ -1829,6 +1865,35 @@ def profile_mixed(rng: random.Random) -> Scenario:
     )
 
 
+def profile_small_dream(rng: random.Random) -> Scenario:
+    """The dream summarizes with a memory model of a smaller window than the
+    loop's. The nightly pass covers messages too large for that model but
+    not for compaction: it sizes its calls by that model, so each such
+    message reaches its call cut, alone, and is summarized; its cursor moves
+    past it, and compaction, which skips what the cursor covers, never
+    receives it whole."""
+    plans = _Plans(rng)
+    loop_model = ModelSpec("default", LOOP_MODEL, rng.choice((200_000, 256_000)), rng.choice((8_192, 16_384)))
+    dream = ModelSpec("memory", "dream-model", rng.choice((16_384, 24_000, 32_768)), rng.choice((2_048, 4_096)))
+    nightly = dream.window - dream.max_out - Consolidator._SAFETY_BUFFER
+    sizes = [rng.randint(40, 300)]
+    for _ in range(rng.randint(1, 2)):
+        sizes += [int(nightly * rng.uniform(1.15, 1.6)), rng.randint(40, 300)]
+    turns = [plans.user(size, reply=rng.randint(60, 200)) for size in sizes]
+    turns.append(TurnPlan(kind="nightly"))
+    # The session then grows past its trigger, and compaction archives the
+    # span, skipping the head the nightly pass covered: the pass is the only
+    # call that ever covers those messages. The ratio leaves them in the
+    # session until then.
+    ratio = 0.6
+    while sum(sizes) < ratio * loop_model.window + 20_000:
+        sizes.append(rng.randint(15_000, 30_000))
+        turns.append(plans.user(sizes[-1], reply=rng.randint(60, 200)))
+    turns.append(plans.user(rng.randint(40, 200)))
+    return Scenario(seed=0, profile="small_dream", loop_model=loop_model, dream_model=dream, ratio=ratio,
+                    agents_words=rng.randint(0, 2_000), turns=turns)
+
+
 PROFILES: tuple[Callable[[random.Random], Scenario], ...] = (
     profile_ceiling,
     profile_fixed_band,
@@ -1839,6 +1904,7 @@ PROFILES: tuple[Callable[[random.Random], Scenario], ...] = (
     profile_cache,
     profile_big_model,
     profile_mixed,
+    profile_small_dream,
 )
 
 

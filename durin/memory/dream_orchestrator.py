@@ -115,7 +115,7 @@ def run_full_dream(
         run_skill_extract_pass,
     )
     from durin.memory.model_resolve import resolve_aux_preset
-    from durin.memory.session_summary_dream import run_session_summary_pass
+    from durin.memory.session_summary_dream import memory_input_budget, run_session_summary_pass
     from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
     from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
@@ -152,6 +152,9 @@ def run_full_dream(
                 run_session_summary_pass(
                     workspace, model=model, max_seconds=max_s,
                     idle_hours=config.memory.dream.session_summary_idle_hours,
+                    # Its calls run on the memory model: sized by what that
+                    # model takes, not by the chat's.
+                    budget_tokens=memory_input_budget(config),
                 )
                 if config.memory.dream.session_summaries_enabled
                 else {"sessions": 0, "written": 0, "skipped": 0, "duration_ms": 0}

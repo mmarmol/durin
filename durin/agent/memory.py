@@ -33,7 +33,12 @@ from durin.utils.helpers import (
 )
 from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
-from durin.utils.runtime import runs_that_fit, without_failure_placeholders
+from durin.utils.runtime import (
+    runs_that_fit,
+    summary_token_count,
+    truncate_to_tokens,
+    without_failure_placeholders,
+)
 
 if TYPE_CHECKING:
     from durin.memory.eager_surface import EagerSnapshot
@@ -1285,21 +1290,10 @@ class Consolidator:
         budget = self._input_token_budget
         if not messages or budget <= 0:
             return [messages] if messages else []
-        try:
-            encoding = tiktoken.get_encoding("cl100k_base")
-
-            def count(text: str) -> int:
-                # Text that spells a special token ("<|endoftext|>" in a
-                # pasted document) is ordinary text here.
-                return len(encoding.encode(text, disallowed_special=()))
-        except Exception:
-
-            def count(text: str) -> int:
-                return len(text) // 4 + 1
-
         # Counted as archive() counts the text it sends.
         return runs_that_fit(
-            messages, budget, line=lambda message: MemoryStore._format_messages([message]), count=count,
+            messages, budget, line=lambda message: MemoryStore._format_messages([message]),
+            count=summary_token_count,
         )
 
     async def archive_pieces(
@@ -1331,20 +1325,13 @@ class Consolidator:
         return summaries, tags
 
     def _truncate_to_token_budget(self, text: str) -> str:
-        """Truncate text so it fits within the consolidation LLM's token budget."""
+        """Truncate text so it fits within the consolidation LLM's token budget.
+        Counted as _summarizer_pieces counts it, so a run it sized is never
+        cut here: only a single message over the budget is."""
         budget = self._input_token_budget
         if budget <= 0:
             return truncate_text(text, _RAW_ARCHIVE_MAX_CHARS)
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            # Counted as _summarizer_pieces counts it, special-token text
-            # included, so a run it sized is never cut here.
-            tokens = enc.encode(text, disallowed_special=())
-            if len(tokens) <= budget:
-                return text
-            return enc.decode(tokens[:budget]) + "\n... (truncated)"
-        except Exception:
-            return truncate_text(text, budget * 4)
+        return truncate_to_tokens(text, budget)
 
     async def archive(
         self, messages: list[dict]
