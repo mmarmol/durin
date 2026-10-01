@@ -464,7 +464,12 @@ The handlers, in order:
   into the turn would be lost. The forced consolidation skips the
   idle check and the real-usage vetoes below: the overflow is newer proof
   than the provider's last count, and a vetoed retry would overflow again,
-  as would every later turn of the session.
+  as would every later turn of the session. An overflow the runner reports
+  as unfixable by compaction (`fits_without_history=False`: the system
+  prompt, the tool definitions and the request alone are over the budget) is
+  not retried: a compaction only removes history, so the turn fails at once,
+  its error naming the prompt's largest parts from the build's
+  `context.composition` (AGENTS.md, the tool definitions, the message...).
 - **`_state_save`** — finalizes plan/stall/goal bookkeeping, records skill-usage
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
@@ -542,6 +547,12 @@ recover does it abort *before* the LLM call with
 `stop_reason=mid_turn_precheck_overflow` and an overflow-specific placeholder.
 The abort leaves the request unfinished and nothing re-sends it; the error tells
 the user to send it again, and the next turn runs on a compacted context.
+Unless the request is over the budget even without the history before the
+run's own request (the system prompt, the tool definitions and the run's own
+messages alone, `mid_turn_precheck.overflow`'s `fixed_tokens`): no compaction
+can make that fit, so the error says what the request needs and what each of
+those parts takes instead, the placeholder says the request was not answered,
+and the result carries `fits_without_history=False`.
 
 The estimate (`estimate_prompt_tokens_chain`) prefers the provider's own count.
 Every assistant message the runner persists is stamped with

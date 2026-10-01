@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from durin.utils.runtime import (
     MODEL_ERROR_PLACEHOLDER,
+    NO_ROOM_PLACEHOLDER,
     OVERFLOW_PLACEHOLDER,
     without_failed_exchanges,
 )
@@ -18,6 +19,8 @@ def test_a_failed_turn_leaves_out_its_message_and_placeholder():
         {"role": "assistant", "content": OVERFLOW_PLACEHOLDER},
         {"role": "user", "content": "asked while the model was down"},
         {"role": "assistant", "content": MODEL_ERROR_PLACEHOLDER},
+        {"role": "user", "content": "asked with an AGENTS.md larger than the window"},
+        {"role": "assistant", "content": NO_ROOM_PLACEHOLDER},
         {"role": "user", "content": "last"},
         {"role": "assistant", "content": "answer again"},
     ]

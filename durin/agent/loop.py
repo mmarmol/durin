@@ -104,6 +104,25 @@ _NON_STREAMED_STOP_REASONS = frozenset({
 _MAX_OVERFLOW_RETRIES = 1
 
 
+def _prompt_parts_note(composition: dict[str, Any] | None) -> str:
+    """The largest parts of a turn's prompt, named for the error of a request
+    that cannot fit even without the conversation history, so the user knows
+    what to shrink; empty when the build left no composition to read."""
+    if not composition:
+        return ""
+    from durin.agent.context import summarize_composition
+
+    summary = summarize_composition(composition)
+    parts = {**summary["infra_breakdown"], **summary["conversation_breakdown"]}
+    parts.pop("Prior turns", None)
+    names = {"Bootstrap files": ", ".join(ContextBuilder.BOOTSTRAP_FILES)}
+    largest = sorted(((label, tokens) for label, tokens in parts.items() if tokens), key=lambda kv: -kv[1])[:4]
+    if not largest:
+        return ""
+    named = [f"{names.get(label, label)} {tokens:,}" for label, tokens in largest]
+    return f" The prompt's largest parts: {named[0]} tokens" + "".join(f"; {part}" for part in named[1:]) + "."
+
+
 def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -> str:
     """Truncate ``content`` choosing direction based on the tool name."""
     direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
@@ -365,6 +384,10 @@ class TurnContext:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     initial_messages: list[dict[str, Any]] = field(default_factory=list)
+    # The context.composition payload of the build that made
+    # initial_messages: what each part of the prompt costs, which names the
+    # parts to the user when the prompt cannot fit even without history.
+    composition: dict[str, Any] | None = None
 
     # Hits of the automatic search this turn ran with the user message,
     # fenced for the wire copy of that message only (never stored). Resolved
@@ -609,6 +632,9 @@ class AgentLoop:
         # _run_agent_loop returns is shared by several callers/tests, so new
         # per-turn telemetry rides this side channel instead of growing it.
         self._pending_usage: dict[str, dict[str, int]] = {}
+        # The same handoff for the last run's AgentRunResult.fits_without_history:
+        # False when a precheck overflow could not be cured by any compaction.
+        self._pending_fits_without_history: dict[str, bool | None] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
@@ -2503,6 +2529,7 @@ class AgentLoop:
             # (test doubles) defaults to 0.0 — the breakdown just shows no LLM time.
             self._pending_llm_ms[session_key] = getattr(result, "llm_ms", 0.0)
             self._pending_usage[session_key] = dict(result.usage)
+            self._pending_fits_without_history[session_key] = getattr(result, "fits_without_history", None)
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
             # Push final content through stream so a streaming channel updates
@@ -4005,6 +4032,7 @@ class AgentLoop:
             eager_snapshot=ctx.eager_snapshot,
             input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
         )
+        ctx.composition = self.context.last_composition
         if freezes and ctx.eager_snapshot is None:
             # Immediately after the build: the builder holds one rendering at
             # a time and the background consolidation probe overwrites it with
@@ -4076,6 +4104,14 @@ class AgentLoop:
                 ctx.session_key, {}
             ).items():
                 ctx.usage[_usage_key] = ctx.usage.get(_usage_key, 0) + _usage_value
+            fits_without_history = self._pending_fits_without_history.pop(ctx.session_key, None)
+            if stop_reason == "mid_turn_precheck_overflow" and fits_without_history is False:
+                # The system prompt, the tool definitions and the request alone
+                # are over the budget: a compaction only removes history, so
+                # forcing one could not make room and the retry would fail the
+                # same way. The turn fails now, saying what fills the budget.
+                ctx.final_content = (final_content or "") + _prompt_parts_note(ctx.composition)
+                break
 
             # In-turn recovery for an overflow before the turn's first model
             # call: BUILD's consolidation must have failed (the consolidator
@@ -4128,6 +4164,7 @@ class AgentLoop:
                     eager_snapshot=ctx.eager_snapshot,
                     input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
                 )
+                ctx.composition = self.context.last_composition
                 continue
             break
         return "ok"

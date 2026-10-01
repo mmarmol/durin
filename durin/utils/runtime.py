@@ -21,15 +21,20 @@ EMPTY_FINAL_RESPONSE_MESSAGE = (
 )
 
 # What a turn that produced no answer leaves in the conversation in place of
-# one, so the transcript says why: the model call failed, or the prompt
-# exceeded its input budget.
+# one, so the transcript says why: the model call failed, the prompt exceeded
+# its input budget, or the part of it no compaction can shrink did.
 MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
 OVERFLOW_PLACEHOLDER = (
     "[Turn stopped before the next model call: the prompt exceeded the input "
     "budget even after emergency trimming. The request was not finished; the "
     "next turn starts from a compacted context.]"
 )
-_FAILED_TURN_PLACEHOLDERS = frozenset({MODEL_ERROR_PLACEHOLDER, OVERFLOW_PLACEHOLDER})
+NO_ROOM_PLACEHOLDER = (
+    "[Turn stopped before the next model call: even without the conversation "
+    "history, the system prompt, the tool definitions and this turn's messages "
+    "exceeded the input budget. The request was not finished.]"
+)
+_FAILED_TURN_PLACEHOLDERS = frozenset({MODEL_ERROR_PLACEHOLDER, OVERFLOW_PLACEHOLDER, NO_ROOM_PLACEHOLDER})
 
 
 def without_failed_exchanges(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

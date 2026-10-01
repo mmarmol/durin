@@ -972,3 +972,31 @@ async def test_a_caller_that_compacts_gets_the_overflow_instead_of_a_trim():
 
     assert result.stop_reason == "mid_turn_precheck_overflow"
     provider.chat_with_retry.assert_not_awaited()
+    # Without the history it would fit: a compaction can make room.
+    assert result.fits_without_history is True
+
+
+@pytest.mark.asyncio
+async def test_a_request_over_the_budget_without_its_history_says_what_fills_it():
+    """When the system prompt, the tool schemas and the request are over the
+    budget by themselves, no compaction can make the request fit: the run
+    says so, and what each of them takes, instead of asking for a resend."""
+    import dataclasses
+
+    from durin.agent.runner import AgentRunner
+    from durin.utils.runtime import NO_ROOM_PLACEHOLDER
+
+    spec, _schemas = _over_budget_run(caller_compacts_on_overflow=True)
+    spec = dataclasses.replace(spec, initial_messages=[
+        {"role": "system", "content": "system prompt " * 6_000}, *spec.initial_messages[1:],
+    ])
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="never"))
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "mid_turn_precheck_overflow"
+    assert result.fits_without_history is False
+    assert "cannot make it fit" in result.final_content
+    assert "the input budget is 12,000" in result.final_content
+    assert "send it again" not in result.final_content
+    assert result.messages[-1]["content"] == NO_ROOM_PLACEHOLDER

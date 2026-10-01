@@ -80,7 +80,8 @@ async def _run_turns(
     in the saved session. On a turn in *tool_turns* the model first lists the
     workspace, then answers. On a turn in *overflow_turns* the first run
     stops before its first call, as it does when the incoming message pushes
-    a prompt at its ceiling over the budget, and the turn retries."""
+    a prompt at its ceiling over the budget, and the turn retries (the turn
+    needs history before it for that: without, no compaction could help)."""
     if agents_md is not None:
         # Part of every prompt's fixed part, like the system prompt itself.
         (tmp_path / "AGENTS.md").write_text(agents_md, encoding="utf-8")
@@ -155,7 +156,10 @@ async def _run_turns(
 
     async def _run(spec):
         if turn["i"] in overflow_turns and not any(a["turn"] == turn["i"] for a in attempts):
-            spec = dataclasses.replace(spec, context_block_limit=1_000)
+            # A budget the request fits without its history and not with
+            # it: an overflow a compaction can cure.
+            fixed = loop.runner._history_free_parts(spec, list(spec.initial_messages), spec.provider)
+            spec = dataclasses.replace(spec, context_block_limit=fixed[0] + 1)
         result = await real_run(spec)
         attempts.append({
             "turn": turn["i"], "stop_reason": result.stop_reason,
@@ -380,6 +384,38 @@ async def test_a_small_window_filled_by_its_fixed_prompt_compacts_on_a_runway(tm
 
     assert sum(1 for count in result["compactions"] if count) <= 4, result["compactions"]
     _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_part_over_the_budget_fails_at_once_and_says_what_fills_it(tmp_path):
+    """An AGENTS.md of 35,000 words on a 64,000-token window puts the system
+    prompt and the tool definitions alone over the input budget: no
+    compaction can make any turn fit. Every turn still forced a compaction
+    before failing, and failed with an error that told the user to send the
+    request again, as if compacting would help."""
+    from durin.agent.runner import input_budget_tokens
+
+    result = await _run_turns(tmp_path, turns=0, window=64_000, agents_md="guidance " * 35_000)
+    loop = result["loop"]
+    forced: list[bool] = []
+    real_check = loop.consolidator.maybe_consolidate_by_tokens
+
+    async def _check(session, **kwargs):
+        forced.append(bool(kwargs.get("force")))
+        return await real_check(session, **kwargs)
+
+    loop.consolidator.maybe_consolidate_by_tokens = _check  # type: ignore[method-assign]
+    replies = [
+        (await loop.process_direct(_turn_text(i), session_key="cli:sim")).content for i in range(3)
+    ]
+
+    assert True not in forced
+    assert result["main_prompts"] == []
+    budget = f"{input_budget_tokens(64_000, 8192):,}"
+    for reply in replies:
+        assert reply.startswith(_OVERFLOW_REPLY), reply
+        assert "AGENTS.md" in reply and budget in reply, reply
+        assert "send it again" not in reply, reply
 
 
 @pytest.mark.asyncio

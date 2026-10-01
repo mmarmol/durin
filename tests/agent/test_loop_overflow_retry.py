@@ -134,6 +134,7 @@ async def test_an_attempt_that_took_a_queued_message_is_not_rerun(tmp_path):
     from durin.agent.loop import PendingQueues
     from durin.providers.base import GenerationSettings, LLMResponse
     from durin.utils.helpers import estimate_prompt_tokens
+    from durin.utils.runtime import NO_ROOM_PLACEHOLDER
 
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -184,4 +185,6 @@ async def test_an_attempt_that_took_a_queued_message_is_not_rerun(tmp_path):
     assert [m["role"] for m in saved] == ["user", "assistant", "user", "assistant"]
     assert saved[1]["content"].startswith("REPLY-1 ")
     assert queued in saved[2]["content"]
-    assert saved[3]["content"] == _PERSISTED_OVERFLOW_PLACEHOLDER
+    # The run's own messages are what is over the budget: the session has no
+    # history a compaction could take out.
+    assert saved[3]["content"] == NO_ROOM_PLACEHOLDER

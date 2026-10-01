@@ -51,11 +51,15 @@ class CircuitBreakerIdleTimeoutEvent(TypedDict):
 
 class MidTurnPrecheckOverflowEvent(TypedDict):
     """Post-sanitize prompt still exceeded the input budget; turn was
-    aborted BEFORE making the LLM call."""
+    aborted BEFORE making the LLM call. ``fixed_tokens`` is what the request
+    needs with all the history before the run's own request dropped (None
+    when it could not be estimated): over ``budget_tokens``, no compaction
+    can make the request fit."""
     iteration: int
     session_key: NotRequired[str | None]
     estimated_tokens: int
     budget_tokens: int
+    fixed_tokens: NotRequired[int | None]
 
 
 class MidTurnPrecheckRecoveredEvent(TypedDict):

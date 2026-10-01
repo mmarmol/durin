@@ -42,6 +42,7 @@ from durin.utils.prompt_templates import render_template
 from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
     MODEL_ERROR_PLACEHOLDER,
+    NO_ROOM_PLACEHOLDER,
     OVERFLOW_PLACEHOLDER,
     build_finalization_retry_message,
     build_length_recovery_message,
@@ -486,6 +487,11 @@ class AgentRunResult:
     # made after it from these messages can be sent as the loop would send
     # its next one (AgentRunner.request_view).
     prune_state: Any = None
+    # On a precheck overflow: whether the request would fit with all the
+    # history before the run's own request dropped (True too when that could
+    # not be estimated). False means no compaction can make it fit; None,
+    # that the run did not stop on an overflow.
+    fits_without_history: bool | None = None
 
 
 class AgentRunner:
@@ -778,6 +784,7 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        fits_without_history: bool | None = None
 
         # Idle-timeout circuit breaker state.
         # Increments on every iteration whose response is an idle/wall-clock
@@ -874,16 +881,25 @@ class AgentRunner:
                         # Genuinely unrecoverable: abort before the LLM call
                         # with a distinct stop_reason and an overflow-specific
                         # placeholder (NOT "model error"). A1 re-bases the
-                        # context for the next turn.
-                        final_content = (
-                            "Error: prompt overflow before LLM call "
-                            f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
-                            "The request was not finished; send it again and the next "
-                            "turn runs on a freshly-compacted context."
-                        )
+                        # context for the next turn. Unless even no history
+                        # would fit: then no compaction can help, and the
+                        # error says what fills the budget instead of asking
+                        # for the request again.
+                        fixed = self._history_free_parts(spec, messages_for_model, provider)
+                        fits_without_history = fixed is None or fixed[0] <= budget_tokens
+                        if fits_without_history:
+                            final_content = (
+                                "Error: prompt overflow before LLM call "
+                                f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
+                                "The request was not finished; send it again and the next "
+                                "turn runs on a freshly-compacted context."
+                            )
+                            self._append_overflow_placeholder(messages)
+                        else:
+                            final_content = self._no_room_message(fixed, budget_tokens)
+                            self._append_overflow_placeholder(messages, NO_ROOM_PLACEHOLDER)
                         stop_reason = "mid_turn_precheck_overflow"
                         error = final_content
-                        self._append_overflow_placeholder(messages)
                         context = AgentHookContext(iteration=iteration, messages=messages)
                         context.final_content = final_content
                         context.error = error
@@ -896,6 +912,7 @@ class AgentRunner:
                                     "session_key": spec.session_key,
                                     "estimated_tokens": estimate_tokens,
                                     "budget_tokens": budget_tokens,
+                                    "fixed_tokens": fixed[0] if fixed is not None else None,
                                 })
                         logger.warning(
                             "Mid-turn precheck overflow on turn {} for {}: "
@@ -1489,6 +1506,7 @@ class AgentRunner:
             had_injections=had_injections,
             llm_ms=total_llm_ms,
             prune_state=prune_state,
+            fits_without_history=fits_without_history,
         )
 
     @staticmethod
@@ -2555,7 +2573,9 @@ class AgentRunner:
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
     @staticmethod
-    def _append_overflow_placeholder(messages: list[dict[str, Any]]) -> None:
+    def _append_overflow_placeholder(
+        messages: list[dict[str, Any]], placeholder: str = _PERSISTED_OVERFLOW_PLACEHOLDER,
+    ) -> None:
         """Persist an overflow-specific assistant placeholder.
 
         Distinct from ``_append_model_error_placeholder`` so the transcript
@@ -2564,7 +2584,7 @@ class AgentRunner:
         """
         if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
             return
-        messages.append(build_assistant_message(_PERSISTED_OVERFLOW_PLACEHOLDER))
+        messages.append(build_assistant_message(placeholder))
 
     def _normalize_tool_result(
         self,
@@ -3239,6 +3259,48 @@ class AgentRunner:
             # messages, and the count that found them over is kept.
             return messages
         return system_messages + kept
+
+    def _history_free_parts(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None,
+    ) -> tuple[int, int, int, int] | None:
+        """What a request on *messages* needs with all the history before the
+        run's own request dropped, the part no compaction can shrink, as
+        ``(total, system prompt, tool definitions, the run's own messages
+        with the task state they append)``. None when it cannot be
+        estimated."""
+        try:
+            system = [msg for msg in messages if msg.get("role") == "system"]
+            non_system = [
+                {key: value for key, value in msg.items() if key != "usage_prompt_tokens"}
+                for msg in messages if msg.get("role") != "system"
+            ]
+            request_at = self._run_request_index(spec, non_system)
+            turn = non_system[request_at:] if request_at is not None else non_system
+            tools = self._active_tool_definitions(spec)
+            total = self._request_estimate(spec, system + turn, provider)
+            system_tokens = estimate_prompt_tokens(system)
+            tool_tokens = estimate_prompt_tokens([], tools) if tools else 0
+        except Exception:
+            logger.exception("History-free estimate failed for {}", spec.session_key or "default")
+            return None
+        return total, system_tokens, tool_tokens, max(0, total - system_tokens - tool_tokens)
+
+    @staticmethod
+    def _no_room_message(fixed: tuple[int, int, int, int], budget: int) -> str:
+        """The error of a request that cannot fit its budget whatever is
+        compacted: what it needs, and what that is made of."""
+        total, system, tools, turn = fixed
+        return (
+            "Error: prompt overflow before LLM call: even without the conversation "
+            f"history this request needs {total:,} tokens and the input budget is "
+            f"{budget:,}, so compacting the conversation cannot make it fit, and the "
+            f"request was not finished. The system prompt takes {system:,} tokens, "
+            f"the tool definitions {tools:,} and this turn's messages {turn:,}. Make "
+            "one of them smaller, or use a model with a larger context window."
+        )
 
     @staticmethod
     def _run_request_index(

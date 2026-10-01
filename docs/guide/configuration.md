@@ -195,6 +195,11 @@ On a small window the summary so far would take much of that room by itself,
 so a prompt carries it cut to a quarter of what the system prompt and the
 tool schemas leave of the input budget, its oldest parts left out first.
 
+When the system prompt, the tool schemas and the message alone are over the
+input budget, no compaction can make the turn fit: it fails at once, and the
+error names the largest parts of the prompt (`AGENTS.md`, the tool
+definitions, the message) so you know what to shorten.
+
 An empty `preemptive_compact_max_tokens` in the settings editor is `null`,
 and `null` means two different things: under `agents.defaults` it is no cap,
 while on a preset it is the `agents.defaults` cap. To turn the cap off for
