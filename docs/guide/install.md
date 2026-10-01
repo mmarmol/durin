@@ -344,11 +344,11 @@ and the command exits 1.
 
 It refuses outright, removing nothing, when the durin home (`DURIN_HOME`) is
 your home folder, the filesystem root, or a folder that contains your home
-folder. It removes everything else in the durin home only when the folder is
-recognizably durin's: it holds `config.json.d/`, or a `config.json` that is
-durin's split-layout marker — what every durin release writes. In any other
-folder it removes only the paths durin is known to use, and the plan lists
-the entries it leaves, with the reason.
+folder. It also refuses a folder that is not recognizably durin's — one that
+holds neither `config.json.d/` nor a `config.json` that is durin's
+split-layout marker, which every durin release writes — since the names
+durin uses there (`config.json`, `logs/`, `sessions/`…) may be your own. If
+such a folder really is a durin home, remove it by hand.
 
 ### What lives outside the package
 
@@ -368,7 +368,7 @@ the entries it leaves, with the reason.
 | `~/.durin/models/` (the STT and OCR model caches) | yes | `--keep-cache` |
 | `~/.cache/durin/models/` (model files shared by every install on the machine) | by the default install only | `--keep-cache` |
 | `~/.cache/durin/archive/` (the default install's archive) | by the default install only | `--keep-cache` |
-| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, …), when the folder is recognizably a durin home (below) | yes | — |
+| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, …), as long as the folder is recognizably a durin home (see above) | yes | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed

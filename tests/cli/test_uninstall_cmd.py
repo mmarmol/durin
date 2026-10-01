@@ -594,31 +594,35 @@ def test_the_filesystem_root_is_refused(tmp_path: Path, monkeypatch: pytest.Monk
     assert _refusal(tmp_path / "home" / ".durin") is None
 
 
-def test_a_folder_without_durin_markers_keeps_what_is_not_durins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("args, answer", [(["--yes"], None), ([], "y\n")])
+def test_a_folder_without_durin_markers_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], answer: str | None,
 ) -> None:
-    """DURIN_HOME set to a folder that is not durin's: no config.json.d/ and
-    no config.json that is durin's split-layout marker. Its unknown entries
-    were removed as "everything else". Only durin's own paths go now, and the
-    plan lists the rest it leaves, with the reason."""
+    """DURIN_HOME set to a folder that is not recognizably durin's: no
+    config.json.d/ and no config.json that is durin's split-layout marker.
+    The names durin uses (config.json, logs/, media/, sessions/) still went
+    there, and they may be the user's own. Uninstall now removes nothing, says
+    why and which markers it looked for, and exits 1, --yes or a yes at the
+    prompt alike."""
     home = tmp_path / "home"
     home.mkdir()
     folder = tmp_path / "projects"
     _users_files(folder)
-    (folder / "sessions").mkdir()
-    (folder / "sessions" / "cli_direct.jsonl").write_text("{}\n", encoding="utf-8")
+    (folder / "config.json").write_text('{"name": "my-app", "version": "1.0.0"}', encoding="utf-8")
+    for name in ("logs", "media", "sessions"):
+        (folder / name).mkdir()
+        (folder / name / "mine.txt").write_text("mine", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("DURIN_HOME", str(folder))
     monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
-    theirs = {rel: data for rel, data in _tree(folder).items() if not rel.startswith("sessions")}
+    before = _tree(tmp_path)
 
-    result = runner.invoke(app, ["uninstall", "--yes"])
+    result = runner.invoke(app, ["uninstall", *args], input=answer)
 
-    assert result.exit_code == 0, result.output
-    assert _tree(folder) == theirs
-    left = result.output[result.output.index("Left in place"):]
-    for name in ("Documents", "photos", "notes.txt", ".zshrc"):
-        assert f"{folder / name} — not a durin home" in left
+    assert result.exit_code == 1, result.output
+    assert _tree(tmp_path) == before
+    assert "config.json.d/" in result.output
+    assert "remove it by hand" in result.output
 
 
 def test_a_full_uninstall_leaves_the_durin_home_empty(fake_home: Path) -> None:

@@ -55,24 +55,32 @@ def _default_cache() -> tuple[Path, bool]:
     return cache, get_telemetry_dir() == cache / "telemetry"
 
 
-# What uninstall knew of a durin home before it removed everything in one: in
-# a folder that is not recognizably a durin home, only these go besides the
-# config, workspace and cache paths.
-_KNOWN_STATE = ("sessions", "history", "cron", "media", "bridge", "webui", "logs")
-_NOT_DURINS = "not a durin home (no config.json.d/), so only durin's own paths go"
+_MARKERS = 'config.json.d/, or a config.json that is durin\'s split-layout marker {"_layout": "split"}'
 
 
 def _refusal(durin_home: Path) -> str | None:
-    """Why uninstall must not touch *durin_home* at all, or None. The user's
-    home folder, the filesystem root and any folder that contains the user's
-    home are never a durin home, whatever DURIN_HOME says: everything in them
-    would be "everything else in the durin home"."""
+    """Why uninstall must not touch *durin_home* at all, or None.
+
+    The user's home folder, the filesystem root and any folder that contains
+    the user's home are never a durin home, whatever DURIN_HOME says. Nor is
+    a folder without durin's markers: the names durin uses there
+    (``config.json``, ``logs/``, ``media/``, ``sessions/``…) may be the
+    user's own, so nothing in it is removed; a durin home that lost its
+    markers is removed by hand."""
     home = Path.home().resolve()
     target = durin_home.expanduser().resolve()
     if target == home:
-        return f"{durin_home} is your home folder, not a durin home"
+        return f"{durin_home} is your home folder, not a durin home. Point DURIN_HOME at the durin home itself."
     if home.is_relative_to(target):
-        return f"{durin_home} contains your home folder: it is not a durin home"
+        return (
+            f"{durin_home} contains your home folder: it is not a durin home. "
+            "Point DURIN_HOME at the durin home itself."
+        )
+    if target.is_dir() and not _is_durin_home(target):
+        return (
+            f"{durin_home} holds none of durin's markers ({_MARKERS}), so it is not recognizably "
+            "a durin home. If it is one, remove it by hand."
+        )
     return None
 
 
@@ -93,18 +101,12 @@ def _is_durin_home(durin_home: Path) -> bool:
 
 
 def left_in_place() -> list[tuple[Path, str]]:
-    """What uninstall leaves, with why: for an instance, what is in
-    ``~/.cache/durin`` (the default install's); in a folder that is not
-    recognizably a durin home, every entry that is not durin's own."""
-    from durin.config.home import durin_home as _durin_home_root
-
+    """What uninstall leaves in ``~/.cache/durin`` for an instance, with why;
+    nothing for the default install, which removes it."""
     cache, owned = _default_cache()
-    left = [] if owned else [(cache / name, why) for name, why in _DEFAULT_CACHE if (cache / name).exists()]
-    durin_home = _durin_home_root()
-    if durin_home.is_dir() and not _is_durin_home(durin_home):
-        listed = {path for group in default_target_groups() for path in group.paths}
-        left += [(path, _NOT_DURINS) for path in sorted(durin_home.iterdir()) if path not in listed]
-    return left
+    if owned:
+        return []
+    return [(cache / name, why) for name, why in _DEFAULT_CACHE if (cache / name).exists()]
 
 
 def _config_paths(durin_home: Path) -> tuple[Path, ...]:
@@ -159,14 +161,10 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
     )))
     # Everything else in the durin home, whatever its name: a list of known
     # names leaves behind whatever durin writes under a name it lacks. Only
-    # in a folder that is recognizably durin's, though; in any other, only
-    # the names durin is known to use.
+    # in a folder that is recognizably durin's; uninstall refuses any other.
     claimed = {*config_paths, *workspace_paths, *cache_paths}
-    if _is_durin_home(durin_home):
-        entries = sorted(durin_home.iterdir())
-        other_paths = tuple(path for path in entries if path not in claimed)
-    else:
-        other_paths = tuple(durin_home / name for name in _KNOWN_STATE)
+    entries = sorted(durin_home.iterdir()) if _is_durin_home(durin_home) else []
+    other_paths = tuple(path for path in entries if path not in claimed)
 
     groups = [
         TargetGroup("Config", "--keep-config", config_paths),
@@ -320,10 +318,7 @@ def run_uninstall(
 
     refusal = _refusal(_durin_home_root())
     if refusal:
-        console.print(
-            f"[red]Refusing to uninstall: {escape(refusal)}.[/red] "
-            "Point DURIN_HOME at the durin home itself. Nothing was removed."
-        )
+        console.print(f"[red]Refusing to uninstall:[/red] {escape(refusal)} Nothing was removed.")
         return 1
     try:
         targets = collect_targets(
