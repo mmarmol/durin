@@ -104,11 +104,13 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
 
     config_paths = _config_paths(durin_home)
     workspace_paths = (durin_home / "workspace",)
-    # This install's own telemetry, wherever it lives, and the rest of
-    # ~/.cache/durin only when that is this install's.
+    # This install's own telemetry, wherever it lives, the model caches in its
+    # home (STT engines, OCR languages), and the rest of ~/.cache/durin only
+    # when that is this install's.
     cache_paths = tuple(dict.fromkeys((
         get_telemetry_dir(),
         durin_home / "telemetry",
+        durin_home / "models",
         *((cache / "models", cache / "archive") if owned else ()),
     )))
     # Everything else in the durin home, whatever its name: a list of known
@@ -321,7 +323,8 @@ def register(app: typer.Typer) -> None:
         keep_workspace: bool = typer.Option(False, "--keep-workspace", help="Preserve ~/.durin/workspace/."),
         keep_cache: bool = typer.Option(
             False, "--keep-cache",
-            help="Preserve the caches: this install's telemetry and, for the default install, ~/.cache/durin/.",
+            help="Preserve the caches: this install's telemetry, the STT and OCR model caches in its home and, "
+            "for the default install, ~/.cache/durin/.",
         ),
         workspace: str | None = typer.Option(
             None,

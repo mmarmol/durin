@@ -331,8 +331,9 @@ Flags:
   credentials the config's `${secret:…}` references and sign-ins resolve
   against (`secrets.json`, `api_tokens.json`, `oauth/`); everything else
   still goes.
-- `--keep-cache` — preserve the caches: the install's telemetry and, for the
-  default install, the rest of `~/.cache/durin/` it would remove.
+- `--keep-cache` — preserve the caches: the install's telemetry, the STT and
+  OCR model caches under `~/.durin/models/` and, for the default install, the
+  rest of `~/.cache/durin/` it would remove.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
 The command prints every path it will remove, grouped, with its size, before
@@ -356,9 +357,10 @@ and the command exits 1.
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
 | `~/.cache/durin/telemetry/` (the default install's telemetry) | by the default install only | `--keep-cache` |
 | `$DURIN_HOME/telemetry/` (an instance's telemetry) | yes | `--keep-cache` |
+| `~/.durin/models/` (the STT and OCR model caches) | yes | `--keep-cache` |
 | `~/.cache/durin/models/` (model files shared by every install on the machine) | by the default install only | `--keep-cache` |
 | `~/.cache/durin/archive/` (the default install's archive) | by the default install only | `--keep-cache` |
-| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, the STT and OCR model caches under `models/`, …) | yes | — |
+| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, …) | yes | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed

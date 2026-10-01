@@ -510,6 +510,32 @@ def test_a_path_gone_before_its_turn_is_not_a_failure(fake_home: Path, monkeypat
     assert not pid.exists()
 
 
+@pytest.mark.parametrize("install", ["default_install", "fake_home"])
+def test_the_model_caches_in_the_durin_home_go_with_the_cache(install: str, request: pytest.FixtureRequest) -> None:
+    """The STT and OCR model caches under the durin home's models/ went with
+    everything else: --keep-cache, which keeps the caches, removed them."""
+    home = request.getfixturevalue(install)
+    models = home / ".durin" / "models"
+    (models / "stt").mkdir(parents=True)
+    (models / "stt" / "weights.bin").write_bytes(b"\x00\x01")
+    (models / "ocr").mkdir()
+    (models / "ocr" / "eng.onnx").write_bytes(b"\x02")
+    before = _tree(models)
+
+    kept = collect_targets(keep_config=False, keep_workspace=False, keep_cache=True, workspace=None)
+    planned = {path: group.name for group, path, _size in collect_targets(
+        keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )}
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=True, workspace=None,
+    )
+
+    assert models not in {path for _group, path, _size in kept}
+    assert planned[models] == "Cache"
+    assert rc == 0
+    assert _tree(models) == before
+
+
 def test_a_full_uninstall_leaves_the_durin_home_empty(fake_home: Path) -> None:
     """Uninstall stops the daemon after it lists what it removes, and checking
     the daemon's status created a logs/ folder the list never had: it stayed
