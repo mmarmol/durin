@@ -12,10 +12,19 @@ extra is optional).
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
-# Hard skip if the optional extra is missing.
-fastembed = pytest.importorskip("fastembed")
+# Hard skip if the optional extra is missing, checked without importing it:
+# fastembed loads onnxruntime, and onnxruntime (1.30, on macOS) writes a
+# telemetry database under the home directory as it loads. Imported here, at
+# collection, that is the real home of whoever runs the suite; the tests
+# import it under their own throwaway one.
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("fastembed") is None,
+    reason="fastembed is not installed (the [memory] extra)",
+)
 
 from durin.cli.onboard_wizard import _EMBEDDING_CHOICES
 from durin.config.schema import MemoryEmbeddingConfig

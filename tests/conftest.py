@@ -247,16 +247,55 @@ def _no_one_left_waiting():
     approval._HANDOFF_DECIDED_BY.clear()
 
 
+# The home of whoever runs the suite, read when this module is imported:
+# before any test points HOME at a folder of its own.
+_REAL_HOME = os.path.expanduser("~")
+
+
+@pytest.fixture(scope="session")
+def real_home():
+    """The home directory of whoever runs the suite, for a test that reads a
+    file a developer keeps there (a downloaded dataset). Every test runs with
+    its own empty HOME; nothing writes here."""
+    from pathlib import Path
+
+    return Path(_REAL_HOME)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_home(tmp_path_factory, monkeypatch):
+    """Run every test with a throwaway home directory.
+
+    ``Path.home()`` and ``os.path.expanduser`` read ``$HOME``, and code under
+    test expands ``~`` paths: the default ``~/.durin`` when DURIN_HOME is
+    unset, ``~/.cache/durin``, a workspace a test names as ``~/...``. With the
+    real home, a test that left DURIN_HOME unset or resolved such a path
+    created folders in the home of whoever ran the suite (``~/.durin/workspace``,
+    ``~/custom-workspace``). Each test gets its own empty home, in a subfolder
+    of the run's base temp. A test that reads a file from the real home takes
+    its path from ``real_home``; one that needs the real home's behaviour sets
+    ``HOME`` itself.
+    """
+    import tempfile
+
+    homes = tmp_path_factory.getbasetemp() / "user_homes"
+    homes.mkdir(exist_ok=True)
+    home = tempfile.mkdtemp(prefix="home", dir=homes)
+    monkeypatch.setenv("HOME", home)
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", home)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_durin_home(tmp_path_factory, monkeypatch):
     """Run every test as a throwaway durin instance.
 
     ``durin_home()`` reads ``$DURIN_HOME`` with priority over ``Path.home()``,
-    so an ambient DURIN_HOME (a dev shell) would leak into tests, and an unset
-    one would point them at the real ``~/.durin`` — colliding with a running
-    daemon (SQLite/lock contention) and polluting the live deploy. Pin a fresh
-    per-test home so the suite never touches ``~/.durin`` and passes under any
-    ambient environment. A test that needs the default/unset behaviour controls
+    so an ambient DURIN_HOME (a dev shell) would leak into tests. Unset, it
+    falls back to ``~/.durin``, which the throwaway HOME above keeps away from
+    the real one (where a running daemon holds SQLite files and locks). Pin a
+    fresh per-test durin home so tests see one instance whatever the ambient
+    environment. A test that needs the default/unset behaviour controls
     DURIN_HOME itself (see ``tests/config/test_config_paths.py``).
     """
     import tempfile

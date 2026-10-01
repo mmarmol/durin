@@ -67,13 +67,13 @@ def test_categories_tuple_lists_all_five() -> None:
     }
 
 
-def test_locomo10_counts_match_canonical_mapping() -> None:
+def test_locomo10_counts_match_canonical_mapping(real_home) -> None:
     """End-to-end check: loading the bundled locomo10 dataset must
     produce the canonical per-category counts mem0 publishes —
     minus the 444 adversarial entries that carry ``answer=None``
     (those are the 'agent must refuse' adversarial cases; H14
     covers loading them with a special judge)."""
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present in ~/.cache/durin/")
     qas = _ds_mod.load_dataset(data_path)
@@ -93,11 +93,11 @@ def test_locomo10_counts_match_canonical_mapping() -> None:
     assert cats["adversarial"] == 446, cats
 
 
-def test_adversarial_null_answers_load_with_refuse_sentinel() -> None:
+def test_adversarial_null_answers_load_with_refuse_sentinel(real_home) -> None:
     """H14 (2026-05-29): adversarial QAs with raw ``answer=null`` in
     the dataset land with ``answer="__REFUSE__"`` so the judge can
     distinguish them from substring-matchable answers."""
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
@@ -128,11 +128,11 @@ def test_adversarial_null_answers_load_with_refuse_sentinel() -> None:
 # its share of the dataset.
 
 
-def test_proportional_subset_preserves_distribution() -> None:
+def test_proportional_subset_preserves_distribution(real_home) -> None:
     """Sampling 100 from locomo10's 1986 QAs must allocate proportional
     to category sizes — single_hop ~42%, temporal ~16%, etc."""
     from collections import Counter
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
@@ -154,9 +154,9 @@ def test_proportional_subset_preserves_distribution() -> None:
         )
 
 
-def test_proportional_subset_is_deterministic_per_seed() -> None:
+def test_proportional_subset_is_deterministic_per_seed(real_home) -> None:
     """Same seed → identical subset across runs."""
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
@@ -165,8 +165,8 @@ def test_proportional_subset_is_deterministic_per_seed() -> None:
     assert [qa.qa_id for qa in a] == [qa.qa_id for qa in b]
 
 
-def test_proportional_subset_different_seed_different_sample() -> None:
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+def test_proportional_subset_different_seed_different_sample(real_home) -> None:
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
@@ -175,11 +175,11 @@ def test_proportional_subset_different_seed_different_sample() -> None:
     assert [qa.qa_id for qa in a] != [qa.qa_id for qa in b]
 
 
-def test_proportional_subset_handles_small_total() -> None:
+def test_proportional_subset_handles_small_total(real_home) -> None:
     """A small N still allocates at least 1 to each category that
     has > 0 entries — losing a category entirely would defeat the
     purpose of proportional sampling."""
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
@@ -197,14 +197,14 @@ def test_proportional_subset_empty_input() -> None:
     assert _ds_mod.proportional_subset([], total_n=100, seed=42) == []
 
 
-def test_proportional_subset_locomo10_100_distribution_snapshot() -> None:
+def test_proportional_subset_locomo10_100_distribution_snapshot(real_home) -> None:
     """Reproducibility snapshot: with locomo10 + total_n=100 + seed=42,
     the per-category counts must lock to a known distribution so a
     historical run-dir can be re-sampled identically. If this changes,
     document it in the audit log — every prior bench result becomes
     incomparable."""
     from collections import Counter
-    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    data_path = real_home / ".cache" / "durin" / "locomo10.json"
     if not data_path.is_file():
         pytest.skip("locomo10.json not present")
     qas = _ds_mod.load_dataset(data_path)
