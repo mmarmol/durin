@@ -913,6 +913,8 @@ class AgentRunner:
                 messages=messages,
             )
             await hook.before_iteration(context)
+            # Measured before the request, which appends the same block.
+            appended_tokens = self._appended_task_state_tokens(spec, messages_for_model)
             _llm_started = time.monotonic()
             with self._bound_call_limits(spec, provider):
                 response = await self._request_model(
@@ -1050,7 +1052,7 @@ class AgentRunner:
                     tool_calls=[tc.to_openai_tool_call() for tc in response.tool_calls],
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=raw_usage.get("prompt_tokens"),
+                    prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in response.tool_calls)
@@ -1347,7 +1349,7 @@ class AgentRunner:
                     clean,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
-                    prompt_tokens=raw_usage.get("prompt_tokens"),
+                    prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
                 )
 
             # Check for mid-turn injections BEFORE signaling stream end.
@@ -1419,7 +1421,7 @@ class AgentRunner:
                 clean,
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
-                prompt_tokens=raw_usage.get("prompt_tokens"),
+                prompt_tokens=self._stamp_tokens(raw_usage, appended_tokens),
             ))
             await self._emit_checkpoint(
                 spec,
@@ -1721,6 +1723,35 @@ class AgentRunner:
                 "one shown earlier]\n" + block
             ),
         }
+
+    def _appended_task_state_tokens(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> int:
+        """Tokens of the task state a request on *messages* appends (0 when it
+        appends none)."""
+        message = self._task_state_message(spec, messages)
+        return estimate_message_tokens(message) if message is not None else 0
+
+    @staticmethod
+    def _stamp_tokens(raw_usage: dict[str, int], appended_tokens: int) -> int | None:
+        """The usage stamp a reply records: the provider's count of the
+        request that produced it, without the task state that request
+        appended.
+
+        A stamp stands for the system prompt, the tool schemas and every
+        message before the reply, and the next request's estimate is the
+        stamp plus what came after it. The appended block is in neither: the
+        conversation never keeps it, and the next request appends the task
+        state as it is then. Left in the stamp, it was counted a second time
+        on every request after the task state first changed. None (no
+        stamp) when the provider reported no count, or one smaller than the
+        block itself."""
+        prompt_tokens = raw_usage.get("prompt_tokens")
+        if not prompt_tokens or prompt_tokens <= appended_tokens:
+            return None
+        return prompt_tokens - appended_tokens
 
     def _with_task_state(
         self,

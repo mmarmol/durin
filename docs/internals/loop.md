@@ -538,7 +538,10 @@ the user to send it again, and the next turn runs on a compacted context.
 The estimate (`estimate_prompt_tokens_chain`) prefers the provider's own count.
 Every assistant message the runner persists is stamped with
 `usage_prompt_tokens`, the provider's count for the prompt that *produced* it:
-system prompt, tool definitions and every earlier message. From the second call
+system prompt, tool definitions and every earlier message. The task state that
+request appended is taken out of the stamp: the conversation never keeps it,
+and each request appends the block as it is then, so a stamp that kept it
+would count it twice. From the second call
 of a turn onward the estimate is that stamp plus a tiktoken estimate of the
 stamped message and everything after it, *without* the tool definitions, which
 the stamp already contains. Before any call has been made (iteration 0, and the
