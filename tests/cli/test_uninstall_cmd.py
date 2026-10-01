@@ -510,6 +510,21 @@ def test_a_path_gone_before_its_turn_is_not_a_failure(fake_home: Path, monkeypat
     assert not pid.exists()
 
 
+def test_a_full_uninstall_leaves_the_durin_home_empty(fake_home: Path) -> None:
+    """Uninstall stops the daemon after it lists what it removes, and checking
+    the daemon's status created a logs/ folder the list never had: it stayed
+    behind, empty."""
+    root = fake_home / ".durin"
+    assert not (root / "logs").exists()
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    assert sorted(p.name for p in root.iterdir()) == []
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root lists a directory without its read permission")
 def test_a_durin_home_it_cannot_list_removes_nothing(fake_home: Path) -> None:
     """Without the home's entries there is no complete plan to show: the run

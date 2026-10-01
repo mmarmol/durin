@@ -60,6 +60,19 @@ def test_daemon_status_not_running_when_no_pid_file(isolated_home: Path) -> None
     assert not s.is_running
 
 
+def test_checking_the_status_creates_no_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Asking where the pid and log files are created the durin home and its
+    logs/ folder, so an uninstall, which stops the daemon after it lists what
+    it removes, left an empty logs/ behind."""
+    home = tmp_path / "instance"
+    monkeypatch.setenv("DURIN_HOME", str(home))
+
+    status = daemon_status()
+
+    assert status.state == "not_running"
+    assert not home.exists()
+
+
 def test_daemon_status_running_when_alive_pid_present(isolated_home: Path) -> None:
     p = _spawn_dummy([])
     try:

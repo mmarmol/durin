@@ -438,7 +438,10 @@ to keep their noise out of `gateway.log`.
 `daemon_status()` returns a `DaemonStatus` with `state ∈ {running, not_running,
 stale_pid}`. A stale PID is detected when the PID file exists but its pid fails
 `pid_alive` (`durin/utils/process.py`), the cross-platform liveness probe
-shared with the jobs subsystem's reconcile sweeps. The gateway also acquires an exclusive flock on
+shared with the jobs subsystem's reconcile sweeps. Checking the status
+creates nothing: the path helpers only name the pid and log files, and what
+writes one creates its folder (`start_daemon` the boot log's, loguru the
+log file's). An uninstall checks the status after it lists what it removes. The gateway also acquires an exclusive flock on
 `~/.durin/gateway.lock` at startup (`acquire_gateway_singleton`); the OS
 releases it automatically on exit, providing crash-safe singleton enforcement
 that the PID file alone cannot guarantee.

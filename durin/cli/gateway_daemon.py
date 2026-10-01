@@ -59,12 +59,15 @@ __all__ = [
 
 
 def _state_root() -> Path:
-    """Where we keep the PID + log files. Stable across the agent's lifetime."""
+    """Where we keep the PID + log files. Stable across the agent's lifetime.
+
+    These helpers only name paths: whatever writes a file creates its folder
+    (``start_daemon`` the boot log's, loguru the log file's), so asking for
+    the daemon's status leaves the disk as it was — an uninstall checks it
+    after it lists what it removes."""
     from durin.config.home import durin_home
 
-    root = durin_home()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    return durin_home()
 
 
 def daemon_pid_path() -> Path:
@@ -72,9 +75,7 @@ def daemon_pid_path() -> Path:
 
 
 def daemon_logs_path() -> Path:
-    logs = _state_root() / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    return logs / "gateway.log"
+    return _state_root() / "logs" / "gateway.log"
 
 
 def daemon_boot_logs_path() -> Path:
@@ -84,9 +85,7 @@ def daemon_boot_logs_path() -> Path:
     tracebacks). The structured log lives in ``gateway.log`` (loguru-owned,
     rotating); this file is only a boot-time safety net.
     """
-    logs = _state_root() / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    return logs / "gateway.boot.log"
+    return _state_root() / "logs" / "gateway.boot.log"
 
 
 # ---------------------------------------------------------------------------
