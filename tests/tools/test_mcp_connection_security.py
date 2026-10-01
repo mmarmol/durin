@@ -128,7 +128,21 @@ async def test_injection_scan_warns_but_registers():
 # 5c.3 — stdio spawn policy enforcement
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def unresolvable_hosts(monkeypatch):
+    """The spawn check resolves the host of every URL in the command (the
+    internal-address check). evil.example does not exist: answer that
+    without asking a DNS server."""
+    import socket
+
+    def getaddrinfo(host, *args, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, f"{host} not known")
+
+    monkeypatch.setattr("durin.security.network.socket.getaddrinfo", getaddrinfo)
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unresolvable_hosts")
 async def test_refuse_policy_blocks_egress_spawn():
     from durin.agent.tools.mcp_connection import MCPServerConnection
     from durin.agent.tools.registry import ToolRegistry
@@ -145,6 +159,7 @@ async def test_refuse_policy_blocks_egress_spawn():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unresolvable_hosts")
 async def test_warn_policy_allows_spawn(monkeypatch):
     from loguru import logger as loguru_logger
 

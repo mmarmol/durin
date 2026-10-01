@@ -43,7 +43,17 @@ def test_describe_unresolvable_is_empty(monkeypatch):
     assert payload["description"] == ""
 
 
-def test_describe_clawhub_is_empty():
+def test_describe_clawhub_is_empty(monkeypatch):
+    """The registry has no SKILL.md for an unknown slug: the fetch fails and
+    the description is empty."""
+    requested: list[str] = []
+
+    def not_found(url):
+        requested.append(url)
+        raise RuntimeError("404 Not Found")
+
+    monkeypatch.setattr(si, "_http_get_bytes", not_found)
     status, payload = ss.web_skill_describe("clawhub:some/slug")
     assert status == 200
     assert payload["description"] == ""
+    assert requested == [f"{si._CLAWHUB_API}/skills/some/slug/file?path=SKILL.md"]

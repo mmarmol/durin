@@ -787,6 +787,12 @@ async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
     )
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", _capturing_stdio_client)
+    # The npx package goes through the OSV malware preflight: no advisory,
+    # without querying api.osv.dev.
+    monkeypatch.setattr(
+        "durin.agent.tools.mcp_security._query_osv",
+        lambda package, ecosystem, version=None: [],
+    )
 
     registry = ToolRegistry()
     stacks = await connect_mcp_servers(

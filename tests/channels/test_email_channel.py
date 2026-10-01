@@ -11,6 +11,19 @@ from durin.bus.queue import MessageBus
 from durin.channels.email import EmailChannel, EmailConfig
 
 
+@pytest.fixture(autouse=True)
+def _imap_unreachable_unless_faked(monkeypatch):
+    """A sent mail is copied into the IMAP Sent folder, best-effort. Tests
+    that fake only SMTP get an unreachable IMAP server, as their made-up
+    host was, without a DNS lookup. A test that fakes IMAP4_SSL replaces
+    this."""
+
+    def _unreachable(host, port, **kwargs):
+        raise OSError(f"{host}:{port} unreachable")
+
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", _unreachable)
+
+
 def _make_config(**overrides) -> EmailConfig:
     defaults = dict(
         enabled=True,

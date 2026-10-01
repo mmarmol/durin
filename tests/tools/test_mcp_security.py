@@ -2,7 +2,26 @@
 and command exfil-blocklist (SP-5b, 5c)."""
 from __future__ import annotations
 
+import socket
+
+import pytest
+
 from durin.agent.tools.mcp_security import scan_injection, scan_spawn_command
+
+
+@pytest.fixture(autouse=True)
+def _resolver(monkeypatch):
+    """scan_spawn_command resolves the host of every URL it finds (the
+    internal-address check). Answer as DNS does for the hosts here —
+    example.com is a public host, the made-up ones do not exist — without
+    asking a DNS server."""
+
+    def getaddrinfo(host, *args, **kwargs):
+        if host == "example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0))]
+        raise socket.gaierror(socket.EAI_NONAME, f"{host} not known")
+
+    monkeypatch.setattr("durin.security.network.socket.getaddrinfo", getaddrinfo)
 
 # ---------------------------------------------------------------------------
 # 5b.1 — scan_injection reason codes

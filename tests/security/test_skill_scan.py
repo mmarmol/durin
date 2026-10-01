@@ -134,12 +134,16 @@ def test_brew_formula_traversal_flagged(tmp_path):
     assert any(f.category == "install_spec" for f in scan_skill(d).findings)
 
 
-def test_go_module_url_flagged(tmp_path):
+def test_go_module_url_flagged(tmp_path, monkeypatch):
+    # The module is also looked up in OSV: no advisory, without the network.
+    monkeypatch.setattr(skill_scan, "query_malware", lambda pkg, eco, ver=None: [])
     d = _mk_install(tmp_path, "      - {kind: go, module: \"https://evil.example/mod\"}\n")
     assert any(f.category == "install_spec" for f in scan_skill(d).findings)
 
 
-def test_node_pkg_with_protocol_flagged(tmp_path):
+def test_node_pkg_with_protocol_flagged(tmp_path, monkeypatch):
+    # The package is also looked up in OSV: no advisory, without the network.
+    monkeypatch.setattr(skill_scan, "query_malware", lambda pkg, eco, ver=None: [])
     d = _mk_install(tmp_path, "      - {kind: node, package: \"file:../malicious\"}\n")
     assert any(f.category == "install_spec" for f in scan_skill(d).findings)
 

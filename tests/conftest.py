@@ -20,7 +20,12 @@ the convention discoverable + grep-able instead of hidden inside a
 
 from __future__ import annotations
 
+import errno
+import importlib.util
+import ipaddress
 import os
+import socket
+import threading
 
 import pytest
 
@@ -40,6 +45,136 @@ os.environ.pop("FORCE_COLOR", None)
 os.environ["NO_COLOR"] = "1"
 os.environ["TERM"] = "dumb"
 os.environ["COLUMNS"] = "200"
+
+# tiktoken reads its encodings from TIKTOKEN_CACHE_DIR and downloads a missing
+# one from openaipublic.blob.core.windows.net. litellm ships the cl100k_base
+# and o200k_base files and points TIKTOKEN_CACHE_DIR at them when its
+# tokenizer module is first imported, so a test that counted tokens before
+# anything in its process had imported that module downloaded the encoding
+# (on a machine without it in tiktoken's own cache). Point it there before
+# any test runs.
+_litellm = importlib.util.find_spec("litellm")
+if _litellm is not None and _litellm.submodule_search_locations:
+    _tokenizers = os.path.join(
+        next(iter(_litellm.submodule_search_locations)), "litellm_core_utils", "tokenizers")
+    if os.path.isdir(_tokenizers):
+        os.environ["TIKTOKEN_CACHE_DIR"] = _tokenizers
+
+
+# No test reaches another host. The socket calls every client goes through
+# are wrapped once, here at import, before pytest collects the test modules
+# (and the modules they import) that could hold on to the originals: a
+# connection or datagram to a non-loopback address, and a host-name lookup
+# that would ask a DNS server, are refused with the error an offline machine
+# gives and recorded, and ``_no_outbound_network`` fails the test that made
+# them. Loopback, Unix sockets, IP literals (they need no lookup) and this
+# machine's own name stay open.
+_LOCAL_HOST_NAMES = frozenset({
+    "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback",
+    socket.gethostname().lower(),
+})
+
+
+def _is_local_address(host) -> bool:
+    try:
+        ip = ipaddress.ip_address(str(host).split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        ip = ip.ipv4_mapped
+    # The unspecified address (0.0.0.0, ::) reaches this machine when connected to.
+    return ip.is_loopback or ip.is_unspecified
+
+
+def _needs_lookup(host) -> bool:
+    if host is None:
+        return False
+    name = host.decode() if isinstance(host, (bytes, bytearray)) else str(host)
+    name = name.lower().rstrip(".")
+    if not name or name in _LOCAL_HOST_NAMES:
+        return False
+    try:
+        ipaddress.ip_address(name.split("%", 1)[0])
+    except ValueError:
+        return True
+    return False
+
+
+def _install_network_guard() -> dict:
+    """Wrap the socket calls once per process and return the guard's state.
+
+    A test module that imports a helper from this file (``from tests.conftest
+    import ...``) imports it a second time under another name; that import
+    finds the guard already installed and shares its state, so the refusals
+    a test causes reach the fixture that reports them."""
+    installed = getattr(socket.getaddrinfo, "network_guard", None)
+    if installed is not None:
+        return installed
+    guard: dict = {"open": False, "refusals": []}
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_sendto = socket.socket.sendto
+    real_getaddrinfo = socket.getaddrinfo
+    real_gethostbyname = socket.gethostbyname
+    real_gethostbyname_ex = socket.gethostbyname_ex
+
+    def _refuse(what: str) -> str:
+        guard["refusals"].append(f"{what} (thread {threading.current_thread().name})")
+        return f"network access is refused in the test suite: {what}"
+
+    def remote(sock, address) -> bool:
+        return (
+            not guard["open"]
+            and sock.family in (socket.AF_INET, socket.AF_INET6)
+            and isinstance(address, tuple)
+            and not _is_local_address(address[0])
+        )
+
+    def lookup_refused(host) -> bool:
+        return not guard["open"] and _needs_lookup(host)
+
+    def connect(self, address):
+        if remote(self, address):
+            raise OSError(errno.ENETUNREACH, _refuse(f"connect to {address[0]}:{address[1]}"))
+        return real_connect(self, address)
+
+    def connect_ex(self, address):
+        if remote(self, address):
+            _refuse(f"connect to {address[0]}:{address[1]}")
+            return errno.ENETUNREACH
+        return real_connect_ex(self, address)
+
+    def sendto(self, data, *args):
+        if args and remote(self, args[-1]):
+            raise OSError(errno.ENETUNREACH, _refuse(f"datagram to {args[-1][0]}:{args[-1][1]}"))
+        return real_sendto(self, data, *args)
+
+    def getaddrinfo(host, *args, **kwargs):
+        if lookup_refused(host):
+            raise socket.gaierror(socket.EAI_NONAME, _refuse(f"lookup of {host!r}"))
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def gethostbyname(name):
+        if lookup_refused(name):
+            raise socket.gaierror(socket.EAI_NONAME, _refuse(f"lookup of {name!r}"))
+        return real_gethostbyname(name)
+
+    def gethostbyname_ex(name):
+        if lookup_refused(name):
+            raise socket.gaierror(socket.EAI_NONAME, _refuse(f"lookup of {name!r}"))
+        return real_gethostbyname_ex(name)
+
+    getaddrinfo.network_guard = guard
+    socket.socket.connect = connect
+    socket.socket.connect_ex = connect_ex
+    socket.socket.sendto = sendto
+    socket.getaddrinfo = getaddrinfo
+    socket.gethostbyname = gethostbyname
+    socket.gethostbyname_ex = gethostbyname_ex
+    return guard
+
+
+_NETWORK_GUARD = _install_network_guard()
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -294,6 +429,34 @@ def _remove_loguru_sinks_left_by_a_test():
     for handler_id in set(logger._core.handlers) - before:
         with suppress(ValueError):
             logger.remove(handler_id)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(request):
+    """Fail the test that tried to reach another host, naming the target.
+
+    The socket guard installed at the top of this module refuses every
+    connection to a non-loopback address and every host-name lookup that
+    would ask a DNS server, and records each refusal. Code under test sees
+    the error an offline machine gives; the test fails at teardown, because
+    a test that reaches the network depends on it — slow, flaky, and gone
+    offline. Tests fake the network at the boundary the code uses (the
+    resolver, the HTTP client, the fetch function). Loopback stays open, so
+    tests that serve on localhost keep working. A test marked ``network``
+    (the opt-in live registry tests) may reach the network.
+    """
+    _NETWORK_GUARD["open"] = request.node.get_closest_marker("network") is not None
+    _NETWORK_GUARD["refusals"].clear()
+    yield
+    _NETWORK_GUARD["open"] = False
+    refusals = list(_NETWORK_GUARD["refusals"])
+    _NETWORK_GUARD["refusals"].clear()
+    if refusals:
+        pytest.fail(
+            "test tried to reach the network: " + "; ".join(refusals)
+            + ". Fake the network at the boundary the code uses.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

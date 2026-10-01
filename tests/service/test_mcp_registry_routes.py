@@ -109,6 +109,17 @@ async def test_registry_install_remote(config_path, monkeypatch):
     monkeypatch.setattr(
         "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
     )
+    import durin.agent.mcp_install as mi
+
+    def _unreachable_probe():
+        # The install probes the remote for an OAuth challenge; its made-up
+        # host answers nothing, like an unreachable endpoint.
+        async def request(url):
+            raise ConnectionError(f"{url} unreachable")
+
+        return request
+
+    monkeypatch.setattr(mi, "_default_probe", _unreachable_probe)
     from durin.service.mcp import McpRegistryInstallCommand
 
     res = await McpService().registry_install(

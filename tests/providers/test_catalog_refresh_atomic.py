@@ -23,6 +23,8 @@ def test_refresh_creates_lock_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         catalog_refresh, "_default_fetch", lambda url: json.dumps(fake).encode()
     )
+    # NVIDIA's model list is fetched from its own API: unreachable here.
+    monkeypatch.setattr(catalog_refresh, "fetch_nvidia_model_ids", lambda: None)
     catalog_refresh.refresh_provider_models_cache(tmp_path)
     cache = tmp_path / "provider_models_cache.json"
     assert cache.exists()
@@ -46,6 +48,8 @@ def test_refresh_cache_is_valid_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         catalog_refresh, "_default_fetch", lambda url: json.dumps(fake).encode()
     )
+    # NVIDIA's model list is fetched from its own API: unreachable here.
+    monkeypatch.setattr(catalog_refresh, "fetch_nvidia_model_ids", lambda: None)
     catalog_refresh.refresh_provider_models_cache(tmp_path)
     data = json.loads((tmp_path / "provider_models_cache.json").read_text(encoding="utf-8"))
     assert data["schema_version"] == 1
