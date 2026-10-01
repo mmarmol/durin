@@ -24,6 +24,12 @@ from durin.cli.upgrade import PYPI_DIST_NAME
 runner = CliRunner()
 
 
+def _unwrapped_console() -> Console:
+    """A console wide enough that no path it prints wraps: assertions find
+    each path whole, however long the machine's temp folder makes it."""
+    return Console(width=10_000)
+
+
 def _durin_tree(home: Path) -> Path:
     """A realistic durin home under *home*, and the default install's
     ~/.cache/durin beside it: its telemetry, the model files, the archive,
@@ -265,7 +271,7 @@ def test_an_instance_never_touches_the_default_installs_cache(
     own.mkdir()
     (own / "cli_x_2026-09-09.jsonl").write_text("{}\n", encoding="utf-8")
     before = _tree(cache)
-    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    monkeypatch.setattr("durin.cli.uninstall.console", _unwrapped_console())
 
     result = runner.invoke(app, ["uninstall", "--yes"])
 
@@ -460,7 +466,7 @@ def test_yes_lists_exactly_what_it_removes_before_removing_it(
     (a symlink as the link, its target left alone), and what goes is what
     it named."""
     root, outside = _full_home(fake_home)
-    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    monkeypatch.setattr("durin.cli.uninstall.console", _unwrapped_console())
     entries = set(root.iterdir())
     plan = [path for _group, path, _size in collect_targets(
         keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
@@ -485,7 +491,7 @@ def test_a_path_it_cannot_remove_is_reported(fake_home: Path, monkeypatch: pytes
     stuck = root / "email"
     stuck.mkdir()
     (stuck / "state.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    monkeypatch.setattr("durin.cli.uninstall.console", _unwrapped_console())
     stuck.chmod(0o500)
     try:
         result = runner.invoke(app, ["uninstall", "--yes"])
@@ -614,7 +620,7 @@ def test_a_folder_without_durin_markers_is_refused(
         (folder / name / "mine.txt").write_text("mine", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("DURIN_HOME", str(folder))
-    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    monkeypatch.setattr("durin.cli.uninstall.console", _unwrapped_console())
     before = _tree(tmp_path)
 
     result = runner.invoke(app, ["uninstall", *args], input=answer)
