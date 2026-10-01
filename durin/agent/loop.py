@@ -3154,8 +3154,16 @@ class AgentLoop:
             reset_turn_eager_surface(surface_token)
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
+        # The run's own messages are everything after the prompt it was given,
+        # whatever that prompt's shape: the build merges the current message
+        # into a trailing message of the same role. The current message is
+        # saved on its own, once: a subagent's result was saved above (its
+        # entry in the prompt carries only the runtime context, nothing to
+        # keep), and anything else is the user message it came as.
+        if not is_subagent and isinstance(msg.content, str) and msg.content.strip():
+            session.add_message("user", msg.content)
         self._save_turn(
-            session, all_msgs, 1 + len(history),
+            session, all_msgs, len(messages),
             turn_latency_ms=latency_ms,
             tool_events=tool_events,
         )

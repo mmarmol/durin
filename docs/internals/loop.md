@@ -229,7 +229,13 @@ result, and the wait goes on. The reply to a system message goes to the chat
 its `chat_id` names, in the thread its session key scopes: the loop re-derives
 a Slack `thread_ts`, an email thread and a Telegram forum topic
 (`message_thread_id`) from the key, since the message itself carries no
-channel metadata. An answer carries its
+channel metadata. A system message that starts a turn of its own is saved
+once, as its own entry: a sub-agent's result as the assistant message saved
+before its prompt is built (its entry in the prompt carries only the runtime
+context and is not saved), anything else as a user message; the run's
+messages are saved from the end of the prompt actually built, which is one
+entry shorter when the build merged the message into a trailing one of the
+same role. An answer carries its
 message's `origin` through `pending_answers.resolve`, and the waiting tool
 notes it as the turn's input in the turn's own context
 (`approval.note_turn_input`), so an API client's answer to a question marks
