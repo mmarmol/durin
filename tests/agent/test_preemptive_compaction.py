@@ -809,9 +809,9 @@ def _write_raw_cap(tmp_path, raw: str, *, on_preset: bool):
 _RAW_CAPS = ["NaN", "Infinity", "-Infinity", "1e999", '"300000"', '" 300000 "', '"0"', '"-1"', '"20000"']
 
 
-@pytest.mark.parametrize("raw, expected", zip(
+@pytest.mark.parametrize("raw, expected", list(zip(
     _RAW_CAPS, [256_000, 256_000, 256_000, 256_000, 300_000, 300_000, None, None, 64_000],
-))
+)))
 def test_no_hand_edited_cap_costs_the_rest_of_the_config_or_crashes_the_load(tmp_path, raw, expected):
     """NaN made the loader fall back to the default config, providers and
     presets gone, and Infinity, -Infinity or an overflowing 1e999 raised out
@@ -826,9 +826,9 @@ def test_no_hand_edited_cap_costs_the_rest_of_the_config_or_crashes_the_load(tmp
     assert cfg.agents.defaults.preemptive_compact_max_tokens == expected
 
 
-@pytest.mark.parametrize("raw, expected", zip(
+@pytest.mark.parametrize("raw, expected", list(zip(
     _RAW_CAPS, [None, None, None, None, 300_000, 300_000, 0, 0, 64_000],
-))
+)))
 def test_no_hand_edited_preset_cap_costs_the_rest_of_the_config_or_crashes_the_load(
     tmp_path, raw, expected,
 ):
