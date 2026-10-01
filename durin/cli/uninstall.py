@@ -255,7 +255,7 @@ def register(app: typer.Typer) -> None:
     def uninstall(
         yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
         purge: bool = typer.Option(False, "--purge", help="Also `pip uninstall durin-agent` afterwards."),
-        keep_config: bool = typer.Option(False, "--keep-config", help="Preserve config.json and pairing.json."),
+        keep_config: bool = typer.Option(False, "--keep-config", help="Preserve the config (config.json and config.json.d/) and pairing.json."),
         keep_workspace: bool = typer.Option(False, "--keep-workspace", help="Preserve ~/.durin/workspace/."),
         keep_cache: bool = typer.Option(False, "--keep-cache", help="Preserve ~/.cache/durin/."),
         workspace: str | None = typer.Option(
