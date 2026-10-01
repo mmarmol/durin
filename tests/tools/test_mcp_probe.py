@@ -75,24 +75,62 @@ def _make_http_cfg(url: str, transport: str = "streamableHttp"):
     return MCPServerConfig(type=transport, url=url, tool_timeout=30, enabled_tools=["*"])
 
 
+def _watch_probe_and_transports(monkeypatch) -> tuple[list[str], list[str]]:
+    """Record every probe and every attempt to open one of the SDK's HTTP
+    transports. The probe exists so that an unreachable server never gets as
+    far as the transport, whose task-group cleanup can escape the caller's
+    error handling and crash the event loop; an attempt is refused here."""
+    import mcp.client.sse as sse
+    import mcp.client.streamable_http as streamable_http
+
+    import durin.agent.tools.mcp_connection as mc
+
+    probed: list[str] = []
+    entered: list[str] = []
+    real_probe = mc._probe_http_url
+
+    async def probe(url, **kwargs):
+        probed.append(url)
+        return await real_probe(url, **kwargs)
+
+    def refused(name):
+        def transport(url, *args, **kwargs):
+            entered.append(f"{name}({url})")
+            raise ConnectionError(f"{url} unreachable")
+        return transport
+
+    monkeypatch.setattr(mc, "_probe_http_url", probe)
+    monkeypatch.setattr(streamable_http, "streamable_http_client", refused("streamable_http_client"))
+    monkeypatch.setattr(sse, "sse_client", refused("sse_client"))
+    return probed, entered
+
+
 @pytest.mark.asyncio
-async def test_connect_skips_unreachable_streamable_http():
-    """Unreachable streamableHttp server should be skipped with a warning, no crash."""
+async def test_connect_skips_unreachable_streamable_http(monkeypatch):
+    """Unreachable streamableHttp server should be skipped with a warning, no crash:
+    the probe finds the port closed, and the transport is never opened."""
+    probed, entered = _watch_probe_and_transports(monkeypatch)
     registry = ToolRegistry()
     servers = {"dead": _make_http_cfg("http://127.0.0.1:19999/mcp")}
     stacks = await connect_mcp_servers(servers, registry)
     assert stacks == {}
     assert len(registry._tools) == 0
+    assert probed and set(probed) == {"http://127.0.0.1:19999/mcp"}
+    assert entered == []
 
 
 @pytest.mark.asyncio
-async def test_connect_skips_unreachable_sse():
-    """Unreachable SSE server should be skipped with a warning, no crash."""
+async def test_connect_skips_unreachable_sse(monkeypatch):
+    """Unreachable SSE server should be skipped with a warning, no crash: the
+    probe finds the port closed, and the transport is never opened."""
+    probed, entered = _watch_probe_and_transports(monkeypatch)
     registry = ToolRegistry()
     servers = {"dead": _make_http_cfg("http://127.0.0.1:19999/sse", transport="sse")}
     stacks = await connect_mcp_servers(servers, registry)
     assert stacks == {}
     assert len(registry._tools) == 0
+    assert probed and set(probed) == {"http://127.0.0.1:19999/sse"}
+    assert entered == []
 
 
 @pytest.mark.asyncio
