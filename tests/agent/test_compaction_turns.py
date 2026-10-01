@@ -697,6 +697,8 @@ async def test_status_and_the_footer_measure_against_the_trigger_the_turns_use(t
         session_metadata={"persona": "brief"},
     )
     loop = result["loop"]
+    # The turn's background check after it is not part of this test.
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
     monkeypatch.setattr(loop.consolidator, "estimate_session_prompt_tokens", lambda *_a, **_k: (16_875, "test"))
     monkeypatch.setattr(footer, "_token_estimate", lambda _session: 16_875)
 
@@ -789,11 +791,7 @@ async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(t
         channel="system", sender_id="subagent", chat_id=key,
         content="the sub-agent found three files", metadata={"subagent_task_id": "t-1"},
     ))
-    for coro in background:
-        if getattr(getattr(coro, "cr_code", None), "co_name", "") == "maybe_consolidate_by_tokens":
-            await coro
-        else:
-            coro.close()
+    await _settle(background)
 
     assert windows == [64_000]
     assert "You are Terse" in systems[0]
@@ -807,6 +805,9 @@ async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(t
         return await real_archive(messages)
 
     consolidator.archive = _archive  # type: ignore[method-assign]
+    # The follow-up's own check before it is what this test watches; the one
+    # it schedules after it is not part of this test.
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
     await loop.process_direct("turn 6: a short follow-up", session_key=key)
     assert archived == []
 
