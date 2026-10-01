@@ -261,7 +261,6 @@ async def test_a_small_window_session_keeps_answering_as_its_summary_grows(tmp_p
     on every turn failed, each after a forced compaction that could not make
     room. In a prompt the summary now takes a quarter of that room at most."""
     from durin.agent.runner import input_budget_tokens
-
     from durin.utils.helpers import estimate_text_tokens
 
     window = _window_leaving(tmp_path, 6_000)
@@ -736,7 +735,10 @@ async def test_a_failed_exchange_is_not_summarized(tmp_path):
     leaves the user's message and a placeholder in the session. Compaction
     summarized them like any exchange, and every block they took pushed an
     older, real one out of the bounded summary."""
-    from durin.agent.runner import _PERSISTED_MODEL_ERROR_PLACEHOLDER, _PERSISTED_OVERFLOW_PLACEHOLDER
+    from durin.agent.runner import (
+        _PERSISTED_MODEL_ERROR_PLACEHOLDER,
+        _PERSISTED_OVERFLOW_PLACEHOLDER,
+    )
     from durin.utils.prompt_templates import render_template
 
     def _failed(i: int, placeholder: str) -> list[dict[str, Any]]:
