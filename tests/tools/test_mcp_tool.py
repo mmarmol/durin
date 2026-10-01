@@ -22,6 +22,16 @@ from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import MCPServerConfig
 
 
+@pytest.fixture(autouse=True)
+def _no_connect_backoff(monkeypatch):
+    """A server that cannot connect is retried three times with 1+2+4 s of
+    backoff; the servers here that fail do so on purpose, so retry without
+    waiting."""
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
+
+
 class _FakeTextContent:
     def __init__(self, text: str) -> None:
         self.text = text

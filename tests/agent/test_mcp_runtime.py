@@ -16,6 +16,16 @@ from durin.bus.queue import MessageBus
 from durin.config.schema import MCPServerConfig
 
 
+@pytest.fixture(autouse=True)
+def _no_connect_backoff(monkeypatch):
+    """A server that cannot connect is retried three times with 1+2+4 s of
+    backoff; the servers here that fail do so on purpose, so retry without
+    waiting."""
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
+
+
 def _loop(tmp_path: Path, mcp_servers: dict) -> AgentLoop:
     bus = MessageBus()
     provider = MagicMock()

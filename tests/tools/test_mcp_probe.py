@@ -9,6 +9,16 @@ import pytest
 from durin.agent.tools.mcp import _probe_http_url, connect_mcp_servers
 from durin.agent.tools.registry import ToolRegistry
 
+
+@pytest.fixture(autouse=True)
+def _no_connect_backoff(monkeypatch):
+    """A server that cannot connect is retried three times with 1+2+4 s of
+    backoff; the servers here fail on purpose, so retry without waiting."""
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
+
+
 # ---------------------------------------------------------------------------
 # _probe_http_url unit tests
 # ---------------------------------------------------------------------------
@@ -36,9 +46,20 @@ async def test_probe_returns_false_for_closed_port():
 
 
 @pytest.mark.asyncio
-async def test_probe_uses_default_port_for_http():
-    """When no port in URL, should default to 80 (will fail -> False)."""
+async def test_probe_uses_default_port_for_http(monkeypatch):
+    """When no port in URL, should default to 80 (will fail -> False).
+
+    The connection is faked at the probe's boundary: the host name is made
+    up, and resolving it would be a real DNS lookup."""
+    dialed: list[tuple[str, int]] = []
+
+    async def _refused(host, port, *args, **kwargs):
+        dialed.append((host, port))
+        raise ConnectionRefusedError(f"{host}:{port} refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", _refused)
     assert await _probe_http_url("http://unreachable-host.test/mcp") is False
+    assert dialed == [("unreachable-host.test", 80)]
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +106,8 @@ async def test_probe_not_called_for_stdio():
         called = True
         return await original_probe(url, **kw)
 
-    with patch("durin.agent.tools.mcp._probe_http_url", _spy_probe):
+    # The connection module imports the probe by name: patch that binding.
+    with patch("durin.agent.tools.mcp_connection._probe_http_url", _spy_probe):
         from durin.config.schema import MCPServerConfig
 
         cfg = MCPServerConfig(
