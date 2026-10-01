@@ -1760,7 +1760,12 @@ def profile_big_model(rng: random.Random) -> Scenario:
     plans = _Plans(rng)
     loop_model = ModelSpec("default", LOOP_MODEL, 32_768, 4_096)
     big = ModelSpec("big", "big-model", 1_000_000, 8_192, cap=rng.choice((64_000, 64_000, 80_000)))
-    turns = [plans.user(rng.randint(4_000, 8_000), reply=rng.randint(100, 300)) for _ in range(rng.randint(9, 11))]
+    sizes = [rng.randint(4_000, 8_000) for _ in range(rng.randint(9, 11))]
+    # Past the big model's cap, its trigger, so compaction runs: nine short
+    # turns alone can stay under an 80,000 cap.
+    while sum(sizes) < big.cap + 8_000:
+        sizes.append(rng.randint(4_000, 8_000))
+    turns = [plans.user(size, reply=rng.randint(100, 300)) for size in sizes]
     turns[0].before.append(("persona", "wide"))
     return Scenario(seed=0, profile="big_model", loop_model=loop_model, presets=[big],
                     personas={"wide": (60, "big")}, summary_tokens=rng.randint(150, 400), turns=turns)
