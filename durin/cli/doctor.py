@@ -1174,11 +1174,15 @@ def check_model_limits() -> CheckResult:
 def check_embedding_model() -> CheckResult:
     """Validate ``config.memory.embedding.model`` against fastembed's catalog.
 
-    Three outcomes, with actionable messages:
+    Outcomes, with actionable messages:
 
     - ``memory.enabled = False`` → ``ok``, "not enabled, vector retrieval off".
-    - memory enabled but fastembed not importable → ``warn``, points to
-      ``check_optional_extra`` which already flags the missing extra.
+    - memory enabled but the ``[memory]`` extra missing → doctor installs it
+      here, as its own explicit step, when ``install.auto_install_extras``
+      allows, and the row says what happened: installed (restart the
+      gateway), or the failure with the manual command. With the setting off
+      the row reports the extra as not installed, with the fix. Reading the
+      catalog to find out never installs anything.
     - fastembed present and model in catalog → ``ok`` with model + dim.
     - fastembed present but model NOT in catalog → ``fail`` with the
       list of supported models (the same actionable message
@@ -1209,15 +1213,9 @@ def check_embedding_model() -> CheckResult:
             category="state",
         )
     try:
-        catalog = list_supported_models()
-    except RuntimeError:
-        # fastembed not installed — the dedicated extras checks already
-        # cover this; we don't double-fail.
-        return CheckResult(
-            "embedding model", "ok",
-            f"configured as {model_name} ([memory] extra not installed)",
-            category="state",
-        )
+        catalog = list_supported_models(install=False)
+    except RuntimeError as exc:
+        return _install_memory_extra(cfg, model_name, exc)
     if model_name in catalog:
         dim = catalog[model_name].get("dim", "?")
         size = catalog[model_name].get("size_in_GB")
@@ -1236,6 +1234,47 @@ def check_embedding_model() -> CheckResult:
             "Set memory.embedding.model to one of the wizard options, or "
             "rerun `durin onboard` and pick a model from the menu."
         ),
+        category="state",
+    )
+
+
+def _install_memory_extra(cfg: "Config", model_name: str, exc: RuntimeError) -> CheckResult:
+    """Vector memory is on but fastembed's catalog did not load: install the
+    ``[memory]`` extra as doctor's own step when ``install.auto_install_extras``
+    allows, and report the outcome in the embedding-model row either way."""
+    from durin.extras import ensure_extra
+
+    res = ensure_extra("memory_vector", config=cfg)
+    if res.status == "installed":
+        return CheckResult(
+            "embedding model", "warn",
+            f"installed the [memory] extra for {model_name}; "
+            "restart the gateway to activate it",
+            fix="`durin gateway restart`",
+            category="state",
+        )
+    if res.status == "disabled":
+        return CheckResult(
+            "embedding model", "warn",
+            f"configured as {model_name}, but the [memory] extra is not installed "
+            "(install.auto_install_extras is off)",
+            fix=f"`durin doctor --install-missing -y`, or by hand. {res.message}",
+            category="state",
+        )
+    if res.status == "failed":
+        from durin.cli.upgrade import install_hint
+
+        return CheckResult(
+            "embedding model", "warn",
+            f"could not install the [memory] extra: {res.message or 'the installer failed'}",
+            fix=f"`durin doctor --install-missing -y`, or by hand: {install_hint(['memory'])}",
+            category="state",
+        )
+    # "present": fastembed imports, yet its catalog still did not load.
+    return CheckResult(
+        "embedding model", "warn",
+        f"fastembed is installed but its model catalog could not be read: "
+        f"{exc.__cause__ or exc}",
         category="state",
     )
 
@@ -1770,6 +1809,11 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_default_model_resolvable())
     report.add(check_secret_refs())
     report.add(check_executable("git", required=False, hint="Install git so `durin upgrade` can pull editable installs."))
+    # The embedding-model check installs a missing [memory] extra when
+    # install.auto_install_extras allows. Run it before the extras probes so
+    # their rows describe the state after that install (and --install-missing
+    # does not install it again); its row is filed in its usual place below.
+    embedding_model = check_embedding_model()
     report.add(check_optional_extra("fastembed", extra="memory", purpose="vector recall over memory/"))
     report.add(check_optional_extra("lancedb", extra="memory", purpose="vector index storage"))
     report.add(check_cross_encoder_dep())
@@ -1802,7 +1846,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_extras_drift())
     report.add(check_specific_models())
     report.add(check_model_limits())
-    report.add(check_embedding_model())
+    report.add(embedding_model)
     # Smoke-test the configured models actually load + work. Goes beyond
     # `check_embedding_model` which only validates the id against the catalog.
     report.add(check_embedding_model_loads())

@@ -362,7 +362,17 @@ Check categories and representative checks:
   cross-encoder available when enabled; STT packages and model cache.
 - **state** — embedding model in catalog; embedding model actually loads and
   embeds a probe vector; cross-encoder loads and scores a pair; memory store
-  document counts; `~/.cache/durin` byte count (warn at > 10 GB).
+  document counts; `~/.cache/durin` byte count (warn at > 10 GB). With vector
+  memory on and the `[memory]` extra missing, the embedding-model check
+  installs the extra as doctor's own step (`ensure_extra`, gated by
+  `install.auto_install_extras`) and its row reports the outcome: installed,
+  restart the gateway; or the failure with the manual command; or, with the
+  setting off, not installed with the fix (`durin doctor --install-missing -y`
+  or the pipx/uv command). Reading the catalog never installs anything
+  (`list_supported_models(install=False)`), so no install happens unreported.
+  `run_checks` runs this check before the extras probes, so their rows
+  describe the state after that install and `--install-missing` does not
+  repeat it; its row stays in the state group.
 - **services** — when `gateway.daemon=true`, the PID file points at a live
   process; when `gateway.webui_enabled=true`, the dashboard HTTP endpoint
   returns 2xx.

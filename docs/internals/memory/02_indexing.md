@@ -141,6 +141,15 @@ Production code obtains the provider via
 constructing `FastembedProvider` directly is reserved for tests and
 benchmark scripts.
 
+Reading fastembed's catalog (`list_supported_models`) with the `[memory]`
+extra missing installs the extra first, as `install.auto_install_extras`
+allows, because the callers that use vector memory reach the catalog there:
+a provider checking its model, a model's dimensions. A caller that only
+checks — `durin doctor`, the onboarding wizard's model probe — reads it with
+`install=False`, which raises instead of installing. Doctor then installs the
+extra as its own reported step; the wizard leaves it to the install `durin
+onboard` offers when the wizard ends.
+
 ### Embedding text composers
 
 Each indexable type has exactly one composer. Both composers apply a 1500-character budget and a `\n\n` joiner, placing most-distilled signal first.

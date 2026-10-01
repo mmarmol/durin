@@ -163,7 +163,7 @@ def _rss_bytes() -> int | None:
 _CATALOG_CACHE: dict[str, dict[str, Any]] | None = None
 
 
-def list_supported_models() -> dict[str, dict[str, Any]]:
+def list_supported_models(*, install: bool = True) -> dict[str, dict[str, Any]]:
     """Return fastembed's supported models keyed by model name.
 
     Registers durin's custom models (:data:`_CUSTOM_MODELS`) with
@@ -172,15 +172,25 @@ def list_supported_models() -> dict[str, dict[str, Any]]:
     the same view.
 
     Raises ``RuntimeError`` if fastembed is not installed (the
-    ``[memory]`` extra is missing). The cache is process-lifetime; the
-    catalog never changes inside one fastembed version.
+    ``[memory]`` extra is missing). By default the missing extra is
+    installed first, as ``install.auto_install_extras`` allows: the
+    callers that use vector memory reach the catalog through here. A
+    caller that only checks (doctor, the onboarding wizard's probe)
+    passes ``install=False``, so asking never installs anything. The
+    cache is process-lifetime; the catalog never changes inside one
+    fastembed version.
     """
     global _CATALOG_CACHE
     if _CATALOG_CACHE is not None:
         return _CATALOG_CACHE
     try:
         from fastembed import TextEmbedding  # type: ignore[import-not-found]
-    except ImportError:
+    except ImportError as missing:
+        if not install:
+            raise RuntimeError(
+                "fastembed is required for vector retrieval. "
+                "Install the memory extra: pip install durin-agent[memory]"
+            ) from missing
         # Cold path (extra missing): load the config so the auto-install gate
         # can see install.auto_install_extras.
         from durin.config.loader import load_config

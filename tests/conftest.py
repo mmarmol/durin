@@ -550,6 +550,69 @@ def _no_outbound_network(request):
         )
 
 
+@pytest.fixture
+def memory_extra_missing(monkeypatch):
+    """A host without the ``[memory]`` extra, whose extras installer records.
+
+    fastembed and lancedb read as not installed: ``None`` in ``sys.modules``
+    makes every import of them fail, however the code asks. The command
+    ``ensure_extra`` builds is a stand-in, and the ``subprocess.run`` it calls
+    records it instead of running it, in place of the refusal
+    ``_no_package_installs`` puts there; a successful "install" makes minimal
+    fastembed and lancedb modules importable, as a real install would. Any
+    other command still meets that refusal. A test sets
+    ``installer.succeeds = False`` to model a failing install, and reads the
+    commands run from ``installer.calls``.
+    """
+    import subprocess
+    import sys
+    import types
+
+    import durin.extras as extras
+    import durin.memory.embedding as embedding
+
+    class TextEmbedding:
+        """The part of fastembed's API durin calls."""
+
+        @staticmethod
+        def list_supported_models():
+            return [{"model": "intfloat/multilingual-e5-small", "dim": 384, "size_in_GB": 0.45}]
+
+        @staticmethod
+        def add_custom_model(**kwargs):
+            pass
+
+        def __init__(self, model_name, **kwargs):
+            self.model_name = model_name
+
+        def embed(self, texts, batch_size=32):
+            for _ in texts:
+                yield [0.0] * 384
+
+    fastembed = types.ModuleType("fastembed")
+    fastembed.TextEmbedding = TextEmbedding
+    lancedb = types.ModuleType("lancedb")
+    installer = types.SimpleNamespace(calls=[], succeeds=True)
+    refused_run = extras.subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if not (isinstance(cmd, list) and cmd[:1] == ["durin-test-installer"]):
+            return refused_run(cmd, *args, **kwargs)
+        installer.calls.append(list(cmd))
+        if not installer.succeeds:
+            raise subprocess.CalledProcessError(1, cmd, stderr="simulated install failure")
+        sys.modules["fastembed"] = fastembed
+        sys.modules["lancedb"] = lancedb
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(embedding, "_CATALOG_CACHE", None)
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    monkeypatch.setitem(sys.modules, "lancedb", None)
+    monkeypatch.setattr(extras, "_installer_cmd", lambda specs: ["durin-test-installer", *specs])
+    monkeypatch.setattr(extras.subprocess, "run", run)
+    return installer
+
+
 @pytest.fixture(autouse=True)
 def _restore_loguru_durin_activation():
     """Keep loguru's ``durin`` namespace enabled across test boundaries.
