@@ -24,17 +24,10 @@ from durin.cli.upgrade import PYPI_DIST_NAME
 runner = CliRunner()
 
 
-@pytest.fixture
-def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Override `Path.home()` so the uninstall walks our fixtures, not the real home."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setattr("durin.cli.uninstall._home", lambda: home)
-    # The durin data root resolves via DURIN_HOME; point it at the fake tree
-    # (the kit cache still derives from _home()).
-    monkeypatch.setenv("DURIN_HOME", str(home / ".durin"))
-
-    # Build a realistic state tree under the fake home.
+def _durin_tree(home: Path) -> Path:
+    """A realistic durin home under *home*, and the default install's
+    ~/.cache/durin beside it: its telemetry, the model files, the archive,
+    and a file uninstall never lists."""
     (home / ".durin").mkdir()
     (home / ".durin" / "config.json").write_text('{"x":1}', encoding="utf-8")
     (home / ".durin" / "config.json.bak").write_text("{}", encoding="utf-8")
@@ -43,12 +36,38 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".durin" / "sessions").mkdir()
     (home / ".durin" / "history").mkdir()
     (home / ".durin" / "media").mkdir()
-    (home / ".cache" / "durin").mkdir(parents=True)
-    (home / ".cache" / "durin" / "telemetry").mkdir()
-    (home / ".cache" / "durin" / "telemetry" / "log.jsonl").write_text("{}\n", encoding="utf-8")
-    (home / ".cache" / "durin" / "models").mkdir()
-    (home / ".cache" / "durin" / "archive").mkdir()
+    cache = home / ".cache" / "durin"
+    (cache / "telemetry").mkdir(parents=True)
+    (cache / "telemetry" / "log.jsonl").write_text("{}\n", encoding="utf-8")
+    (cache / "models").mkdir()
+    (cache / "models" / "weights.bin").write_bytes(b"\x00\x01")
+    (cache / "archive").mkdir()
+    (cache / "archive" / "payload.json").write_text("{}", encoding="utf-8")
+    (cache / "locomo10.json").write_text("[]", encoding="utf-8")
     return home
+
+
+@pytest.fixture
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An instance selected with DURIN_HOME, run as a throwaway user: HOME is
+    a temp directory too, holding the default install's ~/.cache/durin, so
+    nothing a run removes can be the real home's."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DURIN_HOME", str(home / ".durin"))
+    return _durin_tree(home)
+
+
+@pytest.fixture
+def default_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The default install, no DURIN_HOME, run as a throwaway user under a
+    temp HOME."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("DURIN_HOME", raising=False)
+    return _durin_tree(home)
 
 
 def test_default_target_groups_lists_expected_paths() -> None:
@@ -72,14 +91,14 @@ def test_collect_targets_skips_missing_paths(fake_home: Path) -> None:
     assert not any(p.endswith(".durin/cron") for p in str_paths)
 
 
-def test_collect_targets_includes_existing_paths(fake_home: Path) -> None:
+def test_collect_targets_includes_existing_paths(default_install: Path) -> None:
     targets = collect_targets(
         keep_config=False, keep_workspace=False, keep_cache=False, workspace=None
     )
     str_paths = {str(p) for _g, p, _s in targets}
-    assert str(fake_home / ".durin" / "config.json") in str_paths
-    assert str(fake_home / ".durin" / "workspace") in str_paths
-    assert str(fake_home / ".cache" / "durin" / "telemetry") in str_paths
+    assert str(default_install / ".durin" / "config.json") in str_paths
+    assert str(default_install / ".durin" / "workspace") in str_paths
+    assert str(default_install / ".cache" / "durin" / "telemetry") in str_paths
 
 
 def test_collect_targets_honors_keep_config(fake_home: Path) -> None:
@@ -100,15 +119,15 @@ def test_collect_targets_honors_keep_workspace(fake_home: Path) -> None:
     assert str(fake_home / ".durin" / "workspace") not in str_paths
 
 
-def test_collect_targets_honors_keep_cache(fake_home: Path) -> None:
+def test_collect_targets_honors_keep_cache(default_install: Path) -> None:
     targets = collect_targets(
         keep_config=False, keep_workspace=False, keep_cache=True, workspace=None
     )
     str_paths = {str(p) for _g, p, _s in targets}
-    assert str(fake_home / ".cache" / "durin" / "telemetry") not in str_paths
+    assert str(default_install / ".cache" / "durin" / "telemetry") not in str_paths
 
 
-def test_run_uninstall_yes_actually_deletes(fake_home: Path) -> None:
+def test_run_uninstall_yes_actually_deletes(default_install: Path) -> None:
     rc = run_uninstall(
         assume_yes=True,
         purge=False,
@@ -118,9 +137,9 @@ def test_run_uninstall_yes_actually_deletes(fake_home: Path) -> None:
         workspace=None,
     )
     assert rc == 0
-    assert not (fake_home / ".durin" / "config.json").exists()
-    assert not (fake_home / ".durin" / "workspace").exists()
-    assert not (fake_home / ".cache" / "durin" / "telemetry").exists()
+    assert not (default_install / ".durin" / "config.json").exists()
+    assert not (default_install / ".durin" / "workspace").exists()
+    assert not (default_install / ".cache" / "durin" / "telemetry").exists()
 
 
 def test_run_uninstall_keep_config_preserves_file(fake_home: Path) -> None:
@@ -228,6 +247,60 @@ def test_instance_telemetry_is_collected_with_the_cache_group(fake_home: Path) -
     str_paths = {str(p) for _g, p, _s in kept}
     assert str(instance_telemetry) not in str_paths
     assert str(fake_home / ".cache" / "durin" / "telemetry") not in str_paths
+
+
+def test_an_instance_never_touches_the_default_installs_cache(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uninstalling an instance selected with DURIN_HOME also removed
+    ~/.cache/durin's telemetry, model files and archive, which are the
+    default install's whatever DURIN_HOME says. Now it removes the
+    instance's own telemetry and leaves ~/.cache/durin as it was, naming
+    what it leaves there and why."""
+    cache = fake_home / ".cache" / "durin"
+    own = fake_home / ".durin" / "telemetry"
+    own.mkdir()
+    (own / "cli_x_2026-09-09.jsonl").write_text("{}\n", encoding="utf-8")
+    before = _tree(cache)
+    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+
+    result = runner.invoke(app, ["uninstall", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert _tree(cache) == before
+    assert not own.exists()
+    left = result.output[result.output.index("Left in place"):]
+    assert f"{cache / 'telemetry'} — the default install's telemetry" in left
+    assert f"{cache / 'models'} — model files shared by every install on this machine" in left
+    assert f"{cache / 'archive'} — the default install's archive" in left
+
+
+def test_the_default_install_removes_its_caches(default_install: Path) -> None:
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    # Its telemetry, the model files and the archive; nothing else there.
+    assert sorted(p.name for p in (default_install / ".cache" / "durin").iterdir()) == ["locomo10.json"]
+
+
+@pytest.mark.parametrize("install", ["default_install", "fake_home"])
+def test_keep_cache_keeps_the_caches(install: str, request: pytest.FixtureRequest) -> None:
+    home = request.getfixturevalue(install)
+    own = home / ".durin" / "telemetry"
+    own.mkdir()
+    (own / "cli_x_2026-09-09.jsonl").write_text("{}\n", encoding="utf-8")
+    cache = home / ".cache" / "durin"
+    before = (_tree(cache), _tree(own))
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=True, workspace=None,
+    )
+
+    assert rc == 0
+    assert (_tree(cache), _tree(own)) == before
+    assert not (home / ".durin" / "sessions").exists()
 
 
 def _split_config(fake_home: Path) -> dict[str, bytes]:

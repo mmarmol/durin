@@ -331,7 +331,8 @@ Flags:
   credentials the config's `${secret:…}` references and sign-ins resolve
   against (`secrets.json`, `api_tokens.json`, `oauth/`); everything else
   still goes.
-- `--keep-cache` — preserve `~/.cache/durin/`.
+- `--keep-cache` — preserve the caches: the install's telemetry and, for the
+  default install, the rest of `~/.cache/durin/` it would remove.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
 The command prints every path it will remove, grouped, with its size, before
@@ -353,16 +354,21 @@ and the command exits 1.
 | `~/.durin/pairing.json` | yes | `--keep-config` |
 | `~/.durin/secrets.json`, `api_tokens.json`, `oauth/` (the credentials) | yes | `--keep-config` |
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
-| `~/.cache/durin/telemetry/` | yes | `--keep-cache` |
-| `$DURIN_HOME/telemetry/` (instances selected with `DURIN_HOME`) | yes | `--keep-cache` |
-| `~/.cache/durin/models/` | yes | `--keep-cache` |
-| `~/.cache/durin/archive/` | yes | `--keep-cache` |
+| `~/.cache/durin/telemetry/` (the default install's telemetry) | by the default install only | `--keep-cache` |
+| `$DURIN_HOME/telemetry/` (an instance's telemetry) | yes | `--keep-cache` |
+| `~/.cache/durin/models/` (model files shared by every install on the machine) | by the default install only | `--keep-cache` |
+| `~/.cache/durin/archive/` (the default install's archive) | by the default install only | `--keep-cache` |
 | everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, the STT and OCR model caches under `models/`, …) | yes | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed
 automatically — many users keep their workspace under a project repo and
 don't want durin to touch it. Pass `--workspace <path>` to opt-in.
+
+An instance selected with `DURIN_HOME` removes its own home and its own
+telemetry, and never touches `~/.cache/durin/`: that belongs to the default
+install, and the model files there are shared by every install on the
+machine. Its plan lists what it leaves there, and why.
 
 ---
 

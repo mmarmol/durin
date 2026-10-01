@@ -35,8 +35,32 @@ class TargetGroup:
     paths: tuple[Path, ...]
 
 
-def _home() -> Path:
-    return Path.home()
+# What ~/.cache/durin holds that uninstall knows, and why an instance selected
+# with DURIN_HOME leaves each: none of it is the instance's own.
+_DEFAULT_CACHE = (
+    ("telemetry", "the default install's telemetry"),
+    ("models", "model files shared by every install on this machine"),
+    ("archive", "the default install's archive"),
+)
+
+
+def _default_cache() -> tuple[Path, bool]:
+    """``~/.cache/durin``, and whether this install owns it: the default
+    install does, its telemetry lives there; an instance selected with
+    DURIN_HOME keeps its telemetry in its own home and owns none of it."""
+    from durin.config.paths import get_telemetry_dir
+
+    cache = Path.home() / ".cache" / "durin"
+    return cache, get_telemetry_dir() == cache / "telemetry"
+
+
+def left_in_place() -> list[tuple[Path, str]]:
+    """What uninstall leaves in ``~/.cache/durin`` for an instance, with why;
+    nothing for the default install, which removes it."""
+    cache, owned = _default_cache()
+    if owned:
+        return []
+    return [(cache / name, why) for name, why in _DEFAULT_CACHE if (cache / name).exists()]
 
 
 def _config_paths(durin_home: Path) -> tuple[Path, ...]:
@@ -73,19 +97,20 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
     explicitly. Raises ``OSError`` when the durin home cannot be listed.
     """
     from durin.config.home import durin_home as _durin_home_root
+    from durin.config.paths import get_telemetry_dir
 
-    home = _home()
     durin_home = _durin_home_root()
-    cache = home / ".cache" / "durin"
+    cache, owned = _default_cache()
 
     config_paths = _config_paths(durin_home)
     workspace_paths = (durin_home / "workspace",)
-    cache_paths = (
-        cache / "telemetry",
+    # This install's own telemetry, wherever it lives, and the rest of
+    # ~/.cache/durin only when that is this install's.
+    cache_paths = tuple(dict.fromkeys((
+        get_telemetry_dir(),
         durin_home / "telemetry",
-        cache / "models",
-        cache / "archive",
-    )
+        *((cache / "models", cache / "archive") if owned else ()),
+    )))
     # Everything else in the durin home, whatever its name: a list of known
     # names leaves behind whatever durin writes under a name it lacks.
     claimed = {*config_paths, *workspace_paths, *cache_paths}
@@ -177,23 +202,27 @@ def collect_targets(
     return out
 
 
-def _render_plan(targets: list[tuple[TargetGroup, Path, int]]) -> None:
-    if not targets:
+def _render_plan(targets: list[tuple[TargetGroup, Path, int]], left: list[tuple[Path, str]]) -> None:
+    if targets:
+        table = Table(title="durin uninstall plan", show_lines=False)
+        table.add_column("Group")
+        table.add_column("Path")
+        table.add_column("Size", justify="right")
+        total = 0
+        for group, path, size in targets:
+            shown = f"{path} -> {os.readlink(path)} (the link only)" if path.is_symlink() else str(path)
+            # Escaped: a name with brackets would otherwise be read as markup
+            # and listed without them.
+            table.add_row(group.name, escape(shown), _format_bytes(size))
+            total += size
+        table.add_row("[bold]Total[/bold]", "", f"[bold]{_format_bytes(total)}[/bold]")
+        console.print(table)
+    else:
         console.print("[green]Nothing to do — no durin state found.[/green]")
-        return
-    table = Table(title="durin uninstall plan", show_lines=False)
-    table.add_column("Group")
-    table.add_column("Path")
-    table.add_column("Size", justify="right")
-    total = 0
-    for group, path, size in targets:
-        shown = f"{path} -> {os.readlink(path)} (the link only)" if path.is_symlink() else str(path)
-        # Escaped: a name with brackets would otherwise be read as markup and
-        # listed without them.
-        table.add_row(group.name, escape(shown), _format_bytes(size))
-        total += size
-    table.add_row("[bold]Total[/bold]", "", f"[bold]{_format_bytes(total)}[/bold]")
-    console.print(table)
+    if left:
+        console.print("Left in place — DURIN_HOME selects an instance, and these are not its own:")
+        for path, why in left:
+            console.print(f"  {escape(str(path))} — {why}")
 
 
 def _pip_uninstall_spawn() -> None:
@@ -243,11 +272,12 @@ def run_uninstall(
             keep_cache=keep_cache,
             workspace=workspace,
         )
+        left = left_in_place()
     except OSError as e:
         # Without the home's entries the plan would be incomplete.
         console.print(f"[red]Could not list what to remove: {e}[/red] Nothing was removed.")
         return 1
-    _render_plan(targets)
+    _render_plan(targets, left)
     if not targets and not purge:
         return 0
     if not assume_yes:
