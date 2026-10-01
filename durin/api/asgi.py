@@ -835,9 +835,11 @@ def build_gateway_http_app(
                 return _problem_response(
                     NotFoundError("webui thread not found", details={"key": key})
                 )
-        # Resolve the active persona for this session and include it in the payload.
+        # The persona the session's turns run with, resolved as one of its
+        # turns that brings no persona of its own resolves it: the channel and
+        # chat its key names, a cron run's recorded persona, the defaults.
         from durin.config.loader import load_config
-        from durin.personas.resolve import resolve_active_persona_name
+        from durin.personas.resolve import channel_and_chat_of, session_persona_name
 
         raw_session = sm.read_session_file(key) if sm is not None else None
         session_metadata = (raw_session or {}).get("metadata") or {}
@@ -845,7 +847,8 @@ def build_gateway_http_app(
             cfg = load_config()
         except Exception:
             cfg = None
-        data["persona"] = resolve_active_persona_name(cfg, session_metadata, None)
+        key_channel, key_chat = channel_and_chat_of(key)
+        data["persona"] = session_persona_name(cfg, session_metadata, channel=key_channel, chat_id=key_chat)
         return JSONResponse({"data": data})
 
     # -- WebSocket chat endpoint --------------------------------------------

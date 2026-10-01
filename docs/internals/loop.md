@@ -238,7 +238,9 @@ records them on the session (`turn_overrides` in its metadata) and a turn
 given neither clears them. A cron job's turn is given the job's own, so a
 sub-agent's or a background workflow's result that lands on the run's
 session later runs as the job's turn did. Otherwise they are the session's
-persona's, resolved as BUILD resolves them. Like BUILD, it reads the session
+persona's, resolved as BUILD resolves them. The persona's name comes from
+`durin.personas.resolve.session_persona_name`, which the webui's thread view
+shows as the session's persona too. Like BUILD, it reads the session
 summary after its check, so a compaction that check ran is summarized in the
 prompt it builds. It is saved
 once, as its own entry: a sub-agent's result as the assistant message saved

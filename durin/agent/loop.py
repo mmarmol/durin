@@ -505,9 +505,6 @@ class AgentLoop:
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
-    # The model and persona the session's latest turn was given for itself
-    # (a cron job's own), as {"model_preset": ref, "persona": name}.
-    _TURN_OVERRIDES_KEY = "turn_overrides"
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
@@ -1937,14 +1934,15 @@ class AgentLoop:
         (a cron job's own) when it was given any, else the session's persona,
         each resolved as BUILD resolves them: a cron run's session gets the
         system messages of what its turn started (a sub-agent's result, a
-        background workflow's), and those turns run as the job's did."""
-        given = session.metadata.get(self._TURN_OVERRIDES_KEY)
-        if not isinstance(given, dict):
-            given = {}
-        soul_body, model_ref = self._active_persona(
-            session, given.get("persona"), channel=channel, chat_id=chat_id,
-        )
-        return soul_body, given.get("model_preset") or model_ref
+        background workflow's), and those turns run as the job's did. The
+        name is ``session_persona_name``'s, which the webui's thread view
+        shows as well."""
+        from durin.personas.resolve import session_persona_name, session_turn_overrides
+        from durin.workflow.persona_resolve import resolve_persona
+
+        name = session_persona_name(self.app_config, session.metadata, channel=channel, chat_id=chat_id)
+        soul_body, model_ref, _temperature = resolve_persona(self.app_config, name, self.workspace)
+        return soul_body, session_turn_overrides(session.metadata).get("model_preset") or model_ref
 
     def _build_initial_messages(
         self,
@@ -3968,15 +3966,17 @@ class AgentLoop:
         # What this turn was given for itself stays on its session for the
         # turns that bring nothing of their own (_session_persona), until a
         # turn that is given nothing puts the session back on its persona.
+        from durin.personas.resolve import TURN_OVERRIDES_KEY
+
         given = {
             name: value
             for name, value in (("model_preset", ctx.model_preset_override), ("persona", ctx.persona_override))
             if value
         }
         if given:
-            ctx.session.metadata[self._TURN_OVERRIDES_KEY] = given
+            ctx.session.metadata[TURN_OVERRIDES_KEY] = given
         else:
-            ctx.session.metadata.pop(self._TURN_OVERRIDES_KEY, None)
+            ctx.session.metadata.pop(TURN_OVERRIDES_KEY, None)
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
             replay_max_messages=self._max_messages,

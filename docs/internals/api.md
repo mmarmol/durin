@@ -195,7 +195,13 @@ rejected with a `validation_failed` problem response before the service is
 even called. When no display transcript exists (non-websocket sessions), the
 endpoint falls back to converting the raw session history instead — see
 [channels.md](channels.md) for that path — and that fallback payload always
-carries `prevCursor: null` since it is not byte-paged.
+carries `prevCursor: null` since it is not byte-paged. Either way the payload's
+`data.persona` names the persona the session's turns run with, resolved as a
+turn of the session that brings no persona of its own resolves it
+(`session_persona_name` in `durin.personas.resolve`, which the loop uses for a
+system message's turn): the persona a cron run's turn was given (recorded on
+its session as `turn_overrides`), else the session's pick, the chat map and
+channel default of the channel and chat its key names, then the global default.
 
 Display-transcript appends are buffered: the WS channel enqueues each streamed
 event into a process-wide `TranscriptWriter`, which batches them to disk with
