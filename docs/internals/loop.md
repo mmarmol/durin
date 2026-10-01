@@ -976,8 +976,10 @@ Two metadata splits matter:
   context and task state included, the decision log already cut to fit the
   message, see below) leave of the turn model's input budget
   (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks are
-  left out first, after a line saying so, and it never makes the turn too
-  large to send whatever history goes. On a small window the whole
+  left out first, after a line saying so, and the head block carrying the
+  paths of evicted blocks goes last, so those paths outlive the cut as they
+  outlive the eviction; it never makes the turn too large to send whatever
+  history goes. On a small window the whole
   projection alone could otherwise leave a turn no room, or no turn room to
   be sent at all. The compaction probe measures the summary the same way,
   framed as the loop frames it (`pending_summary_for_session`), with its

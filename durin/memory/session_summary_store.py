@@ -358,8 +358,10 @@ def fit_summary_to_tokens(text: str, max_tokens: int) -> str:
     A frame around the blocks (a first line ``=== … ===``, and an end line
     ``=== END … ===`` with what follows it) is kept whole. The newest blocks
     are kept whole while they fit, after a line saying older ones were left
-    out; when not even the newest one fits, its last lines that do. Empty
-    when not even the frame fits."""
+    out; when not even the newest one fits, its last lines that do. The
+    head block that carries the paths of blocks the store evicted goes
+    last, after every other block: it exists so those paths outlive the
+    eviction. Empty when not even the frame and that block fit."""
     from durin.utils.helpers import estimate_text_tokens
 
     if not text or max_tokens <= 0:
@@ -371,26 +373,36 @@ def fit_summary_to_tokens(text: str, max_tokens: int) -> str:
     end = next((i for i, line in enumerate(lines) if _FRAME_END.match(line)), len(lines))
     tail = "\n".join(lines[end:])
     blocks = "\n".join(lines[:end]).split(_SUMMARY_BLOCK_SEP)
+    carried = [blocks.pop(0)] if blocks and blocks[0].startswith(_EVICTED_PATHS_PREFIX) else []
 
-    def framed(body: str) -> str:
+    def framed(parts: list[str]) -> str:
+        body = _SUMMARY_BLOCK_SEP.join([*carried, _ELIDED_BLOCKS, *parts])
         return "\n".join(part for part in (head, body, tail) if part)
 
-    room = max_tokens - estimate_text_tokens(framed(_ELIDED_BLOCKS + _SUMMARY_BLOCK_SEP))
-    if room <= 0:
-        return ""
-    kept: list[str] = []
-    for block in reversed(blocks):
-        if estimate_text_tokens(_SUMMARY_BLOCK_SEP.join([block, *kept])) > room:
-            break
-        kept.insert(0, block)
-    if kept:
-        return framed(_SUMMARY_BLOCK_SEP.join([_ELIDED_BLOCKS, *kept]))
-    newest: list[str] = []
-    for line in reversed(blocks[-1].split("\n")):
-        if estimate_text_tokens("\n".join([line, *newest])) > room:
-            break
-        newest.insert(0, line)
-    return framed(_SUMMARY_BLOCK_SEP.join([_ELIDED_BLOCKS, "\n".join(newest)])) if newest else ""
+    def most(count: int, build) -> str | None:
+        # The largest n in [1, count] whose build(n) fits; fewer parts never
+        # take more tokens, so bisection finds it.
+        low, high, found = 1, count, None
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = build(middle)
+            if estimate_text_tokens(candidate) <= max_tokens:
+                found, low = candidate, middle + 1
+            else:
+                high = middle - 1
+        return found
+
+    if blocks and blocks != [""]:
+        kept = most(len(blocks), lambda n: framed(blocks[-n:]))
+        if kept is not None:
+            return kept
+        newest = blocks[-1].split("\n")
+        kept = most(len(newest), lambda n: framed(["\n".join(newest[-n:])]))
+        if kept is not None:
+            return kept
+    if carried and estimate_text_tokens(framed([])) <= max_tokens:
+        return framed([])
+    return ""
 
 
 def _load_summary_entry(path: Path) -> Optional[MemoryEntry]:

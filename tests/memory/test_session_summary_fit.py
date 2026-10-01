@@ -64,3 +64,29 @@ def test_an_unframed_summary_is_cut_the_same_way():
 
     assert estimate_text_tokens(fitted) <= limit
     assert fitted.endswith(blocks[-1])
+
+
+_CARRIED = "Files/paths from earlier spans (evicted): /srv/billing/values-prod.yaml; /etc/nginx/sites/api.conf"
+
+
+def test_the_carried_paths_outlive_the_oldest_blocks():
+    """The store keeps the paths of the blocks it evicted in a head block,
+    so they survive the eviction. The cut left that block out first, being
+    the oldest: 50 tokens under the whole summary, the paths were gone."""
+    text = _framed([_CARRIED, *(_block(i) for i in range(6))])
+    limit = estimate_text_tokens(text) - 50
+
+    fitted = fit_summary_to_tokens(text, limit)
+
+    assert estimate_text_tokens(fitted) <= limit
+    assert "values-prod.yaml" in fitted
+    assert "- span 0:" not in fitted
+    assert "- span 5:" in fitted
+
+
+def test_the_carried_paths_go_last():
+    text = _framed([_CARRIED, *(_block(i) for i in range(6))])
+    carried_only = _framed([_CARRIED])
+
+    assert "values-prod.yaml" in fit_summary_to_tokens(text, estimate_text_tokens(carried_only) + 30)
+    assert fit_summary_to_tokens(text, 10) == ""
