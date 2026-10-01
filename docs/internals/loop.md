@@ -971,7 +971,8 @@ Two metadata splits matter:
   The projection's own bound is in characters, whatever the window, so a
   prompt carries the summary cut to a quarter of what the rest of the system
   prompt, the tool definitions and the turn's own message (its runtime
-  context and task state included) leave of the turn model's input budget
+  context and task state included, the decision log already cut to fit the
+  message, see below) leave of the turn model's input budget
   (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks are
   left out first, after a line saying so, and it never makes the turn too
   large to send whatever history goes. On a small window the whole
@@ -1001,6 +1002,14 @@ Two metadata splits matter:
   `auto` present and evicts *itself*, making the write a no-op), and an `auto`
   append that could only fit by evicting a manual anchor is rejected instead —
   still counted as a drop, so `decision_log.capped` records the loss.
+  Its caps are in characters whatever the window, so a prompt whose message
+  would not fit with the whole log carries it cut, in the same order (the
+  oldest auto entries first): `build_messages` cuts it to what the system
+  prompt's fixed tiers, the tool definitions and the rest of the message
+  leave of the turn model's input budget, records the bound
+  (`ContextBuilder.last_decision_log_tokens`), and the run's
+  `task_state_provider` renders the block it appends mid-turn with the same
+  bound, so an unchanged task state is still recognised as the one shown.
 - **A finished goal still leaves a trace in the anchor.** A session rarely ends
   when its goal does, and rendering only `status == "active"` would erase the
   session's stated purpose the moment it succeeded, leaving the work that

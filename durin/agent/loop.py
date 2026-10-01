@@ -388,6 +388,10 @@ class TurnContext:
     # initial_messages: what each part of the prompt costs, which names the
     # parts to the user when the prompt cannot fit even without history.
     composition: dict[str, Any] | None = None
+    # The token bound that build put on the decision log to make the turn
+    # fit (None: it carried the log whole); the run cuts the task state it
+    # appends mid-turn the same way.
+    decision_log_tokens: int | None = None
 
     # Hits of the automatic search this turn ran with the user message,
     # fenced for the wire copy of that message only (never stored). Resolved
@@ -2198,6 +2202,7 @@ class AgentLoop:
         pending_queues: PendingQueues | None = None,
         override_snapshot: ProviderSnapshot | None = None,
         compacts_on_overflow: bool = False,
+        decision_log_tokens: int | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
 
@@ -2208,6 +2213,11 @@ class AgentLoop:
         *compacts_on_overflow*: the caller compacts and retries when the
         run's first request does not fit, so the runner stops there instead
         of trimming the history it was given.
+
+        *decision_log_tokens*: the bound the prompt's build put on the
+        decision log (``ContextBuilder.last_decision_log_tokens``); the task
+        state the run appends when it changes mid-turn is cut the same way,
+        so an unchanged state is recognised as the one the prompt shows.
 
         *on_stream*: called with each content delta during streaming.
         *on_stream_end(resuming)*: called when a streaming session finishes.
@@ -2493,7 +2503,9 @@ class AgentLoop:
                 injection_callback=_drain_pending,
                 mode_provider=_mode_provider if session is not None else None,
                 task_state_provider=(
-                    (lambda: task_state_runtime_lines(session.metadata))
+                    (lambda: task_state_runtime_lines(
+                        session.metadata, decision_log_max_tokens=decision_log_tokens,
+                    ))
                     if session is not None else None
                 ),
                 # Sustained goals may legitimately exceed DURIN_LLM_TIMEOUT_S; idle stall
@@ -3198,6 +3210,7 @@ class AgentLoop:
             eager_snapshot=eager_snapshot,
             input_budget_tokens=self._turn_input_budget(run_snapshot),
         )
+        decision_log_tokens = self.context.last_decision_log_tokens
         if freezes and eager_snapshot is None:
             # This build rendered live (no snapshot stored yet, or none to
             # resolve): freeze it now so the next build of this session —
@@ -3220,6 +3233,7 @@ class AgentLoop:
                 session_key=key,
                 pending_queues=pending_queues,
                 override_snapshot=run_snapshot,
+                decision_log_tokens=decision_log_tokens,
             )
         finally:
             reset_turn_eager_surface(surface_token)
@@ -4033,6 +4047,7 @@ class AgentLoop:
             input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
         )
         ctx.composition = self.context.last_composition
+        ctx.decision_log_tokens = self.context.last_decision_log_tokens
         if freezes and ctx.eager_snapshot is None:
             # Immediately after the build: the builder holds one rendering at
             # a time and the background consolidation probe overwrites it with
@@ -4084,6 +4099,7 @@ class AgentLoop:
                 # compaction that summarizes what a trim would drop. The last
                 # attempt trims, rather than fail on a history it cannot shrink.
                 compacts_on_overflow=attempt < _MAX_OVERFLOW_RETRIES,
+                decision_log_tokens=ctx.decision_log_tokens,
             )
             final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
             ctx.final_content = final_content
@@ -4165,6 +4181,7 @@ class AgentLoop:
                     input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
                 )
                 ctx.composition = self.context.last_composition
+                ctx.decision_log_tokens = self.context.last_decision_log_tokens
                 continue
             break
         return "ok"

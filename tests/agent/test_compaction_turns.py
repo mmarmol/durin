@@ -295,6 +295,33 @@ async def test_a_summary_never_crowds_out_the_turn_it_is_carried_by(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_decision_log_gives_way_to_the_turn_it_is_carried_by(tmp_path):
+    """The decision log rides in every turn's runtime context. With 1,700
+    tokens of the input budget beside the system prompt and the tool
+    definitions, a turn's message fits, but not with a decision log of about
+    500 tokens as well: every turn failed, however much history went. In a
+    prompt the log now gives way first, its oldest entries left out."""
+    from durin.session.decision_log import DECISION_LOG_KEY
+
+    decisions = [
+        {"text": f"decision {i}: " + "we chose the second approach because it is simpler " * 5,
+         "ts": "", "source": "auto"}
+        for i in range(10)
+    ]
+    window = _window_leaving(tmp_path, 1_700)
+    result = await _run_turns(
+        tmp_path, turns=3, window=window, session_metadata={DECISION_LOG_KEY: decisions},
+    )
+
+    failed = [i for i, r in enumerate(result["replies"]) if not r or r.startswith(_OVERFLOW_REPLY)]
+    assert failed == []
+    message = _text_of(result["attempts"][0]["prompt"][-1])
+    assert "decision 9:" in message
+    assert "decision 0:" not in message
+    _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
 async def test_a_rescued_turn_that_used_tools_is_saved_whole(tmp_path):
     """A turn rescued by the overflow retry that calls a tool: the assistant
     message carrying the call is saved with its result, not the result alone."""

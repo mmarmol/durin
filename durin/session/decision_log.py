@@ -160,7 +160,18 @@ def _over_caps(
     return len(entries) > 1 and sum(len(e["text"]) for e in entries) > max_chars
 
 
-def decision_log_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
-    """Lines for the 'Decisions & findings' section of the task-state anchor."""
+def decision_log_runtime_lines(
+    metadata: Mapping[str, Any] | None, max_tokens: int | None = None,
+) -> list[str]:
+    """Lines for the 'Decisions & findings' section of the task-state anchor.
+
+    *max_tokens* bounds them for a prompt with little room left: entries are
+    left out in the order the log's own cap drops them, the oldest automatic
+    ones before the oldest the model recorded itself, until the rest fit."""
     entries = parse_decisions(decision_log_raw(metadata))
+    if max_tokens is not None:
+        from durin.utils.helpers import estimate_text_tokens
+
+        while entries and estimate_text_tokens("\n".join(f"  - {e['text']}" for e in entries)) > max_tokens:
+            entries.pop(next((i for i, e in enumerate(entries) if e["source"] == "auto"), 0))
     return [f"  - {e['text']}" for e in entries]

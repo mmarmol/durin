@@ -163,3 +163,32 @@ def test_layer_skipping_when_all_layers_empty(tmp_path):
     assert p  # identity is non-empty
     assert not p.startswith("---")
     assert not p.endswith("---")
+
+
+def test_a_bounded_decision_log_is_the_one_a_run_appends(builder):
+    """When a turn's message only fits with its decision log cut, the
+    builder records the bound, and the task state rendered with it is the
+    one the message carries: a run appending the task state mid-turn
+    compares against exactly that, and appends nothing while it holds."""
+    from durin.agent.task_state import task_state_runtime_lines
+    from durin.session.decision_log import DECISION_LOG_KEY
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    metadata = {DECISION_LOG_KEY: [
+        {"text": f"decision {i}: " + "the second approach is simpler " * 6, "ts": "", "source": "auto"}
+        for i in range(10)
+    ]}
+    whole = builder.build_messages(history=[], current_message="hello", session_metadata=metadata)
+    assert builder.last_decision_log_tokens is None
+    budget = estimate_prompt_tokens(whole) - 200
+
+    messages = builder.build_messages(
+        history=[], current_message="hello", session_metadata=metadata, input_budget_tokens=budget,
+    )
+
+    bound = builder.last_decision_log_tokens
+    assert bound is not None
+    assert estimate_prompt_tokens(messages) <= budget
+    block = "\n".join(task_state_runtime_lines(metadata, decision_log_max_tokens=bound))
+    assert "decision 9:" in block and "decision 0:" not in block
+    assert block in messages[-1]["content"]

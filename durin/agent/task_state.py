@@ -15,8 +15,13 @@ from durin.session.goal_state import goal_state_runtime_lines
 from durin.session.todo_state import todos_runtime_lines
 
 
-def task_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
-    """Return the ``<task-state>`` block lines, or [] when every section is empty."""
+def task_state_runtime_lines(
+    metadata: Mapping[str, Any] | None, *, decision_log_max_tokens: int | None = None,
+) -> list[str]:
+    """Return the ``<task-state>`` block lines, or [] when every section is empty.
+
+    *decision_log_max_tokens* bounds the decision log's section (see
+    ``decision_log_runtime_lines``) for a prompt with little room left."""
     # Imported lazily to mirror build_messages and avoid an import cycle with
     # durin.agent.agent_mode.
     from durin.agent.agent_mode import (
@@ -25,7 +30,7 @@ def task_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
     )
 
     goal = list(goal_state_runtime_lines(metadata))
-    decisions = list(decision_log_runtime_lines(metadata))
+    decisions = list(decision_log_runtime_lines(metadata, decision_log_max_tokens))
     focus = (
         list(todos_runtime_lines(metadata))
         + list(plan_mode_runtime_lines(metadata))

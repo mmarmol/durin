@@ -198,7 +198,9 @@ turn runs on a model with other limits.
 On a small window the summary so far would take much of that room by itself,
 so a prompt carries it cut to a quarter of what the system prompt, the tool
 schemas and the turn's own message leave of the input budget, its oldest
-parts left out first.
+parts left out first. The decision log rides in the message: when the
+message would not fit with all of it, the prompt leaves out its oldest
+entries until it does.
 
 When the system prompt, the tool schemas and the message alone are over the
 input budget, no compaction can make the turn fit: it fails at once, and the
