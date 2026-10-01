@@ -4,10 +4,10 @@ Two processes simultaneously call add_job on the same jobs.json while
 _running=True.  Without a FileLock across the read-modify-write, one add
 clobbers the other.
 
-The race is exposed by patching _load_store to sleep *after* loading
-(so both processes have read the empty store before either writes), which
-guarantees the clobber even on fast machines.  After the fix, self._lock
-serialises the sequence and both jobs survive.
+The race is exposed by patching _load_store to wait *after* loading until
+the peer has loaded too (so both hold the empty store before either writes),
+which guarantees the clobber even on fast machines.  After the fix,
+self._lock serialises the sequence and both jobs survive.
 """
 
 import multiprocessing as mp
@@ -15,17 +15,26 @@ import os
 import time
 from pathlib import Path
 
+# How long a process that has loaded the store waits for its peer to load
+# too, once the peer has announced it is about to add. Without the lock the
+# peer loads within milliseconds of that announcement; with it the peer is
+# blocked on the lock and this grace simply runs out.
+_PEER_LOAD_GRACE_S = 0.5
 
-def _add_running(home: str, jobs_dir: str, name: str, ready_file: str) -> None:
+
+def _add_running(home: str, jobs_dir: str, name: str, ready_dir: str) -> None:
     """Add a job via CronService with _running=True (the racy branch).
 
-    _load_store is wrapped to (a) signal readiness and (b) sleep until
-    both processes have loaded, maximising the race window.
+    Each process announces, right before add_job, that it is about to add.
+    _load_store is wrapped to (a) signal that this process loaded and (b) wait
+    for the peer's announcement (spawn and import time vary), then give the
+    peer a short grace to load as well, maximising the race window.
     """
     os.environ["DURIN_HOME"] = home
     from durin.cron.service import CronService
     from durin.cron.types import CronSchedule
 
+    ready = Path(ready_dir)
     store_path = Path(jobs_dir) / "jobs.json"
     svc = CronService(store_path)
     svc._running = True
@@ -33,21 +42,22 @@ def _add_running(home: str, jobs_dir: str, name: str, ready_file: str) -> None:
 
     original_load = svc._load_store
 
+    def _both(prefix: str) -> bool:
+        return all((ready / f"{prefix}_job{i}").exists() for i in range(2))
+
     def _load_then_wait():
         result = original_load()
-        # Signal that we have loaded
-        (Path(ready_file).parent / f"ready_{name}").touch()
-        # Wait until the peer has also loaded (both hold the old snapshot)
+        (ready / f"loaded_{name}").touch()
         deadline = time.monotonic() + 10.0
-        while not (Path(ready_file).parent / "ready_job0").exists() or \
-              not (Path(ready_file).parent / "ready_job1").exists():
-            time.sleep(0.01)
-            if time.monotonic() > deadline:
-                break
+        while not _both("about") and time.monotonic() < deadline:
+            time.sleep(0.005)
+        grace = time.monotonic() + _PEER_LOAD_GRACE_S
+        while not _both("loaded") and time.monotonic() < grace:
+            time.sleep(0.005)
         return result
 
     svc._load_store = _load_then_wait
-
+    (ready / f"about_{name}").touch()
     svc.add_job(
         name=name,
         schedule=CronSchedule(kind="every", every_ms=3_600_000),
@@ -70,13 +80,12 @@ def test_two_processes_no_lost_job(tmp_path: Path) -> None:
     jobs_dir.mkdir()
     ready_dir = tmp_path / "ready"
     ready_dir.mkdir()
-    ready_sentinel = str(ready_dir / "sentinel")
 
     ctx = mp.get_context("spawn")
     processes = [
         ctx.Process(
             target=_add_running,
-            args=(str(tmp_path), str(jobs_dir), f"job{i}", ready_sentinel),
+            args=(str(tmp_path), str(jobs_dir), f"job{i}", str(ready_dir)),
         )
         for i in range(2)
     ]
