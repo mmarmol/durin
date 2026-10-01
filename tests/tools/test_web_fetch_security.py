@@ -60,8 +60,14 @@ async def test_web_fetch_result_contains_untrusted_flag():
     async def _fake_get(self, url, **kwargs):
         return FakeResponse()
 
+    def _no_image_probe(self, method, url, **kwargs):
+        # The image pre-check streams the URL; without this it connects for
+        # real to the faked address and waits out its 15 s timeout.
+        raise ConnectionError("image probe skipped in this test")
+
     with patch("durin.security.network.socket.getaddrinfo", _fake_resolve_public), \
-         patch("httpx.AsyncClient.get", _fake_get):
+         patch("httpx.AsyncClient.get", _fake_get), \
+         patch("httpx.AsyncClient.stream", _no_image_probe):
         result = await tool.execute(url="https://example.com/page")
 
     data = json.loads(result)
