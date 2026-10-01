@@ -203,7 +203,8 @@ parts left out first. The message is counted as at least a fixed allowance,
 so the cut stays the same from one ordinary message to the next and the
 provider's prompt cache keeps working. The decision log rides in the message: when the
 message would not fit with all of it, the prompt leaves out its oldest
-entries until it does.
+automatic entries first (the ones durin records on its own), then the oldest
+ones recorded with `note_decision`, until it does.
 
 When the system prompt, the tool schemas and the message alone are over the
 input budget, no compaction can make the turn fit: it fails at once, and the

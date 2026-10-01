@@ -5,7 +5,8 @@ manual notes (2026-07-17 incident: the Zendesk note held the answer).
 """
 from __future__ import annotations
 
-from durin.session.decision_log import add_decision, parse_decisions
+from durin.session.decision_log import add_decision, decision_log_runtime_lines, parse_decisions
+from durin.utils.helpers import estimate_text_tokens
 
 
 def _fill(metadata: dict, n: int, source: str, prefix: str) -> None:
@@ -117,3 +118,20 @@ def test_auto_entries_accumulate_when_there_is_headroom():
     assert len(autos) == 4
     assert [e["text"] for e in autos] == [f"auto finding {i}" for i in range(4)]
     assert len([e for e in metadata["decision_log"] if e["source"] == "tool"]) == 2
+
+
+def test_a_prompt_leaves_out_the_oldest_auto_entries_before_any_manual_one():
+    """A prompt with little room carries the log cut in the order its cap
+    drops entries: the oldest automatic ones first, then the oldest manual
+    one, wherever they sit in the log."""
+    metadata = {"decision_log": [
+        {"text": "manual 0 " + "m " * 40, "ts": "", "source": "tool"},
+        {"text": "auto 1 " + "a " * 40, "ts": "", "source": "auto"},
+        {"text": "auto 2 " + "a " * 40, "ts": "", "source": "auto"},
+        {"text": "manual 3 " + "m " * 40, "ts": "", "source": "tool"},
+    ]}
+    whole = decision_log_runtime_lines(metadata)
+    manual = [whole[0], whole[3]]
+
+    assert decision_log_runtime_lines(metadata, max_tokens=estimate_text_tokens("\n".join(manual))) == manual
+    assert decision_log_runtime_lines(metadata, max_tokens=estimate_text_tokens(whole[3])) == [whole[3]]
