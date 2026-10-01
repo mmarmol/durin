@@ -251,10 +251,12 @@ class TestCmdNewUnifiedSession:
             # /new reads and deletes the key's session-summary file, so the
             # double needs the real workspace a production loop always has.
             workspace=tmp_path,
-            # /new archives the closed conversation and has the consolidator
-            # forget what it measured of it.
+            # /new leaves out what the nightly pass summarized (nothing here),
+            # archives the rest of the closed conversation, and has the
+            # consolidator forget what it measured of it.
             consolidator=SimpleNamespace(
-                archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []})),
+                _unsummarized=lambda _session, chunk: chunk,
+                archive_pieces=AsyncMock(return_value=(["summary"], {"entities": [], "topics": []})),
                 forget_session=lambda _key: None,
             ),
             _cancel_active_tasks=AsyncMock(return_value=0),
@@ -293,10 +295,12 @@ class TestCmdNewUnifiedSession:
             # /new reads and deletes the key's session-summary file, so the
             # double needs the real workspace a production loop always has.
             workspace=tmp_path,
-            # /new archives the closed conversation and has the consolidator
-            # forget what it measured of it.
+            # /new leaves out what the nightly pass summarized (nothing here),
+            # archives the rest of the closed conversation, and has the
+            # consolidator forget what it measured of it.
             consolidator=SimpleNamespace(
-                archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []})),
+                _unsummarized=lambda _session, chunk: chunk,
+                archive_pieces=AsyncMock(return_value=(["summary"], {"entities": [], "topics": []})),
                 forget_session=lambda _key: None,
             ),
             _cancel_active_tasks=AsyncMock(return_value=0),

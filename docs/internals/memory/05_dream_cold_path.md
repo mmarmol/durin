@@ -376,7 +376,7 @@ already archived, because its start respects `last_consolidated`. And when an
 idle-then-summarized session resumes and compacts, `Consolidator._unsummarized`
 trims the head of the compaction chunk that this pass's `summary_cursor`
 already covers — an entirely covered chunk means no LLM call and no block
-appended.
+appended. `/compact` and the record `/new` files apply the same trim.
 
 The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**

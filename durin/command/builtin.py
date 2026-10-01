@@ -581,7 +581,10 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     )
 
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
-    snapshot = session.messages[session.last_consolidated:]
+    # The head the nightly pass already summarized stays out of the record's
+    # archive: its block is in the key's summary, which rides into the record.
+    # Resolved before clear(), against the messages the cursor names.
+    snapshot = loop.consolidator._unsummarized(session, session.messages[session.last_consolidated:])
     last_active = session.updated_at            # before clear() stamps "now"
     # Read before the delete below: the record is filed in the background,
     # by which time the key's summary file is gone. One parse for both the
@@ -1454,11 +1457,14 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
             content="Nothing to compact — session is already consolidated.",
             metadata=metadata_text,
         )
+    # The head the nightly pass already summarized stays out: summarized
+    # again, it would be a second block of the same turns in the bounded store.
+    pending = loop.consolidator._unsummarized(session, chunk)
 
     try:
         # In as many summarizing calls as the conversation needs, so a long
         # one is summarized whole rather than cut to what one call takes.
-        summaries, tags = await loop.consolidator.archive_pieces(chunk)
+        summaries, tags = await loop.consolidator.archive_pieces(pending)
     except Exception as exc:  # noqa: BLE001
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -1478,9 +1484,14 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
             f"Compacted {len(chunk)} messages into summary "
             f"(total: {len(session.messages)})."
         )
+    elif not pending:
+        content = (
+            f"Compacted {len(chunk)} messages: the nightly summary already covers them "
+            f"(total: {len(session.messages)})."
+        )
     else:
         content = (
-            f"Consolidation LLM degraded — raw-archived {len(chunk)} messages "
+            f"Consolidation LLM degraded — raw-archived {len(pending)} messages "
             "as a breadcrumb. Cursor still advanced."
         )
     return OutboundMessage(

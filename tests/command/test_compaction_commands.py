@@ -102,3 +102,70 @@ async def test_new_files_a_conversation_larger_than_one_call_whole(tmp_path: Pat
     record = read_session_summary_entry(loop.workspace, closed_record_key(KEY, last_active))
     assert record is not None
     assert all(f"- summary {n}" in (record.body or record.summary) for n in range(1, len(inputs) + 1))
+
+
+def _nightly_then_more(loop: AgentLoop) -> tuple[list[str], list[str]]:
+    """A conversation the nightly pass summarized, then four more exchanges:
+    the contents the pass covered, and the ones after it."""
+    from durin.memory.session_summary_dream import summarize_session
+
+    session = loop.sessions.get_or_create(KEY)
+    for i in range(4):
+        session.add_message("user", f"covered question {i}")
+        session.add_message("assistant", f"covered answer {i}")
+    loop.sessions.save(session)
+    summarize_session(
+        loop.workspace, loop.sessions._get_session_path(KEY),
+        llm_invoke=lambda prompt, **_: "- the nightly block",
+        idle_hours=0, min_new_messages=1, budget_tokens=100_000,
+    )
+    for i in range(4):
+        session.add_message("user", f"later question {i}")
+        session.add_message("assistant", f"later answer {i}")
+    loop.sessions.save(session)
+    covered = [f"covered {kind} {i}" for i in range(4) for kind in ("question", "answer")]
+    later = [f"later {kind} {i}" for i in range(4) for kind in ("question", "answer")]
+    return covered, later
+
+
+@pytest.mark.asyncio
+async def test_compact_leaves_out_what_the_nightly_pass_summarized(tmp_path: Path) -> None:
+    """/compact summarized from last_consolidated, the span the nightly pass
+    had already summarized included: a second block of the same turns in the
+    bounded store, evicting an older one."""
+    from durin.command.builtin import cmd_compact
+
+    loop, inputs = _loop(tmp_path)
+    covered, later = _nightly_then_more(loop)
+
+    await cmd_compact(_ctx(loop, "/compact"))
+
+    sent = "\n".join(inputs)
+    assert [text for text in covered if text in sent] == []
+    assert [text for text in later if text not in sent] == []
+
+
+@pytest.mark.asyncio
+async def test_new_files_only_what_the_nightly_pass_left(tmp_path: Path) -> None:
+    """The /new record held the key's summary, the nightly pass's block
+    among it, and a fresh summary of everything since last_consolidated: the
+    span the pass covered, twice."""
+    from durin.command.builtin import cmd_new
+    from durin.memory.session_summary_store import closed_record_key, read_session_summary_entry
+
+    loop, inputs = _loop(tmp_path)
+    covered, later = _nightly_then_more(loop)
+    last_active = loop.sessions.get_or_create(KEY).updated_at
+    scheduled: list[Any] = []
+    loop._schedule_background = scheduled.append  # type: ignore[method-assign]
+
+    await cmd_new(_ctx(loop, "/new"))
+    for coro in scheduled:
+        await coro
+
+    sent = "\n".join(inputs)
+    assert [text for text in covered if text in sent] == []
+    assert [text for text in later if text not in sent] == []
+    record = read_session_summary_entry(loop.workspace, closed_record_key(KEY, last_active))
+    assert record is not None
+    assert "the nightly block" in (record.body or record.summary)

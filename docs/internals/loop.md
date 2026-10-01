@@ -1095,7 +1095,11 @@ newline after the last, so a span that fills one call exactly is one call. `/com
 files go through the same cut (`Consolidator.archive_pieces`): they summarize
 the whole unconsolidated conversation at once, so a long one takes several
 calls rather than being cut to what one takes. Only a single message larger
-than the budget is still truncated.
+than the budget is still truncated. Like automatic compaction, both first
+leave out the head the nightly session-summary pass already summarized
+(`Consolidator._unsummarized`): its block is already in the key's summary,
+and a second one of the same turns would evict an older block from the
+bounded store. `/new` resolves that head before it clears the session.
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a
