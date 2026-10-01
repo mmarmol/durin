@@ -20,6 +20,41 @@ EMPTY_FINAL_RESPONSE_MESSAGE = (
     "Please try again or narrow the task."
 )
 
+# What a turn that produced no answer leaves in the conversation in place of
+# one, so the transcript says why: the model call failed, or the prompt
+# exceeded its input budget.
+MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
+OVERFLOW_PLACEHOLDER = (
+    "[Turn stopped before the next model call: the prompt exceeded the input "
+    "budget even after emergency trimming. The request was not finished; the "
+    "next turn starts from a compacted context.]"
+)
+_FAILED_TURN_PLACEHOLDERS = frozenset({MODEL_ERROR_PLACEHOLDER, OVERFLOW_PLACEHOLDER})
+
+
+def without_failed_exchanges(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* without what turns that produced no answer left: each
+    failure placeholder, and the user message it stands in the answer to
+    when nothing came between them.
+
+    They hold nothing to summarize, and in a summary bounded in size every
+    block spent on them evicts an older, real one. A turn that called tools
+    before it failed keeps them: that work happened."""
+    kept: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if (
+            message.get("role") == "assistant"
+            and not message.get("tool_calls")
+            and isinstance(content, str)
+            and content.strip() in _FAILED_TURN_PLACEHOLDERS
+        ):
+            while kept and kept[-1].get("role") == "user":
+                kept.pop()
+            continue
+        kept.append(message)
+    return kept
+
 FINALIZATION_RETRY_PROMPT = (
     "Please provide your response to the user based on the conversation above."
 )

@@ -32,6 +32,7 @@ from durin.utils.helpers import (
 )
 from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
+from durin.utils.runtime import without_failed_exchanges
 
 if TYPE_CHECKING:
     from durin.memory.eager_surface import EagerSnapshot
@@ -1297,10 +1298,12 @@ class Consolidator:
         """Summarize *messages* in as many calls as ``_summarizer_pieces``
         cuts them into, so none of them is cut: each summary that came back
         (one block each, like a round's) and the tags of all of them. A call
-        that fails raw-archives its run (``archive``)."""
+        that fails raw-archives its run (``archive``). The exchanges of turns
+        that produced no answer are left out (``without_failed_exchanges``):
+        no call is made for a span of nothing else."""
         summaries: list[str] = []
         tags: dict[str, list[str]] = {"entities": [], "topics": []}
-        for piece in self._summarizer_pieces(messages):
+        for piece in self._summarizer_pieces(without_failed_exchanges(messages)):
             summary, piece_tags = await self.archive(piece)
             self._collect_tags(tags, piece_tags)
             if summary:
@@ -1807,13 +1810,15 @@ class Consolidator:
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 rounds_run += 1
-                if not summaries:
+                if not summaries and (not pending or without_failed_exchanges(pending)):
                     # No summary has two causes. An empty chunk means the
                     # nightly session-summary pass already covered this span,
                     # so archive() never called an LLM and nothing failed —
                     # the cursor moved and the work is done. Otherwise the LLM
                     # is degraded: stop hammering it this call and let the next
-                    # invocation retry a fresh chunk.
+                    # invocation retry a fresh chunk. A chunk of failed
+                    # exchanges alone has nothing to summarize, so no summary
+                    # came back for it and the rounds go on.
                     exit_reason = "already_summarized" if not pending else "summary_failed"
                     break
 
@@ -1929,7 +1934,7 @@ class Consolidator:
         # each extraction below reads it in the same summarizer-sized runs a
         # round's chunk is summarized in, so no call sees only its head.
         extracting = self.decision_log_enabled or self.compaction_learnings_enabled
-        pieces = self._summarizer_pieces(span) if extracting else []
+        pieces = self._summarizer_pieces(without_failed_exchanges(span)) if extracting else []
         # Concern B (task-state anchor): one LLM call per compaction (per run
         # of the span) extracts key decisions/findings from the span just
         # archived and appends them to the decision log so they survive in

@@ -951,6 +951,12 @@ Two metadata splits matter:
   synthetic head block rather than lost). Only the part of the span the
   nightly session-summary pass has not already summarized is sent to the LLM;
   a span it fully covered advances the cursor with no call and no new block.
+  The exchanges of turns that produced no answer (a model error or an
+  overflow placeholder, and the user message it stands in the answer to) are
+  left out of what is summarized and of the decision and learnings
+  extraction (`without_failed_exchanges`): in a bounded summary every block
+  spent on them would evict an older, real one, and a span of nothing else
+  makes no call. A failed turn that ran tools keeps that work.
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact

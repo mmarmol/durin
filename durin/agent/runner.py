@@ -41,6 +41,8 @@ from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.prompt_templates import render_template
 from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
+    MODEL_ERROR_PLACEHOLDER,
+    OVERFLOW_PLACEHOLDER,
     build_finalization_retry_message,
     build_length_recovery_message,
     build_reasoning_truncation_message,
@@ -52,12 +54,8 @@ from durin.utils.runtime import (
 from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
-_PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
-_PERSISTED_OVERFLOW_PLACEHOLDER = (
-    "[Turn stopped before the next model call: the prompt exceeded the input "
-    "budget even after emergency trimming. The request was not finished; the "
-    "next turn starts from a compacted context.]"
-)
+_PERSISTED_MODEL_ERROR_PLACEHOLDER = MODEL_ERROR_PLACEHOLDER
+_PERSISTED_OVERFLOW_PLACEHOLDER = OVERFLOW_PLACEHOLDER
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
 _MAX_INJECTIONS_PER_TURN = 3

@@ -606,3 +606,38 @@ async def test_a_turn_on_a_larger_model_is_summarized_whole(tmp_path):
     archived = [m for m in session.messages[:session.last_consolidated] if m.get("content")]
     assert len(archived) > 4
     assert [m["content"] for m in archived if m["content"] not in summarized] == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_exchange_is_not_summarized(tmp_path):
+    """A turn that failed (its prompt overflowed, or the model call failed)
+    leaves the user's message and a placeholder in the session. Compaction
+    summarized them like any exchange, and every block they took pushed an
+    older, real one out of the bounded summary."""
+    from durin.agent.runner import _PERSISTED_MODEL_ERROR_PLACEHOLDER, _PERSISTED_OVERFLOW_PLACEHOLDER
+    from durin.utils.prompt_templates import render_template
+
+    def _failed(i: int, placeholder: str) -> list[dict[str, Any]]:
+        return [
+            {"role": "user", "content": f"FAILED-{i} " + "more context words " * 400,
+             "timestamp": "2026-09-30T10:00:00"},
+            {"role": "assistant", "content": placeholder, "timestamp": "2026-09-30T10:00:01"},
+        ]
+
+    seed = _failed(0, _PERSISTED_OVERFLOW_PLACEHOLDER) + _failed(1, _PERSISTED_MODEL_ERROR_PLACEHOLDER)
+    for i in range(2, 30):
+        seed += [
+            {"role": "user", "content": _turn_text(i), "timestamp": "2026-09-30T10:00:00"},
+            {"role": "assistant", "content": f"reply {i}", "timestamp": "2026-09-30T10:00:01"},
+        ]
+        if i in (10, 11):
+            seed += _failed(i, _PERSISTED_OVERFLOW_PLACEHOLDER)
+    result = await _run_turns(tmp_path, turns=1, window=60_000, session_messages=seed)
+
+    archive_prompt = render_template("agent/consolidator_archive.md", strip=True)
+    summarized = "\n".join(text for system, text in result["side_calls"] if system == archive_prompt)
+    assert result["session"].last_consolidated > 30
+    assert "turn 2:" in summarized
+    assert "FAILED-" not in summarized
+    assert "[Turn stopped" not in summarized
+    assert "[Assistant reply unavailable" not in summarized
