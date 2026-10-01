@@ -200,8 +200,8 @@ def test_dream_transformed_entity_fully_searchable(tmp_path):
 
 def test_vector_search_finds_attributes_and_semantic(tmp_path, embedding_model):
     # The embedding includes attributes/relations, and the vector path adds
-    # SEMANTIC recall the token paths miss. The `embedding_model` fixture skips
-    # when the model is unavailable / can't be downloaded (infra, not a bug).
+    # SEMANTIC recall the token paths miss. The `embedding_model` fixture
+    # embeds with the fastembed stand-in: no model is loaded or downloaded.
     from durin.memory.embedding import FastembedProvider
     from durin.memory.vector_index import VectorIndex
 

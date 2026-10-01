@@ -188,13 +188,15 @@ def _filed_approval(ws, status: str = "pending") -> str:
 
 
 def _evolve_filed_for_approval(ws, monkeypatch, approval_id: str) -> None:
-    monkeypatch.setattr(ss, "apply_skill_edit", lambda *a, **k: {
-        "error": "edit needs review", "pending_approval": approval_id})
-    curate_catalog(ws, judge=lambda p: json.dumps({
-        "actions": [{"type": "evolve", "name": "stable", "old": "old step here",
-                     "new": "new step here", "rationale": "obs #1"}],
-        "observations": [{"id": 1, "disposition": "applied"}]}))
-    monkeypatch.undo()
+    # A scoped patch: undoing the test's whole monkeypatch would also undo
+    # the suite's isolation (DURIN_HOME, the skill vector index, ...).
+    with monkeypatch.context() as patch:
+        patch.setattr(ss, "apply_skill_edit", lambda *a, **k: {
+            "error": "edit needs review", "pending_approval": approval_id})
+        curate_catalog(ws, judge=lambda p: json.dumps({
+            "actions": [{"type": "evolve", "name": "stable", "old": "old step here",
+                         "new": "new step here", "rationale": "obs #1"}],
+            "observations": [{"id": 1, "disposition": "applied"}]}))
 
 
 def test_a_rejected_edit_declines_its_observation(tmp_path, monkeypatch):

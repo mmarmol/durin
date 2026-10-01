@@ -69,6 +69,7 @@ def _stub_fastembed():
     from durin.config import loader as config_loader
 
     embedding_module._CATALOG_CACHE = None
+    embedding_module._REGISTERED_CUSTOM = set()
     fake = types.ModuleType("fastembed")
     fake.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake
@@ -91,6 +92,7 @@ def _stub_fastembed():
     finally:
         sys.modules.pop("fastembed", None)
         embedding_module._CATALOG_CACHE = None
+        embedding_module._REGISTERED_CUSTOM = set()
         config_loader.load_config = real_load_config
 
 

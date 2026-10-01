@@ -27,6 +27,15 @@ def _page(text, *, det_boxes=None):
     )
 
 
+@pytest.fixture(autouse=True)
+def _ingestion_skips_the_vector_index(monkeypatch):
+    """A finished job indexes its transcription, and with the [memory] extra
+    installed the vector half of that loads the embedding model (a download
+    on a machine without it). These tests check the lexical half; the
+    ingestion's vector wiring has its own tests."""
+    monkeypatch.setattr("durin.memory.ingestion._vector_index_for", lambda workspace: None)
+
+
 @pytest.fixture()
 def registry(tmp_path):
     return JobRegistry(tmp_path / "jobs.db")

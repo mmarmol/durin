@@ -262,6 +262,21 @@ def _no_package_installs(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _skill_writes_skip_the_vector_index(monkeypatch):
+    """Skill writes keep the FTS index in step but never embed.
+
+    Every skill write and curation stamp re-indexes the skill, and when the
+    [memory] extra is importable that includes an embedding through the real
+    model: a model load (a download, on a machine without it cached) and
+    about a second per write, paid by skill tests that never look at
+    vectors. The vector index has its own tests, which build it directly.
+    """
+    import durin.agent.skills_store as _skills_store
+
+    monkeypatch.setattr(_skills_store, "_vector_index_for", lambda workspace: None)
+
+
+@pytest.fixture(autouse=True)
 def _remove_loguru_sinks_left_by_a_test():
     """Remove every loguru sink a test added and left behind.
 

@@ -13,11 +13,15 @@ from durin.memory.file_watcher import MemoryFileWatcher
 from durin.memory.memory_writer import write_entity
 from durin.memory.vector_index import VectorIndex, vector_index_available
 
-# Real vector retrieval needs the `memory` extra (fastembed + lancedb); CI skips it.
-pytestmark = pytest.mark.skipif(
-    not vector_index_available(),
-    reason="vector deps (memory extra: fastembed/lancedb) absent",
-)
+# The vector index needs lancedb (the `memory` extra); the model is the
+# fastembed stand-in, in this process and in the embedding pool's workers.
+pytestmark = [
+    pytest.mark.skipif(
+        not vector_index_available(),
+        reason="vector deps (memory extra: fastembed/lancedb) absent",
+    ),
+    pytest.mark.usefixtures("fastembed_stand_in"),
+]
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 MODEL = "intfloat/multilingual-e5-small"
