@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 import tiktoken
 from loguru import logger
 
+from durin.agent.runner import input_budget_tokens
 from durin.config.schema import PREEMPTIVE_COMPACT_MIN_TOKENS
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
@@ -573,6 +574,7 @@ class Consolidator:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         *,
         eager_snapshot_for_session: Callable[[Session], EagerSnapshot | None] | None = None,
+        pending_summary_for_session: Callable[[Session], str | None] | None = None,
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
@@ -634,6 +636,11 @@ class Consolidator:
         # probe render live, which is what a session without a frozen surface
         # gets anyway.
         self._eager_snapshot_for_session = eager_snapshot_for_session
+        # The session summary as the session's next prompt carries it (the
+        # loop's framing, or the previous session's for a fresh one), so the
+        # probe measures that text. None (a test scaffold, an ad-hoc runner)
+        # reads the session's own summary unframed.
+        self._pending_summary_for_session = pending_summary_for_session
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -1026,12 +1033,15 @@ class Consolidator:
         session: Session,
         *,
         persona_soul: str | None = None,
+        limits: CompactionLimits | None = None,
     ) -> tuple[int, str]:
         """Estimate prompt size from the full unconsolidated session tail.
 
         ``persona_soul`` is the SOUL the session's turns are built with when
         a persona sets one (None: the default SOUL); a persona's SOUL can be
-        many times the default's size."""
+        many times the default's size. ``limits`` are the numbers of the
+        model those turns run on (None: the loop's own): its input budget
+        bounds the session summary in the prompt as it does in theirs."""
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
@@ -1039,14 +1049,19 @@ class Consolidator:
         # source of truth); the legacy `session.metadata["_last_summary"]` is
         # kept as a backward-compat fallback for pre-A10 sessions until they
         # next compact (at which point `_persist_last_summary` migrates).
-        from durin.memory.session_summary_store import get_session_summary
-        summary, _ = get_session_summary(self.store.workspace, session.key)
-        if summary is None:
-            legacy = session.metadata.get("_last_summary")
-            if isinstance(legacy, dict):
-                summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
-            elif isinstance(legacy, str):
-                summary = legacy
+        if self._pending_summary_for_session is not None:
+            summary = self._pending_summary_for_session(session)
+        else:
+            from durin.memory.session_summary_store import get_session_summary
+            summary, _ = get_session_summary(self.store.workspace, session.key)
+            if summary is None:
+                legacy = session.metadata.get("_last_summary")
+                if isinstance(legacy, dict):
+                    summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
+                elif isinstance(legacy, str):
+                    summary = legacy
+        limits = limits or self._limits()
+        tools = self._get_tool_definitions()
         # ``probe=True``: this build exists only to be measured. Without the
         # flag it would emit a ``context.composition`` row and overwrite the
         # cached payload that /status and the CLI footer read, so the estimate
@@ -1077,12 +1092,15 @@ class Consolidator:
             probe=True,
             eager_snapshot=eager_snapshot,
             active_persona_soul=persona_soul,
+            input_budget_tokens=input_budget_tokens(
+                limits.context_window_tokens, limits.max_completion_tokens, self.context_block_limit,
+            ),
         )
         return estimate_prompt_tokens_chain(
             self.provider,
             self.model,
             probe_messages,
-            self._get_tool_definitions(),
+            tools,
         )
 
     def _limits(self) -> CompactionLimits:
@@ -1664,7 +1682,7 @@ class Consolidator:
                 new_summaries.extend(replay_summaries)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
-                    session, persona_soul=persona_soul,
+                    session, persona_soul=persona_soul, limits=limits,
                 )
             except Exception:
                 logger.exception("Token estimation failed for {}", session.key)
@@ -1824,7 +1842,7 @@ class Consolidator:
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
-                        session, persona_soul=persona_soul,
+                        session, persona_soul=persona_soul, limits=limits,
                     )
                 except Exception:
                     logger.exception("Token estimation failed for {}", session.key)

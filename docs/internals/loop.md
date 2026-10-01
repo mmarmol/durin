@@ -957,6 +957,14 @@ Two metadata splits matter:
   extraction (`without_failed_exchanges`): in a bounded summary every block
   spent on them would evict an older, real one, and a span of nothing else
   makes no call. A failed turn that ran tools keeps that work.
+  The projection's own bound is in characters, whatever the window, so a
+  prompt carries the summary cut to a quarter of the room the rest of the
+  system prompt and the tool definitions leave of the turn model's input
+  budget (`_SUMMARY_ROOM_SHARE`, `fit_summary_to_tokens`): its oldest blocks
+  are left out first, after a line saying so. On a small window the whole
+  projection alone could otherwise leave a turn no room for its own message.
+  The compaction probe measures the summary the same way, framed as the
+  loop frames it (`pending_summary_for_session`).
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact

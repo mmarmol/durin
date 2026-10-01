@@ -191,6 +191,10 @@ every turn. It stops waiting once there is room again (a shorter
 `AGENTS.md`), after `/new` or `/compact`, and when a turn runs on a model
 with other limits.
 
+On a small window the summary so far would take much of that room by itself,
+so a prompt carries it cut to a quarter of what the system prompt and the
+tool schemas leave of the input budget, its oldest parts left out first.
+
 An empty `preemptive_compact_max_tokens` in the settings editor is `null`,
 and `null` means two different things: under `agents.defaults` it is no cap,
 while on a preset it is the `agents.defaults` cap. To turn the cap off for

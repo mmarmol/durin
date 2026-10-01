@@ -14,13 +14,24 @@ from durin.agent.skills import SkillsLoader
 from durin.agent.task_state import task_state_runtime_lines
 from durin.memory.eager_surface import EagerSnapshot
 from durin.memory.hot_layer import read_hot_layer
+from durin.memory.session_summary_store import fit_summary_to_tokens
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
+    estimate_prompt_tokens,
+    estimate_text_tokens,
 )
 from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
+
+# The share of a turn's input budget the archived session summary may take
+# of what the rest of the system prompt and the tool definitions leave: the
+# turn's own message, its task state and the replayed history share the
+# rest. The summary store caps the summary by characters whatever the
+# window, so on a small window the summary alone would otherwise leave a
+# turn no room.
+_SUMMARY_ROOM_SHARE = 0.25
 
 # The stable tier's sub-block labels for the ``/status`` composition
 # breakdown (see ``summarize_composition`` below).
@@ -240,6 +251,8 @@ class ContextBuilder:
         agent_mode_name: str | None = None,
         active_persona_soul: str | None = None,
         eager_snapshot: EagerSnapshot | None = None,
+        input_budget_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Build the system prompt in 3 cache-friendly tiers.
 
@@ -270,6 +283,11 @@ class ContextBuilder:
         page; a caller that wants the prefix to hold for the session passes
         the same snapshot back on every build. Omitted, both are rendered
         live and exposed through ``last_eager_render``.
+
+        ``input_budget_tokens`` is the input budget of the model the prompt
+        is for. With it, the session summary is cut to its share
+        (``_SUMMARY_ROOM_SHARE``) of what the other two tiers and *tools*
+        leave of that budget, its oldest blocks left out first.
         """
         # Reset the per-call breakdown — each layer fills its slot.
         self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
@@ -279,6 +297,12 @@ class ContextBuilder:
             eager_snapshot=eager_snapshot,
         )
         context = self._build_context_layer(agent_mode_name=agent_mode_name)
+        if session_summary and input_budget_tokens:
+            fixed = estimate_text_tokens("\n\n---\n\n".join(p for p in (stable, context) if p))
+            if tools:
+                fixed += estimate_prompt_tokens([], tools)
+            room = max(0, input_budget_tokens - fixed)
+            session_summary = fit_summary_to_tokens(session_summary, int(room * _SUMMARY_ROOM_SHARE))
         volatile = self._build_volatile_layer(session_summary=session_summary)
         return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
 
@@ -586,6 +610,7 @@ class ContextBuilder:
         *,
         probe: bool = False,
         eager_snapshot: EagerSnapshot | None = None,
+        input_budget_tokens: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call.
 
@@ -597,6 +622,10 @@ class ContextBuilder:
         ``eager_snapshot`` goes straight to ``build_system_prompt``: the
         pinned block and hot layer already rendered for this session, rather
         than a fresh read off disk.
+
+        ``input_budget_tokens``, the input budget of the model the turn runs
+        on, bounds the session summary in the system prompt by the room the
+        rest of it and *tools* leave (see ``build_system_prompt``).
         """
         # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
@@ -689,6 +718,8 @@ class ContextBuilder:
                     agent_mode_name=agent_mode_name,
                     active_persona_soul=active_persona_soul,
                     eager_snapshot=eager_snapshot,
+                    input_budget_tokens=input_budget_tokens,
+                    tools=tools,
                 ),
             },
             *history,

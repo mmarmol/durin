@@ -344,6 +344,55 @@ def append_session_summary_block(
         )
 
 
+# A prompt's frame around the summary blocks: a first line naming it, and an
+# end line after which a note may follow.
+_FRAME_HEAD = re.compile(r"^=== .+ ===$")
+_FRAME_END = re.compile(r"^=== END .+ ===$")
+_ELIDED_BLOCKS = "[… older parts of this summary are left out to fit the context window]"
+
+
+def fit_summary_to_tokens(text: str, max_tokens: int) -> str:
+    """*text*, a session summary as a prompt carries it, cut to at most
+    *max_tokens* tokens by leaving out its oldest blocks.
+
+    A frame around the blocks (a first line ``=== … ===``, and an end line
+    ``=== END … ===`` with what follows it) is kept whole. The newest blocks
+    are kept whole while they fit, after a line saying older ones were left
+    out; when not even the newest one fits, its last lines that do. Empty
+    when not even the frame fits."""
+    from durin.utils.helpers import estimate_text_tokens
+
+    if not text or max_tokens <= 0:
+        return ""
+    if estimate_text_tokens(text) <= max_tokens:
+        return text
+    lines = text.split("\n")
+    head = lines.pop(0) if lines and _FRAME_HEAD.match(lines[0]) else ""
+    end = next((i for i, line in enumerate(lines) if _FRAME_END.match(line)), len(lines))
+    tail = "\n".join(lines[end:])
+    blocks = "\n".join(lines[:end]).split(_SUMMARY_BLOCK_SEP)
+
+    def framed(body: str) -> str:
+        return "\n".join(part for part in (head, body, tail) if part)
+
+    room = max_tokens - estimate_text_tokens(framed(_ELIDED_BLOCKS + _SUMMARY_BLOCK_SEP))
+    if room <= 0:
+        return ""
+    kept: list[str] = []
+    for block in reversed(blocks):
+        if estimate_text_tokens(_SUMMARY_BLOCK_SEP.join([block, *kept])) > room:
+            break
+        kept.insert(0, block)
+    if kept:
+        return framed(_SUMMARY_BLOCK_SEP.join([_ELIDED_BLOCKS, *kept]))
+    newest: list[str] = []
+    for line in reversed(blocks[-1].split("\n")):
+        if estimate_text_tokens("\n".join([line, *newest])) > room:
+            break
+        newest.insert(0, line)
+    return framed(_SUMMARY_BLOCK_SEP.join([_ELIDED_BLOCKS, "\n".join(newest)])) if newest else ""
+
+
 def _load_summary_entry(path: Path) -> Optional[MemoryEntry]:
     """Parse the summary entry at *path*, or ``None`` when it is absent or
     unreadable. Best-effort — a broken file must never break the compaction

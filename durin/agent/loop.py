@@ -708,6 +708,7 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             eager_snapshot_for_session=self.eager_snapshot_for_session,
+            pending_summary_for_session=self._format_pending_summary,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
@@ -1897,6 +1898,7 @@ class AgentLoop:
         active_persona_soul: str | None = None,
         memory_prefetch: str | None = None,
         eager_snapshot: "EagerSnapshot | None" = None,
+        input_budget_tokens: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         audio_mode, supports_audio = self._audio_build_args()
@@ -1917,6 +1919,7 @@ class AgentLoop:
             active_persona_soul=active_persona_soul,
             memory_prefetch=memory_prefetch,
             eager_snapshot=eager_snapshot,
+            input_budget_tokens=input_budget_tokens,
         )
 
     async def _dispatch_command_inline(
@@ -2092,6 +2095,13 @@ class AgentLoop:
             budget = min(budget, limit)
         return budget if budget > 0 else max(128, window // 2)
 
+    def _turn_input_budget(self, run_snapshot: ProviderSnapshot | None = None) -> int | None:
+        """The runner's input budget for a turn on *run_snapshot*'s model,
+        else on the loop's own."""
+        window = run_snapshot.context_window_tokens if run_snapshot else self.context_window_tokens
+        provider = run_snapshot.provider if run_snapshot else self.provider
+        return input_budget_tokens(window, provider_max_output(provider), self.context_block_limit)
+
     def _turn_model_snapshot(self, ref: str | None) -> ProviderSnapshot | None:
         """The snapshot of the model a turn runs on when *ref* (a per-turn
         model or a persona's) names another one than the loop's own; None
@@ -2125,9 +2135,13 @@ class AgentLoop:
     ) -> int:
         """The session's prompt as its next turn would build it, estimated
         the way its compaction check measures it: with the SOUL of the
-        persona it runs under."""
-        soul, _model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
-        return self.consolidator.estimate_session_prompt_tokens(session, persona_soul=soul)[0]
+        persona it runs under, and its summary bounded by the input budget
+        of that persona's model."""
+        soul, model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
+        limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
+        return self.consolidator.estimate_session_prompt_tokens(
+            session, persona_soul=soul, limits=limits,
+        )[0]
 
     def _compaction_limits(self, run_snapshot: ProviderSnapshot | None) -> CompactionLimits | None:
         """What compaction is sized by for a turn on *run_snapshot*'s model;
@@ -3155,6 +3169,7 @@ class AgentLoop:
             supports_audio_input=supports_audio,
             active_persona_soul=persona_soul,
             eager_snapshot=eager_snapshot,
+            input_budget_tokens=self._turn_input_budget(run_snapshot),
         )
         if freezes and eager_snapshot is None:
             # This build rendered live (no snapshot stored yet, or none to
@@ -3988,6 +4003,7 @@ class AgentLoop:
             active_persona_soul=ctx.active_persona_soul,
             memory_prefetch=ctx.memory_prefetch or None,
             eager_snapshot=ctx.eager_snapshot,
+            input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
         )
         if freezes and ctx.eager_snapshot is None:
             # Immediately after the build: the builder holds one rendering at
@@ -4110,6 +4126,7 @@ class AgentLoop:
                     active_persona_soul=ctx.active_persona_soul,
                     memory_prefetch=ctx.memory_prefetch or None,
                     eager_snapshot=ctx.eager_snapshot,
+                    input_budget_tokens=self._turn_input_budget(ctx.run_snapshot),
                 )
                 continue
             break

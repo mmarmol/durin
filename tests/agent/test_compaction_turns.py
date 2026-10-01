@@ -39,6 +39,26 @@ def _text_of(message: dict[str, Any]) -> str:
     return ""
 
 
+def _window_leaving(tmp_path, room: int) -> int:
+    """The window whose input budget leaves *room* tokens beside the system
+    prompt and the tool definitions a session in *tmp_path* starts with.
+
+    Measured rather than fixed: the system prompt names the workspace and
+    the skills it lists by absolute path, so its size depends on where the
+    tree is checked out, and a test at a window's edge would pass in one
+    checkout and fail in another."""
+    from durin.agent.runner import input_budget_tokens
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=8192)
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    system = loop.context.build_system_prompt(None, channel="cli")
+    fixed = estimate_prompt_tokens([{"role": "system", "content": system}], loop.tools.get_definitions())
+    overhead = 100_000 - input_budget_tokens(100_000, 8192)
+    return fixed + room + overhead
+
+
 async def _run_turns(
     tmp_path,
     *,
@@ -222,6 +242,32 @@ async def test_a_session_at_the_ceiling_recovers_from_an_overflow(tmp_path, turn
     assert sum(result["compactions"]) >= 1
     assert any(a["stop_reason"] == "mid_turn_precheck_overflow" for a in result["attempts"])
     _assert_turns_saved(result)
+
+
+@pytest.mark.asyncio
+async def test_a_small_window_session_keeps_answering_as_its_summary_grows(tmp_path):
+    """The session summary is capped at 16,000 characters, about 4,700
+    tokens, whatever the window. On a window whose budget leaves 6,000
+    tokens beside the system prompt and the tool definitions, the summary
+    grew until it, the task state and one message no longer fit: from then
+    on every turn failed, each after a forced compaction that could not make
+    room. In a prompt the summary now takes a quarter of that room at most."""
+    from durin.agent.runner import input_budget_tokens
+
+    from durin.utils.helpers import estimate_text_tokens
+
+    window = _window_leaving(tmp_path, 6_000)
+    result = await _run_turns(tmp_path, turns=45, window=window)
+
+    failed = [i for i, r in enumerate(result["replies"]) if not r or r.startswith(_OVERFLOW_REPLY)]
+    assert failed == []
+    assert max(result["main_prompts"]) <= input_budget_tokens(window, 8192)
+    _assert_turns_saved(result)
+    summaries = [
+        _text_of(a["prompt"][0]).partition("[Archived Context Summary]")[2] for a in result["attempts"]
+    ]
+    assert any(summaries)
+    assert max(estimate_text_tokens(s) for s in summaries) <= 6_000 // 4
 
 
 @pytest.mark.asyncio
