@@ -162,28 +162,99 @@ def test_real_concurrency_threads(tmp_path):
     assert landed == 16   # all 16 landed via CAS
 
 
-def test_concurrency_threads_stress_no_lost_write(tmp_path):
+def test_concurrency_a_reset_racing_a_peer_commit_loses_no_write(tmp_path, monkeypatch):
     """Load-bearing regression for hazard #9 (in-process ref-CAS lost update).
 
-    Without the per-repo in-process write lock in memory_writer, dulwich's
-    loose-ref CAS (`refs.set_if_equals`) is not atomic across same-process
-    threads: two threads read the same parent sha, both pass the compare, both
-    write, and the second silently orphans the first's commit — losing one
-    relation with NO exception and NO CAS retry. A single high-contention round
-    flakes only ~1-in-8; this loops many rounds so the loss is caught reliably
-    (~99.9%) without the fix, and passes deterministically with it.
-    The per-repo in-process write lock in memory_writer closes this race.
+    After each commit, write_entity fast-forwards the working tree with
+    dulwich's ``reset --hard``, which resolves HEAD's commit, then re-reads
+    HEAD and compare-and-sets it back to the commit it resolved. A peer
+    thread's commit landing between those two reads is reverted: its relation
+    is lost with no exception and no CAS retry. The per-repo in-process write
+    lock keeps peers out of that window.
+
+    The race is made deterministic: both writers read their base together,
+    then the first reset is held inside its window until a peer commit has
+    landed (bounded wait). With the lock no peer can commit meanwhile, the
+    waits run out and both relations land; without it the peer commits in the
+    window and its relation is lost every time.
     """
-    n_threads = 32
-    for rnd in range(60):
-        ws = tmp_path / f"round{rnd}"
-        ws.mkdir()
-        landed, errors = _concurrent_relation_round(ws, n_threads)
-        assert not errors, (rnd, errors)
-        assert landed == n_threads, (
-            f"round {rnd}: lost a write — {landed}/{n_threads} relations landed "
-            f"(hazard #9 in-process ref-CAS lost update)"
-        )
+    import sys
+
+    import dulwich.refs as dulwich_refs
+    from dulwich import porcelain
+
+    import durin.memory.memory_writer as memory_writer
+
+    ws = tmp_path
+    write_entity(ws, "company:x",
+                 [FieldPatch(kind="body_append", value="seed", author="agent",
+                             source_ref="s", at=NOW)], create=True)
+
+    wait_s = 0.5
+    start = threading.Barrier(2)
+    started: set[int] = set()
+    holder: list[int] = []
+    peer_committed = threading.Event()
+
+    real_head_sha = memory_writer.head_sha
+
+    def head_sha_lined_up(root):
+        me = threading.get_ident()
+        if me not in started:
+            started.add(me)
+            try:
+                start.wait(timeout=wait_s)
+            except threading.BrokenBarrierError:
+                pass
+        return real_head_sha(root)
+
+    real_parse_commit = porcelain.parse_commit
+
+    def parse_commit_then_hold(*args, **kwargs):
+        commit = real_parse_commit(*args, **kwargs)
+        # Hold only the lookup reset makes, between resolving HEAD and
+        # re-reading it for its compare-and-set.
+        if not holder and sys._getframe(1).f_code.co_name == "reset":
+            holder.append(threading.get_ident())
+            peer_committed.wait(timeout=wait_s)
+        return commit
+
+    real_set_if_equals = dulwich_refs.DiskRefsContainer.set_if_equals
+
+    def set_if_equals_and_signal(self, *args, **kwargs):
+        ok = real_set_if_equals(self, *args, **kwargs)
+        if ok and holder and threading.get_ident() != holder[0]:
+            peer_committed.set()
+        return ok
+
+    monkeypatch.setattr(memory_writer, "head_sha", head_sha_lined_up)
+    monkeypatch.setattr(porcelain, "parse_commit", parse_commit_then_hold)
+    monkeypatch.setattr(dulwich_refs.DiskRefsContainer, "set_if_equals",
+                        set_if_equals_and_signal)
+
+    errors = []
+
+    def worker(i):
+        try:
+            write_entity(ws, "company:x",
+                         [FieldPatch(kind="relation",
+                                     value=dict(to=f"topic:t{i}", type="rel"),
+                                     author="agent", source_ref=f"s{i}", at=NOW)])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+
+    assert holder, "the hold never ran: dulwich's reset no longer calls parse_commit"
+    assert not errors, errors
+    raw = read_blob_at_head(ws / "memory", "entities/company/x.md")
+    page = EntityPage.from_text(raw.decode("utf-8"))
+    assert {r["to"] for r in page.relations} == {"topic:t0", "topic:t1"}, (
+        "lost a write (hazard #9 in-process ref-CAS lost update)")
 
 
 # ---- author scope bridge (Task 7) -----------------------------------------
