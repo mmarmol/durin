@@ -1284,21 +1284,29 @@ class Consolidator:
         pieces.append(piece)
         return pieces
 
-    async def _archive_in_pieces(
-        self, session: Session, messages: list[dict],
+    async def archive_pieces(
+        self, messages: list[dict],
     ) -> tuple[list[str], dict[str, list[str]]]:
         """Summarize *messages* in as many calls as ``_summarizer_pieces``
-        cuts them into: each summary that came back (one block each, like a
-        round's), and the tags of all of them, also merged into the session's
-        own. A call that fails raw-archives its run (``archive``)."""
+        cuts them into, so none of them is cut: each summary that came back
+        (one block each, like a round's) and the tags of all of them. A call
+        that fails raw-archives its run (``archive``)."""
         summaries: list[str] = []
         tags: dict[str, list[str]] = {"entities": [], "topics": []}
         for piece in self._summarizer_pieces(messages):
             summary, piece_tags = await self.archive(piece)
-            self._merge_session_tags(session, piece_tags)
             self._collect_tags(tags, piece_tags)
             if summary:
                 summaries.append(summary)
+        return summaries, tags
+
+    async def _archive_in_pieces(
+        self, session: Session, messages: list[dict],
+    ) -> tuple[list[str], dict[str, list[str]]]:
+        """``archive_pieces``, with the tags also merged into the session's
+        own."""
+        summaries, tags = await self.archive_pieces(messages)
+        self._merge_session_tags(session, tags)
         return summaries, tags
 
     def _truncate_to_token_budget(self, text: str) -> str:

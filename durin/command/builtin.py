@@ -536,19 +536,17 @@ async def _archive_closed_session(
     )
 
     log = logging.getLogger(__name__)
-    summary: str | None = None
+    summaries: list[str] = []
     tags: dict[str, list[str]] = {"entities": [], "topics": []}
     if snapshot:
         try:
-            result = await loop.consolidator.archive(snapshot)
-            first = result[0] if isinstance(result, tuple) else None
-            if isinstance(first, str) and first.strip() and first.strip() != "(nothing)":
-                summary = first.strip()
-            if isinstance(result, tuple) and isinstance(result[1], dict):
-                tags = result[1]
+            # In as many summarizing calls as the conversation needs, so a
+            # long one is filed whole rather than cut to what one call takes.
+            found, tags = await loop.consolidator.archive_pieces(snapshot)
+            summaries = [s.strip() for s in found if s.strip() and s.strip() != "(nothing)"]
         except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
             log.exception("/new archive failed for %s", key)
-    parts = [p for p in (prior_summary, summary) if p]
+    parts = [p for p in (prior_summary, *summaries) if p]
     if not parts:
         return
     when = last_active if isinstance(last_active, datetime) else datetime.now()
@@ -1456,7 +1454,9 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
         )
 
     try:
-        summary, tags = await loop.consolidator.archive(chunk)
+        # In as many summarizing calls as the conversation needs, so a long
+        # one is summarized whole rather than cut to what one call takes.
+        summaries, tags = await loop.consolidator.archive_pieces(chunk)
     except Exception as exc:  # noqa: BLE001
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -1466,12 +1466,12 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
 
     session.last_consolidated = len(session.messages)
     loop.consolidator.forget_session(session.key)
-    if summary:
+    if summaries:
         loop.consolidator._merge_session_tags(session, tags)
-        loop.consolidator._persist_last_summary(session, [summary], tags)
+        loop.consolidator._persist_last_summary(session, summaries, tags)
     loop.sessions.save(session)
 
-    if summary:
+    if summaries:
         content = (
             f"Compacted {len(chunk)} messages into summary "
             f"(total: {len(session.messages)})."

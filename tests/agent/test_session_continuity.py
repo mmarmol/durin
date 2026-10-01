@@ -15,12 +15,15 @@ from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.config.schema import MemoryContinuityConfig
 from durin.memory.session_summary_store import write_session_summary
-from durin.providers.base import LLMResponse, ToolCallRequest
+from durin.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
 
 def _make_loop(tmp_path: Path) -> AgentLoop:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
+    # A real provider always carries its generation settings; the
+    # consolidator sizes its summarizing calls by them.
+    provider.generation = GenerationSettings()
     loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
     loop.tools.get_definitions = MagicMock(return_value=[])
     return loop

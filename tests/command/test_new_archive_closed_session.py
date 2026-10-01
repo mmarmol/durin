@@ -26,8 +26,13 @@ KEY = "cli:test"
 
 
 def _make_loop(tmp_path: Path) -> AgentLoop:
+    from durin.providers.base import GenerationSettings
+
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
+    # A real provider always carries its generation settings; the
+    # consolidator sizes its summarizing calls by them.
+    provider.generation = GenerationSettings()
     return AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
 
 

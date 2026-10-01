@@ -991,8 +991,11 @@ extraction and the learnings extraction all run on the loop's own model. A
 chunk sized by a turn on a larger window than the loop's, or the span several
 rounds archived, can be many times that budget, so each is cut at message
 boundaries into runs that fit it (`_summarizer_pieces`) and summarized one
-run per call, each summary its own block. Only a single message larger than
-the budget is still truncated.
+run per call, each summary its own block. `/compact` and the record `/new`
+files go through the same cut (`Consolidator.archive_pieces`): they summarize
+the whole unconsolidated conversation at once, so a long one takes several
+calls rather than being cut to what one takes. Only a single message larger
+than the budget is still truncated.
 
 The trigger is clamped against `_preemptive_ceiling`, not
 `_input_token_budget`: the budget reserves the full completion ceiling, so on a

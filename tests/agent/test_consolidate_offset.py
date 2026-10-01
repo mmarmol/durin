@@ -488,12 +488,15 @@ class TestNewCommandArchival:
     def _make_loop(tmp_path: Path):
         from durin.agent.loop import AgentLoop
         from durin.bus.queue import MessageBus
-        from durin.providers.base import LLMResponse
+        from durin.providers.base import GenerationSettings, LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
         provider.estimate_prompt_tokens.return_value = (10_000, "test")
+        # A real provider always carries its generation settings; the
+        # consolidator sizes its summarizing calls by them.
+        provider.generation = GenerationSettings()
         loop = AgentLoop(
             bus=bus,
             provider=provider,
@@ -519,10 +522,11 @@ class TestNewCommandArchival:
 
         call_count = 0
 
-        async def _failing_summarize(_messages) -> bool:
+        async def _failing_summarize(_messages):
+            # archive()'s failure: no summary (it raw-archived the messages).
             nonlocal call_count
             call_count += 1
-            return False
+            return None, {"entities": [], "topics": []}
 
         loop.consolidator.archive = _failing_summarize  # type: ignore[method-assign]
 
@@ -552,10 +556,10 @@ class TestNewCommandArchival:
 
         archived_count = -1
 
-        async def _fake_summarize(messages) -> bool:
+        async def _fake_summarize(messages):
             nonlocal archived_count
             archived_count = len(messages)
-            return True
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _fake_summarize  # type: ignore[method-assign]
 
@@ -579,8 +583,8 @@ class TestNewCommandArchival:
             session.add_message("assistant", f"resp{i}")
         loop.sessions.save(session)
 
-        async def _ok_summarize(_messages) -> bool:
-            return True
+        async def _ok_summarize(_messages):
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _ok_summarize  # type: ignore[method-assign]
 
@@ -605,10 +609,10 @@ class TestNewCommandArchival:
 
         archived = asyncio.Event()
 
-        async def _slow_summarize(_messages) -> bool:
+        async def _slow_summarize(_messages):
             await asyncio.sleep(0.1)
             archived.set()
-            return True
+            return "- summary", {"entities": [], "topics": []}
 
         loop.consolidator.archive = _slow_summarize  # type: ignore[method-assign]
 
