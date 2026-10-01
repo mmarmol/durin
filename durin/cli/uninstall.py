@@ -45,6 +45,7 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
     explicitly.
     """
     from durin.config.home import durin_home as _durin_home_root
+    from durin.config.loader import _split_dir
 
     home = _home()
     durin_home = _durin_home_root()
@@ -52,6 +53,8 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
 
     config_paths = (
         durin_home / "config.json",
+        # The split layout's sections: config.json is then only its marker.
+        _split_dir(durin_home / "config.json"),
         durin_home / "config.json.bak",
         durin_home / "pairing.json",
     )

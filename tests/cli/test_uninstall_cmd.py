@@ -226,3 +226,42 @@ def test_instance_telemetry_is_collected_with_the_cache_group(fake_home: Path) -
     str_paths = {str(p) for _g, p, _s in kept}
     assert str(instance_telemetry) not in str_paths
     assert str(fake_home / ".cache" / "durin" / "telemetry") not in str_paths
+
+
+def _split_config(fake_home: Path) -> dict[str, bytes]:
+    """The split layout durin writes: config.json as its marker, a file per
+    section under config.json.d/. Returns every file's bytes."""
+    root = fake_home / ".durin"
+    (root / "config.json").write_text('{"_layout": "split"}', encoding="utf-8")
+    split = root / "config.json.d"
+    split.mkdir()
+    (split / "agents.json").write_text('{"defaults": {"model": "openai/gpt-4.1"}}', encoding="utf-8")
+    (split / "providers.json").write_text('{"openai": {"apiKey": "sk-test"}}', encoding="utf-8")
+    return {p.name: p.read_bytes() for p in (root / "config.json", *sorted(split.iterdir()))}
+
+
+def test_run_uninstall_removes_the_split_config_too(fake_home: Path) -> None:
+    """Uninstall removed config.json, which on the split layout is only its
+    marker, and left every setting behind in config.json.d/."""
+    _split_config(fake_home)
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    assert not (fake_home / ".durin" / "config.json").exists()
+    assert not (fake_home / ".durin" / "config.json.d").exists()
+
+
+def test_run_uninstall_keep_config_keeps_the_split_config(fake_home: Path) -> None:
+    before = _split_config(fake_home)
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=True, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    root = fake_home / ".durin"
+    split = root / "config.json.d"
+    assert {p.name: p.read_bytes() for p in (root / "config.json", *sorted(split.iterdir()))} == before

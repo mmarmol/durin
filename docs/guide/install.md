@@ -317,7 +317,7 @@ touching anything:
 durin uninstall                 # dry-run by default: lists what would be deleted
 durin uninstall --yes           # delete user data (~/.durin, ~/.cache/durin)
 durin uninstall --purge --yes   # also `pip uninstall durin-agent` afterwards
-durin uninstall --keep-config   # remove caches/workspace, preserve config.json
+durin uninstall --keep-config   # remove caches/workspace, preserve the config
 ```
 
 Flags:
@@ -326,8 +326,8 @@ Flags:
 - `--purge` — additionally run `pip uninstall durin-agent` (the PyPI
   distribution name). Self-uninstalls in a subprocess so the running command
   finishes cleanly first.
-- `--keep-config` — preserve `~/.durin/config.json` and `pairing.json`;
-  everything else still goes.
+- `--keep-config` — preserve the config (`~/.durin/config.json` and its
+  `config.json.d/` sections) and `pairing.json`; everything else still goes.
 - `--keep-cache` — preserve `~/.cache/durin/`.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
@@ -339,6 +339,7 @@ you can sanity-check before committing.
 | Path | Removed by default? | Flag to keep |
 |---|---|---|
 | `~/.durin/config.json` | yes | `--keep-config` |
+| `~/.durin/config.json.d/` (the config's sections) | yes | `--keep-config` |
 | `~/.durin/config.json.bak` | yes | `--keep-config` |
 | `~/.durin/pairing.json` | yes | `--keep-config` |
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
