@@ -1164,7 +1164,10 @@ like the veto state), and the session's next compaction waits until the
 prompt has grown past that level by that runway, or reaches the ceiling
 (`compaction.deferred` with reason `fixed_prompt`). Between two compactions
 such a session's prompt therefore runs past its trigger, by up to a runway,
-instead of compacting on every turn. A compaction that leaves more room
+instead of compacting on every turn. The ceiling cuts that wait short: where
+the fixed part leaves less than a runway under the ceiling, the session
+compacts whenever its prompt reaches the ceiling, which with room for one
+exchange of history means nearly every turn. A compaction that leaves more room
 clears the level, and so does one that ran out of rounds while still
 archiving: that is a backlog, which keeps compacting on the next turn. A
 forced compaction ignores the level. The level is kept with the limits it

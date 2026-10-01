@@ -187,9 +187,13 @@ the trigger on its own, for example a very long
 one that leaves less than a quarter of the usual room under the trigger, the
 chat waits until the prompt has grown by the usual room before compacting
 again: its prompts run past the trigger for a while instead of compacting on
-every turn. It stops waiting once there is room again (a shorter
-`AGENTS.md`), after `/new` or `/compact`, and when a turn runs on a model
-with other limits.
+every turn. The wait stops at the window's ceiling, the most a turn may start
+from (the input budget less a safety margin): where the system prompt and the
+tool schemas leave less than the usual room under it, as a very long
+`AGENTS.md` on a small window does, the chat compacts whenever the prompt
+reaches the ceiling, which can be every turn. It stops waiting once there is
+room again (a shorter `AGENTS.md`), after `/new` or `/compact`, and when a
+turn runs on a model with other limits.
 
 On a small window the summary so far would take much of that room by itself,
 so a prompt carries it cut to a quarter of what the system prompt, the tool
