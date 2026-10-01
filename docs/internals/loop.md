@@ -1084,7 +1084,9 @@ extraction and the learnings extraction all run on the loop's own model. A
 chunk sized by a turn on a larger window than the loop's, or the span several
 rounds archived, can be many times that budget, so each is cut at message
 boundaries into runs that fit it (`_summarizer_pieces`) and summarized one
-run per call, each summary its own block. `/compact` and the record `/new`
+run per call, each summary its own block. A run is counted as the
+summarizing call counts the text it receives, its lines joined with no
+newline after the last, so a span that fills one call exactly is one call. `/compact` and the record `/new`
 files go through the same cut (`Consolidator.archive_pieces`): they summarize
 the whole unconsolidated conversation at once, so a long one takes several
 calls rather than being cut to what one takes. Only a single message larger

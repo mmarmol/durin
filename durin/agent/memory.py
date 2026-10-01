@@ -1299,17 +1299,23 @@ class Consolidator:
 
         pieces: list[list[dict]] = []
         piece: list[dict] = []
-        used = 0
+        # A run is counted as archive() counts the text it sends: its lines
+        # joined by newlines, with none after the last. Every formatted line
+        # starts a token of its own ("[" of its timestamp), so that count is
+        # the run's earlier lines each counted with its joining newline
+        # (``closed``) plus the last line alone; ``text`` is the run so far.
+        closed = text = 0
         for message in messages:
             line = MemoryStore._format_messages([message])
-            # Counted with the newline that joins it to the next line, so a
-            # run's lines add up to at least its joined text.
-            cost = count(line + "\n") if line else 0
-            if piece and used + cost > budget:
+            grown = closed + count(line) if line else text
+            if piece and grown > budget:
                 pieces.append(piece)
-                piece, used = [], 0
+                piece, closed = [], 0
+                grown = count(line) if line else 0
             piece.append(message)
-            used += cost
+            if line:
+                closed += count(line + "\n")
+            text = grown
         pieces.append(piece)
         return pieces
 
