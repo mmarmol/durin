@@ -377,6 +377,26 @@ def test_check_cache_size_no_cache(fake_home: Path) -> None:
     assert r.status == "ok"
 
 
+def test_a_big_cache_names_its_folders_instead_of_an_uninstall(fake_home: Path) -> None:
+    """Over 10 GB the fix read "`durin uninstall --keep-config
+    --keep-workspace --yes` to drop caches": that removes the sessions, the
+    history and everything else in the durin home, with no question asked.
+    It names the cache's folders now, the biggest first."""
+    cache = fake_home / ".cache" / "durin"
+    (cache / "models").mkdir(parents=True)
+    with open(cache / "models" / "weights.bin", "wb") as f:
+        f.truncate(11 * 1024 ** 3)  # sparse: the size without the disk
+    (cache / "telemetry").mkdir()
+    (cache / "telemetry" / "cli_2026-10-01.jsonl").write_text("{}\n", encoding="utf-8")
+
+    r = check_cache_size()
+
+    assert r.status == "warn"
+    assert "uninstall" not in r.fix
+    assert f"{cache}" in r.fix
+    assert r.fix.index("models/ (11.0 GB)") < r.fix.index("telemetry/")
+
+
 # ---------------------------------------------------------------------------
 # check_whatsapp_bridge
 # ---------------------------------------------------------------------------

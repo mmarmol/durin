@@ -780,22 +780,29 @@ def check_stt_round_trip(cfg: "Config | None" = None) -> CheckResult:
 
 
 def check_cache_size() -> CheckResult:
+    from durin.cli.uninstall import _path_size
+
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
         return CheckResult("cache size", "ok", "no cache yet", category="state")
-    total = 0
-    for root, _dirs, files in os.walk(cache, followlinks=False):
-        for name in files:
-            try:
-                total += (Path(root) / name).stat().st_size
-            except OSError:
-                continue
+    sizes = {
+        entry.name + ("/" if entry.is_dir() and not entry.is_symlink() else ""): _path_size(entry)
+        for entry in cache.iterdir()
+    }
+    total = sum(sizes.values())
     gb = total / (1024 ** 3)
     if gb > 10:
+        # Named, not removed: an uninstall would take the sessions, the
+        # history and everything else in the durin home with the caches.
+        biggest = ", ".join(
+            f"{name} ({size / 1024 ** 3:.1f} GB)"
+            for name, size in sorted(sizes.items(), key=lambda item: -item[1])[:3]
+        )
         return CheckResult(
             "cache size", "warn",
             f"{gb:.1f} GB at {cache}",
-            fix="`durin uninstall --keep-config --keep-workspace --yes` to drop caches.",
+            fix=f"Delete what you no longer need in {cache} (biggest: {biggest}); "
+                "its telemetry/ is the default install's usage log, not a cache.",
             category="state",
         )
     if gb > 1:
