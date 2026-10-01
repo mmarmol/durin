@@ -538,6 +538,40 @@ async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(t
 
 
 @pytest.mark.asyncio
+async def test_a_system_message_turn_carries_the_summary_its_compaction_wrote(tmp_path):
+    """A system message's turn read the session summary before its own
+    compaction check ran. When that check archived turns, the history it
+    built from no longer held them and the summary it carried did not cover
+    them either: the archived turns vanished from the prompt."""
+    from durin.bus.events import InboundMessage
+
+    seed = []
+    for i in range(30):
+        seed += [
+            {"role": "user", "content": _turn_text(i), "timestamp": "2026-09-30T10:00:00"},
+            {"role": "assistant", "content": f"reply {i}", "timestamp": "2026-09-30T10:00:01"},
+        ]
+    result = await _run_turns(tmp_path, turns=0, window=60_000, session_messages=seed)
+    loop, key = result["loop"], "cli:sim"
+    systems: list[str] = []
+    real_run = loop.runner.run
+
+    async def _run(spec):
+        systems.append(_text_of(spec.initial_messages[0]))
+        return await real_run(spec)
+
+    loop.runner.run = _run  # type: ignore[method-assign]
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    await loop._process_message(InboundMessage(
+        channel="system", sender_id="subagent", chat_id=key,
+        content="the sub-agent found three files", metadata={"subagent_task_id": "t-1"},
+    ))
+
+    assert loop.sessions.get_or_create(key).last_consolidated > 0
+    assert "ARCHIVED SUMMARY" in systems[0]
+
+
+@pytest.mark.asyncio
 async def test_a_turn_on_a_larger_model_is_summarized_whole(tmp_path):
     """A turn's model sizes the chunks a compaction archives, but the summary,
     the decision log and the learnings are written by the loop's own model,

@@ -3089,10 +3089,6 @@ class AgentLoop:
         if self._restore_pending_user_turn(session):
             self.sessions.save(session)
 
-        pending = self._format_pending_summary(session)
-        if pending:
-            logger.info("Memory compact triggered for session {}", key)
-
         # The session's persona and the model it runs on, resolved as BUILD
         # resolves them for the session's own turns: this turn is one of
         # them. Run on the loop's model, its compaction check replaced the
@@ -3109,6 +3105,12 @@ class AgentLoop:
             limits=limits,
             persona_soul=persona_soul,
         )
+        # Read after the check, as BUILD reads it: a compaction it ran wrote
+        # the summary of the turns it archived, which the history built below
+        # no longer holds.
+        pending = self._format_pending_summary(session)
+        if pending:
+            logger.info("Memory compact triggered for session {}", key)
         is_subagent = msg.sender_id == "subagent"
         if is_subagent and self._persist_subagent_followup(session, msg):
             logger.debug("Subagent result persisted for session {}", key)

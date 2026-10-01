@@ -232,7 +232,9 @@ a Slack `thread_ts`, an email thread and a Telegram forum topic
 channel metadata. A system message that starts a turn of its own is a turn
 of the session's: it runs on the model and with the SOUL of the session's
 persona, resolved as BUILD resolves them, and its compaction checks and
-history replay are sized by that model. It is saved
+history replay are sized by that model. Like BUILD, it reads the session
+summary after its check, so a compaction that check ran is summarized in the
+prompt it builds. It is saved
 once, as its own entry: a sub-agent's result as the assistant message saved
 before its prompt is built (its entry in the prompt carries only the runtime
 context and is not saved), anything else as a user message; the run's
