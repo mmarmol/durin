@@ -812,6 +812,84 @@ async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(t
     assert archived == []
 
 
+async def _cron_run_loop(tmp_path) -> tuple[AgentLoop, list[int | None], list[str]]:
+    """A loop on a model with a 1M window, a ``small`` preset with a 64,000
+    window and a persona ``brief`` that answers as Terse, with the window and
+    the system prompt of each run it makes from then on."""
+    from durin.config.schema import Config, ModelPresetConfig, PersonaConfig
+    from durin.souls.store import SoulStore
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+        "small": ModelPresetConfig(model="test-model", context_window_tokens=64_000),
+    }
+    config = Config()
+    config.memory.file_watcher.enabled = False
+    config.personas["brief"] = PersonaConfig(soul="terse")
+    SoulStore(tmp_path).write("terse", "You are Terse: you answer in five words.")
+    result = await _run_turns(tmp_path, turns=0, window=1_000_000, model_presets=presets, app_config=config)
+    loop = result["loop"]
+    # The checks the turns schedule after them are not part of these tests.
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    windows: list[int | None] = []
+    systems: list[str] = []
+    real_run = loop.runner.run
+
+    async def _run(spec):
+        windows.append(spec.context_window_tokens)
+        systems.append(_text_of(spec.initial_messages[0]))
+        return await real_run(spec)
+
+    loop.runner.run = _run  # type: ignore[method-assign]
+    return loop, windows, systems
+
+
+async def _subagent_result(loop: AgentLoop, key: str) -> None:
+    from durin.bus.events import InboundMessage
+
+    await loop._process_message(InboundMessage(
+        channel="system", sender_id="subagent", chat_id="cli:direct",
+        content="the sub-agent found three files", metadata={"subagent_task_id": "t-1"},
+        session_key_override=key,
+    ))
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_on_a_cron_run_runs_as_the_job_turn_did(tmp_path):
+    """A cron job's turn runs on the job's own model and persona, given to
+    that turn alone. A sub-agent's result that lands on the run's session
+    later starts a turn of that session, which knew neither: it answered on
+    the loop's model with the default SOUL, and its compaction check, sized
+    by the loop's model, replaced the trigger the job's turn had recorded,
+    so the footer and /status showed the loop's."""
+    loop, windows, systems = await _cron_run_loop(tmp_path)
+    key = "cron:job-1:run:1"
+    # As the gateway runs a cron job's turn.
+    await loop.process_direct("check the build", session_key=key, model_preset="small", persona="brief")
+    await _subagent_result(loop, key)
+
+    assert windows == [64_000, 64_000]
+    assert "You are Terse" in systems[1]
+    assert loop.consolidator.session_trigger(key) == 48_000
+    session = loop.sessions.get_or_create(key)
+    assert loop.session_compaction_trigger(session, channel="cli", chat_id="direct") == 48_000
+
+
+@pytest.mark.asyncio
+async def test_a_turn_given_no_model_of_its_own_puts_its_session_back_on_its_own(tmp_path):
+    """The model and persona a turn is given for itself hold for its session
+    until the session's next turn of its own: one that is given neither puts
+    the session's system messages back on the session's own persona."""
+    loop, windows, systems = await _cron_run_loop(tmp_path)
+    key = "cron:job-1:run:1"
+    await loop.process_direct("check the build", session_key=key, model_preset="small", persona="brief")
+    await loop.process_direct("and the tests", session_key=key)
+    await _subagent_result(loop, key)
+
+    assert windows == [64_000, 1_000_000, 1_000_000]
+    assert "You are Terse" not in systems[2]
+
+
 @pytest.mark.asyncio
 async def test_a_system_message_turn_carries_the_summary_its_compaction_wrote(tmp_path):
     """A system message's turn read the session summary before its own

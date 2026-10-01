@@ -230,9 +230,15 @@ its `chat_id` names, in the thread its session key scopes: the loop re-derives
 a Slack `thread_ts`, an email thread and a Telegram forum topic
 (`message_thread_id`) from the key, since the message itself carries no
 channel metadata. A system message that starts a turn of its own is a turn
-of the session's: it runs on the model and with the SOUL of the session's
-persona, resolved as BUILD resolves them, and its compaction checks and
-history replay are sized by that model. Like BUILD, it reads the session
+of the session's: it runs on the model and with the SOUL the session's own
+turns run with (`_session_persona`), and its compaction checks and history
+replay are sized by that model. Those are the model and persona the
+session's latest turn was given for itself, when it was given any: BUILD
+records them on the session (`turn_overrides` in its metadata) and a turn
+given neither clears them. A cron job's turn is given the job's own, so a
+sub-agent's or a background workflow's result that lands on the run's
+session later runs as the job's turn did. Otherwise they are the session's
+persona's, resolved as BUILD resolves them. Like BUILD, it reads the session
 summary after its check, so a compaction that check ran is summarized in the
 prompt it builds. It is saved
 once, as its own entry: a sub-agent's result as the assistant message saved
@@ -422,7 +428,10 @@ The handlers, in order:
   → `BUILD`.
 - **`_state_build`** — resolves the active persona and the model the turn
   runs on (a per-turn ref, else the persona's model; `ctx.run_snapshot` when
-  that is not the loop's own), then runs `maybe_consolidate_by_tokens` sized
+  that is not the loop's own), records on the session the per-turn ref and
+  persona the turn was given (`turn_overrides`, cleared when it was given
+  neither) for the system messages that land on it later, then runs
+  `maybe_consolidate_by_tokens` sized
   by that model (compacting before building so the prompt fits), sets the
   per-tool request context, slices history (`session.get_history`, within
   the same model's input budget), then resolves the session's frozen eager
@@ -759,7 +768,8 @@ The active persona for a turn is resolved once in `_state_build` by
 
 1. **Cron job** — `job.payload.persona`, set per job in the cron panel or the
    `cron` tool; applies only to that job's run (mutually exclusive with the
-   job's per-run model).
+   job's per-run model), the system messages that land on the run's session
+   after its turn included.
 2. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
    <name>` and cleared by `/persona durin` (`default`/`none` also work as reset
    keywords).
@@ -1054,19 +1064,20 @@ budget, and by `context_block_limit` when that is set.
 The trigger, its ceiling and the replay budget belong to the model the turn
 runs on. A turn on another model than the loop's own (a cron job's per-job
 model, a persona's model, also for a system message's turn on a persona
-session) sizes its compaction and its history replay by that
+session or on a cron run's) sizes its compaction and its history replay by that
 model's window and output ceiling, and by its preset's ratio and cap
 (`Consolidator.run_limits`), from BUILD to the compaction scheduled after
 SAVE. Sizing it by the loop's model would put the trigger above the smaller
 model's budget whenever the loop's model has the larger window. The context
 gauges follow the same model: `/status` measures a session against the
 trigger its next turn compacts at (`AgentLoop.session_compaction_trigger`
-resolves the session's persona model as BUILD does), and the CLI footer,
+resolves the model the session's turns run on as a system message's turn
+does, `_session_persona`), and the CLI footer,
 which renders too often to build a provider snapshot each time, against the
 trigger its latest check was sized by (`Consolidator.session_trigger`: the
 loop's own model's until the session's first turn in the process). Every
 check of a session's turns, a system message's included, is sized by the
-model those turns run on, so the footer keeps the persona's trigger.
+model those turns run on, so the footer keeps that model's trigger.
 
 `_input_token_budget` does not follow the turn: the summary, the decision-log
 extraction and the learnings extraction all run on the loop's own model. A

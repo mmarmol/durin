@@ -505,6 +505,9 @@ class AgentLoop:
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
+    # The model and persona the session's latest turn was given for itself
+    # (a cron job's own), as {"model_preset": ref, "persona": name}.
+    _TURN_OVERRIDES_KEY = "turn_overrides"
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
@@ -1919,6 +1922,30 @@ class AgentLoop:
         soul_body, model_ref, _temperature = resolve_persona(self.app_config, name, self.workspace)
         return soul_body, model_ref
 
+    def _session_persona(
+        self,
+        session: Session,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """``(soul_body, model_ref)`` of the session's own turns, for a turn
+        that brings no model or persona of its own (a system message's) and
+        for what measures the session's next turn (/status, its estimate).
+
+        The model and persona the session's latest turn was given for itself
+        (a cron job's own) when it was given any, else the session's persona,
+        each resolved as BUILD resolves them: a cron run's session gets the
+        system messages of what its turn started (a sub-agent's result, a
+        background workflow's), and those turns run as the job's did."""
+        given = session.metadata.get(self._TURN_OVERRIDES_KEY)
+        if not isinstance(given, dict):
+            given = {}
+        soul_body, model_ref = self._active_persona(
+            session, given.get("persona"), channel=channel, chat_id=chat_id,
+        )
+        return soul_body, given.get("model_preset") or model_ref
+
     def _build_initial_messages(
         self,
         msg: InboundMessage,
@@ -2148,11 +2175,11 @@ class AgentLoop:
         chat_id: str | None = None,
     ) -> int:
         """The trigger the session's next turn compacts at: the one of the
-        model its persona names when that is not the loop's own, resolved as
-        BUILD resolves it, else the loop's own model's. Resolving builds that
+        model its turns run on (``_session_persona``) when that is not the
+        loop's own, else the loop's own model's. Resolving builds that
         model's provider snapshot, so a display that renders often reads
         ``Consolidator.session_trigger`` instead."""
-        _soul, model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
+        _soul, model_ref = self._session_persona(session, channel=channel, chat_id=chat_id)
         limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
         return self.consolidator._trigger_for(limits or self.consolidator._limits())[0]
 
@@ -2166,8 +2193,8 @@ class AgentLoop:
         """The session's prompt as its next turn would build it, estimated
         the way its compaction check measures it: with the SOUL of the
         persona it runs under, and its summary bounded by the input budget
-        of that persona's model."""
-        soul, model_ref = self._active_persona(session, None, channel=channel, chat_id=chat_id)
+        of the model it runs on (``_session_persona``)."""
+        soul, model_ref = self._session_persona(session, channel=channel, chat_id=chat_id)
         limits = self._compaction_limits(self._turn_model_snapshot(model_ref))
         return self.consolidator.estimate_session_prompt_tokens(
             session, persona_soul=soul, limits=limits,
@@ -3142,13 +3169,13 @@ class AgentLoop:
         if self._restore_pending_user_turn(session):
             self.sessions.save(session)
 
-        # The session's persona and the model it runs on, resolved as BUILD
-        # resolves them for the session's own turns: this turn is one of
-        # them. Run on the loop's model, its compaction check replaced the
-        # limits those turns recorded and forgot the fixed-prompt level they
-        # reached, so the next one compacted again at once.
-        persona_soul, persona_model_ref = self._active_persona(
-            session, None, channel=channel, chat_id=chat_id,
+        # The persona and the model the session's own turns run with: this
+        # turn is one of them. Run on the loop's model, its compaction check
+        # replaced the limits those turns recorded and forgot the
+        # fixed-prompt level they reached, so the next one compacted again at
+        # once.
+        persona_soul, persona_model_ref = self._session_persona(
+            session, channel=channel, chat_id=chat_id,
         )
         run_snapshot = self._turn_model_snapshot(persona_model_ref)
         limits = self._compaction_limits(run_snapshot)
@@ -3938,6 +3965,18 @@ class AgentLoop:
         ctx.run_snapshot = self._turn_model_snapshot(
             ctx.model_preset_override or ctx.persona_model_ref,
         )
+        # What this turn was given for itself stays on its session for the
+        # turns that bring nothing of their own (_session_persona), until a
+        # turn that is given nothing puts the session back on its persona.
+        given = {
+            name: value
+            for name, value in (("model_preset", ctx.model_preset_override), ("persona", ctx.persona_override))
+            if value
+        }
+        if given:
+            ctx.session.metadata[self._TURN_OVERRIDES_KEY] = given
+        else:
+            ctx.session.metadata.pop(self._TURN_OVERRIDES_KEY, None)
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
             replay_max_messages=self._max_messages,
