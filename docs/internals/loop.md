@@ -1040,14 +1040,19 @@ given the snapshot loaders, which the gateway wires and the TUI does not. A
 preset's own values come from wherever it takes the preset. While the loop holds a
 preset (`_active_preset`: the one `agents.defaults.model_preset` named at
 start, which `from_config` activates, or one set with `/model`, the model
-picker or the settings' default model) and the selection in the file still
-resolves to the same model and provider, the snapshot is rebuilt from the
-loop's own preset object, which only `reload_app_config` replaces (a persona,
-the default model or a concurrency limit saved through the settings) besides
-a restart. Once the file's selection resolves to another model or provider,
-the loop drops the held preset and takes the file's snapshot every turn, so
-an edit to the preset named there applies on the next turn. The `default`
-preset is re-read from the file every turn either way.
+picker or the settings' default model) and the config still selects what it
+selected when the loop last looked, the snapshot is rebuilt from the loop's
+own preset object, which only `reload_app_config` replaces (a persona, the
+default model or a concurrency limit saved through the settings) besides a
+restart. The selection is `ProviderSnapshot.selection`: the name of the
+preset the config selects and that preset's own settings, recorded from the
+config's snapshot, never from the held preset's (the gateway hands the loop
+its startup snapshot's). Once it changes (another preset, or an edit to the
+selected one, so also to the preset named at start), the loop drops the held
+preset and takes the config's snapshot every turn. `agents.defaults`' own
+ratio and cap are not part of it: they reach every turn through
+`compaction_defaults` without dropping a runtime pick. The `default` preset
+is re-read from the file every turn either way.
 
 The cap governs the loop's session compaction only: workflow nodes and
 subagents prune by the runner's input budget instead.

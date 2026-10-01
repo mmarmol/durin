@@ -198,16 +198,15 @@ one preset, set that preset's value to `0`.
 
 A running gateway applies an edit to `agents.defaults.preemptive_compact_ratio`
 or `preemptive_compact_max_tokens` from the next turn. A preset's own ratio
-and cap reach it like the preset's other settings, which depends on how the
-preset became active. The preset `agents.defaults.model_preset` named when
-the gateway started, and one picked with `/model` or the model picker, are
-held as they were loaded: an edit to them applies after a restart
+and cap reach it like the preset's other settings. The preset
+`agents.defaults.model_preset` selects is read from the configuration on
+every turn: switching to another preset, or editing the selected one,
+applies from the next turn. A preset picked with `/model` or the model picker
+is held as it was loaded: an edit to it applies after a restart
 (`durin gateway restart`), or sooner when a settings change reloads the
-presets (saving a persona, the default model or a concurrency limit). When
-`agents.defaults.model_preset` is changed while the gateway runs, to a preset
-with another model or provider, the gateway follows the file from the next
-turn and reads that preset from it on every turn, so an edit to it applies
-from the next turn.
+presets (saving a persona, the default model or a concurrency limit). A
+change to what the configuration selects (another preset, or an edit to the
+selected one) replaces such a pick from the next turn.
 
 **`agents.aux_models`** — optional auxiliary model bridges (used only when the primary model lacks the modality):
 

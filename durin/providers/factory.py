@@ -61,6 +61,12 @@ class ProviderSnapshot:
     # to them reaches the running loop with the next snapshot refresh; None
     # when it was built without a config, and the loop keeps what it has.
     compaction_defaults: CompactionDefaults | None = None
+    # On a snapshot of what the config selects: which preset that is
+    # (agents.defaults.model_preset, "default" when it names none) and that
+    # preset's own settings. A running loop reads a change here as a new
+    # choice, and follows it. None on a snapshot of a preset asked for by
+    # name or object.
+    selection: tuple[object, ...] | None = None
 
 
 def _resolve_model_preset(
@@ -356,6 +362,9 @@ def build_provider_snapshot(
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     fallbacks = _resolve_fallbacks(config, resolved)
+    selection = None
+    if preset_name is None and preset is None:
+        selection = (config.agents.defaults.model_preset or "default", resolved.model_dump_json())
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
@@ -364,6 +373,7 @@ def build_provider_snapshot(
         preemptive_compact_ratio=resolved.preemptive_compact_ratio,
         preemptive_compact_max_tokens=resolved.preemptive_compact_max_tokens,
         compaction_defaults=CompactionDefaults.of(config),
+        selection=selection,
     )
 
 

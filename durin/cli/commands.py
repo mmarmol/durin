@@ -1363,6 +1363,7 @@ def _run_gateway(
             preset,
         ),
         provider_signature=provider_snapshot.signature,
+        provider_selection=provider_snapshot.selection,
     )
     _startup_phase("agent loop and memory services setup")
 

@@ -20,6 +20,15 @@ def default_selection_signature(signature: tuple[object, ...] | None) -> tuple[o
     return signature[:2] if signature else None
 
 
+def snapshot_selection(snapshot: ProviderSnapshot) -> tuple[object, ...] | None:
+    """What the config selected when *snapshot* was built: the preset's name
+    and own settings (``ProviderSnapshot.selection``), or, for a snapshot
+    built without them, its model and provider."""
+    if snapshot.selection is not None:
+        return snapshot.selection
+    return default_selection_signature(snapshot.signature)
+
+
 def configured_model_presets(config: Any) -> dict[str, ModelPresetConfig]:
     return {**config.model_presets, "default": config.resolve_default_preset()}
 

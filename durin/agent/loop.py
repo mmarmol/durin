@@ -525,6 +525,7 @@ class AgentLoop:
         aux_providers: dict[str, "AuxProviderHandle"] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
+        provider_selection: tuple[object, ...] | None = None,
         model_presets: dict[str, ModelPresetConfig] | None = None,
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
@@ -551,7 +552,14 @@ class AgentLoop:
         self._default_preset_loader = default_preset_loader
         self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
-        self._default_selection_signature = preset_helpers.default_selection_signature(provider_signature)
+        # What the config selected when the loop started (the snapshot's
+        # selection, or its model and provider when given only a signature):
+        # the refresh follows the config again once this changes.
+        self._default_selection_signature = (
+            provider_selection
+            if provider_selection is not None
+            else preset_helpers.default_selection_signature(provider_signature)
+        )
         self.workspace = workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = (
@@ -1244,7 +1252,14 @@ class AgentLoop:
                 self.model_presets["default"] = self._default_preset_loader()
             except Exception:
                 logger.exception("Failed to refresh default model preset")
-        default_selection = preset_helpers.default_selection_signature(snapshot.signature)
+        # The preset the loop holds (the one it started with, or a runtime
+        # pick) stays while the config selects what it selected before: the
+        # same preset with the same settings. Another preset, or an edit to
+        # the selected one, is a new choice, and the loop follows the config
+        # from then on. What is recorded is always the config's selection,
+        # never the held preset's: recording the held one would read as a new
+        # choice on the next turn and drop a runtime pick.
+        default_selection = preset_helpers.snapshot_selection(snapshot)
         if self._active_preset and self._default_selection_signature in (None, default_selection):
             self._default_selection_signature = default_selection
             try:
@@ -1257,7 +1272,6 @@ class AgentLoop:
             self._default_selection_signature = default_selection
         if snapshot.signature == self._provider_signature:
             return
-        self._default_selection_signature = preset_helpers.default_selection_signature(snapshot.signature)
         self._apply_provider_snapshot(snapshot)
 
     @property
