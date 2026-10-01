@@ -51,6 +51,7 @@ async def _run_turns(
     overflow_turns: tuple[int, ...] = (),
     session_messages: list[dict[str, Any]] | None = None,
     session_metadata: dict[str, Any] | None = None,
+    compaction: bool = True,
     **loop_kwargs: Any,
 ) -> dict[str, Any]:
     """Run *turns* turns on one session.
@@ -122,6 +123,13 @@ async def _run_turns(
         return await real_archive(messages)
 
     loop.consolidator.archive = _archive  # type: ignore[method-assign]
+    if not compaction:
+        # A compaction that cannot shrink the session (its lock timed out, its
+        # summary failed): the rest of the turn has to cope without it.
+        async def _no_compaction(*_args, **_kwargs):
+            return None
+
+        loop.consolidator.maybe_consolidate_by_tokens = _no_compaction  # type: ignore[method-assign]
     attempts: list[dict[str, Any]] = []
     real_run = loop.runner.run
 
@@ -342,6 +350,32 @@ async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
     assert sum(result["compactions"]) >= 1
     budget = input_budget_tokens(1_000_000, 8192, 40_000)
     assert max(result["main_prompts"]) <= budget
+
+
+@pytest.mark.asyncio
+async def test_a_turn_compaction_cannot_shrink_still_fits_its_budget(tmp_path):
+    """A turn replaying a history over its 60,000-token block limit, with a
+    compaction that cannot shrink it, stops on its first request as the loop
+    wants: it compacts and retries. The retry is still over, so the trim
+    drops the oldest history down to what the limit leaves beside the system
+    prompt, the tool schemas and the current message, and the turn is
+    answered. With room left for the system prompt alone, the retry
+    overflowed too and the turn failed."""
+    seed: list[dict[str, Any]] = []
+    for i in range(40):
+        seed += [
+            {"role": "user", "content": f"question {i} " + "long words " * 1500,
+             "timestamp": "2026-09-30T10:00:00"},
+            {"role": "assistant", "content": f"answer {i}", "timestamp": "2026-09-30T10:00:01"},
+        ]
+    result = await _run_turns(
+        tmp_path, turns=1, window=1_000_000, texts=["turn 0: next"], session_messages=seed,
+        compaction=False, context_block_limit=60_000,
+    )
+
+    assert [a["stop_reason"] for a in result["attempts"]] == ["mid_turn_precheck_overflow", "completed"]
+    assert max(result["main_prompts"]) <= 60_000
+    _assert_turns_saved(result, from_index=len(seed))
 
 
 @pytest.mark.asyncio

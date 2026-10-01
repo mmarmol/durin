@@ -507,7 +507,18 @@ the full copy.
 (`_output_reservation`, not the full configured `max_tokens` ceiling), so a high
 ceiling never collapses the usable input; the request then sends a *dynamic*
 `max_tokens` sized to the room the prompt actually leaves (resolving the ceiling
-from the provider when the spec leaves it unset). A mid-turn precheck estimates
+from the provider when the spec leaves it unset). When a request is over that
+budget, the history snip (`_snip_history`) drops history, oldest first: the
+messages before the run's own request, the last user message of the prompt it
+started from. That request and everything after it, the system prompt, the
+task state a request appends and the tool schemas are all sent, so the
+history gets what they leave, starting at a user message on a legal tool-call
+boundary. A caller that compacts and retries sets
+`caller_compacts_on_overflow`: the chat loop's turn does, on every attempt but
+its last, so its first request keeps the replayed history whole and an
+overflow there is answered by a compaction that summarizes what the snip
+would have dropped; the last attempt snips rather than fail on a history
+compaction could not shrink. A mid-turn precheck estimates
 the post-sanitize prompt each iteration: when it is over budget the runner
 emergency-trims the largest string tool results on the model-facing copy and
 proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't

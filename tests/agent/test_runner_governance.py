@@ -789,3 +789,96 @@ def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
         assert non_system[0]["role"] in ("user", "tool"), (
             f"Safety net should ensure first non-system is user/tool, got {non_system[0]['role']}"
         )
+
+
+def _over_budget_run(*, caller_compacts_on_overflow: bool = False):
+    """A run on a 12,000-token block limit whose request is over it: a
+    system prompt, a long history, the current question, and tool schemas of
+    a few thousand tokens. The history alone would fit beside the system
+    prompt; beside the schemas too, only once its oldest turns are dropped."""
+    from durin.agent.runner import AgentRunSpec
+
+    schemas = [
+        {"type": "function", "function": {
+            "name": f"tool_{i}", "description": "does a thing " * 200,
+            "parameters": {"type": "object", "properties": {}},
+        }}
+        for i in range(5)
+    ]
+    tools = MagicMock()
+    tools.get_definitions.return_value = schemas
+    messages = [{"role": "system", "content": "system prompt " * 300}]
+    for i in range(30):
+        messages += [
+            {"role": "user", "content": f"question {i} " + "words " * 400},
+            {"role": "assistant", "content": f"answer {i}"},
+        ]
+    messages.append({"role": "user", "content": "the current question"})
+    extra = {"caller_compacts_on_overflow": True} if caller_compacts_on_overflow else {}
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=200_000,
+        context_block_limit=12_000,
+        **extra,
+    )
+    return spec, schemas
+
+
+def test_snip_history_leaves_room_for_everything_the_request_sends():
+    """A request sends the tool schemas and the current question with the
+    history. The trim kept history up to the budget less the system prompt,
+    so its view was still over the budget by the schemas' size."""
+    from durin.agent.runner import AgentRunner
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, schemas = _over_budget_run()
+    view = AgentRunner(MagicMock())._snip_history(spec, spec.initial_messages)
+
+    assert estimate_prompt_tokens(view, schemas) <= 12_000
+    assert view[0]["role"] == "system"
+    assert view[-1]["content"] == "the current question"
+    assert len(view) < len(spec.initial_messages)
+
+
+@pytest.mark.asyncio
+async def test_a_run_its_trim_can_fit_is_sent_not_stopped():
+    """With the schemas counted, dropping the oldest turns fits the request,
+    so the run calls the model instead of stopping on the precheck overflow;
+    what it sends fits the budget."""
+    from durin.agent.runner import AgentRunner
+    from durin.utils.helpers import estimate_prompt_tokens
+
+    spec, _schemas = _over_budget_run()
+    sent: list[int] = []
+
+    async def _chat(*_args, messages=None, tools=None, **_kwargs):
+        sent.append(estimate_prompt_tokens(messages, tools))
+        return LLMResponse(content="done")
+
+    provider = MagicMock()
+    provider.chat_with_retry = _chat
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "completed"
+    assert sent and max(sent) <= 12_000
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_compacts_gets_the_overflow_instead_of_a_trim():
+    """The chat loop compacts the history it replays and retries when its
+    first request does not fit: it summarizes what a trim would drop. For
+    such a caller the first request leaves the history whole and the run
+    stops on the overflow."""
+    from durin.agent.runner import AgentRunner
+
+    spec, _schemas = _over_budget_run(caller_compacts_on_overflow=True)
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="never"))
+    result = await AgentRunner(provider).run(spec)
+
+    assert result.stop_reason == "mid_turn_precheck_overflow"
+    provider.chat_with_retry.assert_not_awaited()

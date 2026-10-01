@@ -2130,12 +2130,17 @@ class AgentLoop:
         session_key: str | None = None,
         pending_queues: PendingQueues | None = None,
         override_snapshot: ProviderSnapshot | None = None,
+        compacts_on_overflow: bool = False,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
 
         *override_snapshot*: the model this run uses when it is not the
         loop's own (a turn resolves it once, in BUILD); None runs on the
         loop's model.
+
+        *compacts_on_overflow*: the caller compacts and retries when the
+        run's first request does not fit, so the runner stops there instead
+        of trimming the history it was given.
 
         *on_stream*: called with each content delta during streaming.
         *on_stream_end(resuming)*: called when a streaming session finishes.
@@ -2433,6 +2438,7 @@ class AgentLoop:
                 ),
                 is_compacting=_is_compacting,
                 post_compaction_guard=self.consolidator.post_compaction_guard,
+                caller_compacts_on_overflow=compacts_on_overflow,
             ))
         finally:
             reset_file_states(file_state_token)
@@ -3975,6 +3981,11 @@ class AgentLoop:
                 pending_queues=ctx.pending_queues,
                 # The model BUILD resolved for this turn (None: the loop's).
                 override_snapshot=ctx.run_snapshot,
+                # An attempt that will be retried leaves its history whole on
+                # its first request: an overflow there is answered below by a
+                # compaction that summarizes what a trim would drop. The last
+                # attempt trims, rather than fail on a history it cannot shrink.
+                compacts_on_overflow=attempt < _MAX_OVERFLOW_RETRIES,
             )
             final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
             ctx.final_content = final_content

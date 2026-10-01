@@ -26,6 +26,7 @@ from durin.utils.helpers import (
     IncrementalThinkExtractor,
     build_assistant_message,
     estimate_message_tokens,
+    estimate_prompt_tokens,
     estimate_prompt_tokens_chain,
     extract_reasoning,
     find_legal_message_start,
@@ -447,6 +448,12 @@ class AgentRunSpec:
     # the turn immune to concurrent swaps. None → fall back to self.provider
     # for backward compatibility.
     provider: LLMProvider | None = None
+    # Set by a caller that compacts the history it handed over and retries
+    # when the run's first request does not fit (the chat loop's turn): that
+    # request leaves the history whole and the run stops on the precheck
+    # overflow, so the caller summarizes what a trim would have dropped.
+    # Later requests trim as usual.
+    caller_compacts_on_overflow: bool = False
 
 
 @dataclass(slots=True)
@@ -722,7 +729,8 @@ class AgentRunner:
                 # first one stamped with the pruned size.
                 prune_state.trusted_from = len(messages)
             view = self._apply_tool_result_budget(spec, view)
-            view = self._snip_history(spec, view, provider)
+            if not (iteration == 0 and spec.caller_compacts_on_overflow):
+                view = self._snip_history(spec, view, provider)
             # Snipping may have created new orphans; clean them up.
             view = self._drop_orphan_tool_results(view)
             return self._backfill_missing_tool_results(view)
@@ -1669,6 +1677,34 @@ class AgentRunner:
             if mode.is_tool_allowed(ToolRegistry._schema_name(d))
         ]
 
+    def _task_state_message(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """The task-state message a request on *messages* adds, or None when
+        the conversation already shows the current task state (or there is
+        none)."""
+        if spec.task_state_provider is None:
+            return None
+        try:
+            lines = [str(line) for line in (spec.task_state_provider() or [])]
+        except Exception:
+            logger.exception("task_state_provider failed; sending the request without it")
+            return None
+        if not lines:
+            return None
+        block = "\n".join(lines)
+        if any(block in _message_text(m) for m in messages):
+            return None
+        return {
+            "role": "user",
+            "content": (
+                "[Task state, updated during this turn; it supersedes the "
+                "one shown earlier]\n" + block
+            ),
+        }
+
     def _with_task_state(
         self,
         spec: AgentRunSpec,
@@ -1680,26 +1716,11 @@ class AgentRunner:
         Appended last, so the cached prompt prefix is untouched; returned as
         a new list, so the block never enters the saved conversation.
         """
-        if spec.task_state_provider is None:
-            return messages
-        try:
-            lines = [str(line) for line in (spec.task_state_provider() or [])]
-        except Exception:
-            logger.exception("task_state_provider failed; sending the request without it")
-            return messages
-        if not lines:
-            return messages
-        block = "\n".join(lines)
-        if any(block in _message_text(m) for m in messages):
+        message = self._task_state_message(spec, messages)
+        if message is None:
             return messages
         updated = list(messages)
-        self._append_injected_messages(updated, [{
-            "role": "user",
-            "content": (
-                "[Task state, updated during this turn; it supersedes the "
-                "one shown earlier]\n" + block
-            ),
-        }])
+        self._append_injected_messages(updated, [message])
         return updated
 
     @staticmethod
@@ -3064,6 +3085,18 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         provider: LLMProvider | None = None,
     ) -> list[dict[str, Any]]:
+        """*messages* with the oldest history dropped until the request fits
+        the input budget.
+
+        The history is what comes before the run's own request: the last user
+        message of the prompt the run started from. That request and
+        everything after it (the run's replies, tool calls and results, the
+        messages it took in) are sent whatever this does, as are the system
+        prompt, the task state a request appends and the tool schemas; the
+        history gets what they leave, newest first, starting at a user
+        message on a legal tool-call boundary. When even no history leaves
+        the request over budget, the precheck after this decides. A run whose
+        prompt holds no user message keeps the newest messages that fit."""
         _provider = provider if provider is not None else self.provider
         if not messages or not spec.context_window_tokens:
             return messages
@@ -3072,22 +3105,42 @@ class AgentRunner:
         if budget is None or budget <= 0:
             return messages
 
+        tools = self._active_tool_definitions(spec)
+        # The task state a request on these messages appends, when it changed
+        # during the run: sent with them, so it has to fit beside them.
+        added = [m for m in (self._task_state_message(spec, messages),) if m is not None]
         estimate, _ = estimate_prompt_tokens_chain(
             _provider,
             spec.model,
-            messages,
-            self._active_tool_definitions(spec),
+            messages + added,
+            tools,
         )
         if estimate <= budget:
             return messages
 
         system_messages = [dict(msg) for msg in messages if msg.get("role") == "system"]
-        non_system = [dict(msg) for msg in messages if msg.get("role") != "system"]
+        # A usage stamp measured a prompt that still held the messages dropped
+        # below, so none of them describes what is kept.
+        non_system = [
+            {key: value for key, value in msg.items() if key != "usage_prompt_tokens"}
+            for msg in messages if msg.get("role") != "system"
+        ]
         if not non_system:
             return messages
 
-        system_tokens = sum(estimate_message_tokens(msg) for msg in system_messages)
-        remaining_budget = max(128, budget - system_tokens)
+        fixed_tokens = sum(estimate_message_tokens(msg) for msg in system_messages + added)
+        if tools:
+            fixed_tokens += estimate_prompt_tokens([], tools)
+        request_at = self._run_request_index(spec, non_system)
+        if request_at is not None:
+            turn = non_system[request_at:]
+            room = budget - fixed_tokens - sum(estimate_message_tokens(msg) for msg in turn)
+            kept = self._newest_history_within(non_system[:request_at], room) + turn
+            if len(kept) == len(non_system):
+                return messages
+            return system_messages + kept
+
+        remaining_budget = max(128, budget - fixed_tokens)
         kept: list[dict[str, Any]] = []
         kept_tokens = 0
         for message in reversed(non_system):
@@ -3121,7 +3174,53 @@ class AgentRunner:
             start = find_legal_message_start(kept)
             if start:
                 kept = kept[start:]
+        if len(kept) == len(non_system):
+            # Nothing dropped after all: the stamps still describe these
+            # messages, and the count that found them over is kept.
+            return messages
         return system_messages + kept
+
+    @staticmethod
+    def _run_request_index(
+        spec: AgentRunSpec, non_system: list[dict[str, Any]],
+    ) -> int | None:
+        """Where the run's own request sits in *non_system*: the last user
+        message of the prompt it started from, found by its rank among user
+        messages, since the governance before the trim adds and drops tool
+        results only. None when that prompt holds no user message."""
+        rank = sum(1 for msg in spec.initial_messages if msg.get("role") == "user")
+        if not rank:
+            return None
+        seen = 0
+        for idx, msg in enumerate(non_system):
+            if msg.get("role") == "user":
+                seen += 1
+                if seen == rank:
+                    return idx
+        return None
+
+    @staticmethod
+    def _newest_history_within(
+        history: list[dict[str, Any]], room: int,
+    ) -> list[dict[str, Any]]:
+        """The newest messages of *history* that fit in *room* tokens,
+        starting at a user message on a legal tool-call boundary (none when
+        no user message fits)."""
+        kept: list[dict[str, Any]] = []
+        used = 0
+        for message in reversed(history):
+            tokens = estimate_message_tokens(message)
+            if used + tokens > room:
+                break
+            kept.append(message)
+            used += tokens
+        kept.reverse()
+        first_user = next((i for i, msg in enumerate(kept) if msg.get("role") == "user"), None)
+        if first_user is None:
+            return []
+        kept = kept[first_user:]
+        start = find_legal_message_start(kept)
+        return kept[start:] if start else kept
 
     def _partition_tool_batches(
         self,
