@@ -269,4 +269,5 @@ markers = [
     "ollama: requires running Ollama instance with a local model",
     "slow: marks slow / live-LLM end-to-end tests (opt-in via env)",
     "network: live tests against real skill registries (opt-in: DURIN_LIVE_REGISTRY_TESTS=1)",
+    "real_model: runs the real embedding model, downloading it on first use (opt-in: pytest -m real_model)",
 ]

@@ -94,6 +94,14 @@ def test_upsert_entity_page_indexes_without_type_prefix(
         body="## Current State\nWorks on durin and mxhero.\n",
         path=page_path,
     )
+    # A row whose text starts one letter after the name: with first-character
+    # vectors it sits right next to the page, so the page ranks first only
+    # while its embedded text starts with the name. Behind a ``person:``
+    # prefix it would sit far from the query, past this row.
+    from durin.memory.storage import load_entry
+
+    other = store_memory(workspace, content="Notes on the roadmap.", headline="Notes on the roadmap")
+    index.upsert(load_entry(Path(other["path"])), other["class"], Path(other["path"]))
 
     hits = index.search("Marcelo", top_k=5)
     assert hits, "page should be findable by name"

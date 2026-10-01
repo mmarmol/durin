@@ -149,11 +149,9 @@ async def test_vector_path_runs_end_to_end(
         out = await search.execute(query="alpha", scope="dreamed", level="warm")
 
     # v2 pipeline runs multiple sources concurrently; the label
-    # reflects which contributed hits.
-    # v2 pipeline labels reflect which sources contributed; with the
-    # stub embedder + grep fallback over memory/ the label may be
-    # any of these depending on what surfaced first.
-    assert out["strategy"] in ("vector", "hybrid", "lexical", "grep")
+    # reflects which contributed hits, and the token paths find "alpha"
+    # too: "vector" or "hybrid" is what shows the vector path ran.
+    assert out["strategy"] in ("vector", "hybrid")
     assert out["total"] > 0
 
 
@@ -162,11 +160,8 @@ async def test_recall_vector_telemetry_fires(
     corpus: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """v2 contract: `memory.recall.vector` fires whenever the vector
-    path is attempted; `memory.recall` aggregate always fires.
-
-    The stub embedder may produce 0 hits because the RRF flow
-    composes differently than v1, so we assert `hit_count >= 0`
-    and the presence of the event — not a hit floor."""
+    path is attempted, with the number of rows the vector index
+    returned; `memory.recall` aggregate always fires."""
     from durin.agent.tools.memory_search import MemorySearchTool
 
     events: list[tuple[str, dict]] = []
@@ -195,7 +190,7 @@ async def test_recall_vector_telemetry_fires(
     assert payload["query"] == "alpha"
     assert payload["scope"] == "dreamed"
     assert payload["embedding_model"] == _TEST_MODEL
-    assert payload["hit_count"] >= 0  # v2: stub embedder may produce 0
+    assert payload["hit_count"] > 0
     assert payload["duration_ms"] >= 0
     assert len(recall_events) == 1
 
@@ -245,7 +240,7 @@ async def test_vector_path_does_not_regress_against_grep_only(
             query="alpha", scope="dreamed", level="warm"
         )
 
-    assert vector_out["strategy"] in ("vector", "hybrid", "lexical", "grep")
+    assert vector_out["strategy"] in ("vector", "hybrid")
     assert grep_out["strategy"] in ("grep", "lexical")
     # Both paths return at least one hit (the corpus has "alpha"
     # content) — the v2 pipeline never returns zero when grep would

@@ -75,6 +75,14 @@ _needs_vector = pytest.mark.skipif(
     reason="vector deps (memory extra: fastembed/lancedb) absent",
 )
 
+# A second document for the vector index to hold, so a vector check has to
+# rank the right chunk first instead of getting back the only one there is.
+_BILLING = "Invoices go out on the first business day of each month.\n"
+
+
+def _ranked_ids(hits) -> list[str]:
+    return [str(h.get("id", "")) for h in hits]
+
 
 @_needs_vector
 @pytest.mark.usefixtures("fastembed_stand_in")
@@ -96,16 +104,20 @@ async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path
             "into Box and SharePoint.\n\n")
     doc = tmp_path / "spec.md"
     doc.write_text("# SMTP Relay Setup\n\n" + body * 8, encoding="utf-8")
+    other = tmp_path / "billing.md"
+    other.write_text("# Billing Guide\n\n" + _BILLING, encoding="utf-8")
 
     tool = MemoryIngestTool(workspace=str(tmp_path),
                             embedding_model="intfloat/multilingual-e5-small")
+    await tool.execute(path=str(other))
     await tool.execute(path=str(doc))
 
     # (1) stored as a REFERENCE (whole doc) + chunk sidecar, NOT a corpus entry
-    refs = list((tmp_path / "memory" / "references").glob("*.md"))
+    refs = [r for r in (tmp_path / "memory" / "references").glob("*.md")
+            if "STARTTLS" in r.read_text(encoding="utf-8")]
     assert refs, "memory_ingest did not create a reference page"
     whole = refs[0].read_text(encoding="utf-8")
-    assert "type: reference" in whole and "STARTTLS" in whole
+    assert "type: reference" in whole
     slug = refs[0].stem
     assert (tmp_path / "memory" / "references" / f"{slug}.chunks.jsonl").exists()
     corpus = tmp_path / "memory" / "corpus"
@@ -118,12 +130,14 @@ async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path
     with FTSIndex.open(tmp_path) as idx:
         assert any(slug in str(getattr(h, "uri", h)) for h in idx.search("STARTTLS", limit=20)), "FTS miss"
 
-    # (4) VECTOR (embeddings): the chunks are embedded + a semantic query pulls a
-    #     chunk that resolves to the parent reference
+    # (4) VECTOR (embeddings): the chunks are embedded, and a question about the
+    #     relay ranks one of them first, ahead of the other document's chunk,
+    #     with an id that resolves to the parent reference
     vi = VectorIndex(tmp_path, FastembedProvider("intfloat/multilingual-e5-small"))
     hits = vi.search("how do I configure the outbound mail relay port", top_k=10)
-    assert any("reference" in str(h.get("class_name", "")) and slug in str(h.get("id", ""))
-               for h in hits), f"vector miss on reference chunk; got {[h.get('id') for h in hits]}"
+    assert hits and hits[0].get("class_name") == "reference" \
+        and str(hits[0].get("id", "")).startswith(f"reference:{slug}#"), \
+        f"vector miss on reference chunk; got {_ranked_ids(hits)}"
 
 
 @_needs_vector
@@ -138,12 +152,14 @@ def test_rebuild_from_workspace_indexes_reference_chunks(tmp_path):
     ingest_reference(tmp_path, "relay-doc",
                      "Set relay.port to configure the outbound mail relay. Default 587.",
                      source="docs/relay.md")
+    ingest_reference(tmp_path, "billing-doc", _BILLING, source="docs/billing.md")
     vi = VectorIndex(tmp_path, FastembedProvider("intfloat/multilingual-e5-small"))
     n = vi.rebuild_from_workspace()
     assert n >= 1
     hits = vi.search("how do I set the outbound mail relay port", top_k=10)
-    assert any("reference" in str(h.get("class_name", "")) and "relay-doc" in str(h.get("id", ""))
-               for h in hits), f"reference chunk missing from rebuild; got {[h.get('id') for h in hits]}"
+    assert hits and hits[0].get("class_name") == "reference" \
+        and str(hits[0].get("id", "")).startswith("reference:relay-doc#"), \
+        f"reference chunk missing from rebuild; got {_ranked_ids(hits)}"
 
 
 # --- strip_scraped_boilerplate ----------------------------------------------

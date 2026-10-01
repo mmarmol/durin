@@ -206,6 +206,7 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
     vector_events = [e for e in events if e[0] == "memory.recall.vector"]
     assert len(vector_events) == 1
     payload = vector_events[0][1]
+    assert payload["hit_count"] > 0  # the ranker had LanceDB rows to work on
     assert payload["ranking"] == "entity_aware"
     assert payload["query_entities_count"] >= 1
     # `scope="dreamed"` excludes the Library class set and the session

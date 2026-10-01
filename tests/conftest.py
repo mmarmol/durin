@@ -177,6 +177,20 @@ def _install_network_guard() -> dict:
 _NETWORK_GUARD = _install_network_guard()
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip the ``real_model`` tests unless the run selects them by marker.
+
+    They embed with the real model, which fastembed downloads (about 450 MB)
+    on a machine that does not have it cached yet, so a default run, CI's
+    included, never runs them; ``pytest -m real_model`` does."""
+    if "real_model" in (config.getoption("markexpr") or ""):
+        return
+    skip = pytest.mark.skip(reason="embeds with the real model; select with -m real_model")
+    for item in items:
+        if item.get_closest_marker("real_model") is not None:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _testclient_localhost_peer():
     """Model the in-process Starlette TestClient as a localhost peer, suite-wide.
@@ -482,9 +496,12 @@ def _no_outbound_network(request):
     offline. Tests fake the network at the boundary the code uses (the
     resolver, the HTTP client, the fetch function). Loopback stays open, so
     tests that serve on localhost keep working. A test marked ``network``
-    (the opt-in live registry tests) may reach the network.
+    (the opt-in live registry tests) or ``real_model`` (the opt-in tests that
+    download the real embedding model when it is not cached) may reach the
+    network.
     """
-    _NETWORK_GUARD["open"] = request.node.get_closest_marker("network") is not None
+    _NETWORK_GUARD["open"] = any(
+        request.node.get_closest_marker(name) is not None for name in ("network", "real_model"))
     _NETWORK_GUARD["refusals"].clear()
     yield
     _NETWORK_GUARD["open"] = False

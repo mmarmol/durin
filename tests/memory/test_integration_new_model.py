@@ -198,26 +198,75 @@ def test_dream_transformed_entity_fully_searchable(tmp_path):
         assert _fts(tmp_path, q, "globex"), f"fts miss: {q}"
 
 
-def test_vector_search_finds_attributes_and_semantic(tmp_path, embedding_model):
-    # The embedding includes attributes/relations, and the vector path adds
-    # SEMANTIC recall the token paths miss. The `embedding_model` fixture
-    # embeds with the fastembed stand-in: no model is loaded or downloaded.
+# mxHERO and two other companies, so a vector check has to rank mxHERO first
+# instead of getting back the only page there is. The others each share a
+# little with a query: Globex names Argentina in its body, Initech has an HQ
+# country and a cloud industry of its own.
+_COMPANIES = {
+    "mxhero": ("mxHERO", {"hq_country": "Argentina"}, "An email-to-cloud company."),
+    "globex": ("Globex", {}, "A steel conglomerate with a sales office in Argentina."),
+    "initech": ("Initech", {"hq_country": "United States", "industry": "cloud payroll"},
+                "A payroll software vendor."),
+}
+
+
+def _index_companies(ws, vi, companies=_COMPANIES):
+    for slug, (name, attributes, body) in companies.items():
+        patches = [_A(k, v) for k, v in attributes.items()]
+        patches.append(FieldPatch(kind="body_append", value=body, author="agent",
+                                  source_ref="s", at=NOW))
+        write_entity(ws, f"company:{slug}", patches, create=True, name=name)
+        path = ws / f"memory/entities/company/{slug}.md"
+        page = EntityPage.from_file(path)
+        vi.upsert_entity_page(entity_ref=f"company:{slug}", name=page.name,
+                              aliases=list(page.aliases), body=page.body, path=path,
+                              attributes=dict(page.attributes), relations=list(page.relations))
+
+
+def _top_hit(vi, query):
+    hits = vi.search(query, top_k=5)
+    return str(hits[0].get("id", "")) if hits else None
+
+
+def test_vector_search_finds_attributes_and_body(tmp_path, embedding_model):
+    # The embedding includes attributes/relations, not just the body. The
+    # `embedding_model` fixture embeds with the fastembed stand-in, which
+    # matches shared words: no model is loaded or downloaded.
     from durin.memory.embedding import FastembedProvider
     from durin.memory.vector_index import VectorIndex
 
-    write_entity(tmp_path, "company:mxhero",
-                 [_A("hq_country", "Argentina"),
-                  FieldPatch(kind="body_append", value="An email-to-cloud company.",
-                             author="agent", source_ref="s", at=NOW)],
-                 create=True, name="mxHERO")
-    page = EntityPage.from_file(tmp_path / "memory/entities/company/mxhero.md")
     vi = VectorIndex(tmp_path, FastembedProvider(model=embedding_model))
-    vi.upsert_entity_page(entity_ref="company:mxhero", name=page.name, aliases=list(page.aliases),
-                          body=page.body, path=tmp_path / "memory/entities/company/mxhero.md",
-                          attributes=dict(page.attributes), relations=list(page.relations))
+    _index_companies(tmp_path, vi)
+    assert _top_hit(vi, "hq country Argentina") == "company:mxhero"        # attribute, embedded
+    assert _top_hit(vi, "an email to cloud company") == "company:mxhero"   # body, embedded
 
-    def vec(q):
-        return any("mxhero" in str(h.get("uri", "") + h.get("entity_ref", "") + str(h.get("id", "")))
-                   for h in vi.search(q, top_k=5))
-    assert vec("Argentina")                 # exact attribute value, embedded
-    assert vec("correo en la nube")          # semantic (ES) — token paths would miss this
+
+# What each company does and nothing else: no country or other attribute that
+# could lean toward a Spanish query, so only the meaning of a body can put
+# mxHERO first. Initech's is about the cloud, Crumbs' about mail.
+_WHAT_THEY_DO = {
+    "mxhero": ("mxHERO", {}, "An email-to-cloud company."),
+    "initech": ("Initech", {}, "A cloud payroll software vendor."),
+    "crumbs": ("Crumbs", {}, "A bakery that ships bread by mail."),
+    "globex": ("Globex", {}, "A steel conglomerate."),
+}
+
+
+@pytest.mark.real_model
+def test_vector_search_recall_crosses_languages(tmp_path):
+    """The vector path adds SEMANTIC recall the token paths miss: a Spanish
+    query finds the English page that means the same. Only a real multilingual
+    model shows that, so this embeds with the real E5 model, its query and
+    passage prefixes included, and runs only when selected:
+    ``pytest -m real_model``. The model loads from fastembed's cache, which a
+    first run fills by downloading it (about 450 MB)."""
+    pytest.importorskip("fastembed")
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+
+    if not vector_index_available():
+        pytest.skip("vector index unavailable in this environment")
+    vi = VectorIndex(tmp_path, FastembedProvider(model="intfloat/multilingual-e5-small"))
+    _index_companies(tmp_path, vi, _WHAT_THEY_DO)
+    # "email company in the cloud": no word in common with any page
+    assert _top_hit(vi, "empresa de correo electrónico en la nube") == "company:mxhero"

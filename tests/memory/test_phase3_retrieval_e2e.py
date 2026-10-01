@@ -88,7 +88,7 @@ def test_retrieval_l1_light_end_to_end(
 
     Query: "what does Marcelo prefer about testing?"
 
-    Expected: page + post-cursor entry rank in top; pre-cursor at bottom.
+    Expected: the page ranks first; the newer entry ranks above the older.
     """
     workspace = tmp_path
 
@@ -189,9 +189,9 @@ def test_retrieval_l1_light_end_to_end(
     for r in ranked:
         print(f"  {r.adjusted_score:.4f}  {r.record['id']:<60}  {r.signals}")
 
-    # ASSERT 1: the entity page is in the top results (since query matches it).
-    assert "person:marcelo" in ids[:3], (
-        f"entity page should surface in top 3; got order {ids}"
+    # ASSERT 1: the entity page ranks first, since the query names its entity.
+    assert ids[0] == "person:marcelo", (
+        f"entity page should rank first; got order {ids}"
     )
 
     # ASSERT 2: the older entry is demoted relative to the newer one by

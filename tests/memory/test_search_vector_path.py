@@ -126,15 +126,16 @@ async def test_search_uses_vector_for_dreamed_warm(
             workspace=tmp_path,
             embedding_model=_TEST_MODEL,
         )
-        out = await search.execute(query="alpha", scope="dreamed", level="warm")
+        # No word of the query is in either entry, so neither token path
+        # finds anything: whatever comes back came through the vector index.
+        out = await search.execute(query="aardvark", scope="dreamed", level="warm")
 
     # v2 pipeline runs vector + lexical + grep concurrently; the
     # strategy label reflects which sources contributed hits.
-    assert out["strategy"] in ("vector", "hybrid", "lexical")
-    assert out["total"] >= 1
-    # The 'alpha' query (first char 'a') matches the alpha entry
-    headlines = {r["headline"] for r in out["results"]}
-    assert "alpha" in headlines
+    assert out["strategy"] == "vector"
+    # The query's first character ('a') puts the alpha entry nearest, the
+    # beta entry next.
+    assert [r["headline"] for r in out["results"]] == ["alpha", "beta"]
 
 
 @pytest.mark.asyncio
@@ -185,7 +186,9 @@ async def test_search_scope_all_combines_vector_and_grep(
         )
         out = await search.execute(query="alpha", scope="all", level="warm")
 
-    assert out["strategy"] in ("hybrid", "vector", "lexical")
+    # The token paths find the entry too: the label shows the vector index
+    # contributed.
+    assert out["strategy"] in ("hybrid", "vector")
     sources = {r["source"] for r in out["results"]}
     assert "memory" in sources   # from vector
     assert "sessions" in sources  # from grep
@@ -220,7 +223,7 @@ async def test_search_cold_level_uses_vector_with_body_enrichment(
 
     # v2 pipeline runs vector + lexical + grep concurrently; the
     # strategy label reflects which sources contributed hits.
-    assert out["strategy"] in ("vector", "hybrid", "lexical")
+    assert out["strategy"] in ("vector", "hybrid")
     assert out["total"] >= 1
     # Cold tier returns bodies — populated from disk after vector hit.
     assert any(r.get("body") for r in out["results"])
@@ -260,5 +263,7 @@ async def test_search_scope_library_isolates_reference_via_vector_index(
 
     default_uris = {r["uri"] for r in default["results"]}
     library_uris = {r["uri"] for r in library["results"]}
-    assert not any(u.startswith("memory/reference/") for u in default_uris)
-    assert any(u.startswith("memory/reference/") for u in library_uris)
+    assert default["strategy"] in ("vector", "hybrid")
+    assert library["strategy"] in ("vector", "hybrid")
+    assert default_uris and not any(u.startswith("memory/reference/") for u in default_uris)
+    assert library_uris and all(u.startswith("memory/reference/") for u in library_uris)
