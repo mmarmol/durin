@@ -124,9 +124,19 @@ def _isolate_durin_home(tmp_path_factory, monkeypatch):
     ambient environment. A test that needs the default/unset behaviour controls
     DURIN_HOME itself (see ``tests/config/test_config_paths.py``).
     """
+    import tempfile
+    from pathlib import Path
+
     import durin.config.loader as _loader
 
-    home = tmp_path_factory.mktemp("durin_home")
+    # One folder per test, created with mkdtemp's random name inside a
+    # subfolder of the run's base temp. tmp_path_factory.mktemp numbers its
+    # folders by scanning every entry already in the base temp, so a fresh
+    # numbered folder per test made each test's setup slower than the one
+    # before it, quadratically over a full run.
+    homes = tmp_path_factory.getbasetemp() / "durin_homes"
+    homes.mkdir(exist_ok=True)
+    home = Path(tempfile.mkdtemp(prefix="home", dir=homes))
     monkeypatch.setenv("DURIN_HOME", str(home))
     monkeypatch.setattr(_loader, "_current_config_path", None, raising=False)
     yield
