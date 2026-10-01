@@ -3080,9 +3080,20 @@ class AgentLoop:
         if pending:
             logger.info("Memory compact triggered for session {}", key)
 
+        # The session's persona and the model it runs on, resolved as BUILD
+        # resolves them for the session's own turns: this turn is one of
+        # them. Run on the loop's model, its compaction check replaced the
+        # limits those turns recorded and forgot the fixed-prompt level they
+        # reached, so the next one compacted again at once.
+        persona_soul, persona_model_ref = self._active_persona(
+            session, None, channel=channel, chat_id=chat_id,
+        )
+        run_snapshot = self._turn_model_snapshot(persona_model_ref)
+        limits = self._compaction_limits(run_snapshot)
         await self.consolidator.maybe_consolidate_by_tokens(
             session,
             replay_max_messages=self._max_messages,
+            limits=limits,
         )
         is_subagent = msg.sender_id == "subagent"
         if is_subagent and self._persist_subagent_followup(session, msg):
@@ -3094,7 +3105,7 @@ class AgentLoop:
         )
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
+            "max_tokens": self._replay_token_budget(run_snapshot),
             "include_timestamps": True,
         }
         history = session.get_history(**_hist_kwargs)
@@ -3126,6 +3137,7 @@ class AgentLoop:
             iteration=0,
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
+            active_persona_soul=persona_soul,
             eager_snapshot=eager_snapshot,
         )
         if freezes and eager_snapshot is None:
@@ -3149,6 +3161,7 @@ class AgentLoop:
                 metadata=msg.metadata,
                 session_key=key,
                 pending_queues=pending_queues,
+                override_snapshot=run_snapshot,
             )
         finally:
             reset_turn_eager_surface(surface_token)
@@ -3179,6 +3192,7 @@ class AgentLoop:
             self.consolidator.maybe_consolidate_by_tokens(
                 session,
                 replay_max_messages=self._max_messages,
+                limits=limits,
             )
         )
         content = final_content or "Background task completed."

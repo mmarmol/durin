@@ -229,7 +229,10 @@ result, and the wait goes on. The reply to a system message goes to the chat
 its `chat_id` names, in the thread its session key scopes: the loop re-derives
 a Slack `thread_ts`, an email thread and a Telegram forum topic
 (`message_thread_id`) from the key, since the message itself carries no
-channel metadata. A system message that starts a turn of its own is saved
+channel metadata. A system message that starts a turn of its own is a turn
+of the session's: it runs on the model and with the SOUL of the session's
+persona, resolved as BUILD resolves them, and its compaction checks and
+history replay are sized by that model. It is saved
 once, as its own entry: a sub-agent's result as the assistant message saved
 before its prompt is built (its entry in the prompt carries only the runtime
 context and is not saved), anything else as a user message; the run's
@@ -990,7 +993,8 @@ budget, and by `context_block_limit` when that is set.
 
 The trigger, its ceiling and the replay budget belong to the model the turn
 runs on. A turn on another model than the loop's own (a cron job's per-job
-model, a persona's model) sizes its compaction and its history replay by that
+model, a persona's model, also for a system message's turn on a persona
+session) sizes its compaction and its history replay by that
 model's window and output ceiling, and by its preset's ratio and cap
 (`Consolidator.run_limits`), from BUILD to the compaction scheduled after
 SAVE. Sizing it by the loop's model would put the trigger above the smaller
@@ -1000,7 +1004,9 @@ trigger its next turn compacts at (`AgentLoop.session_compaction_trigger`
 resolves the session's persona model as BUILD does), and the CLI footer,
 which renders too often to build a provider snapshot each time, against the
 trigger its latest check was sized by (`Consolidator.session_trigger`: the
-loop's own model's until the session's first turn in the process).
+loop's own model's until the session's first turn in the process). Every
+check of a session's turns, a system message's included, is sized by the
+model those turns run on, so the footer keeps the persona's trigger.
 
 `_input_token_budget` does not follow the turn: the summary, the decision-log
 extraction and the learnings extraction all run on the loop's own model. A

@@ -436,6 +436,76 @@ async def test_status_and_the_footer_measure_against_the_trigger_the_turns_use(t
 
 
 @pytest.mark.asyncio
+async def test_a_system_message_on_a_persona_session_runs_on_the_persona_model(tmp_path):
+    """A sub-agent's result on a persona session starts a turn of its own,
+    which ran on the loop's model with the default SOUL and checked
+    compaction by the loop's model. The check replaced the limits the
+    persona's turns recorded and forgot the fixed-prompt level they reached:
+    the footer showed the loop's trigger, and the next persona turn
+    compacted again at once."""
+    from durin.bus.events import InboundMessage
+    from durin.config.schema import Config, ModelPresetConfig, PersonaConfig
+    from durin.souls.store import SoulStore
+
+    presets = {
+        "default": ModelPresetConfig(model="test-model", context_window_tokens=1_000_000),
+        "small": ModelPresetConfig(model="test-model", context_window_tokens=64_000),
+    }
+    config = Config()
+    # Not part of this test: left running, the memory watcher re-indexes the
+    # session summary after the test's event loop has closed.
+    config.memory.file_watcher.enabled = False
+    config.personas["brief"] = PersonaConfig(soul="terse", model="small")
+    SoulStore(tmp_path).write("terse", "You are Terse: you answer in five words.")
+    # A fixed part between the small model's trigger (48,000) and its
+    # ceiling, so its compactions record the fixed-prompt level.
+    result = await _run_turns(
+        tmp_path, turns=6, window=1_000_000, model_presets=presets, app_config=config,
+        session_metadata={"persona": "brief"}, agents_md="guidance " * 22_000,
+    )
+    loop, key = result["loop"], "cli:sim"
+    consolidator = loop.consolidator
+    assert key in consolidator._compaction_floor
+    assert consolidator.session_trigger(key) == 48_000
+    windows: list[int | None] = []
+    systems: list[str] = []
+    real_run = loop.runner.run
+
+    async def _run(spec):
+        windows.append(spec.context_window_tokens)
+        systems.append(_text_of(spec.initial_messages[0]))
+        return await real_run(spec)
+
+    loop.runner.run = _run  # type: ignore[method-assign]
+    background: list = []
+    loop._schedule_background = background.append  # type: ignore[method-assign]
+    await loop._process_message(InboundMessage(
+        channel="system", sender_id="subagent", chat_id=key,
+        content="the sub-agent found three files", metadata={"subagent_task_id": "t-1"},
+    ))
+    for coro in background:
+        if getattr(getattr(coro, "cr_code", None), "co_name", "") == "maybe_consolidate_by_tokens":
+            await coro
+        else:
+            coro.close()
+
+    assert windows == [64_000]
+    assert "You are Terse" in systems[0]
+    assert key in consolidator._compaction_floor
+    assert consolidator.session_trigger(key) == 48_000
+    archived: list[int] = []
+    real_archive = consolidator.archive
+
+    async def _archive(messages):
+        archived.append(len(messages))
+        return await real_archive(messages)
+
+    consolidator.archive = _archive  # type: ignore[method-assign]
+    await loop.process_direct("turn 6: a short follow-up", session_key=key)
+    assert archived == []
+
+
+@pytest.mark.asyncio
 async def test_a_turn_on_a_larger_model_is_summarized_whole(tmp_path):
     """A turn's model sizes the chunks a compaction archives, but the summary,
     the decision log and the learnings are written by the loop's own model,
