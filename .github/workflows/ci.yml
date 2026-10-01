@@ -90,11 +90,17 @@ jobs:
           python -m pip install --upgrade pip
           # Skip the webui bundle — CI doesn't need it and it would force
           # bun/npm onto the runner just for tests.
-          # Install every optional extra except `[memory]` (fastembed
-          # downloads ~2GB models). Tests that need it self-skip via
-          # `pytest.importorskip` when it is absent.
-          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev,mcp,web,oauth,slack,discord]"
+          # `[memory]` (fastembed + lancedb) is installed so the memory tests
+          # run instead of skipping. Installing it downloads no model, and
+          # the tests never load one: they embed with stand-ins
+          # (tests/fakes/fastembed, in-test stubs), and the suite fails any
+          # test that reaches the network. The heavy extras ([stt], [tts],
+          # [voice], [cross-encoder], [ocr]) stay out; tests that need them
+          # self-skip via `pytest.importorskip` when they are absent.
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev,mcp,web,oauth,slack,discord,memory]"
 
       - name: Run unit tests
         if: steps.filter.outputs.run == 'true'
-        run: pytest tests/ -q --maxfail=5
+        # Four pytest-xdist worker processes on this one runner (the plugin
+        # comes with [dev]).
+        run: pytest tests/ -q -n 4 --maxfail=5
