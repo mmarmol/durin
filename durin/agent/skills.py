@@ -1,10 +1,13 @@
 """Skills loader for agent capabilities."""
 
+import copy
 import json
 import os
 import re
 import shutil
 import sys
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import yaml
@@ -34,6 +37,66 @@ _STRIP_SKILL_FRONTMATTER = re.compile(
     r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?",
     re.DOTALL,
 )
+
+# Parsed frontmatter per resolved SKILL.md path, with the (st_mtime_ns,
+# st_size) the file had when it was read. A prompt build reads each skill's
+# frontmatter several times (the platform filter, the catalog line, the
+# always-on scan) and used to parse the YAML every time; a hit costs a stat.
+# Shared by every SkillsLoader in the process, bounded well above a
+# workspace's skill count (the least recently used entry goes first), and
+# locked: the gateway builds prompts for concurrent turns on worker threads.
+_META_CACHE_MAX = 1024
+_META_CACHE: OrderedDict[str, tuple[tuple[int, int], dict | None]] = OrderedDict()
+_META_CACHE_LOCK = threading.Lock()
+# Bumped by every forget. A parse that began before a forget is not stored:
+# the text it read may be the one the forget was for.
+_META_CACHE_GEN = 0
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    """``(st_mtime_ns, st_size)`` of ``path``, or None when it cannot be stat'ed."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def _parse_skill_frontmatter(content: str | None) -> dict | None:
+    """The YAML frontmatter of a SKILL.md as a dict; None without one."""
+    if not content or not content.startswith("---"):
+        return None
+    match = _STRIP_SKILL_FRONTMATTER.match(content)
+    if not match:
+        return None
+    try:
+        parsed = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    # yaml.safe_load returns native types (int, bool, list, etc.);
+    # keep values as-is so downstream consumers get correct types.
+    metadata: dict[str, object] = {}
+    for key, value in parsed.items():
+        metadata[str(key)] = value
+    return metadata
+
+
+def forget_skill_metadata(path: Path) -> None:
+    """Drop the cached frontmatter of the skill file at ``path``.
+
+    The cache trusts a file while its (mtime, size) are unchanged, but a
+    rewrite that keeps the size and lands within the filesystem's mtime
+    granularity (a jiffy on ext4, a second or more on HFS+ or FAT) changes
+    neither. durin's own writes to a skill call this, so the next read parses
+    the new text. An edit made outside this process in that window stays
+    unseen until the file changes again."""
+    global _META_CACHE_GEN
+    key = str(Path(path).resolve())
+    with _META_CACHE_LOCK:
+        _META_CACHE_GEN += 1
+        _META_CACHE.pop(key, None)
 
 
 class SkillsLoader:
@@ -102,13 +165,19 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
+        path = self._skill_file(name)
+        return path.read_text(encoding="utf-8") if path is not None else None
+
+    def _skill_file(self, name: str) -> Path | None:
+        """The SKILL.md a skill name resolves to: the workspace copy shadows the
+        builtin. None when neither exists."""
         roots = [self.workspace_skills]
         if self.builtin_skills:
             roots.append(self.builtin_skills)
         for root in roots:
             path = root / name / "SKILL.md"
             if path.exists():
-                return path.read_text(encoding="utf-8")
+                return path
         return None
 
     def skill_dir(self, name: str) -> Path | None:
@@ -379,27 +448,37 @@ class SkillsLoader:
         """
         Get metadata from a skill's frontmatter.
 
+        Served from the process-wide cache while the skill file's (mtime, size)
+        match the stat taken before it was last read. Every call returns its
+        own copy, so a caller that changes it changes nothing for the next.
+
         Args:
             name: Skill name.
 
         Returns:
             Metadata dict or None.
         """
-        content = self.load_skill(name)
-        if not content or not content.startswith("---"):
+        path = self._skill_file(name)
+        if path is None:
             return None
-        match = _STRIP_SKILL_FRONTMATTER.match(content)
-        if not match:
-            return None
-        try:
-            parsed = yaml.safe_load(match.group(1))
-        except yaml.YAMLError:
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        # yaml.safe_load returns native types (int, bool, list, etc.);
-        # keep values as-is so downstream consumers get correct types.
-        metadata: dict[str, object] = {}
-        for key, value in parsed.items():
-            metadata[str(key)] = value
-        return metadata
+        stamp = _file_stamp(path)
+        if stamp is None:
+            # No freshness token to hold a cached parse against.
+            return _parse_skill_frontmatter(self.load_skill(name))
+        key = str(path.resolve())
+        with _META_CACHE_LOCK:
+            hit = _META_CACHE.get(key)
+            if hit is not None and hit[0] == stamp:
+                _META_CACHE.move_to_end(key)
+                return copy.deepcopy(hit[1])
+            gen = _META_CACHE_GEN
+        # Stat first, read second: a write in between leaves new text under the
+        # old stamp, which the next stat no longer matches.
+        meta = _parse_skill_frontmatter(path.read_text(encoding="utf-8"))
+        with _META_CACHE_LOCK:
+            if gen == _META_CACHE_GEN:
+                _META_CACHE[key] = (stamp, meta)
+                _META_CACHE.move_to_end(key)
+                while len(_META_CACHE) > _META_CACHE_MAX:
+                    _META_CACHE.popitem(last=False)
+        return copy.deepcopy(meta)
