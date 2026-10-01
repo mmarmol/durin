@@ -6,8 +6,9 @@ conversation that ends by silence — a webui chat abandoned, a Slack thread
 that stops — leaves neither. This pass runs in the nightly dream: for each
 conversation idle for ``idle_hours``, it summarizes the messages since the
 last summary (or since the compactor's ``last_consolidated``) with the same
-archive prompt the compactor uses, appends the block to the same store, and
-advances a per-session cursor so the pass is idempotent.
+archive prompt the compactor uses, in pieces that each fit one call, appends
+a block per piece to the same store, and advances a per-session cursor past
+each piece so the pass is idempotent.
 
 Only conversations qualify. Workflow, subagent, cron, automation and bench
 sessions are skipped by file stem, and any session whose line-0 metadata
@@ -36,7 +37,7 @@ from durin.session.manager import is_workflow_session_file
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.utils.prompt_templates import render_template
-from durin.utils.runtime import without_failure_placeholders
+from durin.utils.runtime import runs_that_fit, without_failure_placeholders
 
 __all__ = [
     "get_summary_cursor",
@@ -48,6 +49,8 @@ __all__ = [
 LLMInvoke = Callable[..., Any]
 
 _CURSOR_KEY = "summary_cursor"
+# The most span text one summarizing call of this pass takes; a longer span
+# is summarized in pieces of at most this size.
 _MAX_SPAN_CHARS = 48_000
 _SKIP_STEM_PREFIXES = ("workflow_", "subagent_", "cron_", "automation_", "bench_")
 
@@ -134,8 +137,17 @@ def summarize_session(
     idle_hours: int = 6,
     min_new_messages: int = 4,
     now: datetime | None = None,
+    deadline: float | None = None,
 ) -> dict:
-    """Summarize one session's unsummarized span; returns a small result dict."""
+    """Summarize one session's unsummarized span; returns a small result dict.
+
+    The span goes to the summarizer whole, cut at message boundaries into
+    pieces of at most ``_MAX_SPAN_CHARS`` (a single message larger than
+    that is a piece of its own): one call per piece, in order, each summary
+    stored as a block of its own. The cursor moves past each piece once its
+    call answered, so a call that raises, or a ``deadline``
+    (``time.perf_counter()``) passed before the next piece, leaves the rest
+    for the next pass instead of skipping it."""
     from durin.memory.llm_invoke import default_llm_invoke
 
     llm_invoke = llm_invoke or default_llm_invoke
@@ -163,28 +175,44 @@ def summarize_session(
     if len(span) < min_new_messages:
         return {"session": key, "skipped": "too_short", "new_messages": len(span)}
 
-    text = _format_turns(new)
-    if len(text) > _MAX_SPAN_CHARS:
-        text = "(earlier turns omitted)\n" + text[-_MAX_SPAN_CHARS:]
-    prompt = render_template("agent/consolidator_archive.md", strip=True) + "\n\n" + text
-    resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if hasattr(resp, "text") else str(resp)
-    summary, tags = parse_consolidator_response(raw)
-
+    # Where each message sits in the file: the cursor indexes the file's
+    # messages, placeholders included, and a piece ends at its last message.
+    position = {id(m): i for i, m in enumerate(msgs)}
+    instructions = render_template("agent/consolidator_archive.md", strip=True)
+    pieces = runs_that_fit(new, _MAX_SPAN_CHARS, line=lambda m: _format_turns([m]), count=len)
+    summarized = written = False
+    cursor = start
+    for n, piece in enumerate(pieces):
+        if n and deadline is not None and time.perf_counter() >= deadline:
+            return {
+                "session": key, "written": written, "cursor": cursor,
+                "new_messages": len(span), "yielded": True,
+            }
+        text = _format_turns(piece)
+        if text:
+            prompt = instructions + "\n\n" + text
+            resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
+            raw = resp.text if hasattr(resp, "text") else str(resp)
+            summary, tags = parse_consolidator_response(raw)
+            if summary and summary.strip() != "(nothing)":
+                # The store declines a block it already holds as the newest
+                # one (a degraded-LLM repeat) with no new tags, so "written"
+                # is what it reports, not what we asked.
+                path = append_session_summary_block(
+                    workspace, key, summary, last_active=meta.get("updated_at"),
+                    entities=tags["entities"], topics=tags["topics"],
+                )
+                summarized = True
+                written = written or path is not None
+        cursor = position[id(piece[-1])] + 1
+        set_summary_cursor(jsonl_path, cursor)
+    # What follows the last piece is failure placeholders, left out.
     total = len(msgs)
-    if not summary or summary.strip() == "(nothing)":
-        set_summary_cursor(jsonl_path, total)
-        return {"session": key, "skipped": "nothing", "cursor": total}
-    # The store declines a block it already holds as the newest one (a
-    # degraded-LLM repeat) with no new tags, so "written" is what it
-    # reports, not what we asked.
-    path = append_session_summary_block(
-        workspace, key, summary, last_active=meta.get("updated_at"),
-        entities=tags["entities"], topics=tags["topics"],
-    )
     set_summary_cursor(jsonl_path, total)
+    if not summarized:
+        return {"session": key, "skipped": "nothing", "cursor": total}
     return {
-        "session": key, "written": path is not None,
+        "session": key, "written": written,
         "cursor": total, "new_messages": len(span),
     }
 
@@ -200,12 +228,13 @@ def run_session_summary_pass(
 ) -> dict:
     """Walk ``sessions/*.jsonl`` and summarize every idle conversation with new turns."""
     t0 = time.perf_counter()
+    deadline = t0 + max_seconds if max_seconds else None
     _emit("memory.dream.start", kind="session_summary")
     out: dict[str, Any] = {"sessions": 0, "written": 0, "skipped": 0, "errors": [], "yielded": False}
     sdir = Path(workspace) / "sessions"
     if sdir.is_dir():
         for jsonl_path in sorted(sdir.glob("*.jsonl")):
-            if max_seconds and (time.perf_counter() - t0) >= max_seconds:
+            if deadline is not None and time.perf_counter() >= deadline:
                 out["yielded"] = True
                 break
             if is_workflow_session_file(jsonl_path):
@@ -213,7 +242,7 @@ def run_session_summary_pass(
             try:
                 result = summarize_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
-                    idle_hours=idle_hours, min_new_messages=min_new_messages,
+                    idle_hours=idle_hours, min_new_messages=min_new_messages, deadline=deadline,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad session must not stop the pass
                 logger.warning("session summary pass: {} failed: {}", jsonl_path.stem, exc)
@@ -224,6 +253,11 @@ def run_session_summary_pass(
                 out["written"] += 1
             else:
                 out["skipped"] += 1
+            if result.get("yielded"):
+                # Out of time inside this session: the rest of it, and the
+                # sessions after it, wait for the next pass.
+                out["yielded"] = True
+                break
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="session_summary", sessions=out["sessions"],
           written=out["written"], skipped=out["skipped"], errors=len(out["errors"]),

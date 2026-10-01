@@ -370,7 +370,16 @@ appended.
 The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**
 (`agent/consolidator_archive.md`), so both paths produce the same shape of
-bullet summary plus trailing entity/topic tags. The result is appended to
+bullet summary plus trailing entity/topic tags. It goes to the summarizer
+whole: cut at message boundaries by the splitter compaction uses
+(`runs_that_fit`) into pieces of at most `_MAX_SPAN_CHARS` characters, a
+single message larger than that being a piece of its own, and summarized one
+call per piece, in order, each summary its own block. The cursor moves past
+each piece once its call answered, so a call that fails, or the pass's time
+budget (`memory.dream.max_seconds_per_run`, checked between pieces as well as
+between sessions), leaves the rest of the span for the next pass instead of
+skipping it: compaction skips whatever the cursor covers. Each block is
+appended to
 `memory/session_summary/<key>.md` via `append_session_summary_block` — the
 same bounded, block-based store the compactor writes (oldest blocks evicted
 past the size cap, their path trailers carried forward into a synthetic head

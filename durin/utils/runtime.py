@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -54,6 +54,43 @@ def without_failure_placeholders(messages: list[dict[str, Any]]) -> list[dict[st
             and message["content"].strip() in _FAILED_TURN_PLACEHOLDERS
         )
     ]
+
+
+def runs_that_fit(
+    messages: list[dict[str, Any]],
+    budget: int,
+    *,
+    line: Callable[[dict[str, Any]], str],
+    count: Callable[[str], int],
+) -> list[list[dict[str, Any]]]:
+    """*messages* in order, cut at message boundaries into runs that each fit
+    one summarizing call: a run's text, its messages' lines joined by
+    newlines, counts at most *budget*. A message whose line alone is over
+    it is a run of its own. *line* renders one message ("" for one with
+    nothing to show), *count* measures a text.
+
+    A run is counted as the call counts the text it receives, with no
+    newline after the last line. Every line starts with a token of its own
+    (the "[" of its timestamp), so that text counts as the run's earlier
+    lines, each with its joining newline, plus its last line alone."""
+    if not messages or budget <= 0:
+        return [messages] if messages else []
+    runs: list[list[dict[str, Any]]] = []
+    run: list[dict[str, Any]] = []
+    closed = text = 0
+    for message in messages:
+        rendered = line(message)
+        grown = closed + count(rendered) if rendered else text
+        if run and grown > budget:
+            runs.append(run)
+            run, closed = [], 0
+            grown = count(rendered) if rendered else 0
+        run.append(message)
+        if rendered:
+            closed += count(rendered + "\n")
+        text = grown
+    runs.append(run)
+    return runs
 
 FINALIZATION_RETRY_PROMPT = (
     "Please provide your response to the user based on the conversation above."

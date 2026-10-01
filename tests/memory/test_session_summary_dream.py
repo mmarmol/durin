@@ -111,6 +111,100 @@ def test_the_pass_leaves_out_failure_placeholders_and_keeps_the_request(tmp_path
     assert "[Assistant reply unavailable" not in prompts[0]
 
 
+def _long_session(ws: Path, key: str, n_pairs: int, words: int = 1_000) -> Path:
+    """A session of *n_pairs* exchanges whose questions are about *words*
+    words each, numbered: far longer than one summarizing call takes."""
+    path = _write_session(ws, key, n_pairs=0)
+    rows = path.read_text(encoding="utf-8").splitlines()
+    ts = json.loads(rows[0])["updated_at"]
+    for i in range(n_pairs):
+        rows.append(json.dumps({"role": "user", "content": _question(i, words), "timestamp": ts}))
+        rows.append(json.dumps({"role": "assistant", "content": f"answer {i}", "timestamp": ts}))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def _question(i: int, words: int = 1_000) -> str:
+    return f"question {i}: " + "detail " * words
+
+
+def _numbered(prompts: list[str]):
+    """An invoke that records each prompt and answers with a numbered block."""
+
+    def invoke(prompt: str, *, model=None) -> _Resp:
+        prompts.append(prompt)
+        return _Resp(f"- span {len(prompts)}\n---\nentities: []\ntopics: []")
+
+    return invoke
+
+
+def test_a_span_longer_than_one_call_is_summarized_whole_and_in_order(tmp_path: Path) -> None:
+    """The pass handed the summarizer only the last 48,000 characters of a
+    longer span and moved its cursor to the end of it: compaction skips what
+    the cursor covers, so the earlier turns were never summarized. Each
+    message now reaches a call whole, in order, every call's block stored."""
+    path = _long_session(tmp_path, "websocket:long", n_pairs=20)
+    prompts: list[str] = []
+
+    result = summarize_session(tmp_path, path, llm_invoke=_numbered(prompts))
+
+    assert result["written"] is True
+    assert len(prompts) > 1
+    assert not any("(earlier turns omitted)" in p for p in prompts)
+    first_call = [next(n for n, p in enumerate(prompts) if _question(i) in p) for i in range(20)]
+    assert first_call == sorted(first_call)
+    text, _ = get_session_summary(tmp_path, "websocket:long")
+    blocks = [text.index(f"span {n}") for n in range(1, len(prompts) + 1)]
+    assert blocks == sorted(blocks)
+    assert get_summary_cursor(path) == 40
+
+
+def test_a_failed_call_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None:
+    """The cursor moves past each piece once its block is stored, so a call
+    that fails costs only its own piece, which the next pass starts with."""
+    import pytest
+
+    path = _long_session(tmp_path, "websocket:flaky", n_pairs=20)
+    prompts: list[str] = []
+    numbered = _numbered(prompts)
+
+    def flaky(prompt: str, *, model=None) -> _Resp:
+        if len(prompts) == 1:
+            raise RuntimeError("the provider is down")
+        return numbered(prompt)
+
+    with pytest.raises(RuntimeError):
+        summarize_session(tmp_path, path, llm_invoke=flaky)
+    stored = [i for i in range(20) if _question(i) in prompts[0]]
+    assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
+
+    rest: list[str] = []
+    summarize_session(tmp_path, path, llm_invoke=_numbered(rest))
+    assert _question(stored[-1] + 1) in rest[0]
+    assert not any(_question(i) in p for p in rest for i in stored)
+    assert get_summary_cursor(path) == 40
+
+
+def test_the_time_budget_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None:
+    """Out of time between pieces, the pass stops where its last stored
+    piece ended and says it yielded; the next one goes on from there."""
+    import time
+
+    path = _long_session(tmp_path, "websocket:slow", n_pairs=20)
+    prompts: list[str] = []
+
+    first = summarize_session(tmp_path, path, llm_invoke=_numbered(prompts), deadline=time.perf_counter())
+
+    assert first["yielded"] is True
+    assert len(prompts) == 1
+    stored = [i for i in range(20) if _question(i) in prompts[0]]
+    assert get_summary_cursor(path) == 2 * (stored[-1] + 1)
+    rest: list[str] = []
+    summarize_session(tmp_path, path, llm_invoke=_numbered(rest))
+    assert _question(stored[-1] + 1) in rest[0]
+    assert get_summary_cursor(path) == 40
+
+
 def test_active_session_is_left_to_the_compactor(tmp_path: Path) -> None:
     path = _write_session(tmp_path, "websocket:abc", idle=timedelta(minutes=5))
     assert summarize_session(tmp_path, path, llm_invoke=_invoke)["skipped"] == "active"
