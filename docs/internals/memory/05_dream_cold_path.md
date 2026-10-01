@@ -351,7 +351,10 @@ session is left to the compactor, which already summarizes it on compaction.
 The span to summarize starts after the greater of this pass's own cursor and
 the compactor's `last_consolidated`, so a session that compacted recently is
 not re-summarized from turn zero, and the pass requires at least four new
-user/assistant messages before it spends an LLM call. When that start lands
+user/assistant messages before it spends an LLM call. The placeholders of
+turns that produced no answer are left out of the span, as compaction leaves
+them out (`without_failure_placeholders`): both write into the same bounded
+summary. The user's own messages always stay. When that start lands
 past the end of the file — the file shrank without the cursor resetting,
 because `/new` emptied it or the file cap trimmed it — what is there now is a
 new conversation, and the span falls back to `last_consolidated`.

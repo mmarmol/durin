@@ -965,9 +965,10 @@ Two metadata splits matter:
   The placeholders of turns that produced no answer (a model error, an
   overflow, a request no compaction could make fit) are left out of what is
   summarized and of the decision and learnings extraction
-  (`without_failure_placeholders`): in a bounded summary every block spent on
-  them would evict an older, real one, and a span of nothing else makes no
-  call. The user's messages always stay, answered or not: a later turn often
+  (`without_failure_placeholders`), and so of what the nightly
+  session-summary pass writes into the same store: in a bounded summary every
+  block spent on them would evict an older, real one, and a span of nothing
+  else makes no call. The user's messages always stay, answered or not: a later turn often
   retries one ("try again") and means nothing without it.
   The projection's own bound is in characters, whatever the window, so a
   prompt carries the summary cut to a quarter of what the rest of the system

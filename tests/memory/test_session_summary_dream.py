@@ -86,6 +86,31 @@ def test_summary_keeps_the_entities_the_prompt_extracted(tmp_path: Path) -> None
     assert entry.topics == ["testing", "memory"]
 
 
+def test_the_pass_leaves_out_failure_placeholders_and_keeps_the_request(tmp_path: Path) -> None:
+    """The pass writes into the same bounded summary compaction does, so it
+    leaves out the placeholders of turns that produced no answer as
+    compaction does, and keeps what the user asked."""
+    from durin.utils.runtime import MODEL_ERROR_PLACEHOLDER
+
+    path = _write_session(tmp_path, "websocket:failed")
+    rows = path.read_text(encoding="utf-8").splitlines()
+    ts = json.loads(rows[1])["timestamp"]
+    rows[3:3] = [
+        json.dumps({"role": "user", "content": "deploy on port 8443", "timestamp": ts}),
+        json.dumps({"role": "assistant", "content": MODEL_ERROR_PLACEHOLDER, "timestamp": ts}),
+    ]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    prompts: list[str] = []
+
+    def _capture(prompt: str, *, model=None) -> _Resp:
+        prompts.append(prompt)
+        return _invoke(prompt, model=model)
+
+    assert summarize_session(tmp_path, path, llm_invoke=_capture)["written"] is True
+    assert "deploy on port 8443" in prompts[0]
+    assert "[Assistant reply unavailable" not in prompts[0]
+
+
 def test_active_session_is_left_to_the_compactor(tmp_path: Path) -> None:
     path = _write_session(tmp_path, "websocket:abc", idle=timedelta(minutes=5))
     assert summarize_session(tmp_path, path, llm_invoke=_invoke)["skipped"] == "active"

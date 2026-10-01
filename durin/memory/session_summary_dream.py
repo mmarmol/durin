@@ -36,6 +36,7 @@ from durin.session.manager import is_workflow_session_file
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.utils.prompt_templates import render_template
+from durin.utils.runtime import without_failure_placeholders
 
 __all__ = [
     "get_summary_cursor",
@@ -151,14 +152,18 @@ def summarize_session(
         # The file shrank since the cursor was written (/new emptied it or the
         # file cap trimmed it): what is there now is a new conversation.
         start = int(meta.get("last_consolidated") or 0)
+    # The placeholders of turns that produced no answer stay out, as they do
+    # of what compaction summarizes into the same bounded store: they say
+    # nothing worth a block that would evict an older, real one.
+    new = without_failure_placeholders(msgs[start:])
     span = [
-        m for m in msgs[start:]
+        m for m in new
         if m.get("role") in ("user", "assistant") and m.get("content") and not m.get("_command")
     ]
     if len(span) < min_new_messages:
         return {"session": key, "skipped": "too_short", "new_messages": len(span)}
 
-    text = _format_turns(msgs[start:])
+    text = _format_turns(new)
     if len(text) > _MAX_SPAN_CHARS:
         text = "(earlier turns omitted)\n" + text[-_MAX_SPAN_CHARS:]
     prompt = render_template("agent/consolidator_archive.md", strip=True) + "\n\n" + text
