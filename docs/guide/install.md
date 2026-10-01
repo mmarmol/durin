@@ -317,7 +317,7 @@ touching anything:
 durin uninstall                 # dry-run by default: lists what would be deleted
 durin uninstall --yes           # delete user data (~/.durin, ~/.cache/durin)
 durin uninstall --purge --yes   # also `pip uninstall durin-agent` afterwards
-durin uninstall --keep-config   # remove caches/workspace, preserve the config
+durin uninstall --keep-config   # remove the rest, keep the config and the credentials
 ```
 
 Flags:
@@ -326,44 +326,43 @@ Flags:
 - `--purge` — additionally run `pip uninstall durin-agent` (the PyPI
   distribution name). Self-uninstalls in a subprocess so the running command
   finishes cleanly first.
-- `--keep-config` — preserve the config (`~/.durin/config.json` and its
-  `config.json.d/` sections) and `pairing.json`; everything else still goes.
+- `--keep-config` — preserve the config (`~/.durin/config.json`, its
+  `config.json.d/` sections and their backups), `pairing.json`, and the
+  credentials the config's `${secret:…}` references and sign-ins resolve
+  against (`secrets.json`, `api_tokens.json`, `oauth/`); everything else
+  still goes.
 - `--keep-cache` — preserve `~/.cache/durin/`.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
-The command prints the exact paths and byte counts before prompting, so
-you can sanity-check before committing.
+The command prints every path it will remove, grouped, with its size, before
+it asks; with `--yes` it prints the same list before it starts. A symlink is
+removed as the link itself — the list shows where it points — and what it
+points at is never touched. A path it could not remove is listed at the end,
+and the command exits 1.
 
 ### What lives outside the package
+
+`~/.durin/` below is the durin home: `$DURIN_HOME` when that is set.
 
 | Path | Removed by default? | Flag to keep |
 |---|---|---|
 | `~/.durin/config.json` | yes | `--keep-config` |
 | `~/.durin/config.json.d/` (the config's sections) | yes | `--keep-config` |
-| `~/.durin/config.json.bak` | yes | `--keep-config` |
+| `~/.durin/config.json.bak`, `config.json.bak.<stamp>`, `config.json.d.bak.<stamp>` (copies taken before a rewrite) | yes | `--keep-config` |
+| `~/.durin/config.json.legacy` (the config from before the split layout) | yes | `--keep-config` |
 | `~/.durin/pairing.json` | yes | `--keep-config` |
+| `~/.durin/secrets.json`, `api_tokens.json`, `oauth/` (the credentials) | yes | `--keep-config` |
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
-| `~/.durin/sessions/` | yes | — |
-| `~/.durin/history/` | yes | — |
-| `~/.durin/cron/` | yes | — |
-| `~/.durin/media/` | yes | — |
-| `~/.durin/bridge/` | yes | — |
-| `~/.durin/webui/` | yes | — |
-| `~/.durin/logs/` | yes | — |
 | `~/.cache/durin/telemetry/` | yes | `--keep-cache` |
 | `$DURIN_HOME/telemetry/` (instances selected with `DURIN_HOME`) | yes | `--keep-cache` |
 | `~/.cache/durin/models/` | yes | `--keep-cache` |
 | `~/.cache/durin/archive/` | yes | `--keep-cache` |
-| `~/.durin/models/stt/` | **no** (STT model cache, not enumerated) | — |
-| `~/.durin/models/ocr/` | **no** (OCR language-model cache, not enumerated) | — |
+| everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, the STT and OCR model caches under `models/`, …) | yes | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed
 automatically — many users keep their workspace under a project repo and
 don't want durin to touch it. Pass `--workspace <path>` to opt-in.
-The model caches under `~/.durin/models/` (STT engines, OCR recognition
-languages) are also left in place and can be deleted manually if you want to
-reclaim disk space.
 
 ---
 

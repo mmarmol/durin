@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from durin.cli.commands import app
@@ -265,3 +267,188 @@ def test_run_uninstall_keep_config_keeps_the_split_config(fake_home: Path) -> No
     root = fake_home / ".durin"
     split = root / "config.json.d"
     assert {p.name: p.read_bytes() for p in (root / "config.json", *sorted(split.iterdir()))} == before
+
+
+# The config, its backups and the credentials its ${secret:…} references and
+# sign-ins resolve against: --keep-config keeps exactly these.
+_CONFIG_GROUP = (
+    "api_tokens.json",
+    "config.json",
+    "config.json.bak",
+    "config.json.bak.1780253978",
+    "config.json.bak.20260610_215409",
+    "config.json.d",
+    "config.json.d.bak.20260610_215409",
+    "config.json.legacy",
+    "oauth",
+    "pairing.json",
+    "secrets.json",
+)
+
+
+def _tree(root: Path) -> dict[str, bytes]:
+    """Every entry under *root* with its bytes, symlinks as their target and
+    never followed: what a run must leave untouched, compared whole."""
+    out: dict[str, bytes] = {}
+    for dirpath, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            path = Path(dirpath) / name
+            rel = str(path.relative_to(root))
+            if path.is_symlink():
+                out[rel] = b"-> " + os.readlink(path).encode()
+            elif path.is_dir():
+                out[rel + "/"] = b""
+            else:
+                out[rel] = path.read_bytes()
+    return out
+
+
+def _full_home(fake_home: Path) -> tuple[Path, Path]:
+    """A durin home holding every kind of entry uninstall meets: the config
+    with its sections, its timestamped backups and the pre-split monolith;
+    the credentials; the workspace; state under names a fixed list never
+    had, and lock files; and symlinks to a directory outside the home, one
+    at the top and one inside a directory. Returns the home and that
+    outside directory."""
+    outside = fake_home / "projects" / "notes"
+    outside.mkdir(parents=True)
+    (outside / "keep.txt").write_text("not durin's", encoding="utf-8")
+
+    root = fake_home / ".durin"
+    (root / "config.json").write_text('{"_layout": "split"}', encoding="utf-8")
+    (root / "config.json.d").mkdir()
+    (root / "config.json.d" / "providers.json").write_text(
+        '{"openai": {"apiKey": "${secret:OPENAI_API_KEY}"}}', encoding="utf-8",
+    )
+    (root / "config.json.bak.20260610_215409").write_text('{"x": 1}', encoding="utf-8")
+    (root / "config.json.bak.1780253978").write_text('{"x": 0}', encoding="utf-8")
+    (root / "config.json.d.bak.20260610_215409").mkdir()
+    (root / "config.json.d.bak.20260610_215409" / "providers.json").write_text(
+        '{"openai": {"apiKey": "sk-plaintext"}}', encoding="utf-8",
+    )
+    (root / "config.json.legacy").write_text('{"providers": {}}', encoding="utf-8")
+    (root / "pairing.json").write_text("{}", encoding="utf-8")
+    (root / "secrets.json").write_text('{"OPENAI_API_KEY": {"value": "sk-test"}}', encoding="utf-8")
+    (root / "api_tokens.json").write_text("{}", encoding="utf-8")
+    (root / "oauth").mkdir()
+    (root / "oauth" / "openrouter.json").write_text("{}", encoding="utf-8")
+    for name in ("cron", "logs", "email", "jobs", "models"):
+        (root / name).mkdir()
+        (root / name / "state.json").write_text("{}", encoding="utf-8")
+    for name in ("config.json.lock", "secrets.json.lock", "embed-cache.sqlite", "tui-state.json", "gateway.pid"):
+        (root / name).write_text("x", encoding="utf-8")
+    # A name with brackets, which a console reads as style markup.
+    (root / "notes [old].txt").write_text("x", encoding="utf-8")
+    (root / "telemetry").mkdir()
+    (root / "notes").symlink_to(outside, target_is_directory=True)
+    (root / "media" / "linked.txt").symlink_to(outside / "keep.txt")
+    return root, outside
+
+
+def test_uninstall_removes_everything_in_the_durin_home(fake_home: Path) -> None:
+    """Uninstall removed a fixed list of names: the credentials (the secret
+    store, the API tokens, the OAuth sign-ins), the config backups, and any
+    state under a name the list lacked stayed behind. Everything goes now,
+    and a symlink goes as the link: what it points at outside is untouched."""
+    root, outside = _full_home(fake_home)
+    before = _tree(outside)
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    assert _tree(root) == {}
+    assert _tree(outside) == before
+
+
+def test_keep_config_keeps_the_config_its_backups_and_the_credentials(fake_home: Path) -> None:
+    root, outside = _full_home(fake_home)
+    before = _tree(outside)
+    kept = {rel: data for rel, data in _tree(root).items() if rel.split("/")[0].rstrip("/") in _CONFIG_GROUP}
+    assert {rel.split("/")[0].rstrip("/") for rel in kept} == set(_CONFIG_GROUP)
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=True, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    assert _tree(root) == kept
+    assert _tree(outside) == before
+
+
+def test_yes_lists_exactly_what_it_removes_before_removing_it(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--yes skips the question, not the list: the plan names every path
+    (a symlink as the link, its target left alone), and what goes is what
+    it named."""
+    root, outside = _full_home(fake_home)
+    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    entries = set(root.iterdir())
+    plan = [path for _group, path, _size in collect_targets(
+        keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )]
+
+    result = runner.invoke(app, ["uninstall", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert entries - set(root.iterdir()) == {path for path in plan if path.parent == root}
+    listing = result.output[: result.output.index("Removed")]
+    for path in plan:
+        assert str(path) in listing
+    assert f"{root / 'notes'} -> {outside}" in listing
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root removes the entries of a read-only directory")
+def test_a_path_it_cannot_remove_is_reported(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A path uninstall cannot remove is named, the run exits 1, and the rest
+    still goes. Before, a directory under a name the fixed list lacked was
+    never even tried: it stayed behind with nothing said."""
+    root = fake_home / ".durin"
+    stuck = root / "email"
+    stuck.mkdir()
+    (stuck / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("durin.cli.uninstall.console", Console(width=400))
+    stuck.chmod(0o500)
+    try:
+        result = runner.invoke(app, ["uninstall", "--yes"])
+    finally:
+        stuck.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    failures = result.output[result.output.index("could not be deleted"):]
+    assert str(stuck) in failures
+    assert not (root / "sessions").exists()
+
+
+def test_a_path_gone_before_its_turn_is_not_a_failure(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stopping the gateway removes its pid file, which the plan listed: the
+    path is gone, as asked, and is not reported as one uninstall failed on."""
+    pid = fake_home / ".durin" / "gateway.pid"
+    pid.write_text("12345", encoding="utf-8")
+    monkeypatch.setattr("durin.cli.uninstall._stop_gateway_daemon", pid.unlink)
+
+    rc = run_uninstall(
+        assume_yes=True, purge=False, keep_config=False, keep_workspace=False, keep_cache=False, workspace=None,
+    )
+
+    assert rc == 0
+    assert not pid.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists a directory without its read permission")
+def test_a_durin_home_it_cannot_list_removes_nothing(fake_home: Path) -> None:
+    """Without the home's entries there is no complete plan to show: the run
+    says why, exits 1, and removes nothing."""
+    root = fake_home / ".durin"
+    root.chmod(0o300)
+    try:
+        result = runner.invoke(app, ["uninstall", "--yes"])
+    finally:
+        root.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    assert "Nothing was removed" in result.output
+    assert (root / "config.json").exists()
+    assert (fake_home / ".cache" / "durin" / "telemetry").exists()
