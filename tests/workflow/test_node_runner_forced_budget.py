@@ -10,8 +10,10 @@ for byte, fitted under the same budget.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
+from pathlib import Path
 from typing import Any
 
 from durin.agent.runner import AgentRunner
@@ -86,22 +88,32 @@ def _config(window: int) -> Config:
 
 def _run(tmp_path, node: WorkNode, *, window: int | None = WINDOW, reads: int = READS,
          output_cap: int | None = None, assess: str = "deliver"):
+    """Run *node* in a workspace given as a relative path, from inside it.
+
+    Every request then has the same size wherever tmp_path is. With absolute
+    paths it did not: the model's read_file calls and the pruned results'
+    placeholders (which name each saved file) carried tmp_path over a hundred
+    times, so how long tmp_path was moved where the loop's batches fell, and
+    for some lengths put the forced call past the batch trigger."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     files = []
     for n in range(reads):
-        path = tmp_path / "docs" / f"doc{n}.txt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"document {n}\n{_TEXT}", encoding="utf-8")
+        path = Path("docs") / f"doc{n}.txt"
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(f"document {n}\n{_TEXT}", encoding="utf-8")
         files.append(path)
     model = _Reader(files, {
         "route": {"label": "PASS"},
         "assess": {"verdict": assess},
         "deliver": {"summary": "fine"},
     }, output_cap=output_cap)
-    nr = AgentNodeRunner(AgentRunner(model), SessionManager(workspace=tmp_path),
-                         default_model="test-model",
-                         app_config=_config(window) if window is not None else None)
-    resp = nr(NodeRunRequest(node=node, task="t", upstream_output="the work", shared_context=[],
-                             run_id="r1", iteration=1, root_session_key=None))
+    with contextlib.chdir(tmp_path):
+        nr = AgentNodeRunner(AgentRunner(model), SessionManager(workspace=Path(".")),
+                             default_model="test-model",
+                             app_config=_config(window) if window is not None else None)
+        resp = nr(NodeRunRequest(node=node, task="t", upstream_output="the work",
+                                 shared_context=[], run_id="r1", iteration=1,
+                                 root_session_key=None))
     return model, resp
 
 

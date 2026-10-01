@@ -1,7 +1,16 @@
 """P6 — runnable_install_specs: safe specs become commands; dangerous/download dropped."""
 from pathlib import Path
 
+import pytest
+
 from durin.agent.skills_import import runnable_install_specs
+
+
+@pytest.fixture(autouse=True)
+def _osv_reports_no_malware(monkeypatch):
+    """The specs are also looked up in OSV's malware advisories; answer that
+    lookup with no advisory instead of querying api.osv.dev."""
+    monkeypatch.setattr("durin.security.osv._post_query", lambda payload, timeout: {})
 
 
 def _skill(tmp_path: Path, frontmatter: str) -> Path:

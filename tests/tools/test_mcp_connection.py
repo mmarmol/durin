@@ -776,6 +776,7 @@ async def test_catalog_timeout_at_connect(monkeypatch) -> None:
 
     import durin.agent.tools.mcp_connection as mc
 
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
     server = FastMCP("hang")
 
     @server.tool()
@@ -803,9 +804,9 @@ async def test_catalog_timeout_at_connect(monkeypatch) -> None:
         t0 = time.monotonic()
         await conn.start()
         elapsed = time.monotonic() - t0
-        # Each attempt aborts within catalog_timeout (0.2s).
-        # 3 retries + 1s+2s+4s backoff caps total around 7.6s.
-        assert elapsed < 10.0
+        # Each attempt aborts within catalog_timeout (0.2s): four attempts
+        # take about 0.8s. One hanging list_tools alone would take 10s.
+        assert elapsed < 5.0
         await conn.aclose()
 
 

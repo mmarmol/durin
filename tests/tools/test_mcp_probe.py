@@ -9,6 +9,16 @@ import pytest
 from durin.agent.tools.mcp import _probe_http_url, connect_mcp_servers
 from durin.agent.tools.registry import ToolRegistry
 
+
+@pytest.fixture(autouse=True)
+def _no_connect_backoff(monkeypatch):
+    """A server that cannot connect is retried three times with 1+2+4 s of
+    backoff; the servers here fail on purpose, so retry without waiting."""
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
+
+
 # ---------------------------------------------------------------------------
 # _probe_http_url unit tests
 # ---------------------------------------------------------------------------
@@ -36,9 +46,20 @@ async def test_probe_returns_false_for_closed_port():
 
 
 @pytest.mark.asyncio
-async def test_probe_uses_default_port_for_http():
-    """When no port in URL, should default to 80 (will fail -> False)."""
+async def test_probe_uses_default_port_for_http(monkeypatch):
+    """When no port in URL, should default to 80 (will fail -> False).
+
+    The connection is faked at the probe's boundary: the host name is made
+    up, and resolving it would be a real DNS lookup."""
+    dialed: list[tuple[str, int]] = []
+
+    async def _refused(host, port, *args, **kwargs):
+        dialed.append((host, port))
+        raise ConnectionRefusedError(f"{host}:{port} refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", _refused)
     assert await _probe_http_url("http://unreachable-host.test/mcp") is False
+    assert dialed == [("unreachable-host.test", 80)]
 
 
 # ---------------------------------------------------------------------------
@@ -54,24 +75,62 @@ def _make_http_cfg(url: str, transport: str = "streamableHttp"):
     return MCPServerConfig(type=transport, url=url, tool_timeout=30, enabled_tools=["*"])
 
 
+def _watch_probe_and_transports(monkeypatch) -> tuple[list[str], list[str]]:
+    """Record every probe and every attempt to open one of the SDK's HTTP
+    transports. The probe exists so that an unreachable server never gets as
+    far as the transport, whose task-group cleanup can escape the caller's
+    error handling and crash the event loop; an attempt is refused here."""
+    import mcp.client.sse as sse
+    import mcp.client.streamable_http as streamable_http
+
+    import durin.agent.tools.mcp_connection as mc
+
+    probed: list[str] = []
+    entered: list[str] = []
+    real_probe = mc._probe_http_url
+
+    async def probe(url, **kwargs):
+        probed.append(url)
+        return await real_probe(url, **kwargs)
+
+    def refused(name):
+        def transport(url, *args, **kwargs):
+            entered.append(f"{name}({url})")
+            raise ConnectionError(f"{url} unreachable")
+        return transport
+
+    monkeypatch.setattr(mc, "_probe_http_url", probe)
+    monkeypatch.setattr(streamable_http, "streamable_http_client", refused("streamable_http_client"))
+    monkeypatch.setattr(sse, "sse_client", refused("sse_client"))
+    return probed, entered
+
+
 @pytest.mark.asyncio
-async def test_connect_skips_unreachable_streamable_http():
-    """Unreachable streamableHttp server should be skipped with a warning, no crash."""
+async def test_connect_skips_unreachable_streamable_http(monkeypatch):
+    """Unreachable streamableHttp server should be skipped with a warning, no crash:
+    the probe finds the port closed, and the transport is never opened."""
+    probed, entered = _watch_probe_and_transports(monkeypatch)
     registry = ToolRegistry()
     servers = {"dead": _make_http_cfg("http://127.0.0.1:19999/mcp")}
     stacks = await connect_mcp_servers(servers, registry)
     assert stacks == {}
     assert len(registry._tools) == 0
+    assert probed and set(probed) == {"http://127.0.0.1:19999/mcp"}
+    assert entered == []
 
 
 @pytest.mark.asyncio
-async def test_connect_skips_unreachable_sse():
-    """Unreachable SSE server should be skipped with a warning, no crash."""
+async def test_connect_skips_unreachable_sse(monkeypatch):
+    """Unreachable SSE server should be skipped with a warning, no crash: the
+    probe finds the port closed, and the transport is never opened."""
+    probed, entered = _watch_probe_and_transports(monkeypatch)
     registry = ToolRegistry()
     servers = {"dead": _make_http_cfg("http://127.0.0.1:19999/sse", transport="sse")}
     stacks = await connect_mcp_servers(servers, registry)
     assert stacks == {}
     assert len(registry._tools) == 0
+    assert probed and set(probed) == {"http://127.0.0.1:19999/sse"}
+    assert entered == []
 
 
 @pytest.mark.asyncio
@@ -85,7 +144,8 @@ async def test_probe_not_called_for_stdio():
         called = True
         return await original_probe(url, **kw)
 
-    with patch("durin.agent.tools.mcp._probe_http_url", _spy_probe):
+    # The connection module imports the probe by name: patch that binding.
+    with patch("durin.agent.tools.mcp_connection._probe_http_url", _spy_probe):
         from durin.config.schema import MCPServerConfig
 
         cfg = MCPServerConfig(

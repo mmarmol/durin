@@ -86,7 +86,18 @@ def test_registry_describe_over_http(client):
     assert r.json()["version"] == "2.0.0"
 
 
-def test_registry_install_over_http_then_listed(client):
+def test_registry_install_over_http_then_listed(client, monkeypatch):
+    import durin.agent.mcp_install as mi
+
+    def _unreachable_probe():
+        # The install probes the remote for an OAuth challenge; its made-up
+        # host answers nothing, like an unreachable endpoint.
+        async def request(url):
+            raise ConnectionError(f"{url} unreachable")
+
+        return request
+
+    monkeypatch.setattr(mi, "_default_probe", _unreachable_probe)
     r = client.post(
         "/api/v1/mcp/registry/install",
         headers=AUTH_HEADER,

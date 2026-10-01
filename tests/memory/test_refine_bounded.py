@@ -81,9 +81,18 @@ def _events(monkeypatch) -> list[tuple[str, dict]]:
 def test_the_budget_stops_the_pass_and_the_rest_waits_for_the_next_run(tmp_path, monkeypatch):
     _alias_pairs(tmp_path, 4)
     events = _events(monkeypatch)
-    stub = _Stub(sleep=0.3)
+    # The budget clock moves only while the judge answers, one second per
+    # call: candidate generation costs nothing against the budget however
+    # slow or loaded the machine is.
+    clock = [0.0]
+    monkeypatch.setattr(refine_dream, "_clock", lambda: clock[0])
 
-    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.1)
+    def _one_second_per_call(_i, _prompt):
+        clock[0] += 1.0
+
+    stub = _Stub(on_call=_one_second_per_call)
+
+    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.5)
 
     assert out["yielded"] is True and out["stop_reason"] == "max_seconds"
     assert out["judged"] == 1  # the chunk in flight completes; no new chunk starts

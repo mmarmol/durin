@@ -26,7 +26,11 @@ def test_periodic_reconciler_flips_dead_owner_run(tmp_path, monkeypatch):
 
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if run_log.read_manifest(tmp_path, "wf", "ghost")["status"] == "crashed":
+        # The sweep rewrites the manifest in place, from its own thread: a read
+        # that lands mid-write finds it empty, which read_manifest reports as
+        # None. That is not the flip yet; read again.
+        manifest = run_log.read_manifest(tmp_path, "wf", "ghost")
+        if manifest is not None and manifest["status"] == "crashed":
             break
         time.sleep(0.1)
-    assert run_log.read_manifest(tmp_path, "wf", "ghost")["status"] == "crashed"
+    assert (run_log.read_manifest(tmp_path, "wf", "ghost") or {}).get("status") == "crashed"

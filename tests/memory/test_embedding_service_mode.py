@@ -39,9 +39,10 @@ def test_service_mode_uses_discovered_server(provider, monkeypatch):
     assert provider._isolation == "service"
 
 
-def test_service_mode_without_discovery_quietly_uses_pool(provider):
+def test_service_mode_without_discovery_quietly_uses_pool(provider, fastembed_stand_in):
     """No discovery file (no gateway serving) → local pool for this call,
-    isolation stays "service" so a later-started server gets picked up."""
+    isolation stays "service" so a later-started server gets picked up. The
+    pool's worker loads the fastembed stand-in, not a real model."""
     provider._model = FakeModel()
     # No embed-server.json exists in the isolated DURIN_HOME.
     out = provider.embed(["hola"])
@@ -49,7 +50,8 @@ def test_service_mode_without_discovery_quietly_uses_pool(provider):
     assert provider._isolation == "service"   # no permanent flip
 
 
-def test_service_mode_broken_server_flips_to_process(provider, monkeypatch):
+def test_service_mode_broken_server_flips_to_process(provider, monkeypatch, fastembed_stand_in):
+    # The fallback pool's worker loads the fastembed stand-in, not a real model.
     from durin.memory import embed_server
     from durin.memory import embedding as embedding_mod
 

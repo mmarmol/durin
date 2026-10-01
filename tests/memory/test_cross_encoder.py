@@ -109,15 +109,19 @@ def test_rerank_gracefully_skips_on_failure() -> None:
     assert out == ["a", "b"]
 
 
-def test_lazy_load_when_no_scorer_provided() -> None:
+def test_lazy_load_when_no_scorer_provided(monkeypatch) -> None:
     """When `scorer=None`, the reranker tries to load the default
-    model on first call. In CI without the dep, the load fails →
-    subsequent `score()` calls return None."""
+    model on first call; a failed load makes `score()` return None.
+    The loader is faked: with the cross-encoder extra installed the real
+    one loads (or downloads) a model, which is not what this checks."""
+    from durin.memory import cross_encoder as ce_mod
+
+    loads: list[str] = []
+    monkeypatch.setattr(ce_mod, "_load_default_scorer", lambda model: loads.append(model))
     reranker = CrossEncoderReranker(scorer=None)
     result = reranker.score("q", ["doc"])
-    # We don't assert hard on None — the test box might have the dep.
-    # The contract is: never raise, return list[float] | None.
-    assert result is None or isinstance(result, list)
+    assert loads == [reranker._model]
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +129,18 @@ def test_lazy_load_when_no_scorer_provided() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_reset_clears_load_state() -> None:
+def test_reset_clears_load_state(monkeypatch) -> None:
     """`reset()` forces the next score() call to re-attempt the load.
 
     Used by the HealthChecker probe to recover from transient load
     failures (network blip, HF cache issue) without a process restart.
     """
+    from durin.memory import cross_encoder as ce_mod
     from durin.memory.cross_encoder import CrossEncoderReranker
 
+    monkeypatch.setattr(ce_mod, "_load_default_scorer", lambda model: None)
     r = CrossEncoderReranker(scorer=None)
-    # First call attempts load; in CI without the dep, fails.
+    # First call attempts the load, which fails.
     r.score("q", ["d"])
     assert r._load_attempted is True
     r.reset()

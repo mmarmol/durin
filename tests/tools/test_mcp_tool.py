@@ -22,6 +22,16 @@ from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import MCPServerConfig
 
 
+@pytest.fixture(autouse=True)
+def _no_connect_backoff(monkeypatch):
+    """A server that cannot connect is retried three times with 1+2+4 s of
+    backoff; the servers here that fail do so on purpose, so retry without
+    waiting."""
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
+
+
 class _FakeTextContent:
     def __init__(self, text: str) -> None:
         self.text = text
@@ -777,6 +787,12 @@ async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
     )
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", _capturing_stdio_client)
+    # The npx package goes through the OSV malware preflight: no advisory,
+    # without querying api.osv.dev.
+    monkeypatch.setattr(
+        "durin.agent.tools.mcp_security._query_osv",
+        lambda package, ecosystem, version=None: [],
+    )
 
     registry = ToolRegistry()
     stacks = await connect_mcp_servers(

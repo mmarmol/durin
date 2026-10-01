@@ -309,14 +309,22 @@ def test_realistic_long_commands_at_the_new_cap_are_checked_quickly(command):
 
 @pytest.mark.parametrize("unit", ["rm ", "cp ", "sudo -x ", "http://a ", "mv x "],
                          ids=["rm", "cp", "sudo", "url", "mv"])
-def test_adversarial_repetition_at_the_cap_is_still_checked_quickly(unit):
+def test_adversarial_repetition_at_the_cap_is_still_checked_quickly(unit, monkeypatch):
     """The cap exists for the guard's worst case: an anchor word repeated up to
     the cap makes several patterns quadratic. At the cap that must stay well
     under a few seconds of work (a fraction of a second on a dev machine; the
     bound is generous for slow CI)."""
+    import socket
     import time
 
     from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    def _unresolvable(host, *args, **kwargs):
+        # The URL check resolves the URL's host; "a" resolves nowhere, and
+        # the timing is the guard's, not a DNS server's.
+        raise socket.gaierror(socket.EAI_NONAME, f"{host} not known")
+
+    monkeypatch.setattr("durin.security.network.socket.getaddrinfo", _unresolvable)
 
     command = (unit * (MAX_CHECKED_COMMAND_CHARS // len(unit)))[:MAX_CHECKED_COMMAND_CHARS]
     assert len(command.strip()) <= MAX_CHECKED_COMMAND_CHARS

@@ -386,8 +386,18 @@ async def test_unknown_action():
 
 @pytest.mark.asyncio
 async def test_install_remote_auto(monkeypatch):
+    import durin.agent.mcp_install as mi
     import durin.agent.tools.mcp_manage as m
 
+    def _unreachable_probe():
+        # The install probes the remote for an OAuth challenge; its made-up
+        # host answers nothing, like an unreachable endpoint.
+        async def request(url):
+            raise ConnectionError(f"{url} unreachable")
+
+        return request
+
+    monkeypatch.setattr(mi, "_default_probe", _unreachable_probe)
     monkeypatch.setattr(m, "build_mcp_adapters", lambda regs: [_Reg()])
     svc = _FakeService()
     out = await _tool("auto", svc).execute(action="install", ref="io.x/jira", prefer="remote")

@@ -65,11 +65,11 @@ def test_inline_default_batch_size_is_32_not_library_256():
     assert fake.calls[0]["batch_size"] == 32
 
 
-def test_process_isolation_parity_with_inline():
+def test_process_isolation_parity_with_inline(fastembed_stand_in):
     """Same model, same texts → same vectors, whether embedded in-process
-    or in the worker subprocess. Downloads/loads the real model twice —
-    skipped wherever the [memory] extra is absent (CI)."""
-    pytest.importorskip("fastembed")
+    or in the worker subprocess. The model is the fastembed stand-in in both
+    processes (the worker imports it from this process's sys.path): what
+    differs between the two paths is durin's own plumbing."""
     texts = ["hello world", "durin memory", "embedding parity"]
     inline = FastembedProvider(isolation="inline")
     proc = FastembedProvider(isolation="process", recycle_batches=64)
@@ -80,10 +80,10 @@ def test_process_isolation_parity_with_inline():
         assert a == pytest.approx(b, abs=1e-6)
 
 
-def test_worker_recycles_after_max_batches():
+def test_worker_recycles_after_max_batches(fastembed_stand_in):
     """recycle_batches=1 → every embed call lands in a fresh child, which
-    is what bounds the arena ratchet."""
-    pytest.importorskip("fastembed")
+    is what bounds the arena ratchet. Each child loads the fastembed
+    stand-in, not a real model."""
     from durin.memory import embedding_worker
 
     provider = FastembedProvider(isolation="process", recycle_batches=1)

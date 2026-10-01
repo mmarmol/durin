@@ -41,23 +41,31 @@ def _drained(watcher: MemoryFileWatcher) -> bool:
     return watcher.pending_events() == 0 and not watcher.is_processing()
 
 
-def _flush(watcher: MemoryFileWatcher, *, timeout_s: float = 5.0) -> None:
-    """Wait until the watcher's event queue drains, or timeout.
+def _record_reindexes(watcher: MemoryFileWatcher, monkeypatch) -> list[Path]:
+    """Spy on the watcher's re-index step: the resolved path of every file
+    whose re-index finished, in order. The real re-index still runs."""
+    done: list[Path] = []
+    real = watcher._reindex_path
 
-    Adds a small grace at the start so FSEvents / inotify has a beat
-    to enqueue the event before we look at `pending_events`.
-    """
-    time.sleep(0.2)
-    deadline = time.time() + timeout_s
-    saw_activity = False
-    while time.time() < deadline:
-        pending = watcher.pending_events()
-        processing = watcher.is_processing()
-        if pending > 0 or processing:
-            saw_activity = True
-        if saw_activity and pending == 0 and not processing:
-            return
-        time.sleep(0.05)
+    def recording(path: Path) -> None:
+        try:
+            real(path)
+        finally:
+            done.append(Path(path).resolve())
+
+    monkeypatch.setattr(watcher, "_reindex_path", recording)
+    return done
+
+
+def _settle_after_excluded_write(memory: Path, reindexed: list[Path]) -> None:
+    """After a write the watcher must ignore: re-index a watched sentinel
+    written after it, proving the watcher is live, then give any late event
+    of the ignored write the same one-second settle the other negative
+    checks in this module use."""
+    sentinel = memory / "episodic" / "sentinel.md"
+    sentinel.write_text(_entry("sentinel"), encoding="utf-8")
+    assert _wait_until(lambda: sentinel.resolve() in reindexed)
+    time.sleep(1.0)
 
 
 @pytest.fixture
@@ -69,7 +77,9 @@ def workspace_with_entity(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_edit_triggers_reindex(workspace_with_entity: Path) -> None:
+def test_edit_triggers_reindex(
+    workspace_with_entity: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Modifying an entity page under memory/ flushes a re-index
     through the watcher so the next FTS search sees the new content."""
     page_path = (
@@ -78,13 +88,14 @@ def test_edit_triggers_reindex(workspace_with_entity: Path) -> None:
     )
 
     watcher = MemoryFileWatcher(workspace_with_entity)
+    reindexed = _record_reindexes(watcher, monkeypatch)
     watcher.start()
     try:
         # Edit the page — simulating vim save.
         page = EntityPage.from_file(page_path)
         page.body = "manual edit by user about kubernetes deploys"
         page.save(page_path)
-        _flush(watcher)
+        _wait_until(lambda: page_path.resolve() in reindexed and _drained(watcher))
     finally:
         watcher.stop()
 
@@ -95,10 +106,11 @@ def test_edit_triggers_reindex(workspace_with_entity: Path) -> None:
     )
 
 
-def test_excludes_archive_paths(tmp_path: Path) -> None:
+def test_excludes_archive_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Edits under memory/archive/** must NOT trigger re-index."""
     archive_dir = tmp_path / "memory" / "archive" / "episodic"
     archive_dir.mkdir(parents=True)
+    (tmp_path / "memory" / "episodic").mkdir()
     archived = archive_dir / "old.md"
     archived.write_text(
         "---\nid: old\nheadline: archived\n---\n\nbody\n",
@@ -106,25 +118,28 @@ def test_excludes_archive_paths(tmp_path: Path) -> None:
     )
 
     watcher = MemoryFileWatcher(tmp_path)
+    reindexed = _record_reindexes(watcher, monkeypatch)
     watcher.start()
     try:
         archived.write_text(
             "---\nid: old\nheadline: archived\n---\n\nbody update\n",
             encoding="utf-8",
         )
-        _flush(watcher)
+        _settle_after_excluded_write(tmp_path / "memory", reindexed)
     finally:
         watcher.stop()
 
+    assert archived.resolve() not in reindexed
     with FTSIndex.open(tmp_path) as idx:
-        assert idx.count() == 0, (
+        assert idx.count() == 1, (
             "archive edit should not surface in the live FTS index"
         )
 
 
-def test_excludes_pending_paths(tmp_path: Path) -> None:
+def test_excludes_pending_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pending_dir = tmp_path / "memory" / "pending"
     pending_dir.mkdir(parents=True)
+    (tmp_path / "memory" / "episodic").mkdir()
     p = pending_dir / "raw.md"
     p.write_text(
         "---\nid: raw\nheadline: pending\n---\n\nbody\n",
@@ -132,18 +147,20 @@ def test_excludes_pending_paths(tmp_path: Path) -> None:
     )
 
     watcher = MemoryFileWatcher(tmp_path)
+    reindexed = _record_reindexes(watcher, monkeypatch)
     watcher.start()
     try:
         p.write_text(
             "---\nid: raw\nheadline: pending\n---\n\nupdated\n",
             encoding="utf-8",
         )
-        _flush(watcher)
+        _settle_after_excluded_write(tmp_path / "memory", reindexed)
     finally:
         watcher.stop()
 
+    assert p.resolve() not in reindexed
     with FTSIndex.open(tmp_path) as idx:
-        assert idx.count() == 0
+        assert idx.count() == 1
 
 
 def test_start_stop_idempotent(workspace_with_entity: Path) -> None:
@@ -154,11 +171,14 @@ def test_start_stop_idempotent(workspace_with_entity: Path) -> None:
     watcher.stop()  # double stop — no-op
 
 
-def test_pending_events_counter(workspace_with_entity: Path) -> None:
-    """Internal counter for `_flush`-style synchronisation in tests
-    (and for future dashboards). Starts at 0; bumps on enqueue;
-    decrements when the event is processed."""
+def test_pending_events_counter(
+    workspace_with_entity: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internal counter for synchronisation in tests (and for future
+    dashboards). Starts at 0; bumps on enqueue; decrements when the event
+    is processed."""
     watcher = MemoryFileWatcher(workspace_with_entity)
+    reindexed = _record_reindexes(watcher, monkeypatch)
     assert watcher.pending_events() == 0
     watcher.start()
     try:
@@ -169,8 +189,8 @@ def test_pending_events_counter(workspace_with_entity: Path) -> None:
         page = EntityPage.from_file(page_path)
         page.body = "body v2"
         page.save(page_path)
-        # Give watcher a moment to enqueue, then flush.
-        _flush(watcher)
+        assert _wait_until(lambda: page_path.resolve() in reindexed)
+        assert _wait_until(lambda: _drained(watcher))
         assert watcher.pending_events() == 0
     finally:
         watcher.stop()

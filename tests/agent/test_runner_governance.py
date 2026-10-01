@@ -481,13 +481,33 @@ def test_pruned_results_stay_pruned_and_the_prompt_only_grows_at_its_end(tmp_pat
 
 
 def test_after_a_batch_new_results_do_not_prune_on_every_call(tmp_path):
-    from durin.agent.runner import AgentRunner, _PruneState
+    """Every result that still fits under the trigger after a batch is added
+    without a new batch. How many fit is measured: the placeholders carry
+    the spill file's absolute path, so their size depends on where tmp_path
+    is (an xdist worker's is longer)."""
+    from durin.agent.runner import _MICROCOMPACT_PRESSURE_RATIO, AgentRunner, _PruneState
+    from durin.utils.helpers import estimate_prompt_tokens_chain
 
     runner, state = AgentRunner(MagicMock()), _PruneState()
     spec = _windowed_spec(tmp_path, window=32_000)
+
+    def estimate(view):
+        # The size _microcompact measures a request by.
+        return estimate_prompt_tokens_chain(
+            MagicMock(), spec.model, view, runner._active_tool_definitions(spec))[0]
+
     messages = _conversation(_results(60, 1_200))
-    runner._microcompact(spec, messages, MagicMock(), state=state)
-    for n in range(10):
+    view = runner._microcompact(spec, messages, MagicMock(), state=state)
+    assert state.batches == 1
+    trigger = runner._input_budget(spec, MagicMock()) * _MICROCOMPACT_PRESSURE_RATIO
+    after_batch = estimate(view)
+    per_result = estimate(view + _results(1, 1_200, prefix="n0-")) - after_batch
+    fit = min(10, int((trigger - after_batch) // per_result))
+    # Without the pressure trigger, the results the new ones push out of the
+    # protected recent window free enough for another batch within eight
+    # additions; fewer could not show that bug.
+    assert fit >= 8, f"only {fit} results fit after the batch: tmp_path is too long for this window"
+    for n in range(fit):
         messages = messages + _results(1, 1_200, prefix=f"n{n}-")
         runner._microcompact(spec, messages, MagicMock(), state=state)
     assert state.batches == 1
