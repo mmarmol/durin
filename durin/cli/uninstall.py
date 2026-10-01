@@ -9,6 +9,7 @@ before the package goes away.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -54,13 +55,56 @@ def _default_cache() -> tuple[Path, bool]:
     return cache, get_telemetry_dir() == cache / "telemetry"
 
 
+# What uninstall knew of a durin home before it removed everything in one: in
+# a folder that is not recognizably a durin home, only these go besides the
+# config, workspace and cache paths.
+_KNOWN_STATE = ("sessions", "history", "cron", "media", "bridge", "webui", "logs")
+_NOT_DURINS = "not a durin home (no config.json.d/), so only durin's own paths go"
+
+
+def _refusal(durin_home: Path) -> str | None:
+    """Why uninstall must not touch *durin_home* at all, or None. The user's
+    home folder, the filesystem root and any folder that contains the user's
+    home are never a durin home, whatever DURIN_HOME says: everything in them
+    would be "everything else in the durin home"."""
+    home = Path.home().resolve()
+    target = durin_home.expanduser().resolve()
+    if target == home:
+        return f"{durin_home} is your home folder, not a durin home"
+    if home.is_relative_to(target):
+        return f"{durin_home} contains your home folder: it is not a durin home"
+    return None
+
+
+def _is_durin_home(durin_home: Path) -> bool:
+    """Whether *durin_home* is recognizably durin's: it holds the split
+    config's sections folder (``config.json.d/``) or a ``config.json`` that
+    is the split layout's marker, which every durin release writes. Names
+    like ``config.json`` or ``workspace/`` alone are common in other folders."""
+    from durin.config.loader import _split_dir
+
+    config = durin_home / "config.json"
+    if _split_dir(config).is_dir():
+        return True
+    try:
+        return json.loads(config.read_text(encoding="utf-8")) == {"_layout": "split"}
+    except (OSError, ValueError):
+        return False
+
+
 def left_in_place() -> list[tuple[Path, str]]:
-    """What uninstall leaves in ``~/.cache/durin`` for an instance, with why;
-    nothing for the default install, which removes it."""
+    """What uninstall leaves, with why: for an instance, what is in
+    ``~/.cache/durin`` (the default install's); in a folder that is not
+    recognizably a durin home, every entry that is not durin's own."""
+    from durin.config.home import durin_home as _durin_home_root
+
     cache, owned = _default_cache()
-    if owned:
-        return []
-    return [(cache / name, why) for name, why in _DEFAULT_CACHE if (cache / name).exists()]
+    left = [] if owned else [(cache / name, why) for name, why in _DEFAULT_CACHE if (cache / name).exists()]
+    durin_home = _durin_home_root()
+    if durin_home.is_dir() and not _is_durin_home(durin_home):
+        listed = {path for group in default_target_groups() for path in group.paths}
+        left += [(path, _NOT_DURINS) for path in sorted(durin_home.iterdir()) if path not in listed]
+    return left
 
 
 def _config_paths(durin_home: Path) -> tuple[Path, ...]:
@@ -114,10 +158,15 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
         *((cache / "models", cache / "archive") if owned else ()),
     )))
     # Everything else in the durin home, whatever its name: a list of known
-    # names leaves behind whatever durin writes under a name it lacks.
+    # names leaves behind whatever durin writes under a name it lacks. Only
+    # in a folder that is recognizably durin's, though; in any other, only
+    # the names durin is known to use.
     claimed = {*config_paths, *workspace_paths, *cache_paths}
-    entries = sorted(durin_home.iterdir()) if durin_home.is_dir() else []
-    other_paths = tuple(path for path in entries if path not in claimed)
+    if _is_durin_home(durin_home):
+        entries = sorted(durin_home.iterdir())
+        other_paths = tuple(path for path in entries if path not in claimed)
+    else:
+        other_paths = tuple(durin_home / name for name in _KNOWN_STATE)
 
     groups = [
         TargetGroup("Config", "--keep-config", config_paths),
@@ -222,7 +271,7 @@ def _render_plan(targets: list[tuple[TargetGroup, Path, int]], left: list[tuple[
     else:
         console.print("[green]Nothing to do — no durin state found.[/green]")
     if left:
-        console.print("Left in place — DURIN_HOME selects an instance, and these are not its own:")
+        console.print("Left in place:")
         for path, why in left:
             console.print(f"  {escape(str(path))} — {why}")
 
@@ -267,6 +316,15 @@ def run_uninstall(
     workspace: Path | None = None,
 ) -> int:
     """Top-level entry; returns a process exit code."""
+    from durin.config.home import durin_home as _durin_home_root
+
+    refusal = _refusal(_durin_home_root())
+    if refusal:
+        console.print(
+            f"[red]Refusing to uninstall: {escape(refusal)}.[/red] "
+            "Point DURIN_HOME at the durin home itself. Nothing was removed."
+        )
+        return 1
     try:
         targets = collect_targets(
             keep_config=keep_config,
