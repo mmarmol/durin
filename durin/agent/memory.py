@@ -1092,6 +1092,10 @@ class Consolidator:
             probe=True,
             eager_snapshot=eager_snapshot,
             active_persona_soul=persona_soul,
+            # The tool definitions take their share of the budget in the
+            # turn's build too: without them the probe bounds the summary
+            # by a room larger than the turn's by all of their tokens.
+            tools=tools,
             input_budget_tokens=input_budget_tokens(
                 limits.context_window_tokens, limits.max_completion_tokens, self.context_block_limit,
             ),

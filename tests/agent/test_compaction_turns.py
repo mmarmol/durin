@@ -321,6 +321,54 @@ async def test_a_decision_log_gives_way_to_the_turn_it_is_carried_by(tmp_path):
     _assert_turns_saved(result)
 
 
+def _summary_part(system: str) -> str:
+    start = system.find("=== ARCHIVED SUMMARY")
+    return system[start:] if start >= 0 else ""
+
+
+@pytest.mark.asyncio
+async def test_the_compaction_probe_carries_the_summary_the_turn_carries(tmp_path):
+    """The compaction check measures the next turn's prompt with a probe
+    build, which bounds the summary as the turn's build does. It left the
+    tool definitions out of that room, about 20,000 tokens more than the
+    turn has: on a 64,000-token window with a 25,000-word AGENTS.md the
+    probe measured a summary more than twice the one the turn carried."""
+    from durin.memory.session_summary_store import write_session_summary
+    from durin.utils.helpers import estimate_text_tokens
+
+    result = await _run_turns(tmp_path, turns=0, window=64_000, agents_md="guidance " * 25_000)
+    loop = result["loop"]
+    session = result["session"]
+    session.messages = [
+        {"role": "user", "content": "question " + "word " * 200, "timestamp": "2026-09-30T10:00:00"},
+        {"role": "assistant", "content": "answer " + "word " * 200, "timestamp": "2026-09-30T10:00:01"},
+    ]
+    loop.sessions.save(session)
+    blocks = [f"- Span {i}: worked on item {i}. " + "detail " * 60 for i in range(40)]
+    write_session_summary(tmp_path, session.key, "\n\n---\n".join(blocks)[:15_900], last_active="2026-09-30")
+    turn = loop.context.build_messages(
+        history=session.get_history(max_messages=loop._max_messages, include_timestamps=True),
+        current_message="[token-probe]", channel="cli", chat_id="sim",
+        session_summary=loop._format_pending_summary(session), session_metadata=session.metadata,
+        session_key=session.key, tools=loop.tools.get_definitions(),
+        input_budget_tokens=loop._turn_input_budget(None), probe=True,
+    )
+    probes: list[list[dict[str, Any]]] = []
+    real_build = loop.consolidator._build_messages
+
+    def _capture(**kwargs):
+        probes.append(real_build(**kwargs))
+        return probes[-1]
+
+    loop.consolidator._build_messages = _capture  # type: ignore[method-assign]
+    loop.consolidator.estimate_session_prompt_tokens(session)
+
+    turn_summary = _summary_part(_text_of(turn[0]))
+    probe_summary = _summary_part(_text_of(probes[0][0]))
+    assert turn_summary, "the window should cut the summary, not drop it"
+    assert estimate_text_tokens(probe_summary) == estimate_text_tokens(turn_summary)
+
+
 @pytest.mark.asyncio
 async def test_a_rescued_turn_that_used_tools_is_saved_whole(tmp_path):
     """A turn rescued by the overflow retry that calls a tool: the assistant

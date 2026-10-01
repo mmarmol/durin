@@ -982,8 +982,9 @@ Two metadata splits matter:
   history goes. On a small window the whole
   projection alone could otherwise leave a turn no room, or no turn room to
   be sent at all. The compaction probe measures the summary the same way,
-  framed as the loop frames it (`pending_summary_for_session`), with its
-  probe message in place of the turn's.
+  framed as the loop frames it (`pending_summary_for_session`) and bounded
+  by the same room, the tool definitions counted as in the turn's build,
+  with its probe message in place of the turn's.
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact
