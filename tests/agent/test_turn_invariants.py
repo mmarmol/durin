@@ -91,3 +91,48 @@ async def test_the_invariant_catches_a_nightly_pass_that_loses_a_large_message(t
     lost = [v for v in violations if v.invariant == "content.no_loss"]
     assert lost, _report(generate(seed).describe(), violations, seed)
     assert all("no summarizing call received it at all" in v.detail for v in lost), lost
+
+
+def _broken_cursor(monkeypatch, how: str) -> None:
+    """Break what keeps the nightly pass and the summarizers apart: read the
+    cursor as the bare position it recorded (``positional``), as it was before
+    it named its message, or summarize the head it covers anyway
+    (``untrimmed``), as /compact and the /new record did."""
+    import json
+    from pathlib import Path
+
+    import durin.memory.session_summary_dream as nightly
+    from durin.agent.memory import Consolidator
+    from durin.memory.extract_runner import _meta_path
+
+    if how == "positional":
+        def positional(jsonl_path, messages):
+            sidecar = _meta_path(Path(jsonl_path))
+            record = json.loads(sidecar.read_text(encoding="utf-8")).get("summary_cursor") if sidecar.exists() else None
+            return int(record["position"]) if isinstance(record, dict) else 0
+
+        monkeypatch.setattr(nightly, "summarized_count", positional)
+    else:
+        monkeypatch.setattr(Consolidator, "_unsummarized", lambda self, session, chunk: chunk)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("how", "invariant"), [("positional", "content.no_loss"), ("untrimmed", "content.summarized_once")])
+async def test_the_invariants_catch_a_nightly_cursor_that_does_not_hold(tmp_path, monkeypatch, how, invariant):
+    """/new and the file cap renumber a session's messages under the nightly
+    cursor, and /compact and the /new record summarize what compaction
+    archives. Read as a position, the cursor covers messages the pass never
+    saw, and they are archived unsummarized; ignored, the turns it covers are
+    summarized twice. The mixed profile shows both, on the scenario the real
+    code keeps clean."""
+    from tests.agent.turn_harness import profile_nightly_mix
+
+    seed = next(s for s in range(len(PROFILES)) if PROFILES[s] is profile_nightly_mix)
+    (tmp_path / "real").mkdir()
+    (tmp_path / "broken").mkdir()
+    assert await TurnDriver(generate(seed), tmp_path / "real").run() == []
+
+    _broken_cursor(monkeypatch, how)
+    violations = await TurnDriver(generate(seed), tmp_path / "broken").run()
+
+    assert any(v.invariant == invariant for v in violations), _report(generate(seed).describe(), violations, seed)

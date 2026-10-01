@@ -65,6 +65,7 @@ from durin.memory.session_summary_dream import summarize_session
 from durin.memory.session_summary_store import get_session_summary, write_session_summary
 from durin.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
 from durin.providers.factory import ProviderSnapshot
+from durin.session.manager import FILE_MAX_MESSAGES, Session
 from durin.souls.store import SoulStore
 from durin.utils.helpers import (
     estimate_message_tokens,
@@ -323,6 +324,9 @@ class Scenario:
     # The model the dream's nightly pass summarizes with, when not the
     # loop's own (a memory preset of its own): it sizes the pass's calls.
     dream_model: ModelSpec | None = None
+    # The session file cap, in messages, when lower than the real one: after
+    # a turn it drops the head of a session that outgrew it.
+    file_cap: int | None = None
     turns: list[TurnPlan] = field(default_factory=list)
 
     def describe(self) -> str:
@@ -333,6 +337,7 @@ class Scenario:
             f"max_messages={self.max_messages} agents_words={self.agents_words} "
             f"turns={len(self.turns)} presets={[(p.name, p.window) for p in self.presets]}"
             + (f" dream=({self.dream_model.window}, {self.dream_model.max_out})" if self.dream_model else "")
+            + (f" file_cap={self.file_cap}" if self.file_cap else "")
         )
 
 
@@ -525,6 +530,10 @@ class TurnDriver:
         self.summarized: list[tuple[str, int]] = []
         # Sub-agent results that landed between turns: (text, record index).
         self.system_results: list[tuple[str, int]] = []
+        # The file cap's trims: (record index, messages it dropped), and the
+        # replies among those messages, gone from the session by design.
+        self.cap_drops: list[tuple[int, int]] = []
+        self.cap_dropped: set[str] = set()
         self.windows: dict[str, int] = {}
         self.new_at = 0  # the first record after the latest /new
         self.phase = "turn"
@@ -1053,9 +1062,26 @@ class TurnDriver:
 
         return find
 
+    def _file_cap(self, real: Callable[..., Any]) -> Callable[..., Any]:
+        """The session file cap at the scenario's limit, its trims recorded."""
+        cap = self.scenario.file_cap
+
+        def enforce(session: Session, on_archive: Any = None, limit: int = FILE_MAX_MESSAGES,
+                    archive_sink: Any = None) -> None:
+            before = list(session.messages)
+            real(session, on_archive=on_archive, limit=min(limit, cap or limit), archive_sink=archive_sink)
+            dropped = len(before) - len(session.messages)
+            if dropped > 0 and self.record is not None:
+                # The cap keeps a suffix: what it dropped is the head.
+                self.cap_drops.append((self.record.index, dropped))
+                self.cap_dropped.update(mark for m in before[:dropped] for mark in REPLY_MARK.findall(text_of(m)))
+
+        return enforce
+
     async def run(self) -> list[Violation]:
         find = self._find_previous_summary(session_summary_store.find_previous_session_summary)
-        with harness_patches(), patch.object(session_summary_store, "find_previous_session_summary", find):
+        with harness_patches(), patch.object(session_summary_store, "find_previous_session_summary", find), \
+                patch.object(Session, "enforce_file_cap", self._file_cap(Session.enforce_file_cap)):
             self.loop = self._build()
             self.record = TurnRecord(
                 index=-1, plan_index=-1, kind="seed", marker=None, events=set(), stalled=False, planned_calls=0,
@@ -1098,7 +1124,7 @@ def check_record(driver: TurnDriver, record: TurnRecord) -> list[Violation]:
         fail("turn.no_crash", f"the turn raised: {record.crashed or record.reply}")
 
     # -- persistence.reply_saved_once / persistence.reply_order
-    epoch = [(mark, idx) for mark, idx in driver.replies if idx >= driver.new_at]
+    epoch = [(mark, idx) for mark, idx in driver.replies if idx >= driver.new_at and mark not in driver.cap_dropped]
     positions: list[int] = []
     for mark, idx in epoch:
         hits = [i for i, m in enumerate(session) if m.get("role") == "assistant" and mark in text_of(m)]
@@ -1432,6 +1458,25 @@ def check_scenario(driver: TurnDriver) -> list[Violation]:
             close()
             segment = [r] if (r.kind in ("user", "requeued") and r.attempts and not r.events) else []
     close()
+
+    # -- content.summarized_once: the summary store is bounded, so a second
+    # summary of the same turns evicts an older block. A summarizing call
+    # (compaction's, /compact's, the /new record's, the nightly pass's) has
+    # an input once it answered; each user message reaches at most one.
+    received: dict[str, list[int]] = {}
+    for r in driver.records:
+        for q in r.requests:
+            if q.kind in ("archive", "nightly"):
+                for mark in set(USER_MARK.findall(q.input)):
+                    received.setdefault(mark, []).append(r.index)
+    for mark, at in received.items():
+        if len(at) > 1:
+            kinds = [q.kind for r in driver.records for q in r.requests
+                     if q.kind in ("archive", "nightly") and mark in q.input]
+            out.append(_violation(
+                driver, driver.records[at[1]], "content.summarized_once",
+                f"user message {mark} reached {len(at)} summarizing calls ({', '.join(kinds)}) in turns {at}",
+            ))
     return out
 
 
@@ -1477,6 +1522,14 @@ def scenario_health(driver: TurnDriver) -> list[str]:
             problems.append("the nightly pass never cut a message larger than its model takes")
         elif not any(mark in text_of(m) for mark in cut for m in archived):
             problems.append("no compaction archived a message the nightly pass cut")
+    if profile == "nightly_mix":
+        new = next((r.index for r in records if "new" in r.events), None)
+        if not driver.cap_drops:
+            problems.append("the file cap never dropped a message")
+        elif not any(q.kind == "archive" and q.input for r in records[driver.cap_drops[0][0]:] for q in r.requests):
+            problems.append("no compaction ran after the file cap dropped messages")
+        if new is None or not any(q.kind == "archive" and q.input for r in records[new + 1:] for q in r.requests):
+            problems.append("the conversation after /new never compacted")
     return problems
 
 
@@ -1899,6 +1952,47 @@ def profile_small_dream(rng: random.Random) -> Scenario:
                     agents_words=rng.randint(0, 2_000), turns=turns)
 
 
+def profile_nightly_mix(rng: random.Random) -> Scenario:
+    """Nightly passes over a session that the file cap, /compact and /new
+    keep renumbering. The pass's cursor names the message it ended on: after
+    the cap drops messages the pass covered, compaction leaves out only the
+    ones it still covers; /compact and the /new record leave out what a pass
+    covered; and after /new the next conversation is uncovered from its
+    first message. No user message reaches two summarizing calls, and none
+    is archived without one."""
+    plans = _Plans(rng)
+    window = rng.choice((48_000, 64_000))
+    loop_model = ModelSpec("default", LOOP_MODEL, window, rng.choice((4_096, 8_192)))
+    cap = rng.choice((16, 20, 24))
+
+    def small() -> TurnPlan:
+        return plans.user(rng.randint(80, 250), reply=rng.randint(60, 150))
+
+    def big() -> TurnPlan:
+        return plans.user(int(window * rng.uniform(0.3, 0.4)), reply=rng.randint(60, 150))
+
+    # A conversation a pass covers, then turns past the cap. A turn adds two
+    # messages, so the cap drops two of the ones the pass covered until the
+    # big turns bring a compaction, which resolves the cursor after the drops.
+    turns = [small() for _ in range(cap // 2 - rng.randint(1, 2))]
+    turns.append(TurnPlan(kind="nightly"))
+    turns += [small() for _ in range(rng.randint(3, 5))]
+    turns += [big(), big()]
+    # A pass, then /compact.
+    turns.append(TurnPlan(kind="nightly"))
+    turns += [small() for _ in range(2)]
+    turns.append(TurnPlan(kind="user", text="/compact"))
+    # A pass, then /new; the next conversation compacts before the cap
+    # reaches it.
+    turns += [small() for _ in range(2)]
+    turns.append(TurnPlan(kind="nightly"))
+    turns.append(TurnPlan(kind="user", text="/new"))
+    turns += [small() for _ in range(2)]
+    turns += [big(), big(), small()]
+    return Scenario(seed=0, profile="nightly_mix", loop_model=loop_model, ratio=0.5, file_cap=cap,
+                    agents_words=rng.randint(0, 1_000), turns=turns)
+
+
 PROFILES: tuple[Callable[[random.Random], Scenario], ...] = (
     profile_ceiling,
     profile_fixed_band,
@@ -1910,6 +2004,7 @@ PROFILES: tuple[Callable[[random.Random], Scenario], ...] = (
     profile_big_model,
     profile_mixed,
     profile_small_dream,
+    profile_nightly_mix,
 )
 
 
