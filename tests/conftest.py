@@ -220,6 +220,26 @@ def _ban_catalog_network_fetch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _remove_loguru_sinks_left_by_a_test():
+    """Remove every loguru sink a test added and left behind.
+
+    The gateway and dream-worker commands attach an enqueued JSONL file sink
+    for the life of their process. A test process outlives each command, so
+    every invocation left one more sink and writer thread behind, and every
+    later INFO record was serialized into all of them.
+    """
+    from contextlib import suppress
+
+    from loguru import logger
+
+    before = set(logger._core.handlers)
+    yield
+    for handler_id in set(logger._core.handlers) - before:
+        with suppress(ValueError):
+            logger.remove(handler_id)
+
+
+@pytest.fixture(autouse=True)
 def _restore_loguru_durin_activation():
     """Keep loguru's ``durin`` namespace enabled across test boundaries.
 

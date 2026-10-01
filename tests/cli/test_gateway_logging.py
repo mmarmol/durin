@@ -23,15 +23,19 @@ def test_file_sink_writes_jsonl(tmp_path: Path):
 
 def test_rotation_by_size_and_gz(tmp_path: Path):
     log_file = tmp_path / "gateway.log"
-    # 1 MB threshold so the test rotates quickly.
+    # 1 MB threshold so the test rotates quickly; 2,000 serialized records
+    # (over 1 KB each) cross it.
     sink_id = configure_gateway_file_logging(log_file, max_file_mb=1, retention_days=7)
     try:
-        for i in range(8000):
+        for i in range(2000):
             logger.bind(channel="bulk").info("x" * 200 + f" {i}")
+        # The sink is enqueued: wait for its writer, then look while it is
+        # still open, since closing it compresses the live file as well.
+        logger.complete()
+        rotated = list(tmp_path.glob("*.gz"))
     finally:
         logger.remove(sink_id)
-    rotated = list(tmp_path.glob("*.gz"))
-    assert rotated, f"expected gz-compressed rotated segment, dir had: {[p.name for p in tmp_path.iterdir()]}"
+    assert rotated,f"expected gz-compressed rotated segment, dir had: {[p.name for p in tmp_path.iterdir()]}"
     with gzip.open(rotated[0], "rt", encoding="utf-8") as fh:
         first = json.loads(fh.readline())
     assert "record" in first
