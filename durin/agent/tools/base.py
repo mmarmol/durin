@@ -78,7 +78,10 @@ class Schema(ABC):
             if "minLength" in schema and len(val) < schema["minLength"]:
                 errors.append(f"{label} must be at least {schema['minLength']} chars")
             if "maxLength" in schema and len(val) > schema["maxLength"]:
-                errors.append(f"{label} must be at most {schema['maxLength']} chars")
+                errors.append(
+                    f"{label} must be at most {schema['maxLength']} chars "
+                    f"(got {len(val)}; shorten by {len(val) - schema['maxLength']})"
+                )
         if t == "object":
             props = schema.get("properties", {})
             for k in schema.get("required", []):
@@ -91,7 +94,7 @@ class Schema(ABC):
             if "minItems" in schema and len(val) < schema["minItems"]:
                 errors.append(f"{label} must have at least {schema['minItems']} items")
             if "maxItems" in schema and len(val) > schema["maxItems"]:
-                errors.append(f"{label} must be at most {schema['maxItems']} items")
+                errors.append(f"{label} must be at most {schema['maxItems']} items (got {len(val)})")
             if "items" in schema:
                 prefix = f"{path}[{{}}]" if path else "[{}]"
                 for i, item in enumerate(val):

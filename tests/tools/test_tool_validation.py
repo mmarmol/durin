@@ -702,3 +702,18 @@ def test_cast_nullable_param_no_crash() -> None:
     assert result["name"] == "hello"
     result = tool.cast_params({"name": None})
     assert result["name"] is None
+
+
+def test_a_too_long_value_error_says_by_how_much() -> None:
+    """`note_decision` text over its 400-char cap was rejected three times on
+    the box with only the cap in the message; the model then guessed how much
+    to cut. The error names the length sent and the excess."""
+    errors = Schema.validate_json_schema_value(
+        "x" * 523, {"type": "string", "maxLength": 400}, "text",
+    )
+    assert errors == ["text must be at most 400 chars (got 523; shorten by 123)"]
+
+    errors = Schema.validate_json_schema_value(
+        [1, 2, 3, 4], {"type": "array", "maxItems": 3}, "items",
+    )
+    assert errors == ["items must be at most 3 items (got 4)"]
