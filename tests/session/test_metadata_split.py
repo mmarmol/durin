@@ -320,3 +320,42 @@ def test_read_session_file_returns_merged_view(tmp_path: Path):
     assert payload is not None
     assert payload["metadata"]["agent_mode"] == "plan"
     assert payload["metadata"]["_last_summary"]["text"] == "x"
+
+
+def test_delete_session_removes_its_transcript_and_search_rows(tmp_path: Path):
+    """A deleted session stayed searchable: its rendered <key>.md transcript
+    and that transcript's full-text rows outlived the .jsonl (seen on the box
+    after deleting a session)."""
+    from durin.memory.fts_index import FTSIndex
+
+    sm = SessionManager(workspace=tmp_path)
+    session = sm.get_or_create("slack:C1:1.5")
+    session.add_message("user", "the quokka evidence file")
+    session.add_message("assistant", "noted")
+    sm.save(session)
+    sm.reindex_session("slack:C1:1.5")
+    md = sm._get_session_path("slack:C1:1.5").with_suffix(".md")
+    prefix = f"sessions/{md.stem}.md#"
+    assert md.exists()
+    with FTSIndex.open(tmp_path) as idx:
+        assert idx.uris_with_prefix(prefix)
+
+    assert sm.delete_session("slack:C1:1.5") is True
+
+    assert not md.exists()
+    with FTSIndex.open(tmp_path) as idx:
+        assert idx.uris_with_prefix(prefix) == set()
+
+
+def test_delete_session_creates_no_search_index(tmp_path: Path):
+    from durin.memory.fts_index import fts_index_path
+
+    sm = SessionManager(workspace=tmp_path)
+    session = sm.get_or_create("cli:direct")
+    session.add_message("user", "hello")
+    sm.save(session)
+    existed = fts_index_path(tmp_path).exists()
+
+    sm.delete_session("cli:direct")
+
+    assert fts_index_path(tmp_path).exists() == existed
