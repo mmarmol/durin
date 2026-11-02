@@ -894,6 +894,7 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `channels.send_tool_hints` | bool | `false` | Deliver tool-call hint messages (e.g. `read_file("…")`). Per-channel override allowed. |
 | `channels.show_reasoning` | bool | `true` | Route model reasoning content to channels that implement the reasoning primitives. Per-channel override allowed. |
 | `channels.send_max_retries` | int | `3` | Total delivery attempts (includes initial send). Range 0–10. |
+| `channels.queue_mode` | dict[str, `steer`\|`followup`] | `{}` | Per channel name: whether a message sent mid-turn steers the running turn or waits for its answer. Unlisted channels steer, except `websocket`, `cli` and `api` (follow up). Routing happens in the agent loop's consumer. |
 | `channels.transcription_provider` | str | `"groq"` | Unused by the gateway: every channel transcribes with the one service built from the top-level `transcription` section. |
 | `channels.transcription_language` | str or null | `null` | Unused by the gateway: set the language under `transcription`. |
 

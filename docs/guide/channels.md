@@ -30,6 +30,7 @@ These keys apply across all channels. Set them directly under `channels`:
 | `send_tool_hints` | `false` | Also stream tool-call hints (e.g. "reading file …") as text |
 | `show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `send_max_retries` | `3` | Total delivery attempts per message (initial send included) |
+| `queue_mode` | `{}` | Per channel name, what a message sent while durin is still working does: `steer` (it reaches the running turn as guidance before the next step) or `followup` (it waits until the turn has answered). Unlisted channels steer, except `websocket`, `cli` and `api`, which follow up — e.g. `{"slack": "followup"}` |
 
 Per-channel sections can override `send_progress`, `send_tool_hints`, and
 `show_reasoning` by setting the same key inside the channel's object.

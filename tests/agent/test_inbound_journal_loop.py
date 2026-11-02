@@ -226,9 +226,10 @@ async def test_a_message_sent_during_the_stop_is_journaled_after_the_follow_up_q
         for _ in range(200):
             await asyncio.sleep(0.005)
             queues = loop._pending_queues.get("telegram:c1")
-            if queues is not None and queues.deferred.qsize() == 1:
+            if queues is not None and queues.inject.qsize() + queues.deferred.qsize() == 1:
                 break
-        assert loop._pending_queues["telegram:c1"].deferred.qsize() == 1
+        queues = loop._pending_queues["telegram:c1"]
+        assert queues.inject.qsize() + queues.deferred.qsize() == 1
 
         loop.stop_intake()
         await bus.publish_inbound(_msg("C"))

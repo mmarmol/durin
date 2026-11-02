@@ -52,6 +52,15 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = Field(default=False, description='Stream tool-call hints (e.g. read_file("…")) to the channel')
     show_reasoning: bool = Field(default=True, description="Surface model reasoning when the channel implements it")
     send_max_retries: int = Field(default=3, ge=0, le=10, description="Max delivery attempts per message (initial send included)")
+    queue_mode: dict[str, Literal["steer", "followup"]] = Field(
+        default_factory=dict,
+        description=(
+            "Per channel name: what a message sent while a turn is running does. "
+            "steer = it enters the running turn as guidance before the next model call; "
+            "followup = it waits until the turn has answered. Unlisted channels steer, "
+            "except websocket and cli (they have an explicit steer gesture) and api, which follow up"
+        ),
+    )
     transcription_provider: str = Field(default="groq", description='Unused by the gateway: channels transcribe with the top-level "transcription" settings')
     transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description='Unused by the gateway: set the language under the top-level "transcription" settings')
 

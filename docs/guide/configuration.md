@@ -407,6 +407,7 @@ under this section.
 | `send_tool_hints` | `false` | Stream tool-call hints (e.g. `read_file("…")`) |
 | `show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `send_max_retries` | `3` | Maximum delivery attempts (initial send included) |
+| `queue_mode` | `{}` | Per channel name: `steer` (a message sent mid-turn enters the running turn as guidance) or `followup` (it waits for the turn's answer). Unlisted channels steer, except `websocket`, `cli` and `api` |
 | `transcription_provider` | `groq` | Unused: voice messages on every channel are transcribed with the top-level [`transcription`](#transcription) settings |
 | `transcription_language` | `null` | Unused: set the language hint in `transcription.language` |
 
