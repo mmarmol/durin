@@ -5,6 +5,62 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.6 — 2026-11-02
+
+### Highlights
+
+- **A message written in Slack while durin works now reaches the running
+  turn.** On one install, "can you stop the search?" waited six minutes
+  behind a 25-minute turn, which then answered "it is stopped".
+  - On chat channels that have no steer gesture (Slack, Telegram, Discord,
+    WhatsApp, email), a message sent mid-turn now steers the turn: it goes
+    into the turn as framed guidance before the next model call. This is the
+    default queue mode in openclaw too.
+  - The webui and the TUI/CLI, which have an explicit steer gesture, still
+    queue such messages, and so does the API.
+  - `channels.queue_mode` sets the mode per channel.
+  - A queued message read after the work has ended now says so to the
+    model. The steer and queued notes are kept out of the saved history.
+    (#704)
+- **The `message` tool no longer reports success for a channel that does not
+  exist.** A Slack channel id passed as `channel` was queued, reported as
+  sent, and then dropped by the gateway, so evidence files never reached the
+  thread. The tool now returns an error that names the channels the gateway
+  runs. (#704)
+- **The dream keeps tier-2 verdicts whose reasoning comes before the
+  envelope.** Seven of the thirteen verdicts one install discarded in a month
+  had argued the case in prose and then answered without a REASONING block.
+  That prose now counts as the reasoning. A verdict with no reasoning at all
+  is still not applied, and the retry now names the missing block. (#704)
+
+### Changes
+
+**Sessions**
+- Each message is timestamped when it enters the turn instead of when the
+  turn is saved, so a long turn's steps keep their real times. (#704)
+- Session keys with a `.` or `@` (Slack threads, email) now have one
+  `.meta.json` sidecar instead of two. The store merges the old halves the
+  first time it opens. (#704)
+- Deleting a session also removes its rendered transcript and that
+  transcript's search rows, so a deleted session no longer turns up in
+  search. (#706)
+
+**Tools**
+- `grep` uses 20 lines of context when a call asks for more, instead of
+  rejecting the call. (#704)
+- An argument that is too long or has too many items gets an error that says
+  what was sent and by how much it is over, e.g.
+  `text must be at most 400 chars (got 523; shorten by 123)`. (#705)
+
+**Tests**
+- The `uninstall` test no longer fails on macOS when the console wraps its
+  message at a long temporary path. (#704)
+
+**Dependencies**
+- mcp 1.30.0, litellm 1.100.4, aiohttp 3.14.4, pypdf 6.21.4, certifi
+  2026.10.18, multidict 6.9.1, fsspec 2026.6.0, dulwich 1.2.9, brotli and
+  brotlicffi 1.2.1. (#690–#703)
+
 ## 0.11.5 — 2026-10-01
 
 ### Highlights
