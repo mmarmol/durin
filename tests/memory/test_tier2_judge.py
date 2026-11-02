@@ -396,3 +396,37 @@ def test_source_document_on_a_page_without_documents_and_on_a_missing_page(tmp_p
 
 def test_the_investigating_judge_is_offered_the_source_document_tool(tmp_path):
     assert "memory_source_document" in tier2_judge._build_tools(tmp_path).tool_names
+
+
+def test_the_final_step_tells_the_judge_what_its_answer_lacked(tmp_path, monkeypatch):
+    """An answer with a verdict but no reasoning was retried with a brief that
+    says the investigation budget is spent — not what was wrong — and came
+    back the same way. The retry must name the missing part."""
+    specs = []
+
+    class _FakeRunner:
+        def __init__(self, provider): pass
+
+        async def run(self, spec):
+            specs.append(spec)
+
+            class _R:
+                final_content = (
+                    "===VERDICT===\nrelated\n===CONFIDENCE===\n88\n===RESOLUTION===\n{}"
+                    if len(specs) == 1 else _ENVELOPE
+                )
+                stop_reason = "completed"
+                messages = []
+                tool_events = []
+            return _R()
+
+    monkeypatch.setattr(tier2_judge, "AgentRunner", _FakeRunner)
+    monkeypatch.setattr(tier2_judge, "_resolve_provider_model",
+                        lambda: (object(), "fake-model"))
+    j = tier2_judge.escalate_judge(tmp_path, "topic:a", "topic:b")
+
+    assert j.verdict == "same"
+    brief = specs[1].initial_messages[0]["content"]
+    assert "could not be read" in brief
+    assert "===REASONING===" in brief.split("could not be read", 1)[1].split("\n", 1)[0]
+    assert "budget for this pair is spent" not in brief

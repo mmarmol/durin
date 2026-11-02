@@ -133,6 +133,15 @@ def _blocks(raw: str) -> dict[str, str]:
 
 
 
+def _prose_before_envelope(raw: str) -> str:
+    """The text in front of the first envelope marker, or "" when the reply
+    opens with the envelope."""
+    for m in _RE_MARKER.finditer(raw):
+        if _marker(m.group(1)) is not None:
+            return raw[:m.start()].strip()
+    return ""
+
+
 _VALID_VERDICTS = frozenset({"same", "different", "related", "unclear"})
 
 # Maximum characters of the page's to_markdown() serialization included in
@@ -364,7 +373,8 @@ def _parse_response(raw: str) -> JudgeResult:
     Tolerates: extra prose around and between the blocks, case variation,
     emphasis or code fences around a value, a confidence written as a
     percentage or as a fraction of one, a missing ``===END===`` after the
-    reasoning, a marker repeated blank, and a marker name misspelled, cut
+    reasoning, reasoning written as prose before the envelope instead of in
+    its block, a marker repeated blank, and a marker name misspelled, cut
     short or short-fenced (:func:`_marker`).
     """
     if not raw or not isinstance(raw, str):
@@ -400,7 +410,11 @@ def _parse_response(raw: str) -> JudgeResult:
 
     reasoning_block = blocks.get("===REASONING===")
     if reasoning_block is None:
-        raise JudgeError("missing ===REASONING=== / ===END=== block")
+        # Judges that investigate often argue the case in prose and then write
+        # the envelope without its REASONING block: that prose is the reasoning.
+        reasoning_block = _prose_before_envelope(raw)
+        if not reasoning_block:
+            raise JudgeError("missing ===REASONING=== / ===END=== block")
     reasoning = reasoning_block.strip().strip("`").strip()
     if not reasoning:
         raise JudgeError("empty reasoning block")

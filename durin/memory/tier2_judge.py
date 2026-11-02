@@ -78,8 +78,17 @@ _SEPARATED_NOTE = (
 # no envelope, so every such escalation failed and the pair was re-judged on
 # every run. This brief hands the model its own investigation notes and asks
 # for the verdict with no tools on offer, so the budget always ends in an answer.
+# The final call opens with why it happens: the investigation ran out of
+# iterations, or it ended with an answer that could not be read. Saying only
+# "budget spent" to a judge whose answer merely lacked a block got the same
+# incomplete answer back.
+_BUDGET_SPENT_OPENING = "Your investigation budget for this pair is spent."
+_UNREADABLE_OPENING = (
+    "Your answer could not be read ({error}). Write the whole envelope again, "
+    "every block, ===REASONING=== included."
+)
 _FINAL_BRIEF = (
-    "Your investigation budget for this pair is spent. Decide NOW from the notes "
+    "{opening} Decide NOW from the notes "
     "below — no more tools are available. If they do not settle it, answer "
     "unclear with low confidence rather than guess.\n{extra}" + _GUIDE
     + "Answer ONLY in this envelope:\n" + _ENVELOPE + "\n\n"
@@ -197,6 +206,7 @@ async def _escalate_async(
     # not be read is reported with its raw head, as the first judge does.
     source = f"{ref_a}|{ref_b}"
     result = await AgentRunner(provider).run(spec)
+    opening = _BUDGET_SPENT_OPENING
     try:
         return _parse_response(result.final_content or "")
     except JudgeError as exc:
@@ -205,10 +215,11 @@ async def _escalate_async(
         if str(getattr(result, "stop_reason", "") or "") != "max_iterations":
             emit_parse_failure("tier2_judge", source=source, raw=result.final_content or "",
                                error=str(exc))
+            opening = _UNREADABLE_OPENING.format(error=exc)
     # One more call, no tools: the agent must answer from what it has read.
     from durin.agent.tools.registry import ToolRegistry
     brief = _FINAL_BRIEF.format(
-        a=ref_a, b=ref_b, extra=extra,
+        opening=opening, a=ref_a, b=ref_b, extra=extra,
         notes=_investigation_notes(
             list(getattr(result, "messages", None) or []),
             str(getattr(result, "stop_reason", "") or ""),
