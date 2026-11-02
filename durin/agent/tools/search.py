@@ -16,6 +16,10 @@ from durin.agent.tools.context import current_result_char_cap
 from durin.agent.tools.filesystem import ListDirTool, _FsTool
 
 _DEFAULT_HEAD_LIMIT = 250
+# Context lines per side of a match. A larger request is reduced to this (and
+# the result says so) rather than rejected: a rejection costs the model a
+# whole round trip only to ask again with a smaller number.
+_MAX_CONTEXT_LINES = 20
 T = TypeVar("T")
 _TYPE_GLOB_MAP = {
     "py": ("*.py", "*.pyi"),
@@ -204,15 +208,19 @@ class GrepTool(_SearchTool):
                 },
                 "context_before": {
                     "type": "integer",
-                    "description": "Number of lines of context before each match",
+                    "description": (
+                        f"Number of lines of context before each match "
+                        f"(up to {_MAX_CONTEXT_LINES}; a larger value uses {_MAX_CONTEXT_LINES})"
+                    ),
                     "minimum": 0,
-                    "maximum": 20,
                 },
                 "context_after": {
                     "type": "integer",
-                    "description": "Number of lines of context after each match",
+                    "description": (
+                        f"Number of lines of context after each match "
+                        f"(up to {_MAX_CONTEXT_LINES}; a larger value uses {_MAX_CONTEXT_LINES})"
+                    ),
                     "minimum": 0,
-                    "maximum": 20,
                 },
                 "max_matches": {
                     "type": "integer",
@@ -369,6 +377,13 @@ class GrepTool(_SearchTool):
         offset: int = 0,
         **kwargs: Any,
     ) -> str:
+        clamp_notes = [
+            f"({name} reduced to {_MAX_CONTEXT_LINES}, the most lines of context per match)"
+            for name, value in (("context_before", context_before), ("context_after", context_after))
+            if value > _MAX_CONTEXT_LINES
+        ]
+        context_before = min(context_before, _MAX_CONTEXT_LINES)
+        context_after = min(context_after, _MAX_CONTEXT_LINES)
         try:
             target = self._resolve(path or ".")
             if not target.exists():
@@ -577,6 +592,7 @@ class GrepTool(_SearchTool):
                 notes.append(
                     f"(offset {offset} is past the last of {total_count_before_pagination} results)"
                 )
+            notes.extend(clamp_notes)
             if skipped_binary:
                 notes.append(f"(skipped {skipped_binary} binary/unreadable files)")
             if skipped_large:
