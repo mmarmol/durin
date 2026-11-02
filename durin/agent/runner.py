@@ -9,10 +9,10 @@ import inspect
 import json
 import os
 import time
-from datetime import datetime
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
