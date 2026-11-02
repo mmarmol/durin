@@ -435,3 +435,67 @@ async def test_message_tool_cli_context_may_target_other_ws_chat(tmp_path) -> No
     assert result.startswith("Message sent")
     assert sent[0].channel == "websocket"
     assert sent[0].chat_id == target
+
+
+@pytest.mark.asyncio
+async def test_message_tool_rejects_a_channel_the_gateway_does_not_run() -> None:
+    """A Slack channel id passed as ``channel`` names no channel: the gateway
+    would drop the message with an "Unknown channel" warning while the tool
+    reported it sent. The tool must refuse it and name the real channels."""
+    from durin.agent.tools.context import RequestContext
+
+    sent: list[OutboundMessage] = []
+
+    async def _send(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=_send)
+    tool.set_known_channels(["slack", "websocket"])
+    tool.set_context(RequestContext(channel="slack", chat_id="C0AKE2P92F7"))
+
+    result = await tool.execute(content="evidence", channel="C0AKE2P92F7", media=None)
+
+    assert result.startswith("Error:")
+    assert "C0AKE2P92F7" in result
+    assert "slack" in result and "websocket" in result
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_message_tool_still_sends_to_the_current_conversation_channel() -> None:
+    """The turn's own channel is always deliverable, even when it is not one of
+    the gateway's chat channels (an API or cron turn)."""
+    from durin.agent.tools.context import RequestContext
+
+    sent: list[OutboundMessage] = []
+
+    async def _send(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=_send)
+    tool.set_known_channels(["slack"])
+    tool.set_context(RequestContext(channel="api", chat_id="k1"))
+
+    result = await tool.execute(content="hi", channel="api", chat_id="k2")
+
+    assert result == "Message sent to api:k2"
+    assert [m.channel for m in sent] == ["api"]
+
+
+@pytest.mark.asyncio
+async def test_message_tool_sends_to_another_known_channel() -> None:
+    from durin.agent.tools.context import RequestContext
+
+    sent: list[OutboundMessage] = []
+
+    async def _send(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=_send)
+    tool.set_known_channels(["slack", "telegram"])
+    tool.set_context(RequestContext(channel="slack", chat_id="C1"))
+
+    result = await tool.execute(content="hi", channel="telegram", chat_id="42")
+
+    assert result == "Message sent to telegram:42"
+    assert len(sent) == 1
