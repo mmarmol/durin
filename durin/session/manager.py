@@ -14,6 +14,7 @@ from loguru import logger
 
 from durin.config.paths import get_legacy_sessions_dir
 from durin.session.session_meta import (
+    merge_split_meta_sidecars,
     meta_path_for,
     read_derived,
     write_derived,
@@ -419,6 +420,27 @@ class Session:
         )
 
 
+# Session directories whose split sidecars this process has already folded.
+_FOLDED_SIDECAR_DIRS: set[Path] = set()
+
+
+def _fold_split_sidecars_once(sessions_dir: Path) -> None:
+    """Fold sidecars left under the old path rule (see
+    ``merge_split_meta_sidecars``) the first time this process opens
+    *sessions_dir*. Best-effort: a failure leaves both files readable as
+    before and must not stop the session store from opening."""
+    if sessions_dir in _FOLDED_SIDECAR_DIRS:
+        return
+    _FOLDED_SIDECAR_DIRS.add(sessions_dir)
+    try:
+        folded = merge_split_meta_sidecars(sessions_dir)
+    except Exception:
+        logger.exception("Could not fold split session sidecars in {}", sessions_dir)
+        return
+    if folded:
+        logger.info("Folded {} split session sidecar(s) in {}", folded, sessions_dir)
+
+
 class SessionManager:
     """
     Manages conversation sessions.
@@ -473,6 +495,7 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+        _fold_split_sidecars_once(self.sessions_dir)
 
     @staticmethod
     def safe_key(key: str) -> str:

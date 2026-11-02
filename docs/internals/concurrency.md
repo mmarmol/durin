@@ -284,7 +284,11 @@ The session's `extract_cursor` (used by [dream](memory/05_dream_cold_path.md))
 lives at a **top-level** key in `.meta.json`, not inside the `derived` block
 that `save()` rebuilds, and its read-modify-write runs under the same
 `.jsonl.lock`. That keeps a cursor advance from being erased by a concurrent
-session save.
+session save. Both writers name the sidecar after the `.jsonl`'s own stem
+(`meta_path_for`), so a key with a `.` or `@` (Slack threads, email) has one
+sidecar, not two. Sidecars left by an older rule that turned those characters
+into `_` are folded into the right file, under that same lock, the first time a
+process opens the session store (`merge_split_meta_sidecars`).
 
 ### Config writes
 

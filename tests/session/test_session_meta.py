@@ -43,8 +43,22 @@ class TestMetaPath:
     def test_special_chars_sanitized(self, tmp_path: Path):
         p = meta_path_for("websocket:chat 42/sub", tmp_path)
         assert "chat" in p.name and "42" in p.name
-        # No colon, no slash, no space in the filename
-        assert ":" not in p.name and "/" not in p.name and " " not in p.name
+        # No colon, no slash in the filename
+        assert ":" not in p.name and "/" not in p.name
+
+    @pytest.mark.parametrize("key", [
+        "slack:C0AKE2P92F7:1793352921.477839",
+        "email:someone@example.com",
+        "websocket:chat 42/sub",
+        "cli:direct",
+    ])
+    def test_sidecar_sits_next_to_the_session_file(self, tmp_path: Path, key: str):
+        """One sidecar per session: the session manager and the memory passes
+        that find it from the .jsonl path must land on the same file."""
+        from durin.session.manager import SessionManager
+
+        jsonl = tmp_path / f"{SessionManager.safe_key(key)}.jsonl"
+        assert meta_path_for(key, tmp_path) == jsonl.with_suffix(".meta.json")
 
     def test_empty_key_uses_default(self, tmp_path: Path):
         p = meta_path_for("", tmp_path)
@@ -384,3 +398,85 @@ class TestSlashCommandIntegration:
         assert result["outcome"] == "superseded"
         assert result["msg_index"]["closed"] == 150
         assert result["msg_index"]["approved"] == 100  # preserved
+
+
+# ---------------------------------------------------------------------------
+# Split sidecars from the old path rule
+# ---------------------------------------------------------------------------
+
+
+def test_split_sidecar_is_merged_into_the_one_next_to_the_session(tmp_path: Path):
+    """Keys with a '.' (Slack threads) or '@' (email) used to get two sidecars:
+    events/derived under an all-underscore name, the memory cursors next to
+    the .jsonl. The merge keeps both halves in the second and drops the first."""
+    import json
+
+    from durin.memory.extract_runner import get_extract_cursor
+    from durin.session.session_meta import merge_split_meta_sidecars
+
+    key = "slack:C1:1793352921.477839"
+    jsonl = tmp_path / "slack_C1_1793352921.477839.jsonl"
+    jsonl.write_text("", encoding="utf-8")
+    old = tmp_path / "slack_C1_1793352921_477839.meta.json"
+    old.write_text(json.dumps({
+        "session_key": key,
+        "events": [{"type": "tool_call", "id": "t1"}],
+        "derived": {"title": "x"},
+    }), encoding="utf-8")
+    kept = jsonl.with_suffix(".meta.json")
+    kept.write_text(json.dumps({"extract_cursor": 26, "summary_cursor": {"n": 3}}), encoding="utf-8")
+
+    assert merge_split_meta_sidecars(tmp_path) == 1
+
+    assert not old.exists()
+    data = json.loads(kept.read_text(encoding="utf-8"))
+    assert data["session_key"] == key
+    assert data["events"] == [{"type": "tool_call", "id": "t1"}]
+    assert data["derived"] == {"title": "x"}
+    assert data["summary_cursor"] == {"n": 3}
+    assert get_extract_cursor(jsonl) == 26
+    assert read_meta(meta_path_for(key, tmp_path))["events"][0]["id"] == "t1"
+
+
+def test_split_sidecar_without_a_twin_is_moved(tmp_path: Path):
+    import json
+
+    from durin.session.session_meta import merge_split_meta_sidecars
+
+    key = "email:someone@example.com"
+    (tmp_path / "email_someone@example.com.jsonl").write_text("", encoding="utf-8")
+    old = tmp_path / "email_someone_example_com.meta.json"
+    old.write_text(json.dumps({"session_key": key, "events": [], "derived": {"a": 1}}), encoding="utf-8")
+
+    assert merge_split_meta_sidecars(tmp_path) == 1
+    assert not old.exists()
+    assert read_meta(meta_path_for(key, tmp_path))["derived"] == {"a": 1}
+
+
+def test_sidecar_of_a_deleted_session_is_left_alone(tmp_path: Path):
+    import json
+
+    from durin.session.session_meta import merge_split_meta_sidecars
+
+    old = tmp_path / "api_default.meta.json"
+    old.write_text(json.dumps({"session_key": "api:default", "events": []}), encoding="utf-8")
+
+    assert merge_split_meta_sidecars(tmp_path) == 0
+    assert old.exists()
+
+
+def test_session_manager_folds_split_sidecars_when_it_opens_the_store(tmp_path: Path):
+    import json
+
+    from durin.session.manager import SessionManager
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "slack_C1_1.5.jsonl").write_text("", encoding="utf-8")
+    old = sessions / "slack_C1_1_5.meta.json"
+    old.write_text(json.dumps({"session_key": "slack:C1:1.5", "events": [{"id": "e"}]}), encoding="utf-8")
+
+    SessionManager(tmp_path)
+
+    assert not old.exists()
+    assert read_meta(sessions / "slack_C1_1.5.meta.json")["events"] == [{"id": "e"}]
