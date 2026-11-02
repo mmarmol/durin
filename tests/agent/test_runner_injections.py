@@ -335,7 +335,9 @@ async def test_checkpoint2_preserves_final_response_in_history_before_followup()
 
     assert result.final_content == "second answer"
     assert call_count["n"] == 2
-    assert captured_messages[-1] == [
+    assert [
+        {"role": m["role"], "content": m["content"]} for m in captured_messages[-1]
+    ] == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "first answer"},
         {"role": "user", "content": "follow-up question"},
@@ -583,18 +585,18 @@ async def test_followup_routed_to_pending_queue(tmp_path):
     await loop.bus.publish_inbound(msg)
 
     deadline = time.time() + 2
-    while pending.deferred.empty() and time.time() < deadline:
+    while pending.inject.empty() and time.time() < deadline:
         await asyncio.sleep(0.01)
 
     loop.stop()
     await asyncio.wait_for(run_task, timeout=2)
 
     assert loop._dispatch.await_count == 0
-    # A plain user message defers; the inject queue stays empty.
-    assert pending.inject.empty()
-    assert not pending.deferred.empty()
-    queued_msg = pending.deferred.get_nowait()
+    # A chat channel's follow-up steers the running turn; nothing defers.
+    assert pending.deferred.empty()
+    queued_msg = pending.inject.get_nowait()
     assert queued_msg.content == "follow-up"
+    assert queued_msg.metadata.get("steer") is True
     assert queued_msg.session_key == UNIFIED_SESSION_KEY
 
 

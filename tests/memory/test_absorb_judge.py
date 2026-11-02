@@ -444,3 +444,26 @@ def test_a_parse_failure_reports_why_the_envelope_was_refused(monkeypatch) -> No
     assert stage == "absorb_judge"
     assert kw["finish_reason"] == "length"
     assert "REASONING" in kw["error"]
+
+
+def test_parse_reads_reasoning_written_before_the_envelope() -> None:
+    """Live tier-2 answers (7 of 13 unreadable ones in a month) argued the case
+    in prose and then wrote VERDICT/CONFIDENCE/RESOLUTION without a REASONING
+    block; the verdict was thrown away although its reasoning was right there."""
+    raw = (
+        "I now have enough evidence to decide.\n\n"
+        "Entity A is the EMAIL_FLOW target type; entity B compares it with the "
+        "mailbox target, so they are related, not the same.\n\n"
+        "===VERDICT===\nrelated\n===CONFIDENCE===\n88\n===RESOLUTION===\n{}\n"
+    )
+    r = _parse_response(raw)
+    assert r.verdict == "related" and r.confidence == 88
+    assert "mailbox target" in r.reasoning
+    assert "===" not in r.reasoning
+
+
+def test_parse_still_refuses_a_verdict_with_no_reasoning_anywhere() -> None:
+    """An unexplained verdict cannot be audited, and a `same` merges two
+    entities: with nothing to show a person, it stays a parse failure."""
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDICT===\nrelated\n===CONFIDENCE===\n88\n===RESOLUTION===\n{}")

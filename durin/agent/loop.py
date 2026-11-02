@@ -278,6 +278,53 @@ _STEER_FRAMING = (
 )
 
 
+_DEFERRED_FRAMING = (
+    "[Queued — the user sent this while you were working, and you are reading "
+    "it only now that the work has finished. Answer it in that light: if it "
+    "asked you to stop or change course, say the work had already ended.]"
+)
+
+# Surfaces where a message sent mid-turn waits for the answer by default:
+# the webui and the TUI/CLI give the user an explicit steer gesture (and show
+# the queued message), and API clients expect their turns in order. Chat
+# channels have no such gesture, so there a message mid-turn steers.
+_FOLLOWUP_BY_DEFAULT = frozenset({"websocket", "cli", "api"})
+
+
+def _pending_framing(msg: InboundMessage) -> str:
+    """The note that tells the model how a message drained into a running
+    turn reached it: a steer is mid-work guidance, a plain user message was
+    queued until the work ended, a system result needs none."""
+    if msg.metadata.get("steer") is True:
+        return _STEER_FRAMING
+    if msg.channel == "system":
+        return ""
+    return _DEFERRED_FRAMING
+
+
+def _strip_pending_framing(content: Any) -> Any:
+    """Remove the note :func:`_pending_framing` put in front of a message's
+    text (plain string, or the first text block of multimodal content)."""
+    def _strip(text: str) -> str:
+        for framing in (_STEER_FRAMING, _DEFERRED_FRAMING):
+            if text.startswith(framing):
+                return text[len(framing):].lstrip("\n")
+        return text
+
+    if isinstance(content, str):
+        return _strip(content)
+    if isinstance(content, list):
+        for i, block in enumerate(content):
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    stripped = _strip(text)
+                    if stripped != text:
+                        return [*content[:i], {**block, "text": stripped}, *content[i + 1:]]
+                break
+    return content
+
+
 def _is_injectable(msg: InboundMessage) -> bool:
     """True when *msg* belongs in the running turn (steer or system result)."""
     return msg.channel == "system" or msg.metadata.get("steer") is True
@@ -2014,6 +2061,15 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id, content="", metadata=metadata,
         ))
 
+    def _queue_mode(self, channel: str) -> str:
+        """``"steer"`` or ``"followup"`` for a message *channel* sends mid-turn:
+        ``channels.queue_mode`` first, then the surface's default."""
+        configured = getattr(self.channels_config, "queue_mode", None) or {}
+        mode = configured.get(channel)
+        if mode in ("steer", "followup"):
+            return mode
+        return "followup" if channel in _FOLLOWUP_BY_DEFAULT else "steer"
+
     async def _notify_queued(self, msg: InboundMessage) -> None:
         """Tell the sender's surface its message was deferred (queued) mid-turn.
 
@@ -2308,8 +2364,8 @@ class AgentLoop:
                 if media:
                     content, media = extract_documents(content, media)
                     media = media or None
-                if pending_msg.metadata.get("steer") is True:
-                    content = f"{_STEER_FRAMING}\n\n{content}"
+                if framing := _pending_framing(pending_msg):
+                    content = f"{framing}\n\n{content}"
                 user_content = self.context._build_user_content(
                     content, media,
                     audio_mode=audio_mode,
@@ -2344,8 +2400,8 @@ class AgentLoop:
                     # handler runs precisely because the normal path didn't
                     # finish, so its framing has to be applied here too.
                     content = pending_msg.content
-                    if pending_msg.metadata.get("steer") is True:
-                        content = f"{_STEER_FRAMING}\n\n{content}"
+                    if framing := _pending_framing(pending_msg):
+                        content = f"{framing}\n\n{content}"
                     content = (
                         f"{content}\n\n"
                         f"[error: attached media could not be read: {exc}]"
@@ -2686,6 +2742,12 @@ class AgentLoop:
                         session_key_override=effective_key,
                     )
                 queues = self._pending_queues[effective_key]
+                if (not _is_injectable(pending_msg)
+                        and self._queue_mode(pending_msg.channel) == "steer"):
+                    pending_msg = dataclasses.replace(
+                        pending_msg,
+                        metadata={**pending_msg.metadata, "steer": True},
+                    )
                 injectable = _is_injectable(pending_msg)
                 target = queues.inject if injectable else queues.deferred
                 try:
@@ -4481,6 +4543,10 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             elif role == "user":
+                # The steer/queued note is for the model at the moment the
+                # message reaches it; the history keeps what the user wrote.
+                content = _strip_pending_framing(content)
+                entry["content"] = content
                 if isinstance(content, str) and ContextBuilder._RUNTIME_CONTEXT_TAG in content:
                     # Strip the runtime-context block appended at the end.
                     tag_pos = content.find(ContextBuilder._RUNTIME_CONTEXT_TAG)

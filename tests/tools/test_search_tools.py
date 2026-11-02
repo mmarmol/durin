@@ -511,3 +511,22 @@ class TestRipgrepPrefilter:
         tool = _GrepToolRg(workspace=tree)
         result = await tool.execute(pattern="zzz_not_there", path=str(tree))
         assert "No matches found" in result
+
+
+@pytest.mark.asyncio
+async def test_grep_context_above_the_cap_is_reduced_not_rejected(tmp_path: Path) -> None:
+    """A model asking for 25 lines of context got a parameter error and spent
+    a round trip asking again; the cap now applies and the search runs."""
+    lines = [f"line{i}" for i in range(1, 61)]
+    lines[29] = "match_here"
+    (tmp_path / "big.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
+    params = {"pattern": "match_here", "path": ".", "output_mode": "content", "context_after": 25}
+
+    assert tool.validate_params(tool.cast_params(params)) == []
+    result = await tool.execute(**tool.cast_params(params))
+
+    assert "> 30| match_here" in result
+    assert "  50| line50" in result
+    assert "line51" not in result
+    assert "context_after reduced to 20" in result

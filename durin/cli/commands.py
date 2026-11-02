@@ -1860,6 +1860,8 @@ def _run_gateway(
         webui_session_turn_key=getattr(agent, "bus_turn_key", None),
     )
     _startup_phase("channels setup")
+    if isinstance(message_tool, MessageTool):
+        message_tool.set_known_channels(channels.enabled_channels)
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")

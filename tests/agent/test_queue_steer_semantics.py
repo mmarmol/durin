@@ -352,10 +352,10 @@ async def test_drain_pending_isolates_one_message_conversion_failure(tmp_path, m
         f"expected all 3 batch-mates to survive, got {len(result)} -- "
         "one message's conversion failure dropped the whole batch"
     )
-    assert result[0]["content"] == "first message"
+    assert str(result[0]["content"]).endswith("first message")
     assert "second message, media deleted mid-drain" in str(result[1]["content"])
     assert "[error: attached media could not be read" in str(result[1]["content"])
-    assert result[2]["content"] == "third message"
+    assert str(result[2]["content"]).endswith("third message")
 
 
 @pytest.mark.asyncio
@@ -594,3 +594,118 @@ async def test_drain_pending_passes_queued_audio_per_the_transcription_mode(tmp_
     content = final[0]["content"]
     assert isinstance(content, list)
     assert any(block.get("type") == "input_audio" for block in content)
+
+
+# ---------------------------------------------------------------------------
+# Per-channel mode: chat channels steer, gesture-capable surfaces queue
+# ---------------------------------------------------------------------------
+
+async def _route_with_config(tmp_path, msg, queue_mode=None):
+    """Route *msg* mid-turn with ``channels.queue_mode`` set; return the queues."""
+    from durin.agent.loop import PendingQueues
+    from durin.config.schema import ChannelsConfig
+
+    loop = _make_loop(tmp_path)
+    loop._dispatch = AsyncMock()  # type: ignore[method-assign]
+    loop.channels_config = ChannelsConfig(queue_mode=queue_mode or {})
+    pending = PendingQueues.create()
+    loop._pending_queues[msg.session_key] = pending
+
+    run_task = asyncio.create_task(loop.run())
+    await loop.bus.publish_inbound(msg)
+    deadline = time.time() + 2
+    while (pending.inject.empty() and pending.deferred.empty()
+           and time.time() < deadline):
+        await asyncio.sleep(0.01)
+    loop.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+    return pending
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["slack", "telegram", "discord", "whatsapp", "email"])
+async def test_chat_channel_message_mid_turn_steers_the_running_turn(tmp_path, channel):
+    """A chat channel has no steer gesture: a message written while the turn
+    runs (\"stop the search\") must reach the turn, not wait for its end."""
+    from durin.bus.events import InboundMessage
+
+    pending = await _route_with_config(tmp_path, InboundMessage(
+        channel=channel, sender_id="u", chat_id="c", content="stop the search",
+    ))
+    assert pending.deferred.empty()
+    routed = pending.inject.get_nowait()
+    assert routed.content == "stop the search"
+    assert routed.metadata.get("steer") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["websocket", "cli", "api"])
+async def test_gesture_and_api_surfaces_keep_queueing(tmp_path, channel):
+    from durin.bus.events import InboundMessage
+
+    pending = await _route_with_config(tmp_path, InboundMessage(
+        channel=channel, sender_id="u", chat_id="c", content="later question",
+    ))
+    assert pending.inject.empty()
+    assert pending.deferred.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_mode_config_overrides_the_channel_default(tmp_path):
+    from durin.bus.events import InboundMessage
+
+    slack = await _route_with_config(tmp_path, InboundMessage(
+        channel="slack", sender_id="u", chat_id="c", content="later",
+    ), queue_mode={"slack": "followup"})
+    assert slack.inject.empty() and slack.deferred.qsize() == 1
+
+    ws = await _route_with_config(tmp_path, InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c", content="now",
+    ), queue_mode={"websocket": "steer"})
+    assert ws.deferred.empty()
+    assert ws.inject.get_nowait().metadata.get("steer") is True
+
+
+@pytest.mark.asyncio
+async def test_deferred_message_is_framed_as_sent_while_working(tmp_path):
+    """A queued message is read only after the work ended. Without saying so,
+    the model answers \"can you stop?\" with \"it is stopped\" as if it had."""
+    from durin.agent.loop import _DEFERRED_FRAMING, _STEER_FRAMING, AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    callback, pending = await _capture_injection_callback(loop)
+
+    await pending.deferred.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="can you stop?",
+    ))
+    await pending.inject.put(InboundMessage(
+        channel="system", sender_id="workflow_background", chat_id="c1",
+        content="Workflow finished",
+    ))
+
+    final = await callback()
+    deferred_text = str(final[1]["content"])
+    assert _DEFERRED_FRAMING in deferred_text
+    assert "can you stop?" in deferred_text
+    assert _STEER_FRAMING not in deferred_text
+    assert _DEFERRED_FRAMING not in str(final[0]["content"])
+
+
+def test_history_keeps_what_the_user_wrote_not_the_drain_note():
+    """The steer/queued note reaches the model with the message; the saved
+    history (and the bubble a replay shows) holds only the user's text."""
+    from durin.agent.loop import _DEFERRED_FRAMING, _STEER_FRAMING, _strip_pending_framing
+
+    assert _strip_pending_framing(f"{_STEER_FRAMING}\n\nfocus on X") == "focus on X"
+    assert _strip_pending_framing(f"{_DEFERRED_FRAMING}\n\ncan you stop?") == "can you stop?"
+    blocks = [
+        {"type": "text", "text": f"{_STEER_FRAMING}\n\nlook at this"},
+        {"type": "image_url", "image_url": {"url": "file:///x.png"}},
+    ]
+    assert _strip_pending_framing(blocks)[0]["text"] == "look at this"
+    assert _strip_pending_framing(blocks)[1] == blocks[1]
+    assert _strip_pending_framing("plain text") == "plain text"

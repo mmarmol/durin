@@ -76,7 +76,9 @@ async def test_second_same_session_message_routes_to_pending_not_a_second_task()
         assert len(calls) == 1, f"expected one dispatch task, got {len(calls)}"
         assert key in loop._pending_queues, "pending queue not registered synchronously"
         queues = loop._pending_queues[key]
-        assert queues.deferred.qsize() == 1, "second message not routed to the deferred queue"
+        assert queues.inject.qsize() + queues.deferred.qsize() == 1, (
+            "second message not routed to the session's pending queues"
+        )
     finally:
         loop._running = False
         release.set()

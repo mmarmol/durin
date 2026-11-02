@@ -64,10 +64,13 @@ follow-up messages for that session do not spawn a competing task — they are
 routed to per-session pending queues. Routing is two-tier: explicit steers
 (`metadata["steer"]`, or a literal `[steer]` prefix normalized by the consumer)
 and system-origin results (subagent / background-workflow completions) go to an
-*inject* queue that enters the running turn at the next checkpoint; plain user
-messages go to a *deferred* queue and only enter the conversation after the
-turn's final response, so typing mid-turn queues instead of derailing the work
-in flight.
+*inject* queue that enters the running turn at the next checkpoint. A plain
+user message's route depends on its channel (`channels.queue_mode`): chat
+channels (Slack, Telegram, Discord, WhatsApp, email) have no steer gesture, so
+their messages are flagged as steers and inject too; the webui and the TUI/CLI
+(which have an explicit steer gesture) and the API send them to a *deferred*
+queue that only enters the conversation after the turn's final response, so
+typing there queues instead of derailing the work in flight.
 
 **3. The message bus is the only channel contract.** Channels push
 `InboundMessage` to `bus.inbound` and read `OutboundMessage` from `bus.outbound`
@@ -189,7 +192,9 @@ the routing in order:
 - **Mid-turn follow-up?** If the effective session key already has pending
   queues, the message is routed there instead of starting a new turn (or, if it
   is itself a non-priority command, dispatched inline). Steers and system
-  results go to the inject queue; plain user messages go to the deferred queue,
+  results go to the inject queue. A plain user message is flagged as a steer
+  and injects when its channel's mode is `steer` (the default for every channel
+  but `websocket`, `cli` and `api`); otherwise it goes to the deferred queue,
   and the sender's surface is told (a `message_queued` websocket ack drives the
   webui chip; the CLI/TUI print or toast the notice).
 - **New turn.** Otherwise the loop registers fresh pending queues for the
@@ -682,8 +687,11 @@ Two behaviors connect the runner back to the loop:
   `steer_only=True`: only the inject queue (steers, framed as mid-work
   guidance, plus sub-agent / workflow results) enters the running turn. After
   the final response it drains both queues — deferred user messages last, so
-  the model answers them with all results already in context — and websocket
-  clients get a `queued_consumed` ack. Drained messages are appended as user
+  the model answers them with all results already in context, each framed as
+  sent while the work ran and read only after it ended (so "can you stop?" is
+  not answered as if the agent had stopped) — and websocket clients get a
+  `queued_consumed` ack. The steer and queued notes are for the model at that
+  moment; the saved history keeps only what the user wrote. Drained messages are appended as user
   turns so the run continues without a new dispatch. When the call before
   that drain produced no reply (an error, or an empty reply after its
   retries), what the turn keeps without a queued message for that missing

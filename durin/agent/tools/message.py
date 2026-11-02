@@ -2,7 +2,7 @@
 
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
@@ -19,7 +19,9 @@ from durin.config.paths import get_workspace_path
             "Do not use this for a normal reply in the current chat."
         ),
         channel=StringSchema(
-            "Optional target channel for cross-channel/proactive delivery. "
+            "Optional target channel platform for cross-channel/proactive delivery "
+            "(e.g. slack, telegram, websocket) — never a chat or channel id such as "
+            "a Slack C… id; that goes in chat_id. "
             "Do not set this to the current runtime channel for a normal reply."
         ),
         chat_id=StringSchema(
@@ -61,6 +63,9 @@ class MessageTool(Tool, ContextAware):
             Path(workspace).expanduser() if workspace is not None else get_workspace_path()
         )
         self._restrict_to_workspace = restrict_to_workspace
+        # Channel names the gateway actually runs. None (CLI, tests) means
+        # unknown, and any channel is passed through.
+        self._known_channels: frozenset[str] | None = None
         self._default_channel: ContextVar[str] = ContextVar(
             "message_default_channel", default=default_channel
         )
@@ -104,6 +109,11 @@ class MessageTool(Tool, ContextAware):
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
         """Set the callback for sending messages."""
         self._send_callback = callback
+
+    def set_known_channels(self, names: Iterable[str]) -> None:
+        """Record the channels the gateway runs, so a send to any other name
+        fails here instead of being dropped later by the channel manager."""
+        self._known_channels = frozenset(names)
 
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
@@ -210,6 +220,17 @@ class MessageTool(Tool, ContextAware):
 
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
+
+        # The send is queued and dispatched later: a channel nobody runs would
+        # be dropped after this tool already reported success. The turn's own
+        # channel is always deliverable (API and cron turns are not chat
+        # channels but still receive their replies).
+        known = self._known_channels
+        if known is not None and channel != default_channel and channel not in known:
+            return (
+                f"Error: unknown channel '{channel}'. channel is the platform, one of: "
+                f"{', '.join(sorted(known))}. A chat or channel id goes in chat_id."
+            )
 
         if not self._send_callback:
             return "Error: Message sending not configured"

@@ -658,6 +658,8 @@ def test_a_durin_home_it_cannot_list_removes_nothing(fake_home: Path) -> None:
         root.chmod(0o700)
 
     assert result.exit_code == 1, result.output
-    assert "Nothing was removed" in result.output
+    # The message follows the temp home's path, so where the console wraps
+    # it depends on how long that path is (long on macOS, short on Linux).
+    assert "Nothing was removed" in " ".join(result.output.split())
     assert (root / "config.json").exists()
     assert (fake_home / ".cache" / "durin" / "telemetry").exists()

@@ -40,13 +40,70 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
-def meta_path_for(session_key: str, sessions_dir: Path) -> Path:
-    """Return the ``.meta.json`` path next to ``<session>.jsonl``."""
-    import re
+_META_SUFFIX = ".meta.json"
 
-    safe = re.sub(r"[^\w\-]+", "_", session_key.replace(":", "_"))
-    safe = safe.strip("_") or "default"
-    return sessions_dir / f"{safe}.meta.json"
+
+def meta_path_for(session_key: str, sessions_dir: Path) -> Path:
+    """Return the ``.meta.json`` path next to ``<session>.jsonl``.
+
+    The stem is the session file's own (``SessionManager.safe_key``): the
+    memory passes find a sidecar from the ``.jsonl`` path, so any other rule
+    gives a key with a ``.`` or ``@`` (Slack threads, email) two sidecars.
+    """
+    from durin.utils.helpers import safe_filename
+
+    stem = safe_filename(session_key.replace(":", "_")) or "default"
+    return sessions_dir / f"{stem}{_META_SUFFIX}"
+
+
+def _read_object(path: Path) -> dict[str, Any]:
+    """The JSON object in *path* as written (no defaults filled in), or {}."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def merge_split_meta_sidecars(sessions_dir: Path) -> int:
+    """Fold sidecars written under an older path rule into the one next to
+    their session file; return how many were folded.
+
+    That rule turned every character but letters, digits, ``_`` and ``-``
+    into ``_``, so a Slack thread or email session kept its events and
+    derived state in one file and its memory cursors in another. A sidecar
+    with no ``.jsonl`` of its own names its session inside; when that
+    session's file exists the two halves are merged (events concatenated,
+    ``derived`` blocks combined) under the session's cross-process lock, and
+    the old file is removed. A sidecar whose session is gone is left alone.
+    """
+    from durin.utils.file_lock import cross_process_lock
+
+    merged = 0
+    for old in sorted(sessions_dir.glob(f"*{_META_SUFFIX}")):
+        stem = old.name[: -len(_META_SUFFIX)]
+        if (sessions_dir / f"{stem}.jsonl").exists():
+            continue
+        key = _read_object(old).get("session_key")
+        if not isinstance(key, str) or not key:
+            continue
+        target = meta_path_for(key, sessions_dir)
+        jsonl = sessions_dir / f"{target.name[: -len(_META_SUFFIX)]}.jsonl"
+        if target == old or not jsonl.exists():
+            continue
+        with cross_process_lock(jsonl):
+            if not old.exists():
+                continue
+            moved, current = _read_object(old), _read_object(target)
+            combined = {**moved, **current}
+            if isinstance(moved.get("derived"), dict) and isinstance(current.get("derived"), dict):
+                combined["derived"] = {**moved["derived"], **current["derived"]}
+            if isinstance(moved.get("events"), list) and isinstance(current.get("events"), list):
+                combined["events"] = moved["events"] + current["events"]
+            _atomic_write(target, combined)
+            old.unlink()
+        merged += 1
+    return merged
 
 
 # ---------------------------------------------------------------------------
