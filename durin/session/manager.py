@@ -1038,9 +1038,10 @@ class SessionManager:
     def delete_session(self, key: str) -> bool:
         """Remove a session from disk and the in-memory cache.
 
-        Removes both the ``<key>.jsonl`` and the sibling ``<key>.meta.json``
-        sidecar so derived state doesn't outlive its source. Returns True
-        when at least the JSONL was found and unlinked.
+        Removes the ``<key>.jsonl``, the sibling ``<key>.meta.json`` sidecar
+        and the rendered ``<key>.md`` transcript with its full-text rows, so
+        neither derived state nor search results outlive the session. Returns
+        True when at least the JSONL was found and unlinked.
         """
         path = self._get_session_path(key)
         meta_path = meta_path_for(key, self.sessions_dir)
@@ -1055,6 +1056,7 @@ class SessionManager:
         if meta_path.exists():
             with suppress(OSError):
                 meta_path.unlink()
+        self._drop_transcript(path.with_suffix(".md"))
         if not path.exists():
             return False
         try:
@@ -1063,6 +1065,24 @@ class SessionManager:
         except OSError as e:
             logger.warning("Failed to delete session file {}: {}", path, e)
             return False
+
+    def _drop_transcript(self, md_path: Path) -> None:
+        """Remove a session's rendered transcript and its full-text rows.
+        Best-effort: a failure leaves a stale search hit, never a failed delete."""
+        with suppress(OSError):
+            md_path.unlink()
+        try:
+            from durin.memory.fts_index import FTSIndex, fts_index_path
+
+            # Opening creates the index; a workspace without one has no rows to drop.
+            if not fts_index_path(self.workspace).exists():
+                return
+            with FTSIndex.open(self.workspace) as idx:
+                stale = idx.uris_with_prefix(f"sessions/{md_path.stem}.md#")
+                if stale:
+                    idx.delete_by_uris(sorted(stale))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not drop search rows of deleted session {}: {}", md_path.name, exc)
 
     def read_session_file(self, key: str) -> dict[str, Any] | None:
         """Load a session from disk without caching; intended for read-only HTTP endpoints.
