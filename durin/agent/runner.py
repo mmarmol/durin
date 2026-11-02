@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import time
+from datetime import datetime
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -343,6 +344,15 @@ _LOOP_BLOCK_MESSAGE = (
 
 
 
+
+def _stamped(message: dict[str, Any]) -> dict[str, Any]:
+    """Record when *message* entered the turn. Session saves keep a message's
+    own timestamp and stamp only those without one, so without this every
+    step of a long turn would carry the moment the turn was saved. Providers
+    build their requests from known keys, so the field never reaches a model."""
+    message.setdefault("timestamp", datetime.now().isoformat())
+    return message
+
 @dataclass(slots=True)
 class _PruneState:
     """The old tool results a run has replaced by pointers to their saved files.
@@ -537,7 +547,7 @@ class AgentRunner:
                 )
                 messages[-1] = merged
                 continue
-            messages.append(injection)
+            messages.append(_stamped(injection))
 
     async def _try_drain_injections(
         self,
@@ -1096,7 +1106,7 @@ class AgentRunner:
                     thinking_blocks=response.thinking_blocks,
                     prompt_tokens=stamp_tokens,
                 )
-                messages.append(assistant_message)
+                messages.append(_stamped(assistant_message))
                 tools_used.extend(tc.name for tc in response.tool_calls)
                 await self._emit_checkpoint(
                     spec,
@@ -1136,7 +1146,7 @@ class AgentRunner:
                             result,
                         ),
                     }
-                    messages.append(tool_message)
+                    messages.append(_stamped(tool_message))
                     completed_tool_results.append(tool_message)
                     # Observe this tool call through the post-compaction
                     # guard. Only fires if the consolidator armed the guard
