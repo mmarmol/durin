@@ -10,6 +10,11 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # Held below 7.0: its shared inotify reader dies on a subfolder moved
+      # out of a watch and stops every memory watch (see pyproject.toml).
+      - dependency-name: "watchdog"
+        versions: [">=7"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
