@@ -32,7 +32,8 @@ from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage, SendRec
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
-from durin.config.paths import get_media_dir
+from durin.channels.slack_threads import SlackThreadMemory
+from durin.config.paths import get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename, split_message
 
@@ -117,7 +118,9 @@ SLACK_FATAL_AUTH_ERRORS = frozenset(
 # event IDs for this long (seconds) and drop duplicates.
 SLACK_EVENT_DEDUP_TTL_S = 300.0
 SLACK_EVENT_DEDUP_MAX = 2000
-SLACK_FOLLOWED_THREADS_MAX = 5000
+# Threads whose state (history delivered, followed) is remembered across
+# restarts; past this the least recently marked are forgotten.
+SLACK_THREAD_MEMORY_MAX = 10_000
 # Longest status line shown while a turn works. A tool hint can carry a whole
 # script; the reader only needs to see that something is happening.
 SLACK_STATUS_MAX_LEN = 160
@@ -165,8 +168,6 @@ class SlackChannel(BaseChannel):
     def config_model(cls) -> type | None:
         return SlackConfig
 
-    _THREAD_CONTEXT_CACHE_LIMIT = 10_000
-
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):
             config = SlackConfig.model_validate(config)
@@ -180,10 +181,15 @@ class SlackChannel(BaseChannel):
         # would slip past the user-id self-check below.
         self._bot_id: str | None = None
         self._target_cache: dict[str, str] = {}
-        self._thread_context_attempted: set[str] = set()
+        # Per-thread facts that must outlive a restart: whether a thread's
+        # history already reached its session, and which threads the bot
+        # follows without a re-mention (see SlackThreadMemory).
+        self._threads = SlackThreadMemory(
+            lambda: get_runtime_subdir("slack") / "threads.json",
+            max_entries=SLACK_THREAD_MEMORY_MAX,
+        )
         self._dedup = MessageDeduplicator(max_size=SLACK_EVENT_DEDUP_MAX, ttl_seconds=SLACK_EVENT_DEDUP_TTL_S)
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
-        self._followed_threads: set[str] = set()  # "chat_id:thread_ts" the bot follows
         # Working ceiling for chat.update payloads. Starts at the documented
         # limit and only ever shrinks, when Slack rejects a payload we sized
         # to fit — see _shrink_update_budget.
@@ -1102,9 +1108,7 @@ class SlackChannel(BaseChannel):
     def _mark_thread_context_known(self, key: str) -> None:
         """Record that thread *key* ("chat_id:thread_ts") needs no history
         fetch: it was fetched once already, or its session holds it."""
-        if len(self._thread_context_attempted) >= self._THREAD_CONTEXT_CACHE_LIMIT:
-            self._thread_context_attempted.clear()
-        self._thread_context_attempted.add(key)
+        self._threads.add("context_known", key)
 
     async def _with_thread_context(
         self,
@@ -1128,7 +1132,7 @@ class SlackChannel(BaseChannel):
             return text
 
         key = f"{chat_id}:{thread_ts}"
-        if key in self._thread_context_attempted:
+        if self._threads.has("context_known", key):
             return text
         self._mark_thread_context_known(key)
 
@@ -1226,16 +1230,14 @@ class SlackChannel(BaseChannel):
             return (
                 self.config.thread_auto_follow
                 and thread_root is not None
-                and f"{chat_id}:{thread_root}" in self._followed_threads
+                and self._threads.has("followed", f"{chat_id}:{thread_root}")
             )
         if self.config.group_policy == "allowlist":
             return chat_id in self.config.group_allow_from
         return False
 
     def _follow_thread(self, key: str) -> None:
-        if len(self._followed_threads) >= SLACK_FOLLOWED_THREADS_MAX:
-            self._followed_threads.clear()
-        self._followed_threads.add(key)
+        self._threads.add("followed", key)
 
     def _extract_quoted_context(self, event: dict[str, Any], text: str) -> list[str]:
         """Surface quoted/forwarded content the plain ``text`` field omits.

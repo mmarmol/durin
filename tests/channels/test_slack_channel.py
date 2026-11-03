@@ -1306,7 +1306,7 @@ async def test_mentioned_thread_is_followed_without_re_mention() -> None:
         _channel_event(event_type="app_mention", text="<@UBOT> hola", ts="200.000", envelope_id="f1"),
     )
     assert channel._handle_message.await_count == 1
-    assert "C123:200.000" in channel._followed_threads
+    assert channel._threads.has("followed", "C123:200.000")
 
     # Follow-up inside that thread WITHOUT a mention still gets an answer.
     await channel._on_socket_request(
@@ -1343,7 +1343,7 @@ async def test_thread_auto_follow_can_be_disabled() -> None:
         _channel_event(event_type="app_mention", text="<@UBOT> hola", ts="400.000", envelope_id="g1"),
     )
     assert channel._handle_message.await_count == 1
-    assert channel._followed_threads == set()
+    assert not channel._threads.has("followed", "C123:400.000")
 
     await channel._on_socket_request(
         client,
@@ -1549,3 +1549,77 @@ async def test_stop_does_not_wait_out_a_slow_socket_close(monkeypatch) -> None:
     async with asyncio.timeout(2):
         while not socket.closed:
             await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_thread_history_is_not_fetched_again_after_a_restart() -> None:
+    """The thread's history goes into its session the first time the bot is
+    pulled in. A gateway restart (every deploy) used to forget that, and the
+    next message in the thread fetched and prepended the whole history again,
+    repeating turns the session already held."""
+    replies = {"messages": [{"ts": "111.000", "user": "UROOT", "text": "drink water"}]}
+
+    first = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    first._bot_user_id = "UBOT"
+    first._web_client = _FakeAsyncWebClient()
+    first._web_client._conversations_replies_response = replies
+    await first._with_thread_context(
+        "what did you see?", chat_id="C123", channel_type="channel",
+        thread_ts="111.000", raw_thread_ts="111.000", current_ts="113.000",
+    )
+    assert len(first._web_client.conversations_replies_calls) == 1
+
+    restarted = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    restarted._bot_user_id = "UBOT"
+    restarted._web_client = _FakeAsyncWebClient()
+    restarted._web_client._conversations_replies_response = replies
+    content = await restarted._with_thread_context(
+        "and now?", chat_id="C123", channel_type="channel",
+        thread_ts="111.000", raw_thread_ts="111.000", current_ts="120.000",
+    )
+    assert content == "and now?"
+    assert restarted._web_client.conversations_replies_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_followed_thread_is_still_followed_after_a_restart() -> None:
+    """A reply without a mention in a thread the bot was mentioned in gets an
+    answer. Before, a restart forgot the thread and such replies were
+    dropped until someone mentioned the bot again."""
+    config = SlackConfig(enabled=True, allow_from=["*"], group_policy="mention")
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    first = SlackChannel(config, MessageBus())
+    first._bot_user_id = "UBOT"
+    first._web_client = _FakeAsyncWebClient()
+    first._handle_message = AsyncMock()  # type: ignore[method-assign]
+    first._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    await first._on_socket_request(
+        client,
+        _channel_event(event_type="app_mention", text="<@UBOT> hola", ts="200.000", envelope_id="r1"),
+    )
+
+    restarted = SlackChannel(config, MessageBus())
+    restarted._bot_user_id = "UBOT"
+    restarted._web_client = _FakeAsyncWebClient()
+    restarted._handle_message = AsyncMock()  # type: ignore[method-assign]
+    restarted._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    await restarted._on_socket_request(
+        client,
+        _channel_event(event_type="message", text="and the details?", ts="201.000",
+                       thread_ts="200.000", envelope_id="r2"),
+    )
+    assert restarted._handle_message.await_count == 1
+
+
+def test_thread_memory_at_capacity_forgets_the_oldest_threads_only(tmp_path) -> None:
+    """Full, the memory used to be wiped whole, which re-opened every thread
+    at once (history fetched again, follows lost)."""
+    from durin.channels.slack_threads import SlackThreadMemory
+
+    memory = SlackThreadMemory(tmp_path / "threads.json", max_entries=3)
+    for i in range(4):
+        memory.add("followed", f"C1:{i}.000")
+    assert not memory.has("followed", "C1:0.000")
+    assert all(memory.has("followed", f"C1:{i}.000") for i in (1, 2, 3))
+    assert SlackThreadMemory(tmp_path / "threads.json", max_entries=3).has("followed", "C1:3.000")

@@ -984,7 +984,9 @@ Two metadata splits matter:
   evicted as the cap is hit, their discovered-path trailers salvaged into a
   synthetic head block rather than lost). Only the part of the span the
   nightly session-summary pass has not already summarized is sent to the LLM;
-  a span it fully covered advances the cursor with no call and no new block.
+  a span it fully covered advances the cursor with no call and no new block,
+  and the rounds go on from a fresh measure until the prompt is under the
+  target, as after any other round.
   The placeholders of turns that produced no answer (a model error, an
   overflow, a request no compaction could make fit) are left out of what is
   summarized and of the decision and learnings extraction

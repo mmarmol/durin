@@ -315,7 +315,7 @@ Both modes write the same config keys.
 | `reply_in_thread` | `true` | Reply in the originating thread; each thread is its own conversation |
 | `react_emoji` | `"eyes"` | Reaction added while processing |
 | `done_emoji` | `"white_check_mark"` | Reaction added when done |
-| `include_thread_context` | `true` | Prepend thread history on first mention in a thread |
+| `include_thread_context` | `true` | Prepend thread history on first mention in a thread (once per thread, also across restarts) |
 | `thread_context_limit` | `20` | Max messages of thread context to include |
 | `streaming` | `true` | Stream replies by editing the message in place as the model writes |
 | `stream_edit_interval` | `1.2` | Min seconds between streaming edits (chat.update is rate-limited) |
