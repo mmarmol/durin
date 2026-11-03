@@ -920,6 +920,9 @@ Each entry is an `MCPServerConfig`:
 `oauth` can be `true` (DCR defaults) or an `MCPOAuthConfig` object with `scope`,
 `client_id`, `client_secret`, and `callback_port` (default `1456`) for static
 client registration. See [docs/internals/mcp.md](../internals/mcp.md) for OAuth setup.
+When the authorization server offers `offline_access`, sign-in requests it so
+durin gets a refresh token, and the provider shows its consent screen on every
+sign-in.
 
 Each stdio server writes its stderr to its own file,
 `<durin_home>/logs/mcp-stderr-<server>.log`, and every spawn starts with a

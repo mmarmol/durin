@@ -5,6 +5,65 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.12.0 — 2026-11-03
+
+### Highlights
+
+- **MCP runs on the MCP SDK 2.x.** On the 2.x SDK several protocol fields
+  silently stopped being read. Those reads are fixed:
+  - an MCP tool error showed as a success;
+  - structured output and image blobs were dropped;
+  - read-only tools never ran in parallel;
+  - in sampling, the server's model choice, token budget and system prompt
+    were ignored, and the tool-round cap never counted;
+  - `tools/list_changed` stopped re-listing tools.
+
+  HTTP servers still go through durin's SSRF guard, now built on the httpx2
+  client the SDK requires. A rejected credential still fails fast and asks for
+  `durin mcp login`, although the SDK no longer reports its status. When the
+  authorization server offers `offline_access`, OAuth sign-ins request it, so
+  the provider shows its consent screen on each sign-in. (#710, #712)
+- **The Anthropic provider runs on the anthropic SDK 2.x.**
+  - Requests to Anthropic's own API use API version 2026-10-21. That version
+    takes no `temperature`, so Claude 4.6 and older without thinking now
+    sample at the API default instead of the configured temperature. Newer
+    models already received none.
+  - Anthropic-compatible endpoints set through `api_base` (MiniMax, proxies)
+    get the same requests as before: API version 2023-06-01, the key in
+    `X-Api-Key`, and the temperature. (#714)
+- **The nightly dream stops repeating settled work.**
+  - Resolving a pair as related no longer reopens every other cached verdict
+    of the same page. On one install that caused 79% of a night's re-judged
+    pairs.
+  - Linking entities to their source documents no longer re-asks the same
+    question every night for a session the model found no link in.
+  - Merge candidates pair only entities that have a page, instead of
+    skipping about a hundred unmergeable pairs every night. (#716, #717)
+
+### Changes
+
+**Channels**
+- Slack remembers across restarts which threads it follows and which
+  threads' history already reached their session. After a deploy, a reply
+  without a mention in a followed thread is answered again, and a thread's
+  history is no longer prepended a second time. (#718)
+
+**Sessions**
+- Compaction goes on after a span the nightly session summary already
+  covered, and reports the prompt size it actually reached. Before, it could
+  stop while still over its target. (#718)
+
+**Dependencies**
+- mcp 2.3 and httpx2 (`[mcp]`), anthropic 2.4, sherpa-onnx 2.0 (`[stt]`),
+  fastembed 0.9 (`[memory]`), sentence-transformers 6.2 (`[cross-encoder]`),
+  filelock 4.2, setuptools 84.2, and dulwich 1.2.20 in the lock file. Embeddings,
+  reranker scores and transcriptions were compared against the previous
+  versions and are unchanged. (#708, #710, #714)
+- watchdog stays below 7.0. On Linux, 7.0 reads every watch through one
+  shared reader, and a subfolder moved out of a watch stops the memory
+  watcher until a restart. (#711)
+- Model and MCP catalogs refreshed. (#686, #687)
+
 ## 0.11.6 — 2026-11-02
 
 ### Highlights
