@@ -106,10 +106,16 @@ def _judge_content_fingerprint(page: "EntityPage") -> str:
 
     Deliberately EXCLUDES provenance, derived_from and timestamps — source
     accrual (every seeding pass adds one) must not reopen a settled pair —
-    and the always_on attribute: it is curation state the always_on pass
-    re-ranks after every run, not identity content."""
+    the always_on attribute: it is curation state the always_on pass
+    re-ranks after every run, not identity content — and the relations this
+    pass wrote while resolving another pair as related: drawn from pages
+    already judged, they hold no new evidence about the page's other pairs,
+    yet each one reopened every one of them."""
     import hashlib
 
+    from durin.memory.pair_resolution import dream_resolution_edges
+
+    own_edges = dream_resolution_edges(page)
     payload = json.dumps({
         "type": page.type,
         "name": page.name,
@@ -117,7 +123,8 @@ def _judge_content_fingerprint(page: "EntityPage") -> str:
         "attributes": {
             k: v for k, v in (page.attributes or {}).items() if k != "always_on"},
         "relations": sorted(
-            f"{r.get('to')}|{r.get('type')}" for r in (page.relations or [])),
+            f"{r.get('to')}|{r.get('type')}" for r in (page.relations or [])
+            if (str(r.get("to")), str(r.get("type"))) not in own_edges),
         "body": page.body or "",
     }, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

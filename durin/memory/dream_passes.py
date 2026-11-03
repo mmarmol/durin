@@ -196,6 +196,10 @@ def run_derived_from_pass(
     _emit("memory.dream.start", kind="derived_from")
     sessions_dir = Path(workspace) / "sessions"
     out: dict[str, Any] = {"sessions": 0, "links": 0, "errors": [], "yielded": False}
+    from durin.memory.derived_from_dream import load_unlinked, save_unlinked
+
+    unlinked = load_unlinked(workspace)
+    asked = dict(unlinked)
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
             if is_workflow_session_file(jsonl_path):
@@ -205,7 +209,8 @@ def run_derived_from_pass(
                 break
             try:
                 r = link_derived_from_for_session(
-                    workspace, jsonl_path, llm_invoke=llm_invoke, model=model)
+                    workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
+                    unlinked=unlinked)
                 linked = r.get("linked") or []
                 if linked:
                     out["sessions"] += 1
@@ -216,6 +221,11 @@ def run_derived_from_pass(
                     "derived-from dream: session {} failed: {}",
                     jsonl_path.stem, str(exc)[:300],
                 )
+    if unlinked != asked:
+        try:
+            save_unlinked(workspace, unlinked)
+        except OSError as exc:
+            logger.warning("derived-from dream: cannot save the unlinked memo: {}", exc)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="derived_from",
           links=out["links"], sessions=out["sessions"],
