@@ -462,7 +462,11 @@ threaded through; it is `None` when the vector index is unavailable.
 `run_refine` assembles the candidate set from two sources:
 
 1. `EntityAbsorption.find_candidates` (`durin/memory/absorption.py`) returns
-   pairs that share at least one alias, strongest signal first.
+   pairs that share at least one alias, strongest signal first. Only refs
+   that own a page are paired: the alias index also holds the raw
+   `entities:` refs entries were written with (`person:Ada Lovelace` next to
+   the page `person:ada-lovelace`), which search resolves through but which
+   have no page to merge.
 2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
    reads the stored vector of every entity page from the index in one bulk
    call (`VectorIndex.entity_page_vectors`) — nothing is re-embedded for a
@@ -477,7 +481,7 @@ threaded through; it is `None` when the vector index is unavailable.
    judge. When the vector index is unavailable this step is a no-op.
 3. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously
-   rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,
+   rejected the merge — recorded in `.refine_tombstones.json`), `load_failed` (a page that vanished or could not be read since the candidates were built),
    `user_managed` (either page is `author == "user_authored"`), or `quarantine`
    (`run_started_at` is set and either page was created at or after the run
    started, checked via `created_at` then `updated_at`; no timestamp = treated

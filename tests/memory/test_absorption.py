@@ -97,6 +97,49 @@ class TestFindCandidates:
         # First candidate has more shared aliases
         assert len(cs[0].shared_aliases) >= len(cs[1].shared_aliases)
 
+    def test_entry_refs_without_a_page_are_not_candidates(self, tmp_path: Path) -> None:
+        """The alias index also holds the raw `entities:` refs entries were
+        written with (`person:Ada Lovelace` beside the page
+        `person:ada-lovelace`). Such a ref has no page, so nothing can be
+        merged into or out of it; pairing it made the refine pass skip the
+        same pairs as unloadable every run."""
+        import datetime
+
+        from durin.memory.store import store_memory
+
+        _write_page(tmp_path, "person", "ada-lovelace", name="Ada Lovelace")
+        store_memory(
+            tmp_path, content="Ada reviewed the ticket",
+            entities=["person:Ada Lovelace", "org:Acme Widgets", "org:acme widgets"],
+            valid_from=datetime.date(2026, 10, 1),
+        )
+        absorber = EntityAbsorption(tmp_path)
+        index = absorber._get_alias_index()
+        index.build()
+
+        assert absorber.find_candidates() == []
+        # Search still resolves the entry's own spelling: only merge
+        # candidates are restricted to refs that own a page.
+        assert "person:Ada Lovelace" in index.lookup("ada lovelace")
+
+    def test_a_page_less_ref_does_not_hide_a_pair_of_pages(self, tmp_path: Path) -> None:
+        import datetime
+
+        from durin.memory.store import store_memory
+
+        _write_page(tmp_path, "person", "grace-hopper", name="Grace Hopper", aliases=["Grace"])
+        _write_page(tmp_path, "person", "grace_h", name="Grace H", aliases=["Grace"])
+        store_memory(
+            tmp_path, content="Grace approved it", entities=["person:grace"],
+            valid_from=datetime.date(2026, 10, 1),
+        )
+        absorber = EntityAbsorption(tmp_path)
+        absorber._get_alias_index().build()
+
+        assert [set(c.refs) for c in absorber.find_candidates()] == [
+            {"person:grace-hopper", "person:grace_h"}
+        ]
+
 
 # ---------------------------------------------------------------------------
 # absorb
