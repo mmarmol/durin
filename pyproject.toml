@@ -75,6 +75,13 @@ dependencies = [
     # edits to `memory/**/*.md` (vim, git checkout, etc.) and triggers
     # a synchronous re-index. Doc 02 §6.3. macOS uses FSEvents,
     # Linux uses inotify; both via this wrapper.
+    #
+    # Held below 7.0. On Linux, 7.0 reads every watch in the process
+    # through one shared inotify instance and reader thread. A subfolder
+    # moved out of a watch makes that reader raise KeyError and die, and
+    # from then on no watch in the process gets events, so manual memory
+    # edits stop being indexed until a restart. On 6.x the same error ends
+    # only that watch's thread, which the memory watcher replaces.
     "watchdog>=4.0.2,<7.0",
     # Document → markdown conversion for the `convert_to_markdown` tool.
     # The docx/pptx/xlsx/xls/pdf extras pull the per-format converters;
