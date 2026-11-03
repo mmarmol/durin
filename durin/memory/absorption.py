@@ -142,11 +142,28 @@ class EntityAbsorption:
         v1 signal: alias_index keys that point to >1 entity_ref. Each
         such key contributes a candidate per pair of refs. Ordering:
         candidates with more shared aliases come first (stronger signal).
+
+        Only refs that own a page are paired. The alias index also holds
+        the raw ``entities:`` refs entries were written with — spellings
+        such as ``person:Ada Lovelace`` next to the page
+        ``person:ada-lovelace`` — which search needs but which have no page
+        to merge into or out of.
         """
         idx = self._get_alias_index()
+        has_page: dict[str, bool] = {}
+
+        def _owns_page(ref: str) -> bool:
+            if ref not in has_page:
+                type_, _, slug = ref.partition(":")
+                has_page[ref] = bool(type_ and slug) and (
+                    self.entities_root / type_ / f"{slug}.md"
+                ).is_file()
+            return has_page[ref]
+
         # Group: pair (sorted) → list of shared alias strings.
         pairs: dict[tuple[str, str], list[str]] = {}
         for alias, refs in [(k, idx.lookup(k)) for k in idx.keys()]:
+            refs = [r for r in refs if _owns_page(r)]
             if len(refs) < 2:
                 continue
             for i in range(len(refs)):
