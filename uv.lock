@@ -130,21 +130,21 @@ wheels = [
 
 [[package]]
 name = "anthropic"
-version = "0.109.1"
+version = "2.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "distro" },
     { name = "docstring-parser" },
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "jiter" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/0b/ce24a4f275573f5e436ca954faca60c759d58ed152b8fa36a1e3b888e261/anthropic-0.109.1.tar.gz", hash = "sha256:83e06b3d9d40ff5898f588020e0cc4e42187de954549a3b5fbe6e2685a09c785", size = 927569, upload-time = "2026-06-09T23:55:24.884Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/5b/6c13b126554cfec789ce14a74f2ccfd46382a0eb296ec78ea6b80eeac3b5/anthropic-2.4.0.tar.gz", hash = "sha256:c59cab76049cf581e90e2ee3a20472291029b7a6a1ee2ef32bff2b2a7010fd47", size = 1915809, upload-time = "2026-11-02T19:08:06.047Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/0f/a6110d713370bc92f074a622f8a5ebdec7e92360149b1048dca258a07b2f/anthropic-0.109.1-py3-none-any.whl", hash = "sha256:ce7d94a7657f2aa29338cca448945eac621b4f62c1794cf461cb32847223e9b8", size = 923851, upload-time = "2026-06-09T23:55:23.348Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/5d/e399d9028411ce404d7ddbe6b8060d878b2549ed8cd671a7bb496ae20ffc/anthropic-2.4.0-py3-none-any.whl", hash = "sha256:db2e691364ae2e04083ed9b8deb49f1a6967e9f184f8cbb5afcb3bcda8ab0532", size = 2340848, upload-time = "2026-11-02T19:08:03.822Z" },
 ]
 
 [[package]]
@@ -943,7 +943,7 @@ web = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
+    { name = "anthropic", specifier = ">=2.0.0,<3.0.0" },
     { name = "av", marker = "extra == 'stt'", specifier = ">=12.0.0,<19.0.0" },
     { name = "chardet", specifier = ">=3.0.2,<8.0.0" },
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },

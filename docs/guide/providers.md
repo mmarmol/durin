@@ -273,9 +273,14 @@ simply uses the same model as regular chat.
 
 No `api_base` needed — the native Anthropic SDK uses its built-in endpoint.
 
+Anthropic's API takes no `temperature` on any model, so durin sends none
+to it: a configured `temperature` has no effect on Claude through the
+`anthropic` provider, and every model samples at its default. An
+Anthropic-compatible endpoint set through `api_base` (MiniMax, a proxy) still
+receives it.
+
 Claude models newer than the 4.6 generation (any `claude-*` id other than
-Claude 2, 3 or Instant and Opus/Sonnet/Haiku 4.0–4.6) take no `temperature`
-(durin does not send one) and think adaptively: `reasoning_effort` `low`, `medium`, `high`,
+Claude 2, 3 or Instant and Opus/Sonnet/Haiku 4.0–4.6) think adaptively: `reasoning_effort` `low`, `medium`, `high`,
 `xhigh` or `max` sets the effort level, `adaptive` leaves it to the model, and
 `none` turns thinking off unless the model always thinks.
 

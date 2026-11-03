@@ -458,6 +458,14 @@ with its own switch and default, what to keep.
 
 Provider rules the serialization honors:
 
+- **Anthropic API version.** Requests to Anthropic's own API (no `api_base`,
+  or a host on `anthropic.com`) use the SDK's API version, 2026-10-21, which
+  rejects `temperature`, `top_p` and `top_k` on every model and takes the key
+  as a bearer token; no sampling param is sent. Any other base URL (MiniMax,
+  a proxy) is an Anthropic-compatible third party built against 2023-06-01:
+  the client pins that version, moves the key back to `X-Api-Key`, and sends
+  `temperature` in the request body, so those endpoints see the same requests
+  as before.
 - **Anthropic.** Every `thinking` and `redacted_thinking` block goes back
   unchanged and in its original order. A redacted block is opaque — its
   `data` is replayed as received and never shown as reasoning text.
@@ -465,7 +473,8 @@ Provider rules the serialization honors:
   which matches the closed set of older names — Vertex-style `@date` ids and
   dotted versions read as Anthropic's own form — so a new model needs no code
   change):
-  - no `temperature` is sent, since any non-default value is rejected;
+  - no `temperature` is sent to any endpoint, since any non-default value
+    is rejected;
   - an effort level becomes adaptive thinking plus `output_config.effort`,
     because the `budget_tokens` mode is rejected;
   - effort `none` sends `thinking: {"type": "disabled"}`, since some of these
@@ -490,7 +499,7 @@ Provider rules the serialization honors:
     thinking accepts a turn without one; budget thinking requires the last
     assistant turn to start with one, so on those models the retry also runs
     without thinking;
-  - a rejected `temperature` is omitted.
+  - a `temperature` a third-party endpoint rejects is omitted.
 - **DeepSeek.** Its API thinks by default and rejects a tool request whose
   earlier assistant turns lack `reasoning_content`, so a turn stored without
   reasoning gets the single-space pad above. The pad follows DeepSeek's API —

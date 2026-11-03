@@ -49,6 +49,34 @@ def _is_current_claude(model_name: str) -> bool:
     return name.startswith("claude-") and not _OLDER_CLAUDE_RE.match(name)
 
 
+def _is_anthropic_host(api_base: str | None) -> bool:
+    """Anthropic's own API: the SDK default, or a base URL on anthropic.com."""
+    if not api_base:
+        return True
+    host = (urlparse(api_base).hostname or "").lower()
+    return host == "anthropic.com" or host.endswith(".anthropic.com")
+
+
+# The API version Anthropic-compatible third parties (MiniMax, proxies) were
+# built against. The SDK sends 2026-10-21, which removes the sampling params
+# and authenticates with a bearer token; those endpoints keep the old wire.
+_COMPAT_API_VERSION = "2023-06-01"
+
+
+def _x_api_key_auth(api_key: str):
+    """httpx2 auth hook that sends the key as ``X-Api-Key`` instead of the
+    SDK's ``Authorization: Bearer``, as Anthropic-compatible endpoints expect."""
+    bearer = f"Bearer {api_key}"
+
+    def _auth(request):
+        if request.headers.get("Authorization") == bearer:
+            del request.headers["Authorization"]
+            request.headers["X-Api-Key"] = api_key
+        return request
+
+    return _auth
+
+
 def _gen_tool_id() -> str:
     return "toolu_" + "".join(secrets.choice(_ALNUM) for _ in range(22))
 
@@ -73,15 +101,23 @@ class AnthropicProvider(LLMProvider):
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
 
-        from anthropic import AsyncAnthropic
+        from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 
+        # Anthropic gets the SDK's API version (2026-10-21: no sampling
+        # params, bearer auth). Any other host keeps the 2023-06-01 wire.
+        self._third_party = not _is_anthropic_host(api_base)
         client_kw: dict[str, Any] = {}
         if api_key:
             client_kw["api_key"] = api_key
         if api_base:
             client_kw["base_url"] = api_base
-        if extra_headers:
-            client_kw["default_headers"] = extra_headers
+        headers = dict(extra_headers or {})
+        if self._third_party:
+            headers = {"anthropic-version": _COMPAT_API_VERSION, **headers}
+            if api_key:
+                client_kw["http_client"] = DefaultAsyncHttpxClient(auth=_x_api_key_auth(api_key))
+        if headers:
+            client_kw["default_headers"] = headers
         # Keep retries centralized in LLMProvider._run_with_retry to avoid retry amplification.
         client_kw["max_retries"] = 0
         self._client = AsyncAnthropic(**client_kw)
@@ -522,24 +558,27 @@ class AnthropicProvider(LLMProvider):
                 self._merge_headers(kwargs, self.extra_headers)
             return kwargs
 
-        omit_temperature = temperature is None
+        # Only third-party endpoints get a temperature: Anthropic's API
+        # version rejects sampling params on every model, and the SDK no
+        # longer takes them, so it travels in the request body.
+        send_temperature = self._third_party and temperature is not None
 
         if reasoning_effort == "adaptive":
             # Adaptive thinking: model decides when and how much to think
             # Supported on claude-sonnet-4-6 and claude-opus-4-6.
             # Also auto-enables interleaved thinking between tool calls.
             kwargs["thinking"] = {"type": "adaptive"}
-            if not omit_temperature:
-                kwargs["temperature"] = 1.0
+            if send_temperature:
+                kwargs["extra_body"] = {"temperature": 1.0}
         elif thinking_enabled:
             budget_map = {"low": 1024, "medium": 4096, "high": max(8192, max_tokens)}
             budget = budget_map.get(reasoning_effort.lower(), 4096)
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["max_tokens"] = max(max_tokens, budget + 4096)
-            if not omit_temperature:
-                kwargs["temperature"] = 1.0
-        elif not omit_temperature:
-            kwargs["temperature"] = temperature
+            if send_temperature:
+                kwargs["extra_body"] = {"temperature": 1.0}
+        elif send_temperature:
+            kwargs["extra_body"] = {"temperature": temperature}
 
         if anthropic_tools:
             kwargs["tools"] = anthropic_tools
@@ -574,10 +613,7 @@ class AnthropicProvider(LLMProvider):
         the field, and other platforms spell it differently."""
         if self._binding_refused:
             return False
-        if not self.api_base:
-            return True
-        host = (urlparse(self.api_base).hostname or "").lower()
-        return host == "anthropic.com" or host.endswith(".anthropic.com")
+        return _is_anthropic_host(self.api_base)
 
     def _recover_request_for_error(
         self, kw: dict[str, Any], response: LLMResponse,

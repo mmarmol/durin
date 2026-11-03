@@ -33,9 +33,10 @@ def test_adaptive_sets_type_adaptive() -> None:
     assert kw["thinking"] == {"type": "adaptive"}
 
 
-def test_adaptive_forces_temperature_one() -> None:
+def test_adaptive_sends_no_temperature_to_anthropic() -> None:
     kw = _build(_make_provider(), "adaptive")
-    assert kw["temperature"] == 1.0
+    assert "temperature" not in kw
+    assert "temperature" not in (kw.get("extra_body") or {})
 
 
 def test_adaptive_does_not_inflate_max_tokens() -> None:
@@ -63,7 +64,9 @@ def test_low_uses_small_budget() -> None:
 def test_none_does_not_enable_thinking() -> None:
     kw = _build(_make_provider(), None)
     assert "thinking" not in kw
-    assert kw["temperature"] == 0.7
+    # API version 2026-10-21 rejects sampling params on every model.
+    assert "temperature" not in kw
+    assert "temperature" not in (kw.get("extra_body") or {})
 
 
 def test_opus_4_7_omits_temperature_adaptive() -> None:
@@ -93,7 +96,7 @@ def test_reasoning_effort_string_none_does_not_enable_thinking() -> None:
     """reasoning_effort='none' must not enable thinking — treated same as disabled."""
     kw = _build(_make_provider(), "none")
     assert "thinking" not in kw
-    assert kw["temperature"] == 0.7
+    assert "temperature" not in kw
 
 
 _BINDING_BETA = "thinking-binding-controls-2026-08-01"
@@ -228,9 +231,9 @@ def test_a_rejected_signature_on_a_budget_model_retries_without_thinking() -> No
     assert recovered["reasoning_effort"] is None
 
 
-def test_older_models_keep_their_temperature_and_budget() -> None:
+def test_older_models_keep_their_budget_but_not_temperature() -> None:
     kw = _build(_make_provider("claude-sonnet-4-5-20250929"), None)
-    assert kw["temperature"] == 0.7
+    assert "temperature" not in kw
     kw = _build(_make_provider("claude-opus-4-6"), "high")
     assert kw["thinking"]["type"] == "enabled"
     assert "block_binding" not in kw["thinking"]
