@@ -286,8 +286,13 @@ which document(s) each entity was distilled from — reasoning over the
 conversation, not temporal adjacency. The parsed `entity → [reference]` map is
 applied as `derived_from` `FieldPatch`es (author `dream`). It is idempotent and
 cheap: a session whose authored entities are already linked, or that ingested no
-references, is skipped with no LLM call. **This pass runs only on the cron and
-manual paths — never on the reactive hooks.**
+references, is skipped with no LLM call. A session the model answered with no
+links keeps its pages unlinked, so the pass would send it the same question
+every night; `memory/.derived_from_unlinked.json` records, per session, a
+fingerprint of that exact question (prompt and model), and the session is
+skipped until the question changes — a new turn, a changed page, a new
+document. An unreadable answer is not recorded and is asked again. **This pass
+runs only on the cron and manual paths — never on the reactive hooks.**
 
 ### Pass 2b — distill: reference documents to outlines
 
@@ -641,7 +646,10 @@ Tier-1 `"different"` verdicts are memoized in `memory/.refine_verdicts.json`,
 keyed by a fingerprint of both pages' judgment-bearing content (type, name,
 aliases, attributes, relations, body — deliberately excluding provenance,
 `derived_from`, and timestamps, so source accrual does not reopen a settled
-pair) plus the judge identity (prompt-template hash + model). A cache hit
+pair, and the relations the dream wrote while resolving another pair as
+related, recognized by their provenance: drawn from pages already judged,
+such an edge holds no evidence about the page's other pairs, yet before it
+was excluded each one reopened all of them) plus the judge identity (prompt-template hash + model). A cache hit
 skips the pair with reason `cached_verdict`; a change to either page's
 content, the template, or the model re-judges. The template is the Tier 1
 judge's (`absorb_judge.md`), and its hash (`judge_template_fingerprint`)

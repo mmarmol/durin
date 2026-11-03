@@ -180,3 +180,67 @@ def test_link_derived_from_emits_parse_failure(tmp_path: Path, monkeypatch) -> N
     assert failures and failures[0]["stage"] == "derived_from"
     # A cut answer reads apart from a malformed one.
     assert failures[0]["finish_reason"] == "length"
+
+
+def _unlinked_session(tmp_path: Path) -> Path:
+    """A session that ingested a document and authored a page the model then
+    finds unrelated to it: the question has a definite empty answer."""
+    from datetime import datetime, timezone
+
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+
+    ingest_reference(tmp_path, "Rabies Investigation", "viral disease notes")
+    write_entity(
+        tmp_path, "topic:billing",
+        [FieldPatch(kind="body_append", value="Invoices and payment terms.",
+                    author="agent", source_ref="setup",
+                    at=datetime(2026, 6, 1, tzinfo=timezone.utc))],
+        create=True, name="Billing",
+    )
+    msgs = [
+        {"role": "tool", "content": json.dumps({"id": "x", "reference": "reference:rabies-investigation"})},
+        _upsert_call("topic:billing"),
+    ]
+    return _session(tmp_path, msgs)
+
+
+def test_an_unchanged_question_answered_with_no_links_is_not_asked_again(tmp_path: Path) -> None:
+    """The pass runs nightly over every session. A session whose authored
+    pages the model found unrelated to its documents kept its pages unlinked,
+    so the same prompt went out again every night (15 identical calls a night
+    on one install). The answer is remembered for exactly that question."""
+    from durin.memory.dream_passes import run_derived_from_pass
+
+    jsonl = _unlinked_session(tmp_path)
+    calls: list[str] = []
+
+    def fake_llm(prompt: str, **_kw):
+        calls.append(prompt)
+        return "{}"
+
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    assert len(calls) == 1
+
+    # The session moves on: a new question, asked once.
+    with jsonl.open("a", encoding="utf-8") as f:
+        f.write("\n" + json.dumps({"role": "user", "content": "billing is unrelated to that doc"}))
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    assert len(calls) == 2
+
+
+def test_an_unreadable_answer_is_asked_again(tmp_path: Path) -> None:
+    from durin.memory.dream_passes import run_derived_from_pass
+
+    _unlinked_session(tmp_path)
+    calls: list[str] = []
+
+    def fake_llm(prompt: str, **_kw):
+        calls.append(prompt)
+        return "not json at all"
+
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    run_derived_from_pass(tmp_path, llm_invoke=fake_llm)
+    assert len(calls) == 2

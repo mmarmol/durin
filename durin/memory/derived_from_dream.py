@@ -190,14 +190,52 @@ def parse_links(
     return out
 
 
+# Sessions whose question the model answered with no links, keyed by session
+# stem, each with the fingerprint of the exact question (prompt and model).
+# The pass revisits every session nightly and an unlinked page stays
+# unlinked, so without this the same question is sent again every night.
+_UNLINKED_FILE = ".derived_from_unlinked.json"
+
+
+def _unlinked_path(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / _UNLINKED_FILE
+
+
+def load_unlinked(workspace: Path) -> dict[str, str]:
+    try:
+        data = json.loads(_unlinked_path(workspace).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_unlinked(workspace: Path, unlinked: dict[str, str]) -> None:
+    from durin.utils.atomic_write import atomic_write_text
+
+    path = _unlinked_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(unlinked, sort_keys=True))
+
+
+def _question_fingerprint(prompt: str, model: str | None) -> str:
+    import hashlib
+
+    return hashlib.sha256(f"{model or ''}\n{prompt}".encode("utf-8")).hexdigest()[:16]
+
+
 def link_derived_from_for_session(
     workspace: Path,
     jsonl_path: Path,
     *,
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
+    unlinked: dict[str, str] | None = None,
 ) -> dict:
-    """Link entities authored in this session to the document(s) they came from."""
+    """Link entities authored in this session to the document(s) they came from.
+
+    ``unlinked`` (the pass's memo, updated in place) skips a question the
+    model already answered with no links; any change to the session, its
+    pages or its documents makes a new question."""
     llm_invoke = llm_invoke or default_llm_invoke
     jsonl_path = Path(jsonl_path)
     _meta, msgs = load_session(jsonl_path)
@@ -216,6 +254,9 @@ def link_derived_from_for_session(
         for m in msgs if m.get("content")
     )
     prompt = build_link_prompt(workspace, pages, references, turns)
+    question = _question_fingerprint(prompt, model)
+    if unlinked is not None and unlinked.get(jsonl_path.stem) == question:
+        return {"session": jsonl_path.stem, "skipped": "answered_unlinked"}
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
     links = parse_links(
@@ -223,12 +264,19 @@ def link_derived_from_for_session(
         valid_refs=set(references),
         valid_entities={ref for ref, _page in pages},
     )
-    if links is None:
+    answered = links is not None
+    if not answered:
         emit_parse_failure("derived_from", source=jsonl_path.stem, raw=raw,
                            finish_reason=getattr(resp, "finish_reason", None))
         links = {}
     if not links:
+        # Only a readable "no links" settles the question; an unreadable
+        # answer is asked again next run.
+        if unlinked is not None and answered:
+            unlinked[jsonl_path.stem] = question
         return {"session": jsonl_path.stem, "linked": []}
+    if unlinked is not None:
+        unlinked.pop(jsonl_path.stem, None)
 
     now = datetime.now(timezone.utc)
     src = f"[[sessions/{jsonl_path.stem}.md#turn-{len(msgs)}]]"

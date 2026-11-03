@@ -119,6 +119,31 @@ class PairPageMissingError(ResolutionError):
     deleted) — the pair is stale rather than the resolution wrong."""
 
 
+def resolution_note(actor: str, source: str) -> str:
+    """The ``source_ref`` a resolution stamps on what it writes, e.g.
+    ``dream resolution (tier2)``."""
+    return f"{actor} resolution ({source or 'bandeja'})"
+
+
+_DREAM_RESOLUTION_PREFIX = resolution_note("dream", "x").split("(", 1)[0] + "("
+
+
+def dream_resolution_edges(page: EntityPage) -> set[tuple[str, str]]:
+    """The ``(to, type)`` relations of ``page`` that the dream itself wrote
+    while resolving a pair as related, read from their provenance."""
+    from durin.memory.field_provenance import coerce_relation_prov
+
+    out: set[tuple[str, str]] = set()
+    for entry in coerce_relation_prov((page.provenance or {}).get("relations")).values():
+        if (
+            isinstance(entry, dict)
+            and entry.get("author") == "dream"
+            and str(entry.get("source_ref") or "").startswith(_DREAM_RESOLUTION_PREFIX)
+        ):
+            out.add((str(entry.get("to")), str(entry.get("type"))))
+    return out
+
+
 @dataclass
 class AliasMove:
     """Who keeps ``alias``: one of the two refs (removed from the other, added
@@ -545,7 +570,7 @@ def apply_resolution(
                 except EntityRenameError as exc:
                     raise ResolutionError(str(exc)) from exc
     result = ApplyResult(kind=res.kind, refs={ref_a: ref_a, ref_b: ref_b})
-    note = f"{actor} resolution ({res.source or 'bandeja'})"
+    note = resolution_note(actor, res.source)
     removed: dict[str, set[str]] = {}
 
     if res.kind == "merge":

@@ -636,3 +636,47 @@ def test_refine_tier2_failure_is_flagged_remembered_and_reported(tmp_path, monke
                      confidence_threshold=95, escalate_floor=70, recheck_cooldown_s=3600)
     assert second["n"] == 0, "the pair is held for the cooldown, not re-judged"
     assert [s["reason"] for s in out["skipped"]] == ["cached_verdict"]
+
+
+def test_refine_own_resolution_of_another_pair_keeps_cached_verdict(tmp_path):
+    """Resolving a pair as related writes an edge into one of its pages. That
+    edge carries no evidence about the page's other pairs — it was drawn from
+    pages already judged — so it must not reopen them. Measured live: 42 of
+    53 pairs re-judged in one night were reopened this way, each with the
+    same verdict as before."""
+    from durin.memory.pair_resolution import RelationSpec, Resolution, apply_resolution
+
+    _two_dupes(tmp_path)
+    write_entity(tmp_path, "company:acme",
+                 [FieldPatch(kind="alias", value="Acme", author="agent",
+                             source_ref="s", at=NOW)], create=True, name="Acme")
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1
+
+    apply_resolution(
+        tmp_path,
+        Resolution(kind="relate", source="tier2",
+                   relation=RelationSpec("company:mxhero", "partners_with", "company:acme")),
+        "company:mxhero", "company:acme", actor="dream",
+    )
+    page = EntityPage.from_file(tmp_path / "memory" / "entities" / "company" / "mxhero.md")
+    assert {"to": "company:acme", "type": "partners_with"} in page.relations
+
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1, "the dream's own resolution of another pair reopened a settled one"
+    assert [s["reason"] for s in out["skipped"]] == ["cached_verdict"]
+
+
+def test_refine_a_relation_from_elsewhere_reopens_the_pair(tmp_path):
+    """Only the dream's own resolution edges are left out: an edge the agent
+    or a person writes is new content the judge reads, so the pair is
+    judged again."""
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="relation", value={"to": "company:acme", "type": "partners_with"},
+                             author="agent", source_ref="sessions/s.md", at=NOW)])
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 2
