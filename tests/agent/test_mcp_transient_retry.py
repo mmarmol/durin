@@ -1,7 +1,6 @@
 """Tests for MCP _is_transient helper and wrapper delegation."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -92,10 +91,10 @@ class _FakeConn:
 
 
 def _make_tool_def(name="test_tool"):
-    return SimpleNamespace(
+    return mcp_types.Tool(
         name=name,
         description="A test tool",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
 
 
@@ -105,7 +104,7 @@ async def test_tool_success_on_first_try_no_retry():
     from unittest.mock import AsyncMock
 
     session = AsyncMock()
-    result = SimpleNamespace(content=[mcp_types.TextContent(type="text", text="hello")])
+    result = mcp_types.CallToolResult(content=[mcp_types.TextContent(type="text", text="hello")])
     session.call_tool = AsyncMock(return_value=result)
 
     wrapper = MCPToolWrapper(_FakeConn(session), "test_server", _make_tool_def(), tool_timeout=5)

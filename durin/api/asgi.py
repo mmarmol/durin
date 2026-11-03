@@ -633,7 +633,8 @@ def build_gateway_http_app(
         error = request.query_params.get("error", "")
         if not state or not (code or error):
             return PlainTextResponse("invalid callback", status_code=400)
-        if not resolve_gateway_oauth_callback(state, code=code, error=error or None):
+        iss = request.query_params.get("iss") or None
+        if not resolve_gateway_oauth_callback(state, code=code, error=error or None, iss=iss):
             return PlainTextResponse("invalid callback", status_code=400)
         if error:
             # The provider refused (e.g. access_denied): tell the human what

@@ -154,8 +154,8 @@ def _auth_error_types() -> tuple:
     except ImportError:
         pass
     try:
-        import httpx
-        types.append(httpx.HTTPStatusError)
+        import httpx2
+        types.append(httpx2.HTTPStatusError)
     except ImportError:
         pass
     return tuple(types)
@@ -166,8 +166,8 @@ def _is_auth_error(exc: BaseException) -> bool:
     if not types or not isinstance(exc, types):
         return False
     try:
-        import httpx
-        if isinstance(exc, httpx.HTTPStatusError):
+        import httpx2
+        if isinstance(exc, httpx2.HTTPStatusError):
             return getattr(exc.response, "status_code", None) == 401
     except ImportError:
         pass
@@ -180,7 +180,14 @@ def _is_transient_conn(exc: BaseException) -> bool:
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
-    return isinstance(exc, asyncio.TimeoutError) or "timed out while waiting" in str(exc).lower()
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    try:
+        from mcp import MCPError
+        from mcp.types import REQUEST_TIMEOUT
+    except ImportError:
+        return False
+    return isinstance(exc, MCPError) and exc.code == REQUEST_TIMEOUT
 
 
 # Reconnect / backoff constants (monkeypatchable in tests).
@@ -236,6 +243,12 @@ class MCPServerConnection:
 
         self._rpc_lock = asyncio.Lock()
 
+        # Whether the last HTTP response this connection's client received was
+        # a 401. The SDK reports a rejected streamable-HTTP POST as a generic
+        # JSON-RPC error without its status, so the client's response hook
+        # keeps it here for the auth checks (see _auth_failed).
+        self._http_unauthorized = False
+
         # Breaker state.
         self._error_count = 0
         self._breaker_opened_at: float | None = None
@@ -277,7 +290,8 @@ class MCPServerConnection:
     # ----- SP-5 security helpers -----
 
     def _build_http_client(self, extra_kwargs: dict) -> "Any":
-        """Build the MCP transport's httpx client.
+        """Build the MCP transport's HTTP client (an ``httpx2`` client, the
+        only kind the MCP SDK accepts for its transports and auth).
 
         SSRF posture: unless this server is explicitly opted out via
         ``allow_private_url`` (or an SDK proxy takes over egress), the client
@@ -288,16 +302,28 @@ class MCPServerConnection:
         ``tools.ssrf_whitelist`` (already applied at config load) still
         governs which private ranges are exempt.
         """
-        import httpx
+        import httpx2
 
-        from durin.security.network import ssrf_safe_async_client
+        from durin.security.network import ssrf_safe_httpx2_client
 
+        async def _note_status(response: httpx2.Response) -> None:
+            self._http_unauthorized = response.status_code == 401
+
+        hooks = dict(extra_kwargs.pop("event_hooks", None) or {})
+        hooks["response"] = [*hooks.get("response", []), _note_status]
+        extra_kwargs["event_hooks"] = hooks
         if getattr(self._cfg, "allow_private_url", False):
-            return httpx.AsyncClient(**extra_kwargs)
-        return ssrf_safe_async_client(**extra_kwargs)
+            return httpx2.AsyncClient(**extra_kwargs)
+        return ssrf_safe_httpx2_client(**extra_kwargs)
+
+    def _auth_failed(self, exc: BaseException) -> bool:
+        """True when ``exc`` means the server rejected the credentials: an
+        OAuth error, a 401 status error, or any failure that followed a 401
+        response on this connection's HTTP client."""
+        return _is_auth_error(exc) or self._http_unauthorized
 
     def _sse_client_factory(self):
-        """Return the httpx client factory for the SSE transport.
+        """Return the HTTP client factory for the SSE transport.
 
         Extracted so it is independently testable and so _open_sse stays
         focused on the transport lifecycle.
@@ -383,7 +409,7 @@ class MCPServerConnection:
             try:
                 return await self._open_streamable_http()
             except BaseException as exc:  # noqa: BLE001
-                if _is_auth_error(exc):
+                if self._auth_failed(exc):
                     # 401/OAuth error: SSE won't fix it — fail fast.
                     raise
                 logger.warning(
@@ -459,8 +485,7 @@ class MCPServerConnection:
         )
         await self._http_client.__aenter__()
         self._transport_cm = streamable_http_client(cfg.url, http_client=self._http_client)
-        read, write, _ = await self._transport_cm.__aenter__()
-        return read, write
+        return await self._transport_cm.__aenter__()
 
     async def _open_sse(self):
         from mcp.client.sse import sse_client
@@ -570,7 +595,7 @@ class MCPServerConnection:
                     return
                 if not self._ready.is_set():
                     # Initial connect failed.
-                    if _is_auth_error(exc):
+                    if self._auth_failed(exc):
                         hint = ""
                         if self._oauth_provider is not None:
                             from durin.agent.tools.mcp_oauth import auth_failure_message
@@ -624,6 +649,7 @@ class MCPServerConnection:
         """
         from mcp import ClientSession
 
+        self._http_unauthorized = False
         try:
             read, write = await self._open_transport_streams()
             async with ClientSession(read, write, **self._session_kwargs()) as session:
@@ -719,14 +745,8 @@ class MCPServerConnection:
                         import mcp.types as _types  # noqa: PLC0415
                     except ImportError:
                         return
-                _server_notification_cls = getattr(_types, "ServerNotification", None)
                 _list_changed_cls = getattr(_types, "ToolListChangedNotification", None)
-                if (
-                    _server_notification_cls is not None
-                    and _list_changed_cls is not None
-                    and isinstance(message, _server_notification_cls)
-                    and isinstance(message.root, _list_changed_cls)
-                ):
+                if _list_changed_cls is not None and isinstance(message, _list_changed_cls):
                     logger.info("MCP server '{}': tools/list_changed", self.name)
                     self._schedule_refresh()
                     await asyncio.sleep(0)  # let tests observe the scheduled task
@@ -960,7 +980,7 @@ class MCPServerConnection:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001
-            if _is_auth_error(exc) and self._oauth_provider is not None:
+            if self._auth_failed(exc) and self._oauth_provider is not None:
                 # SP-4d: OAuth 401 the SDK couldn't silently refresh → ask the
                 # user to re-auth. NOT a transient drop, so no reconnect/retry.
                 self._bump_error()

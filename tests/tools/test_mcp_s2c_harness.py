@@ -1,6 +1,6 @@
 """SP-6 real-harness end-to-end tests for server→client capabilities.
 
-A real FastMCP server tool calls ctx.session.list_roots(),
+A real MCPServer server tool calls ctx.session.list_roots(),
 ctx.session.send_log_message(), or ctx.session.create_message() over real
 in-memory MCP streams. durin's callbacks run inside the client session and
 the results/effects are asserted from the server-tool's return value.
@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 
 import pytest
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.memory import create_client_server_memory_streams
 
 from durin.agent.tools.mcp_connection import MCPServerConnection
@@ -22,9 +22,9 @@ pytestmark = pytest.mark.asyncio
 
 
 class _Harness:
-    """SP-2 in-process harness — real FastMCP server over in-memory streams."""
+    """SP-2 in-process harness — real MCPServer server over in-memory streams."""
 
-    def __init__(self, server: FastMCP) -> None:
+    def __init__(self, server: MCPServer) -> None:
         self.server = server
         self._streams_cm = None
         self._task: asyncio.Task | None = None
@@ -36,7 +36,7 @@ class _Harness:
         client_streams, server_streams = await self._streams_cm.__aenter__()
         self.client_streams = client_streams
         sr, sw = server_streams
-        low = self.server._mcp_server
+        low = self.server._lowlevel_server
         ready = asyncio.Event()
 
         async def _run() -> None:
@@ -71,7 +71,7 @@ def _wire(conn: MCPServerConnection, harness: _Harness) -> None:
 # ---------------------------------------------------------------------------
 
 async def test_server_tool_lists_durin_workspace_root(tmp_path):
-    server = FastMCP("roots-probe")
+    server = MCPServer("roots-probe")
 
     @server.tool()
     async def whats_my_root(ctx: Context) -> str:
@@ -99,7 +99,7 @@ async def test_server_tool_lists_durin_workspace_root(tmp_path):
 # ---------------------------------------------------------------------------
 
 async def test_server_log_reaches_durin_logger(tmp_path):
-    server = FastMCP("log-probe")
+    server = MCPServer("log-probe")
 
     @server.tool()
     async def shout(ctx: Context) -> str:
@@ -143,7 +143,7 @@ async def test_server_sampling_round_trips_through_fake_llm(tmp_path):
             user = kwargs["messages"][-1]["content"]
             return LLMResponse(content=f"LLM saw: {user}", finish_reason="stop")
 
-    server = FastMCP("sampling-probe")
+    server = MCPServer("sampling-probe")
 
     @server.tool()
     async def ask_the_model(ctx: Context, q: str) -> str:
@@ -189,7 +189,7 @@ async def test_server_sampling_rpm_limit_trips(tmp_path):
             call_count["n"] += 1
             return LLMResponse(content="ok", finish_reason="stop")
 
-    server = FastMCP("rpm-probe")
+    server = MCPServer("rpm-probe")
 
     @server.tool()
     async def call_twice(ctx: Context) -> str:
@@ -234,7 +234,7 @@ async def test_server_sampling_rpm_limit_trips(tmp_path):
 
 async def test_server_sampling_rejected_when_runner_absent(tmp_path):
     """No sampling_runner → capability not advertised → server create_message raises."""
-    server = FastMCP("no-sampling")
+    server = MCPServer("no-sampling")
 
     @server.tool()
     async def ask(ctx: Context) -> str:

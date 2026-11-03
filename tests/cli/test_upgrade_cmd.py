@@ -262,7 +262,9 @@ def test_extras_to_packages_resolves_mcp() -> None:
     from durin.cli.upgrade import extras_to_packages
 
     pkgs = extras_to_packages(["mcp"])
-    assert pkgs == ["mcp"]
+    assert "mcp" in pkgs
+    # Only the requested extra's packages, not another extra's.
+    assert "fastembed" not in pkgs
 
 
 def test_extras_to_packages_combines_multiple_extras() -> None:

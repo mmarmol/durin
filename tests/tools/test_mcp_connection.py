@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 
 import pytest
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.memory import create_client_server_memory_streams
 
 from durin.agent.tools.mcp_connection import MCPServerConnection
@@ -16,8 +16,8 @@ from durin.config.schema import MCPServerConfig
 pytestmark = pytest.mark.asyncio
 
 
-def _build_server(name: str = "harness") -> FastMCP:
-    server = FastMCP(name)
+def _build_server(name: str = "harness") -> MCPServer:
+    server = MCPServer(name)
 
     @server.tool()
     async def echo(text: str) -> str:
@@ -40,7 +40,7 @@ def _build_server(name: str = "harness") -> FastMCP:
 
 
 class _InProcessHarness:
-    """Runs a real FastMCP server in a cancellable task and exposes a
+    """Runs a real MCPServer server in a cancellable task and exposes a
     MCPServerConnection wired to it via in-memory streams.
 
     The connection's transport-open is monkeypatched to hand back this
@@ -50,7 +50,7 @@ class _InProcessHarness:
     in-process instead of a subprocess/socket.
     """
 
-    def __init__(self, server: FastMCP) -> None:
+    def __init__(self, server: MCPServer) -> None:
         self.server = server
         self._streams_cm = None
         self._server_task: asyncio.Task | None = None
@@ -62,7 +62,7 @@ class _InProcessHarness:
         client_streams, server_streams = await self._streams_cm.__aenter__()
         self.client_streams = client_streams
         server_read, server_write = server_streams
-        low = self.server._mcp_server
+        low = self.server._lowlevel_server
         ready = asyncio.Event()
 
         async def _run() -> None:
@@ -167,7 +167,7 @@ async def test_tool_wrapper_executes_through_connection(live_mcp) -> None:
     wrapper = registry.get("mcp_harness_echo")
     assert wrapper is not None
     out = await wrapper.execute(text="world")
-    # FastMCP may append [structuredContent]; the text portion must be present.
+    # MCPServer may append [structuredContent]; the text portion must be present.
     assert "echo:world" in out
     await conn.aclose()
 
@@ -245,7 +245,7 @@ async def test_initial_connect_gives_up_after_three(monkeypatch) -> None:
 
 
 async def test_initial_auth_failure_does_not_retry(monkeypatch) -> None:
-    import httpx
+    import httpx2
 
     import durin.agent.tools.mcp_connection as mc
 
@@ -256,8 +256,8 @@ async def test_initial_auth_failure_does_not_retry(monkeypatch) -> None:
 
     async def _auth_fail(_self):
         attempts["n"] += 1
-        resp = httpx.Response(401, request=httpx.Request("GET", "http://x"))
-        raise httpx.HTTPStatusError("401", request=resp.request, response=resp)
+        resp = httpx2.Response(401, request=httpx2.Request("GET", "http://x"))
+        raise httpx2.HTTPStatusError("401", request=resp.request, response=resp)
 
     conn._open_transport_streams = _auth_fail.__get__(conn, mc.MCPServerConnection)
 
@@ -342,7 +342,7 @@ async def test_timeout_then_success_same_session(live_mcp, monkeypatch) -> None:
     """
     import durin.agent.tools.mcp_connection as mc
 
-    server = FastMCP("timeouts")
+    server = MCPServer("timeouts")
 
     @server.tool()
     async def slow_tool() -> str:
@@ -412,7 +412,7 @@ async def test_call_tool_native_timeout_returns_sentinel(live_mcp) -> None:
 
 
 async def test_keepalive_tool_server_uses_list_tools(live_mcp) -> None:
-    """Real FastMCP tool server: _advertises_tools() is True, heartbeat lists."""
+    """Real MCPServer tool server: _advertises_tools() is True, heartbeat lists."""
     factory, _harness = live_mcp
     conn, _registry = factory(keepalive_interval=0.1)
     await conn.start()
@@ -681,13 +681,13 @@ async def test_refresh_reapplies_p3_deferral(live_mcp) -> None:
 
 
 async def test_sdk_read_timeout_and_progress_contract() -> None:
-    """Guard: the native call_tool timeout raises McpError and progress fires."""
-    import datetime as dt
+    """Guard: the SDK's own call_tool timeout is an error durin classifies as
+    a timeout, and progress notifications reach the callback."""
+    from mcp import ClientSession, MCPError
 
-    from mcp.shared.exceptions import McpError
-    from mcp.shared.memory import create_connected_server_and_client_session as connect
+    from durin.agent.tools.mcp_connection import _is_timeout_error
 
-    server = FastMCP("contract")
+    server = MCPServer("contract")
 
     @server.tool()
     async def slow(seconds: float, ctx: Context) -> str:
@@ -697,27 +697,27 @@ async def test_sdk_read_timeout_and_progress_contract() -> None:
             await asyncio.sleep(0.02)
         return "done"
 
-    async with connect(server) as session:
-        await session.initialize()
-        with pytest.raises(McpError):
-            await session.call_tool(
-                "slow", {"seconds": 1.0},
-                read_timeout_seconds=dt.timedelta(milliseconds=100),
-            )
-        seen: list[float] = []
+    async with _InProcessHarness(server) as harness:
+        read, write = harness.client_streams
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            with pytest.raises(MCPError) as raised:
+                await session.call_tool("slow", {"seconds": 1.0}, read_timeout_seconds=0.1)
+            assert _is_timeout_error(raised.value)
+            seen: list[float] = []
 
-        async def pcb(progress: float, total: float | None = None, message: str | None = None) -> None:
-            seen.append(progress)
+            async def pcb(progress: float, total: float | None = None, message: str | None = None) -> None:
+                seen.append(progress)
 
-        r = await session.call_tool("slow", {"seconds": 0.2}, progress_callback=pcb)
-        assert r.content[0].text == "done"
-        assert len(seen) >= 1
+            r = await session.call_tool("slow", {"seconds": 0.2}, progress_callback=pcb)
+            assert r.content[0].text == "done"
+            assert len(seen) >= 1
 
 
 async def test_per_tool_timeout_override(monkeypatch) -> None:
     import durin.agent.tools.mcp_connection as mc
 
-    server = FastMCP("to")
+    server = MCPServer("to")
 
     @server.tool()
     async def slow(seconds: float) -> str:
@@ -743,7 +743,7 @@ async def test_per_tool_timeout_override(monkeypatch) -> None:
 async def test_progress_resets_timeout() -> None:
     import durin.agent.tools.mcp_connection as mc
 
-    server = FastMCP("prog")
+    server = MCPServer("prog")
 
     @server.tool()
     async def chatty(ctx: Context) -> str:
@@ -777,7 +777,7 @@ async def test_catalog_timeout_at_connect(monkeypatch) -> None:
     import durin.agent.tools.mcp_connection as mc
 
     monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
-    server = FastMCP("hang")
+    server = MCPServer("hang")
 
     @server.tool()
     async def ok() -> str:
@@ -815,7 +815,7 @@ async def test_resource_read_timeout() -> None:
 
     import durin.agent.tools.mcp_connection as mc
 
-    server = FastMCP("res")
+    server = MCPServer("res")
 
     @server.resource("test://slow")
     async def slow_res() -> str:

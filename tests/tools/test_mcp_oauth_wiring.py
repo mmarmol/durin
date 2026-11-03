@@ -35,7 +35,7 @@ async def test_no_provider_when_oauth_unset(tmp_path, monkeypatch):
 async def test_provider_built_when_oauth_true(tmp_path, monkeypatch):
     """A server with oauth=True must have a provider built in __init__."""
     _point_store_at(tmp_path, monkeypatch)
-    import httpx
+    import httpx2
     from mcp.client.auth import OAuthClientProvider
 
     from durin.agent.tools.mcp_connection import MCPServerConnection
@@ -46,11 +46,11 @@ async def test_provider_built_when_oauth_true(tmp_path, monkeypatch):
     conn = MCPServerConnection("acme", cfg, ToolRegistry())
     assert conn._oauth_provider is not None
     assert isinstance(conn._oauth_provider, OAuthClientProvider)
-    assert isinstance(conn._oauth_provider, httpx.Auth)
+    assert isinstance(conn._oauth_provider, httpx2.Auth)
 
 
 async def test_streamable_http_attaches_provider_as_auth(monkeypatch, tmp_path):
-    """In _open_streamable_http, the httpx.AsyncClient must receive auth=<provider>."""
+    """In _open_streamable_http, the httpx2.AsyncClient must receive auth=<provider>."""
     _point_store_at(tmp_path, monkeypatch)
     from durin.agent.tools.mcp_connection import MCPServerConnection
     from durin.agent.tools.registry import ToolRegistry
@@ -72,7 +72,7 @@ async def test_streamable_http_attaches_provider_as_auth(monkeypatch, tmp_path):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr("httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("httpx2.AsyncClient", _FakeClient)
 
     async def _ok(_url):
         return True
@@ -81,7 +81,7 @@ async def test_streamable_http_attaches_provider_as_auth(monkeypatch, tmp_path):
 
     class _FakeTransportCM:
         async def __aenter__(self):
-            return ("r", "w", lambda: None)
+            return ("r", "w")
 
         async def __aexit__(self, *exc):
             return False
@@ -118,7 +118,7 @@ async def test_streamable_http_no_auth_when_oauth_unset(monkeypatch, tmp_path):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr("httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("httpx2.AsyncClient", _FakeClient)
 
     async def _ok(_url):
         return True
@@ -127,7 +127,7 @@ async def test_streamable_http_no_auth_when_oauth_unset(monkeypatch, tmp_path):
 
     class _FakeTransportCM:
         async def __aenter__(self):
-            return ("r", "w", lambda: None)
+            return ("r", "w")
 
         async def __aexit__(self, *exc):
             return False
@@ -164,7 +164,7 @@ async def test_sse_factory_uses_provider_auth(tmp_path, monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr("httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("httpx2.AsyncClient", _FakeClient)
 
     async def _ok(_url):
         return True
@@ -198,11 +198,11 @@ async def test_sse_factory_uses_provider_auth(tmp_path, monkeypatch):
 
 
 def _http_401():
-    import httpx
+    import httpx2
 
-    req = httpx.Request("POST", "https://api.example/mcp")
-    resp = httpx.Response(401, request=req)
-    return httpx.HTTPStatusError("401", request=req, response=resp)
+    req = httpx2.Request("POST", "https://api.example/mcp")
+    resp = httpx2.Response(401, request=req)
+    return httpx2.HTTPStatusError("401", request=req, response=resp)
 
 
 async def test_call_tool_401_yields_reauth_sentinel(tmp_path, monkeypatch):

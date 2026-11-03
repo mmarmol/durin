@@ -81,6 +81,8 @@ class GatewayCallback:
         self._future: asyncio.Future[tuple[str, str | None]] = (
             asyncio.get_running_loop().create_future()
         )
+        # The redirect's `iss` (RFC 9207), for flows whose client checks it.
+        self.iss: str | None = None
 
     def start(self) -> None:
         _gateway_callbacks[self.state] = self
@@ -111,9 +113,10 @@ class GatewayCallback:
     async def wait(self) -> tuple[str, str | None]:
         return await self._future
 
-    def _resolve(self, code: str, error: str | None) -> None:
+    def _resolve(self, code: str, error: str | None, iss: str | None = None) -> None:
         if self._future.done():
             return
+        self.iss = iss
         if error:
             self._future.set_exception(
                 RuntimeError(f"OAuth provider returned error: {error}")
@@ -133,14 +136,14 @@ def _state_from_url(url: str) -> str | None:
 
 
 def resolve_gateway_oauth_callback(
-    state: str, *, code: str = "", error: str | None = None
+    state: str, *, code: str = "", error: str | None = None, iss: str | None = None
 ) -> bool:
     """Hand a provider redirect to its pending flow. Single-use per state;
     unknown/reused states return False (the route answers 400)."""
     cb = _gateway_callbacks.pop(state, None)
     if cb is None:
         return False
-    cb._resolve(code, error)
+    cb._resolve(code, error, iss)
     return True
 
 
@@ -270,8 +273,12 @@ class McpOauthFlows:
                 if not url_future.done():
                     url_future.set_result(authorization_url)
 
-            async def _callback() -> tuple[str, str | None]:
-                return await asyncio.wait_for(callback.wait(), timeout=300)
+            async def _callback() -> Any:
+                from mcp.client.auth import AuthorizationCodeResult
+
+                code, state = await asyncio.wait_for(callback.wait(), timeout=300)
+                return AuthorizationCodeResult(
+                    code=code, state=state, iss=getattr(callback, "iss", None))
 
             provider = builder(
                 server,

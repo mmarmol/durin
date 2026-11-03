@@ -6,6 +6,7 @@ import sys
 from contextlib import asynccontextmanager
 from types import ModuleType, SimpleNamespace
 
+import mcp.types as mcp_types
 import pytest
 
 import durin.agent.tools.mcp as mcp_mod
@@ -32,45 +33,36 @@ def _no_connect_backoff(monkeypatch):
     monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.0)
 
 
-class _FakeTextContent:
-    def __init__(self, text: str) -> None:
-        self.text = text
+# Content blocks are the SDK's own types, so a field the SDK renames fails
+# here instead of passing against a stale stand-in.
+def _text_content(text: str) -> mcp_types.TextContent:
+    return mcp_types.TextContent(type="text", text=text)
 
 
-class _FakeTextResourceContents:
-    def __init__(self, text: str) -> None:
-        self.text = text
+def _text_resource(text: str) -> mcp_types.TextResourceContents:
+    return mcp_types.TextResourceContents(uri="file:///x", text=text)
 
 
-class _FakeBlobResourceContents:
-    def __init__(self, blob: str, uri: str = "file:///x", mime_type: str | None = None) -> None:
-        self.blob = blob
-        self.uri = uri
-        self.mimeType = mime_type
+def _blob_resource(
+    blob: str, uri: str = "file:///x", mime_type: str | None = None
+) -> mcp_types.BlobResourceContents:
+    return mcp_types.BlobResourceContents(uri=uri, blob=blob, mime_type=mime_type)
 
 
-class _FakeImageContent:
-    def __init__(self, data: str, mime_type: str | None) -> None:
-        self.data = data
-        self.mimeType = mime_type
+def _image_content(data: str, mime_type: str) -> mcp_types.ImageContent:
+    return mcp_types.ImageContent(type="image", data=data, mime_type=mime_type)
 
 
-class _FakeAudioContent:
-    def __init__(self, data: str, mime_type: str | None) -> None:
-        self.data = data
-        self.mimeType = mime_type
+def _audio_content(data: str, mime_type: str) -> mcp_types.AudioContent:
+    return mcp_types.AudioContent(type="audio", data=data, mime_type=mime_type)
 
 
-class _FakeEmbeddedResource:
-    def __init__(self, resource: object) -> None:
-        self.resource = resource
+def _embedded_resource(resource) -> mcp_types.EmbeddedResource:
+    return mcp_types.EmbeddedResource(type="resource", resource=resource)
 
 
-class _FakeResourceLink:
-    def __init__(self, name: str | None, uri: str, description: str | None = None) -> None:
-        self.name = name
-        self.uri = uri
-        self.description = description
+def _resource_link(name: str, uri: str, description: str | None = None) -> mcp_types.ResourceLink:
+    return mcp_types.ResourceLink(type="resource_link", name=name, uri=uri, description=description)
 
 
 class _FakeConn:
@@ -130,15 +122,7 @@ def _fake_mcp_module(
     monkeypatch: pytest.MonkeyPatch, fake_mcp_runtime: dict[str, object | None]
 ) -> None:
     mod = ModuleType("mcp")
-    mod.types = SimpleNamespace(
-        TextContent=_FakeTextContent,
-        TextResourceContents=_FakeTextResourceContents,
-        BlobResourceContents=_FakeBlobResourceContents,
-        ImageContent=_FakeImageContent,
-        AudioContent=_FakeAudioContent,
-        EmbeddedResource=_FakeEmbeddedResource,
-        ResourceLink=_FakeResourceLink,
-    )
+    mod.types = mcp_types
 
     class _FakeStdioServerParameters:
         def __init__(self, command: str, args: list[str], env: dict | None = None) -> None:
@@ -199,19 +183,19 @@ def _fake_mcp_module(
 
 
 def _make_wrapper(session: object, *, timeout: float = 0.1) -> MCPToolWrapper:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     return MCPToolWrapper(_FakeConn(session), "test", tool_def, tool_timeout=timeout)
 
 
 def test_wrapper_preserves_non_nullable_unions() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "value": {
@@ -230,10 +214,10 @@ def test_wrapper_preserves_non_nullable_unions() -> None:
 
 
 def test_wrapper_normalizes_nullable_property_type_union() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "name": {"type": ["string", "null"]},
@@ -247,10 +231,10 @@ def test_wrapper_normalizes_nullable_property_type_union() -> None:
 
 
 def test_wrapper_expands_non_nullable_multi_type_array_to_anyof() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "value": {"type": ["string", "integer"], "description": "x"},
@@ -267,10 +251,10 @@ def test_wrapper_expands_non_nullable_multi_type_array_to_anyof() -> None:
 
 
 def test_wrapper_normalizes_nullable_property_anyof() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "name": {
@@ -387,7 +371,7 @@ def test_normalize_windows_stdio_command_skips_existing_shells(
 async def test_execute_returns_text_blocks() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         assert arguments == {"value": 1}
-        return SimpleNamespace(content=[_FakeTextContent("hello"), 42])
+        return mcp_types.CallToolResult.model_construct(content=[_text_content("hello"), 42])
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
 
@@ -411,11 +395,11 @@ async def test_execute_handles_generic_exception() -> None:
     assert "failed" in result and "RuntimeError" in result
 
 
-def _make_tool_def(name: str) -> SimpleNamespace:
-    return SimpleNamespace(
+def _make_tool_def(name: str) -> mcp_types.Tool:
+    return mcp_types.Tool(
         name=name,
         description=f"{name} tool",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
 
 
@@ -843,8 +827,8 @@ def test_resource_wrapper_properties() -> None:
 async def test_resource_wrapper_execute_returns_text() -> None:
     async def read_resource(uri: str) -> object:
         assert uri == "file:///tmp/data.txt"
-        return SimpleNamespace(
-            contents=[_FakeTextResourceContents("line1"), _FakeTextResourceContents("line2")]
+        return mcp_types.ReadResourceResult(
+            contents=[_text_resource("line1"), _text_resource("line2")]
         )
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
@@ -856,8 +840,8 @@ async def test_resource_wrapper_execute_returns_text() -> None:
 async def test_resource_wrapper_execute_handles_blob() -> None:
     async def read_resource(uri: str) -> object:
         blob = _b64.b64encode(b"\x00\x01\x02").decode()
-        return SimpleNamespace(
-            contents=[_FakeBlobResourceContents(blob, uri="file:///x.bin")]
+        return mcp_types.ReadResourceResult(
+            contents=[_blob_resource(blob, uri="file:///x.bin")]
         )
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
@@ -928,15 +912,15 @@ def test_prompt_wrapper_preserves_argument_descriptions() -> None:
 async def test_prompt_wrapper_execute_returns_text() -> None:
     async def get_prompt(name: str, arguments: dict | None = None) -> object:
         assert name == "myprompt"
-        msg1 = SimpleNamespace(
+        msg1 = mcp_types.PromptMessage(
             role="user",
-            content=_FakeTextContent("You are an expert on {{topic}}."),
+            content=_text_content("You are an expert on {{topic}}."),
         )
-        msg2 = SimpleNamespace(
+        msg2 = mcp_types.PromptMessage(
             role="assistant",
-            content=_FakeTextContent("Understood. Ask me anything."),
+            content=_text_content("Understood. Ask me anything."),
         )
-        return SimpleNamespace(messages=[msg1, msg2])
+        return mcp_types.GetPromptResult(messages=[msg1, msg2])
 
     wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt))
     result = await wrapper.execute(topic="AI")
@@ -1064,10 +1048,10 @@ def test_sanitize_name_noop_for_already_clean_names() -> None:
 
 
 def test_tool_wrapper_sanitizes_name() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="My Tool",
         description="tool with spaces",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "srv", tool_def)
     assert wrapper.name == "mcp_srv_My_Tool"
@@ -1095,10 +1079,10 @@ def test_prompt_wrapper_sanitizes_name() -> None:
 
 
 def test_tool_wrapper_preserves_original_name_for_mcp_call() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="My Tool",
         description="tool with spaces",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "srv", tool_def)
     # The sanitized API-facing name differs from the original MCP name
@@ -1158,8 +1142,8 @@ _PNG_1PX = _b64.b64encode(
 @pytest.mark.asyncio
 async def test_execute_image_content_returns_image_block() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeImageContent(_PNG_1PX, "image/png")], isError=False
+        return mcp_types.CallToolResult(
+            content=[_image_content(_PNG_1PX, "image/png")], is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1174,8 +1158,8 @@ async def test_execute_image_content_returns_image_block() -> None:
 @pytest.mark.asyncio
 async def test_execute_image_content_missing_data_falls_back_to_text() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeImageContent("", "image/png")], isError=False
+        return mcp_types.CallToolResult(
+            content=[_image_content("", "image/png")], is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1188,9 +1172,9 @@ async def test_execute_image_content_missing_data_falls_back_to_text() -> None:
 @pytest.mark.asyncio
 async def test_execute_image_content_non_image_mime_falls_back_to_text() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeImageContent(_PNG_1PX, "application/octet-stream")],
-            isError=False,
+        return mcp_types.CallToolResult(
+            content=[_image_content(_PNG_1PX, "application/octet-stream")],
+            is_error=False,
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1203,7 +1187,7 @@ async def test_execute_image_content_non_image_mime_falls_back_to_text() -> None
 @pytest.mark.asyncio
 async def test_execute_text_only_still_returns_string() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(content=[_FakeTextContent("hello"), 42], isError=False)
+        return mcp_types.CallToolResult.model_construct(content=[_text_content("hello"), 42])
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1214,8 +1198,8 @@ async def test_execute_text_only_still_returns_string() -> None:
 @pytest.mark.asyncio
 async def test_execute_is_error_returns_error_marker() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeTextContent("boom: bad arg")], isError=True
+        return mcp_types.CallToolResult(
+            content=[_text_content("boom: bad arg")], is_error=True
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1229,7 +1213,7 @@ async def test_execute_is_error_returns_error_marker() -> None:
 @pytest.mark.asyncio
 async def test_execute_is_error_empty_content() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(content=[], isError=True)
+        return mcp_types.CallToolResult(content=[], is_error=True)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1241,8 +1225,8 @@ async def test_execute_is_error_empty_content() -> None:
 async def test_execute_audio_content_placeholder() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         data = _b64.b64encode(b"\x00\x01\x02\x03").decode()
-        return SimpleNamespace(
-            content=[_FakeAudioContent(data, "audio/wav")], isError=False
+        return mcp_types.CallToolResult(
+            content=[_audio_content(data, "audio/wav")], is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1253,8 +1237,8 @@ async def test_execute_audio_content_placeholder() -> None:
 @pytest.mark.asyncio
 async def test_execute_embedded_text_resource() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        res = _FakeTextResourceContents("embedded text")
-        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+        res = _text_resource("embedded text")
+        return mcp_types.CallToolResult(content=[_embedded_resource(res)], is_error=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1264,8 +1248,8 @@ async def test_execute_embedded_text_resource() -> None:
 @pytest.mark.asyncio
 async def test_execute_embedded_blob_image_returns_image_block() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        res = _FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")
-        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+        res = _blob_resource(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")
+        return mcp_types.CallToolResult(content=[_embedded_resource(res)], is_error=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1277,8 +1261,8 @@ async def test_execute_embedded_blob_image_returns_image_block() -> None:
 async def test_execute_embedded_blob_non_image_placeholder() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         blob = _b64.b64encode(b"\x00\x01\x02").decode()
-        res = _FakeBlobResourceContents(blob, uri="file:///x.bin", mime_type="application/octet-stream")
-        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+        res = _blob_resource(blob, uri="file:///x.bin", mime_type="application/octet-stream")
+        return mcp_types.CallToolResult(content=[_embedded_resource(res)], is_error=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1289,8 +1273,8 @@ async def test_execute_embedded_blob_non_image_placeholder() -> None:
 @pytest.mark.asyncio
 async def test_execute_resource_link() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        link = _FakeResourceLink("docs", "https://example.com/docs")
-        return SimpleNamespace(content=[link], isError=False)
+        link = _resource_link("docs", "https://example.com/docs")
+        return mcp_types.CallToolResult(content=[link], is_error=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1304,7 +1288,7 @@ async def test_execute_unknown_block_renders_json() -> None:
             return {"kind": "weird", "n": 1}
 
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(content=[_Weird()], isError=False)
+        return mcp_types.CallToolResult.model_construct(content=[_Weird()])
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1314,10 +1298,10 @@ async def test_execute_unknown_block_renders_json() -> None:
 @pytest.mark.asyncio
 async def test_execute_structured_content_appended() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeTextContent("summary")],
-            structuredContent={"count": 3},
-            isError=False,
+        return mcp_types.CallToolResult(
+            content=[_text_content("summary")],
+            structured_content={"count": 3},
+            is_error=False,
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1330,7 +1314,7 @@ async def test_execute_structured_content_appended() -> None:
 @pytest.mark.asyncio
 async def test_execute_structured_content_only() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(content=[], structuredContent={"k": "v"}, isError=False)
+        return mcp_types.CallToolResult(content=[], structured_content={"k": "v"}, is_error=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
@@ -1341,8 +1325,8 @@ async def test_execute_structured_content_only() -> None:
 @pytest.mark.asyncio
 async def test_execute_no_structured_content_unchanged() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        return SimpleNamespace(
-            content=[_FakeTextContent("plain")], structuredContent=None, isError=False
+        return mcp_types.CallToolResult(
+            content=[_text_content("plain")], structured_content=None, is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1354,8 +1338,8 @@ async def test_execute_no_structured_content_unchanged() -> None:
 async def test_execute_image_content_bad_base64_falls_back_to_text() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         # "a" is not a valid base64 length -> b64decode raises -> guarded
-        return SimpleNamespace(
-            content=[_FakeImageContent("a", "image/png")], isError=False
+        return mcp_types.CallToolResult(
+            content=[_image_content("a", "image/png")], is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1368,8 +1352,8 @@ async def test_execute_image_content_bad_base64_falls_back_to_text() -> None:
 async def test_execute_image_content_empty_decoded_falls_back_to_text() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         # whitespace decodes to empty bytes -> guarded by `if not raw`
-        return SimpleNamespace(
-            content=[_FakeImageContent("   ", "image/png")], isError=False
+        return mcp_types.CallToolResult(
+            content=[_image_content("   ", "image/png")], is_error=False
         )
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1384,10 +1368,10 @@ async def test_execute_image_content_empty_decoded_falls_back_to_text() -> None:
 
 
 def test_schema_prunes_required_not_in_properties() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {"a": {"type": "string"}},
             "required": ["a", "ghost"],
@@ -1398,10 +1382,10 @@ def test_schema_prunes_required_not_in_properties() -> None:
 
 
 def test_schema_keeps_valid_required() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
             "required": ["a", "b"],
@@ -1417,10 +1401,10 @@ def test_schema_keeps_valid_required() -> None:
 
 
 def test_schema_rewrites_definitions_to_defs() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {"x": {"$ref": "#/definitions/Foo"}},
             "definitions": {"Foo": {"type": "string"}},
@@ -1434,10 +1418,10 @@ def test_schema_rewrites_definitions_to_defs() -> None:
 
 
 def test_schema_rewrites_nested_defs_ref_in_anyof() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "x": {"anyOf": [{"$ref": "#/definitions/Foo"}, {"$ref": "#/definitions/Bar"}]},
@@ -1502,8 +1486,8 @@ async def test_connect_disables_output_schema_validation(
 @pytest.mark.asyncio
 async def test_resource_wrapper_execute_image_blob_returns_image_block() -> None:
     async def read_resource(uri: str) -> object:
-        return SimpleNamespace(
-            contents=[_FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")]
+        return mcp_types.ReadResourceResult(
+            contents=[_blob_resource(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")]
         )
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
@@ -1515,8 +1499,8 @@ async def test_resource_wrapper_execute_image_blob_returns_image_block() -> None
 @pytest.mark.asyncio
 async def test_prompt_wrapper_execute_image_message_returns_image_block() -> None:
     async def get_prompt(name: str, arguments: dict | None = None) -> object:
-        msg = SimpleNamespace(role="user", content=_FakeImageContent(_PNG_1PX, "image/png"))
-        return SimpleNamespace(messages=[msg])
+        msg = mcp_types.PromptMessage(role="user", content=_image_content(_PNG_1PX, "image/png"))
+        return mcp_types.GetPromptResult(messages=[msg])
 
     wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt))
     result = await wrapper.execute(topic="x")
@@ -1538,11 +1522,11 @@ def test_mcp_tool_read_only_defaults_false_without_annotation() -> None:
 
 
 def test_mcp_tool_read_only_true_when_hint_set() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={"type": "object", "properties": {}},
-        annotations=SimpleNamespace(readOnlyHint=True),
+        input_schema={"type": "object", "properties": {}},
+        annotations=mcp_types.ToolAnnotations(read_only_hint=True),
     )
     wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     assert wrapper.read_only is True
@@ -1550,11 +1534,11 @@ def test_mcp_tool_read_only_true_when_hint_set() -> None:
 
 
 def test_mcp_tool_read_only_false_when_hint_false() -> None:
-    tool_def = SimpleNamespace(
+    tool_def = mcp_types.Tool(
         name="demo",
         description="demo tool",
-        inputSchema={"type": "object", "properties": {}},
-        annotations=SimpleNamespace(readOnlyHint=False),
+        input_schema={"type": "object", "properties": {}},
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False),
     )
     wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     assert wrapper.read_only is False

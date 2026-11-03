@@ -71,7 +71,7 @@ def _content_to_openai_block(content: Any) -> dict[str, Any]:
     if ctype == "text":
         return {"type": "text", "text": content.text}
     if ctype in ("image", "audio"):
-        mime = content.mimeType
+        mime = content.mime_type
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{mime};base64,{content.data}"},
@@ -111,7 +111,7 @@ def mcp_tools_to_openai(tools: list[Any] | None) -> list[dict[str, Any]] | None:
             "function": {
                 "name": t.name,
                 "description": t.description or "",
-                "parameters": t.inputSchema or {"type": "object", "properties": {}},
+                "parameters": t.input_schema or {"type": "object", "properties": {}},
             },
         }
         for t in tools
@@ -142,13 +142,13 @@ def llm_response_to_sampling_result(response: Any, model: str, emit_tools: bool)
             role="assistant",
             content=content,
             model=model,
-            stopReason="toolUse",
+            stop_reason="toolUse",
         )
     return types.CreateMessageResult(
         role="assistant",
         content=types.TextContent(type="text", text=(response.content or "")),
         model=model,
-        stopReason="endTurn",
+        stop_reason="endTurn",
     )
 
 
@@ -207,8 +207,8 @@ class SamplingRunner:
 
         gov = self.governance
         requested: str | None = None
-        prefs = getattr(params, "modelPreferences", None)
-        if prefs is not None and getattr(prefs, "hints", None):
+        prefs = params.model_preferences
+        if prefs is not None and prefs.hints:
             requested = next((h.name for h in prefs.hints if h.name), None)
 
         model = requested or self.default_model
@@ -249,14 +249,14 @@ class SamplingRunner:
             return err
 
         max_tokens = min(
-            int(getattr(params, "maxTokens", gov.max_tokens_cap)),
+            int(params.max_tokens),
             gov.max_tokens_cap,
         )
-        system_prompt = getattr(params, "systemPrompt", None)
-        temperature = getattr(params, "temperature", None)
+        system_prompt = params.system_prompt
+        temperature = params.temperature
         messages = sampling_messages_to_openai(params.messages, system_prompt)
 
-        server_tools = getattr(params, "tools", None)
+        server_tools = params.tools
         within_round_budget = self._tool_rounds < gov.max_tool_rounds
         emit_tools = bool(gov.allow_tools and server_tools and within_round_budget)
         tools = mcp_tools_to_openai(server_tools) if emit_tools else None
@@ -282,6 +282,6 @@ class SamplingRunner:
             )
 
         result = llm_response_to_sampling_result(response, model=model, emit_tools=emit_tools)
-        if hasattr(result, "stopReason") and result.stopReason == "toolUse":
+        if result.stop_reason == "toolUse":
             self._tool_rounds += 1
         return result

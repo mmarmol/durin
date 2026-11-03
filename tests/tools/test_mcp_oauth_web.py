@@ -223,9 +223,9 @@ async def test_drive_oauth_handshake_picks_transport_by_cfg(monkeypatch) -> None
         "mcp.client.streamable_http.streamable_http_client", fake_stream, raising=False
     )
 
-    import httpx
+    import httpx2
 
-    provider = httpx.BasicAuth("u", "p")  # a real httpx.Auth (never exercised)
+    provider = httpx2.BasicAuth("u", "p")  # a real httpx2.Auth (never exercised)
 
     async def drive(cfg):
         with pytest.raises(_StopError):

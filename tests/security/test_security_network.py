@@ -241,3 +241,59 @@ class TestSSRFGuardTransport:
                 await transport.handle_async_request(request)
 
         assert not connected, "guard must block before any connection to the private target"
+
+
+@pytest.mark.asyncio
+class TestHttpx2SSRFGuard:
+    """The httpx2 client the MCP SDK requires gets the same resolve-and-pin
+    guard as the httpx one."""
+
+    async def test_pins_public_host_to_ip_and_preserves_host_and_sni(self):
+        httpx2 = pytest.importorskip("httpx2")
+        from durin.security.network import ssrf_safe_httpx2_client
+
+        captured: dict = {}
+
+        async def fake_super(self, request):
+            captured["url"] = request.url
+            captured["host_header"] = request.headers.get("Host")
+            captured["sni"] = request.extensions.get("sni_hostname")
+            return httpx2.Response(200, request=request)
+
+        with patch("httpx2.AsyncHTTPTransport.handle_async_request", fake_super), \
+             patch("socket.getaddrinfo", _fake_resolve("example.com", ["93.184.216.34"])):
+            async with ssrf_safe_httpx2_client() as client:
+                await client.get("https://example.com/path?q=1")
+
+        assert captured["url"].host == "93.184.216.34"
+        assert captured["url"].path == "/path"
+        assert captured["host_header"] == "example.com"
+        assert captured["sni"] == "example.com"
+
+    async def test_blocks_private_target_without_connecting(self):
+        httpx2 = pytest.importorskip("httpx2")
+        from durin.security.network import ssrf_safe_httpx2_client
+
+        connected = False
+
+        async def fake_super(self, request):
+            nonlocal connected
+            connected = True
+            return httpx2.Response(200, request=request)
+
+        with patch("httpx2.AsyncHTTPTransport.handle_async_request", fake_super), \
+             patch("socket.getaddrinfo", _fake_resolve("rebind.com", ["169.254.169.254"])):
+            async with ssrf_safe_httpx2_client() as client:
+                with pytest.raises(SSRFError):
+                    await client.get("https://rebind.com/latest/meta-data/")
+
+        assert not connected
+
+    async def test_proxy_skips_the_guard(self):
+        pytest.importorskip("httpx2")
+        from durin.security.network import ssrf_guard_transport_httpx2, ssrf_safe_httpx2_client
+
+        async with ssrf_safe_httpx2_client(proxy="http://proxy.example:3128") as client:
+            assert not isinstance(client._transport, ssrf_guard_transport_httpx2())
+        async with ssrf_safe_httpx2_client() as client:
+            assert isinstance(client._transport, ssrf_guard_transport_httpx2())
