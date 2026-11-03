@@ -227,7 +227,8 @@ async def test_prefetch_runs_a_warm_search_and_fences_the_hits(tmp_path: Path, m
 
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
 
-    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}]
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500,
+                           "exclude_uris": ["memory/session_summary/websocket_c"]}]
     content = _user_content(captured)
     assert content.index(QUESTION) < content.index("<memory-context>")
     assert "Ana runs the bakery" in content and "</memory-context>" in content
@@ -301,6 +302,10 @@ async def test_user_typed_fence_in_history_is_neutralised_on_replay(tmp_path: Pa
 @pytest.mark.parametrize("content,reason", [
     ("/status", "command_or_empty"),
     ("ok thanks", "short"),
+    # A bare follow-up names no subject, so its search pulls in whatever is
+    # broadly about tickets and notes: under 60 characters, more than half of
+    # what one install's replay injected was unrelated to the message.
+    ("yes, add it as an internal note", "short"),
 ])
 async def test_prefetch_gates(tmp_path: Path, monkeypatch, content: str, reason: str) -> None:
     fake = _FakeSearch()
@@ -356,7 +361,9 @@ async def test_prefetch_gate_follows_the_runtime_autonomous_session_kinds(
 
     row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
     if prefetched:
-        assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}]
+        from durin.memory.session_summary_store import session_summary_uri
+        assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500,
+                               "exclude_uris": [session_summary_uri(session_key)]}]
         assert "skipped" not in row
     else:
         assert fake.calls == []
@@ -571,7 +578,8 @@ async def test_prefetch_passes_max_chars_to_the_tool_so_it_bounds_its_own_render
         on_progress=on_progress,
     )
 
-    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 800}]
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 800,
+                           "exclude_uris": ["memory/session_summary/websocket_c"]}]
     content = _user_content(captured)
     block = content[content.index("<memory-context>"):content.index("</memory-context>")]
     assert block.count("=== END FRAGMENT ===") == 2
@@ -1152,6 +1160,37 @@ async def test_overflow_rebuild_keeps_the_prefetch_block(tmp_path: Path, monkeyp
     assert second_call_content.count("<memory-context>") == 1
     assert second_call_content.count("</memory-context>") == 1
     assert "Ana runs the bakery" in second_call_content
-    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}], (
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500,
+                           "exclude_uris": ["memory/session_summary/websocket_c"]}], (
         "the prefetch search must not re-run on the rebuild"
     )
+
+
+@pytest.mark.asyncio
+async def test_prefetch_leaves_out_the_session_s_own_summary(tmp_path: Path, monkeypatch) -> None:
+    """The turn already carries its own session's summary and history; a
+    search keyed on the message tends to find that summary first (it is
+    about the same thing), so it used to fill a prefetch slot with what the
+    model already had. Other sessions' summaries still come through."""
+    from durin.memory.indexer import rebuild_fts_index
+    from durin.memory.session_summary_store import write_session_summary
+
+    write_session_summary(
+        tmp_path, "websocket:c",
+        "- Planned the quarzolite migration window with the ops team.", "2026-10-01",
+    )
+    write_session_summary(
+        tmp_path, "websocket:other",
+        "- The quarzolite migration was rolled back once before because of disk quotas.",
+        "2026-09-01",
+    )
+    rebuild_fts_index(tmp_path)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch)
+
+    await loop._process_message(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c",
+        content="What do we know about the quarzolite migration risks?"))
+
+    content = _user_content(captured)
+    assert "rolled back once before" in content
+    assert "Planned the quarzolite migration window" not in content

@@ -93,6 +93,11 @@ def closed_record_key(key: str, when: datetime) -> str:
     return f"{sanitize_session_key(key)[:40]}_closed_{when.strftime('%Y%m%dT%H%M%S')}"
 
 
+def session_summary_uri(session_key: str) -> str:
+    """The search index uri of a session's summary (``memory/<class>/<id>``)."""
+    return f"memory/{SESSION_SUMMARY_CLASS}/{sanitize_session_key(session_key)}"
+
+
 def session_summary_path(workspace: Path, session_key: str) -> Path:
     """Resolve the markdown path for a session's summary."""
     return memory_class_dir(workspace, SESSION_SUMMARY_CLASS) / (

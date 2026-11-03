@@ -649,6 +649,9 @@ class MemorySearchTool(Tool):
         scope = str(kwargs.get("scope") or "all")
         level = str(kwargs.get("level") or "warm")
         kinds = str(kwargs.get("kinds") or "all")
+        # Not in the model-facing schema: the runtime's own callers (the
+        # per-turn prefetch) leave out results the turn already carries.
+        exclude_uris = frozenset(str(u) for u in (kwargs.get("exclude_uris") or ()))
         keywords_raw = kwargs.get("keywords")
         keywords = (
             str(keywords_raw).strip()
@@ -799,6 +802,7 @@ class MemorySearchTool(Tool):
                 cross_encoder_top_n=ce_top_n,
                 max_per_source=max_per_source,
                 scope=scope_predicate,
+                exclude_uris=exclude_uris,
             )
             duration_ms = (time.monotonic() - t0) * 1000.0
             return self._finish_search(
