@@ -699,7 +699,7 @@ async def test_the_prefetch_block_carries_a_post_freeze_write_whole(
     await loop._process_message(
         InboundMessage(
             channel="websocket", sender_id="u", chat_id="c",
-            content="Lighthouse Bakery opened on Main St",
+            content="Lighthouse Bakery opened on Main St in March",
         )
     )
 

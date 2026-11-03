@@ -140,6 +140,7 @@ def run_search_pipeline(
     cross_encoder_top_n: int = 10,
     max_per_source: int | None = None,
     scope: ScopePredicate | None = None,
+    exclude_uris: frozenset[str] = frozenset(),
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
@@ -151,6 +152,9 @@ def run_search_pipeline(
     the caller and applied inside both the vector and lexical legs as a
     prefilter — ``None`` means no restriction, matching the pre-scope
     behaviour.
+
+    ``exclude_uris`` are dropped right after fusion, so the hits after them
+    move up into the ``limit``.
 
     The result is already capped per source (corpus chunks) and ready
     to render via :func:`durin.memory.sectioned_output.render_sectioned`.
@@ -235,6 +239,8 @@ def run_search_pipeline(
         # lexical boost as an explicit `keywords` param.
         keywords_provided=bool(keywords or decision.auto_keywords),
     )
+    if exclude_uris:
+        fused = [f for f in fused if f.uri not in exclude_uris]
 
     # Step 3a' — grep-verify boost. A vector-sourced hit the lexical
     # top-50 missed, whose indexed text literally matches the query,

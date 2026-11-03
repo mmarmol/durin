@@ -3864,6 +3864,7 @@ class AgentLoop:
         import re
 
         from durin.agent.context import build_memory_context_block
+        from durin.memory.session_summary_store import session_summary_uri
         from durin.telemetry.logger import (
             bind_prefetch_search,
             bind_telemetry,
@@ -3892,8 +3893,14 @@ class AgentLoop:
             # in its own copy and still tags the rows it emits after this
             # function has returned and reset it here.
             prefetch_token = bind_prefetch_search()
+            # The session's own summary is already in this turn's context
+            # (with its history), so it would only take a slot from a hit
+            # the model does not have.
             response = await asyncio.wait_for(
-                tool.execute(query=text, limit=cfg.limit, level="warm", max_chars=cfg.max_chars),
+                tool.execute(
+                    query=text, limit=cfg.limit, level="warm", max_chars=cfg.max_chars,
+                    exclude_uris=[session_summary_uri(ctx.session_key)],
+                ),
                 timeout=cfg.timeout_s,
             )
         except asyncio.TimeoutError:
