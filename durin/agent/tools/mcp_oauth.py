@@ -1,7 +1,7 @@
 """OAuth glue for remote MCP servers (SP-4).
 
 durin does NOT reimplement OAuth — the `mcp` SDK's `OAuthClientProvider`
-(an `httpx.Auth`) drives the full 2.1 auth-code + PKCE + DCR + refresh flow.
+(an `httpx2.Auth`) drives the full 2.1 auth-code + PKCE + DCR + refresh flow.
 This module supplies only what the SDK leaves to the application:
 
 * `SecretsTokenStorage` — persist OAuthToken + OAuthClientInformationFull in
@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
-from mcp.client.auth import OAuthClientProvider
+from mcp.client.auth import AuthorizationCodeResult, OAuthClientProvider
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from durin.security.secrets import (
@@ -320,7 +320,7 @@ def make_headless_redirect_handler(server: str) -> Callable[[str], Awaitable[Non
     return _redirect
 
 
-async def _headless_callback() -> tuple[str, str | None]:
+async def _headless_callback() -> AuthorizationCodeResult:
     # Never reached in headless mode — the redirect handler raises first.
     raise NeedsInteractiveAuthError("interactive OAuth callback not available headless")
 
@@ -422,9 +422,9 @@ async def retry_transient_exchange_flow(
     delays: tuple[float, ...] = _EXCHANGE_RETRY_DELAYS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> Any:
-    """httpx auth-flow combinator: re-send the code-exchange on transient failure.
+    """httpx2 auth-flow combinator: re-send the code-exchange on transient failure.
 
-    Wraps the SDK's ``async_auth_flow`` generator at the httpx protocol level
+    Wraps the SDK's ``async_auth_flow`` generator at the httpx2 protocol level
     (yield request → receive response), so no SDK internals are duplicated.
     When the authorization-code exchange draws a transient ``invalid_grant``,
     the IDENTICAL request is re-yielded after a backoff — the code/verifier
@@ -515,7 +515,7 @@ class WriteAheadOAuthProvider(OAuthClientProvider):
         """Route the SDK flow through the transient-exchange retry combinator.
 
         Plain method (not an async generator function) returning the wrapped
-        generator — httpx only needs an async iterator back."""
+        generator — httpx2 only needs an async iterator back."""
         return retry_transient_exchange_flow(super().async_auth_flow(request))
 
 
@@ -525,7 +525,7 @@ def build_oauth_provider(
     *,
     headless: bool,
     redirect_handler: Callable[[str], Awaitable[None]] | None = None,
-    callback_handler: Callable[[], Awaitable[tuple[str, str | None]]] | None = None,
+    callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]] | None = None,
     redirect_uri: str | None = None,
 ) -> Any:
     """Construct the SDK OAuthClientProvider for ``server``.
@@ -535,7 +535,7 @@ def build_oauth_provider(
     A static client_id (config override) is seeded into storage so the SDK
     skips dynamic registration.
 
-    Returns a WriteAheadOAuthProvider, which is also an httpx.Auth.
+    Returns a WriteAheadOAuthProvider, which is also an httpx2.Auth.
     """
     oc = cfg.oauth_config()
     port = oc.callback_port if oc else 1456
@@ -585,6 +585,9 @@ class LoopbackCallback:
         self.state = base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
         self._loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         self._future: asyncio.Future[tuple[str, str | None]] = self._loop.create_future()
+        # The redirect's `iss` (RFC 9207), relayed to the SDK so it can check
+        # the response came from the authorization server it asked.
+        self.iss: str | None = None
         self._servers: list[http.server.HTTPServer] = []
 
     def start(self) -> None:
@@ -608,8 +611,9 @@ class LoopbackCallback:
         if not self._servers:
             raise RuntimeError(f"could not start loopback callback server on :{self.port}")
 
-    def _resolve(self, code: str, state: str | None) -> None:
+    def _resolve(self, code: str, state: str | None, iss: str | None = None) -> None:
         if not self._future.done():
+            self.iss = iss
             self._loop.call_soon_threadsafe(self._future.set_result, (code, state))
 
     def _make_handler(self) -> type[http.server.BaseHTTPRequestHandler]:
@@ -625,6 +629,7 @@ class LoopbackCallback:
                 qs = urllib.parse.parse_qs(parsed.query)
                 code = (qs.get("code") or [None])[0]
                 got = (qs.get("state") or [None])[0]
+                iss = (qs.get("iss") or [None])[0]
                 err = (qs.get("error") or [None])[0]
                 err_desc = (qs.get("error_description") or [None])[0]
                 # The OAuth `state` is generated AND validated by the MCP SDK
@@ -666,7 +671,7 @@ class LoopbackCallback:
                     f"</body>".encode()
                 )
                 if ok:
-                    cb._resolve(code, got)  # type: ignore[arg-type]
+                    cb._resolve(code, got, iss)  # type: ignore[arg-type]
 
             def log_message(self, *a: Any) -> None:  # silence
                 return
@@ -691,7 +696,7 @@ def make_interactive_handlers(
     callback: LoopbackCallback,
     *,
     open_browser: bool = True,
-) -> tuple[Callable[[str], Awaitable[None]], Callable[[], Awaitable[tuple[str, str | None]]]]:
+) -> tuple[Callable[[str], Awaitable[None]], Callable[[], Awaitable[AuthorizationCodeResult]]]:
     """Return ``(redirect_handler, callback_handler)`` for ``durin mcp login``.
 
     ``redirect_handler`` opens the user's browser at the authorize URL.
@@ -714,8 +719,9 @@ def make_interactive_handlers(
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _callback() -> tuple[str, str | None]:
-        return await asyncio.wait_for(callback.wait(), timeout=300)
+    async def _callback() -> AuthorizationCodeResult:
+        code, state = await asyncio.wait_for(callback.wait(), timeout=300)
+        return AuthorizationCodeResult(code=code, state=state, iss=callback.iss)
 
     return _redirect, _callback
 
@@ -729,7 +735,7 @@ async def drive_oauth_handshake(provider: Any, cfg: Any) -> None:
     the post-token ``session.initialize()`` with an opaque ExceptionGroup — so
     both the webui flow and ``durin mcp login`` must honour ``cfg.type`` here.
     """
-    import httpx
+    import httpx2
     from mcp import ClientSession
 
     transport = getattr(cfg, "type", None)
@@ -742,7 +748,7 @@ async def drive_oauth_handshake(provider: Any, cfg: Any) -> None:
         from mcp.client.sse import sse_client
 
         def _factory(headers: Any = None, timeout: Any = None, auth: Any = None) -> Any:
-            return httpx.AsyncClient(
+            return httpx2.AsyncClient(
                 headers=headers, timeout=timeout, auth=provider or auth, follow_redirects=True
             )
 
@@ -753,9 +759,9 @@ async def drive_oauth_handshake(provider: Any, cfg: Any) -> None:
 
     from mcp.client.streamable_http import streamable_http_client
 
-    async with httpx.AsyncClient(
+    async with httpx2.AsyncClient(
         headers=headers, follow_redirects=True, timeout=None, auth=provider
     ) as http_client:
-        async with streamable_http_client(cfg.url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(cfg.url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()

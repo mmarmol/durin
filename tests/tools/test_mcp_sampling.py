@@ -169,7 +169,7 @@ def test_sampling_image_message_becomes_image_block():
 
     msgs = [types.SamplingMessage(
         role="user",
-        content=types.ImageContent(type="image", data="QkFTRTY0", mimeType="image/png"),
+        content=types.ImageContent(type="image", data="QkFTRTY0", mime_type="image/png"),
     )]
     out = sampling_messages_to_openai(msgs, system_prompt=None)
     block = out[0]["content"][0]
@@ -183,7 +183,7 @@ def test_mcp_tool_to_openai_tool():
     from durin.agent.tools.mcp_sampling import mcp_tools_to_openai
 
     tools = [types.Tool(
-        name="lookup", description="d", inputSchema={"type": "object", "properties": {}}
+        name="lookup", description="d", input_schema={"type": "object", "properties": {}}
     )]
     out = mcp_tools_to_openai(tools)
     assert out[0]["type"] == "function"
@@ -200,7 +200,7 @@ def test_llm_text_response_to_create_message_result():
     assert res.role == "assistant"
     assert res.content.text == "the answer"
     assert res.model == "m1"
-    assert res.stopReason == "endTurn"
+    assert res.stop_reason == "endTurn"
 
 
 def test_llm_tool_calls_to_create_message_result_with_tools():
@@ -218,7 +218,7 @@ def test_llm_tool_calls_to_create_message_result_with_tools():
     content = res.content if isinstance(res.content, list) else [res.content]
     tu = [b for b in content if getattr(b, "type", None) == "tool_use"]
     assert tu and tu[0].name == "lookup" and tu[0].input == {"q": "x"}
-    assert res.stopReason == "toolUse"
+    assert res.stop_reason == "toolUse"
 
 
 # ---------------------------------------------------------------------------
@@ -241,13 +241,14 @@ class _FakeProvider:
         return self._response
 
 
-def _sampling_params(max_tokens=100, tools=None):
+def _sampling_params(max_tokens=100, tools=None, system_prompt=None):
     return _types.CreateMessageRequestParams(
         messages=[_types.SamplingMessage(
             role="user", content=_types.TextContent(type="text", text="q")
         )],
-        maxTokens=max_tokens,
+        max_tokens=max_tokens,
         tools=tools,
+        system_prompt=system_prompt,
     )
 
 
@@ -279,6 +280,22 @@ async def test_max_tokens_is_capped():
 
 
 @pytest.mark.asyncio
+async def test_server_max_tokens_below_cap_is_honored():
+    p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
+    runner = _runner(p, max_tokens_cap=4096)
+    await runner.run(_sampling_params(max_tokens=30))
+    assert p.calls[0]["max_tokens"] == 30
+
+
+@pytest.mark.asyncio
+async def test_server_system_prompt_reaches_the_provider():
+    p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
+    runner = _runner(p)
+    await runner.run(_sampling_params(system_prompt="answer in one word"))
+    assert p.calls[0]["messages"][0] == {"role": "system", "content": "answer in one word"}
+
+
+@pytest.mark.asyncio
 async def test_rpm_limit_returns_error_data():
     p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
     runner = _runner(p, requests_per_minute=1)
@@ -293,7 +310,7 @@ async def test_model_not_in_whitelist_is_rejected():
     p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
     runner = _runner(p, allowed_models=["only-this"])
     params = _sampling_params()
-    params.modelPreferences = _types.ModelPreferences(
+    params.model_preferences = _types.ModelPreferences(
         hints=[_types.ModelHint(name="forbidden")]
     )
     res = await runner.run(params)
@@ -307,7 +324,7 @@ async def test_operator_default_always_permitted_even_when_not_in_allowlist():
     p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
     # allowed_models does NOT include "durin-default" (the default_model in _runner)
     runner = _runner(p, allowed_models=["some-other-model"])
-    params = _sampling_params()  # no modelPreferences → resolves to default
+    params = _sampling_params()  # no model_preferences → resolves to default
     res = await runner.run(params)
     assert isinstance(res, _types.CreateMessageResult), (
         f"Expected CreateMessageResult, got {res!r} — "
@@ -322,7 +339,7 @@ async def test_server_requested_model_not_in_allowlist_is_rejected():
     p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
     runner = _runner(p, allowed_models=["some-other-model"])
     params = _sampling_params()
-    params.modelPreferences = _types.ModelPreferences(
+    params.model_preferences = _types.ModelPreferences(
         hints=[_types.ModelHint(name="forbidden-model")]
     )
     res = await runner.run(params)
@@ -336,7 +353,7 @@ async def test_server_requested_model_in_allowlist_is_permitted():
     p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
     runner = _runner(p, allowed_models=["some-other-model"])
     params = _sampling_params()
-    params.modelPreferences = _types.ModelPreferences(
+    params.model_preferences = _types.ModelPreferences(
         hints=[_types.ModelHint(name="some-other-model")]
     )
     res = await runner.run(params)
@@ -352,7 +369,7 @@ async def test_tool_round_bound_forces_text_after_cap():
     ))
     runner = _runner(p, max_tool_rounds=1)
     tools = [_types.Tool(
-        name="loop", description="d", inputSchema={"type": "object", "properties": {}}
+        name="loop", description="d", input_schema={"type": "object", "properties": {}}
     )]
     r1 = await runner.run(_sampling_params(tools=tools))
     assert isinstance(r1, _types.CreateMessageResultWithTools)
@@ -384,7 +401,7 @@ async def test_sampling_callback_delegates_to_runner():
                 role="assistant",
                 content=_types.TextContent(type="text", text="from-runner"),
                 model="m",
-                stopReason="endTurn",
+                stop_reason="endTurn",
             )
 
     conn = MCPServerConnection(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import ipaddress
 import re
 import socket
@@ -172,6 +173,19 @@ def resolve_and_validate(host: str) -> str:
     return str(addrs[0])
 
 
+async def _pin_to_validated_ip(request) -> None:
+    """Resolve + validate ``request``'s host once and pin the request to that
+    IP, keeping the ``Host`` header and pinning TLS SNI to the hostname so
+    certificate verification still matches it. Raises :class:`SSRFError` for
+    a private/internal target before any connection is made."""
+    host = request.url.host
+    if host:
+        ip = await asyncio.to_thread(resolve_and_validate, host)  # raises SSRFError; DNS off-loop
+        if ip != host:
+            request.url = request.url.copy_with(host=ip)
+            request.extensions["sni_hostname"] = host
+
+
 class SSRFGuardTransport(httpx.AsyncHTTPTransport):
     """httpx transport that resolves + validates the target host once and
     pins the connection to that IP, preserving the ``Host`` header and TLS
@@ -185,14 +199,7 @@ class SSRFGuardTransport(httpx.AsyncHTTPTransport):
     """
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        host = request.url.host
-        if host:
-            ip = await asyncio.to_thread(resolve_and_validate, host)  # raises SSRFError; DNS off-loop
-            if ip != host:
-                # Pin to the validated IP; keep Host (already set on the
-                # request) and pin TLS SNI to the original hostname.
-                request.url = request.url.copy_with(host=ip)
-                request.extensions["sni_hostname"] = host
+        await _pin_to_validated_ip(request)
         return await super().handle_async_request(request)
 
 
@@ -207,6 +214,32 @@ def ssrf_safe_async_client(*, proxy: str | None = None, **kwargs) -> httpx.Async
         return httpx.AsyncClient(proxy=proxy, **kwargs)
     kwargs.setdefault("transport", SSRFGuardTransport())
     return httpx.AsyncClient(**kwargs)
+
+
+@functools.cache
+def ssrf_guard_transport_httpx2() -> type:
+    """The :class:`SSRFGuardTransport` equivalent for ``httpx2``, the httpx
+    fork the MCP SDK requires for the clients and auth handed to it. Built on
+    first use because httpx2 is installed only with the extras that need it."""
+    import httpx2
+
+    class SSRFGuardTransportHttpx2(httpx2.AsyncHTTPTransport):
+        async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+            await _pin_to_validated_ip(request)
+            return await super().handle_async_request(request)
+
+    return SSRFGuardTransportHttpx2
+
+
+def ssrf_safe_httpx2_client(*, proxy: str | None = None, **kwargs):
+    """:func:`ssrf_safe_async_client` for ``httpx2``: an ``httpx2.AsyncClient``
+    pinned to validated IPs, or a plain one when a proxy owns egress."""
+    import httpx2
+
+    if proxy:
+        return httpx2.AsyncClient(proxy=proxy, **kwargs)
+    kwargs.setdefault("transport", ssrf_guard_transport_httpx2()())
+    return httpx2.AsyncClient(**kwargs)
 
 
 def contains_internal_url(command: str) -> bool:

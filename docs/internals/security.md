@@ -781,7 +781,9 @@ executes with the same local trust as one placed on disk by hand.
 
 All outbound HTTP fetches from durin's internal tools use `ssrf_safe_async_client()`
 (`durin/security/network.py`), which builds an `httpx.AsyncClient` with
-`SSRFGuardTransport` as the transport layer.
+`SSRFGuardTransport` as the transport layer. MCP transports use
+`ssrf_safe_httpx2_client()`, the same guard built on `httpx2` (the httpx fork the
+MCP SDK requires); both transports pin requests through the same function.
 
 `resolve_and_validate(host)` resolves the hostname to IP addresses, normalizes
 IPv4-mapped IPv6 addresses, and rejects any address in `_BLOCKED_NETWORKS` (which
@@ -909,6 +911,7 @@ only callers with system-write authority can manage other tokens.
 | `Scope` | `durin/service/principal.py` | Enum of permission scopes (`domain:read`/`domain:write` pairs, the write-only `channels:write` and `chat:write`, and `admin`) |
 | `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed hashed token store (mode 0600); `issue()` returns plaintext once and records the token's `kind` (`webui` for a dashboard session, `remote` otherwise); `resolve()` uses HMAC timing-safe compare |
 | `SSRFGuardTransport` | `durin/security/network.py` | `httpx.AsyncHTTPTransport` subclass; resolves + validates hostname per request, pins connection to IP, re-validates on redirects |
+| `ssrf_guard_transport_httpx2` | `durin/security/network.py` | The same guard as an `httpx2.AsyncHTTPTransport` subclass, built on first use; `ssrf_safe_httpx2_client()` wraps it for MCP transports |
 | `resolve_and_validate` | `durin/security/network.py` | Resolves host to public IP; raises `SSRFError` for private/unresolvable targets |
 | `skill_reviews` (module) | `durin/security/skill_reviews.py` | Per-workspace review overrides: per-finding acks (fingerprint + anchor-file hash); reopened by a new finding or an edit to a file carrying an acked finding |
 

@@ -80,7 +80,7 @@ def test_oauth_config_normalizer_dict():
 
 def test_build_provider_is_httpx_auth(tmp_path, monkeypatch):
     _point_store_at(tmp_path, monkeypatch)
-    import httpx
+    import httpx2
     from mcp.client.auth import OAuthClientProvider
 
     from durin.agent.tools.mcp_oauth import build_oauth_provider
@@ -89,7 +89,7 @@ def test_build_provider_is_httpx_auth(tmp_path, monkeypatch):
     cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
     provider = build_oauth_provider("acme", cfg, headless=True)
     assert isinstance(provider, OAuthClientProvider)
-    assert isinstance(provider, httpx.Auth)
+    assert isinstance(provider, httpx2.Auth)
 
 
 def test_build_provider_metadata(tmp_path, monkeypatch):

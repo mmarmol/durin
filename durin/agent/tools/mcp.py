@@ -253,7 +253,7 @@ def _embedded_resource_to_parts(resource: Any, types: Any) -> list[Any]:
     if isinstance(resource, types.TextResourceContents):
         return [resource.text]
     if isinstance(resource, types.BlobResourceContents):
-        mime = getattr(resource, "mimeType", None)
+        mime = resource.mime_type
         uri = getattr(resource, "uri", "")
         img = _image_block_or_none(resource.blob, mime, f"(MCP resource: {uri})")
         if img is not None:
@@ -267,10 +267,10 @@ def _content_block_to_parts(block: Any, types: Any) -> list[Any]:
     if isinstance(block, types.TextContent):
         return [block.text]
     if isinstance(block, types.ImageContent):
-        img = _image_block_or_none(block.data, block.mimeType, "(MCP image)")
+        img = _image_block_or_none(block.data, block.mime_type, "(MCP image)")
         return img if img is not None else ["[MCP image: missing or invalid data]"]
     if isinstance(block, types.AudioContent):
-        mime = block.mimeType or "unknown"
+        mime = block.mime_type or "unknown"
         return [f"[MCP audio: {mime}, {_b64_byte_len(block.data)} bytes]"]
     if isinstance(block, types.EmbeddedResource):
         return _embedded_resource_to_parts(block.resource, types)
@@ -293,7 +293,7 @@ def _render_tool_result(result: Any, types: Any) -> str | list[dict[str, Any]]:
     parts: list[Any] = []
     for block in result.content:
         parts.extend(_content_block_to_parts(block, types))
-    structured = getattr(result, "structuredContent", None)
+    structured = result.structured_content
     if structured is not None:
         parts.append("[structuredContent]\n" + _safe_json(structured))
     return _parts_to_result(parts)
@@ -315,7 +315,7 @@ class MCPToolWrapper(Tool):
         self._original_name = tool_def.name
         self._name = _sanitize_name(f"mcp_{server_name}_{tool_def.name}")
         self._description = tool_def.description or tool_def.name
-        raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
+        raw_schema = tool_def.input_schema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
         per_tool = getattr(getattr(connection, "_cfg", None), "tool_timeouts", {}) or {}
         self._tool_timeout = per_tool.get(tool_def.name, tool_timeout)
@@ -323,8 +323,8 @@ class MCPToolWrapper(Tool):
         # declares a tool read-only opts it into parallel execution alongside
         # other concurrency-safe tools. Absent or false → run alone (the safe
         # default for tools that may mutate remote state).
-        annotations = getattr(tool_def, "annotations", None)
-        self._read_only = bool(getattr(annotations, "readOnlyHint", False))
+        annotations = tool_def.annotations
+        self._read_only = bool(annotations is not None and annotations.read_only_hint)
 
     @property
     def name(self) -> str:
@@ -352,7 +352,7 @@ class MCPToolWrapper(Tool):
         )
         if isinstance(result, _ConnDown):
             return result.message
-        if getattr(result, "isError", False):
+        if result.is_error:
             return _render_tool_error(result, types)
         return _render_tool_result(result, types)
 
