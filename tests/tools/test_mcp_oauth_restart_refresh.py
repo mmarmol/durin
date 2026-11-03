@@ -159,12 +159,12 @@ async def test_cold_load_expired_yields_refresh_request(isolated_secrets):
     token + valid refresh token, the FIRST request it emits must be a
     refresh_token grant — proof the refresh path fires instead of sending the
     dead access token straight into a 401 → full re-auth."""
-    import httpx
+    import httpx2
 
     await _persist_cold_session(expires_at=time.time() - 100)
     provider = _provider()
 
-    gen = provider.async_auth_flow(httpx.Request("GET", f"{URL}/sse"))
+    gen = provider.async_auth_flow(httpx2.Request("GET", f"{URL}/sse"))
     first = await gen.asend(None)
     try:
         body = bytes(first.content or b"")
@@ -181,13 +181,13 @@ async def test_cold_load_expired_refreshes_end_to_end(isolated_secrets):
     expired cold-loaded token must recover by refreshing — new rotated token
     persisted, write-ahead marker cleared, original request re-sent with the
     fresh bearer, and NO fall-through to full re-auth."""
-    import httpx
+    import httpx2
 
     await _persist_cold_session(expires_at=time.time() - 100)
     provider = _provider()
     storage = _storage()
 
-    original = httpx.Request("GET", f"{URL}/sse")
+    original = httpx2.Request("GET", f"{URL}/sse")
     gen = provider.async_auth_flow(original)
 
     # 1) The flow first emits a refresh_token grant (not the dead access token).
@@ -197,7 +197,7 @@ async def test_cold_load_expired_refreshes_end_to_end(isolated_secrets):
 
     # 2) Server rotates the token; the flow then re-emits the original request
     #    carrying the FRESH bearer.
-    rotated = httpx.Response(
+    rotated = httpx2.Response(
         200,
         json={
             "access_token": "fresh-access", "refresh_token": "fresh-refresh",
@@ -210,7 +210,7 @@ async def test_cold_load_expired_refreshes_end_to_end(isolated_secrets):
 
     # 3) Original request now succeeds → flow ends without a 401 → no re-auth.
     with pytest.raises(StopAsyncIteration):
-        await gen.asend(httpx.Response(200, request=authed_req))
+        await gen.asend(httpx2.Response(200, request=authed_req))
 
     # Recovery is durable: rotated token persisted, marker cleared, expiry ahead.
     reloaded = await storage.get_tokens()
