@@ -798,9 +798,9 @@ class TestCompactorSkipsSummarizedSpan:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         """The token path shares the overlap check with the replay path. When
-        the dream's cursor covers the whole round, there is nothing to
-        summarize: no LLM call, and the run reports a clean skip rather than a
-        failed summary."""
+        the dream's cursor covers the whole span, there is nothing to
+        summarize: no LLM call, and the run is not reported as a failed
+        summary."""
         import durin.agent.memory as memory_module
         from durin.memory.session_summary_dream import set_summary_cursor
 
@@ -838,8 +838,62 @@ class TestCompactorSkipsSummarizedSpan:
         assert archive_calls == []
         assert loop.provider.chat_with_retry.await_count == 0
         done = [d for t, d in events if t == "compaction.completed"]
-        assert done and done[0]["exit_reason"] == "already_summarized"
-        assert done[0]["rounds"] == 1
+        assert done and done[0]["exit_reason"] != "summary_failed"
+        assert session.last_consolidated > 0
+
+    @pytest.mark.asyncio
+    async def test_token_path_goes_on_after_a_span_the_dream_covered(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A round whose span the dream already summarized moves the cursor
+        without an LLM call, but the prompt may still be over the target. The
+        pass re-measures and goes on with the next round, and reports the size
+        it reached — it used to stop there and report the size it started at
+        (one live run: 182,541 before and "after", while the next turn's prompt
+        was 81k)."""
+        import durin.agent.memory as memory_module
+        from durin.memory.session_summary_dream import set_summary_cursor
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            memory_module, "current_telemetry",
+            lambda: type("_Sink", (), {"log": lambda _s, t, d: events.append((t, dict(d)))})(),
+        )
+
+        loop = TestNewCommandArchival._make_loop(tmp_path)
+        loop.consolidator.context_window_tokens = 200
+        loop.consolidator.max_completion_tokens = 20
+        loop.consolidator._SAFETY_BUFFER = 0
+        session = loop.sessions.get_or_create("cli:test")
+        for i in range(8):
+            session.add_message("user", f"question {i} " + "word " * 30)
+            session.add_message("assistant", f"answer {i} " + "word " * 30)
+        loop.sessions.save(session)
+        # The nightly pass summarized only the first two exchanges.
+        set_summary_cursor(loop.sessions._get_session_path("cli:test"), session.messages, 4)
+
+        archive_calls: list[list[dict]] = []
+
+        async def _spy(messages):
+            # Like the real one: nothing pending, nothing summarized, no call.
+            if not messages:
+                return [], []
+            archive_calls.append(list(messages))
+            return ["- summary"], []
+
+        loop.consolidator._archive_in_pieces = lambda _s, pending: _spy(pending)  # type: ignore[method-assign]
+        loop.consolidator.estimate_session_prompt_tokens = (
+            lambda s, **_kw: (10 * (len(s.messages) - s.last_consolidated), "test"))
+
+        await loop.consolidator.maybe_consolidate_by_tokens(session)
+
+        done = [d for t, d in events if t == "compaction.completed"]
+        assert done, events
+        # The covered span cost no call, and the rounds went on past it.
+        assert archive_calls, "stopped after the span the dream had covered"
+        assert done[0]["rounds"] >= 2
+        assert done[0]["estimated_after"] == 10 * (len(session.messages) - session.last_consolidated)
+        assert done[0]["estimated_after"] < done[0]["estimated_before"]
 
     @staticmethod
     def _archived_by_replay_compaction(loop, session) -> list[str]:

@@ -235,9 +235,10 @@ class CompactionCompletedEvent(TypedDict):
 
     ``exit_reason`` says why the round loop stopped: ``target_reached``,
     ``no_boundary`` (ran out of user-turn boundaries to cut on),
-    ``max_rounds``, ``summary_failed``, ``already_summarized`` (the round's
-    span was entirely covered by the nightly session-summary pass, so no LLM
-    call was made), ``empty_chunk`` or ``estimate_unavailable``.
+    ``max_rounds``, ``summary_failed``, ``empty_chunk`` or
+    ``estimate_unavailable``. A round whose span the nightly session-summary
+    pass already covered makes no LLM call and does not end the loop.
+    ``estimated_after`` is the prompt measured after the last round.
     ``trigger_bound`` and ``cap_tokens`` as on
     ``compaction.preemptive_trigger``."""
     session_key: str

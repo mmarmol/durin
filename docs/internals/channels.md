@@ -929,7 +929,13 @@ Channel-specific extensions:
   allowlist policy), `open_channels` (rooms that reply to every message under
   any policy), and `thread_auto_follow` (answer follow-ups in a mentioned
   thread without re-mention). Sender authorization uses the standard
-  `allow_from` + pairing flow via the central ingress gate.
+  `allow_from` + pairing flow via the central ingress gate. Two per-thread
+  facts survive a gateway restart, in `<instance>/slack/threads.json`
+  (`SlackThreadMemory`): that a thread's history already reached its session
+  (fetched once with `include_thread_context`, or the session started with
+  the thread's first message), so a later message does not prepend it
+  again, and that the bot follows a thread, so its follow-ups keep getting
+  answers. Past its cap the least recently marked threads are forgotten.
 - **Persona per channel** (any adapter): a `persona` key on the channel
   section sets the default persona for sessions born there; a
   `chat_personas` map (chat id → persona name) refines it per conversation.

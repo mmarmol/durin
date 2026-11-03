@@ -1810,17 +1810,17 @@ class Consolidator:
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 rounds_run += 1
-                if not summaries and (not pending or without_failure_placeholders(pending)):
-                    # No summary has two causes. An empty chunk means the
-                    # nightly session-summary pass already covered this span,
-                    # so archive() never called an LLM and nothing failed —
-                    # the cursor moved and the work is done. Otherwise the LLM
-                    # is degraded: stop hammering it this call and let the next
-                    # invocation retry a fresh chunk. A chunk of failure
-                    # placeholders alone has nothing to summarize, so no
-                    # summary came back for it and the rounds go on.
-                    exit_reason = "already_summarized" if not pending else "summary_failed"
+                if not summaries and pending and without_failure_placeholders(pending):
+                    # The LLM is degraded: stop hammering it this call and let
+                    # the next invocation retry a fresh chunk. A chunk of
+                    # failure placeholders alone has nothing to summarize, so
+                    # no summary came back for it and the rounds go on.
+                    exit_reason = "summary_failed"
                     break
+                # An empty chunk means the nightly session-summary pass already
+                # covered this span: the cursor moved with no LLM call and
+                # nothing failed. The prompt may still be over the target, so
+                # the rounds go on from a fresh measure like any other round.
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
