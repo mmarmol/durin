@@ -5,6 +5,27 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.12.1 — 2026-11-04
+
+### Highlights
+
+- **The automatic memory search before each message stops repeating what the
+  turn already has, and stops searching on short follow-ups.** A replay of real
+  chat messages showed that many of the three results injected per turn were
+  the conversation's own summary, already in context, and that short messages
+  ("yes, add it as a note") name no subject, so their search mostly found
+  unrelated material. (#720)
+
+### Memory
+
+- The per-turn prefetch leaves out the session's own summary, and the next
+  result moves up into its place. Summaries of other sessions still come
+  through, including closed records of an earlier conversation in the same
+  chat. (#720)
+- `memory.prefetch.min_query_chars` now defaults to `40` (was `20`). On the
+  replay this kept 92% of the relevant results and dropped 24% of the
+  irrelevant ones. A value set explicitly in your config is kept. (#720)
+
 ## 0.12.0 — 2026-11-03
 
 ### Highlights
