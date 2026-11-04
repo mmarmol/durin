@@ -101,7 +101,12 @@ so they never wait behind unpaced ones. The running thread is named
 `workflow-run-<run_id>` either way. A paused run (waiting on a person) has
 returned from the engine and holds no thread. None of these
 threads is a daemon, so, like the default executor's workers, an interpreter
-exit waits for them; a restart re-execs without waiting. Reactive dreams run
+exit would wait for them, and a run left waiting that way can do nothing, since
+executors refuse new work once the exit begins (each DNS lookup fails, and a
+provider retries it as a connection error). So neither way out waits: a restart
+re-execs, and a stop ends the process as soon as everything is flushed
+(`leave_unfinished_runs`), naming the runs it left. Either way the run ends
+where a crash would, for the startup sweep to mark it `crashed`. Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.
 
