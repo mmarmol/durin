@@ -2439,6 +2439,9 @@ def _run_gateway(
         # Every subsystem is down now, as a graceful stop leaves it; a fresh
         # process takes this one's place.
         reexec()
+    from durin.workflow.run_threads import leave_unfinished_runs
+
+    leave_unfinished_runs()
 
 
 # ============================================================================

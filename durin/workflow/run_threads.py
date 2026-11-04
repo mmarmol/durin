@@ -25,15 +25,21 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import os
+import sys
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import suppress
 from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
 from durin.utils.dedicated_thread import run_in_dedicated_thread
+from durin.utils.restart import _flush_logs_before_exit
 
-__all__ = ["MAX_CONCURRENT_RUNS", "run_on_workflow_thread"]
+__all__ = [
+    "MAX_CONCURRENT_RUNS", "leave_unfinished_runs", "run_on_workflow_thread", "runs_in_flight",
+]
 
 _T = TypeVar("_T")
 
@@ -99,3 +105,36 @@ async def run_on_workflow_thread(
             "({} runs executing, {} waiting ahead of it)",
             run_id, MAX_CONCURRENT_RUNS, ahead)
     return await asyncio.wrap_future(future)
+
+
+def runs_in_flight() -> list[str]:
+    """The ids of the runs executing on a thread right now, paced or not."""
+    prefix = "workflow-run-"
+    return sorted(
+        thread.name.removeprefix(prefix) for thread in threading.enumerate()
+        if thread.name.startswith(prefix))
+
+
+def leave_unfinished_runs() -> None:
+    """End a stopped process now if a run is still executing on its thread.
+
+    A run's thread is no daemon, so an interpreter exit would wait for it, and
+    the run could reach nothing while it waits: executors refuse new work once
+    the exit begins, so each DNS lookup and thread hop fails, and a provider
+    reports that as a connection error and retries until a supervisor kills
+    the process. Leaving instead ends the run where a crash would: its manifest
+    stays ``running``, and the next start marks it ``crashed`` and tells whoever
+    is waiting, the same as after a restart. With no run executing this returns
+    and the interpreter exits as usual.
+    """
+    unfinished = runs_in_flight()
+    if not unfinished:
+        return
+    logger.warning(
+        "Shutdown: exiting with {} workflow run(s) unfinished: {}",
+        len(unfinished), ", ".join(unfinished))
+    _flush_logs_before_exit()
+    with suppress(Exception):
+        sys.stdout.flush()
+        sys.stderr.flush()
+    os._exit(0)

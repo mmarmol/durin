@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -194,3 +196,61 @@ def test_a_run_outliving_its_loop_ends_quietly():
     finally:
         threading.excepthook = previous_hook
     assert thread_errors == []
+
+
+_STOPPED_GATEWAY = """
+import asyncio
+import sys
+import threading
+
+from durin.workflow.run_threads import leave_unfinished_runs, run_on_workflow_thread
+
+paced = sys.argv[1] == "paced"
+started = threading.Event()
+
+
+def _run():
+    started.set()
+    threading.Event().wait()
+
+
+async def _main():
+    asyncio.get_running_loop().create_task(
+        run_on_workflow_thread("unfinished", _run, paced=paced))
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+
+
+asyncio.run(_main())
+print("stopped", flush=True)
+leave_unfinished_runs()
+print("exited on its own", flush=True)
+"""
+
+
+@pytest.mark.parametrize("pace", ["paced", "unpaced"])
+def test_a_stopped_gateway_exits_with_a_run_unfinished(pace):
+    """An interpreter exit waits for a run's thread, and a run on that thread
+    can reach nothing, since executors refuse work once the exit has begun: a
+    stop has to end the process instead of hanging until a supervisor kills it."""
+    done = subprocess.run(
+        [sys.executable, "-c", _STOPPED_GATEWAY, pace],
+        capture_output=True, text=True, timeout=20,
+    )
+
+    assert done.returncode == 0
+    assert done.stdout.splitlines() == ["stopped"]
+
+
+def test_a_stopped_gateway_with_no_run_exits_normally():
+    """Nothing unfinished: the exit stays the interpreter's own, atexit hooks
+    included, even with an idle pool thread left from a finished run."""
+    script = _STOPPED_GATEWAY.replace("threading.Event().wait()", "pass").replace(
+        "asyncio.run(_main())", "asyncio.run(_main())\nimport time; time.sleep(0.2)")
+    done = subprocess.run(
+        [sys.executable, "-c", script, "unpaced"],
+        capture_output=True, text=True, timeout=20,
+    )
+
+    assert done.returncode == 0
+    assert done.stdout.splitlines() == ["stopped", "exited on its own"]
