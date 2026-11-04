@@ -5,6 +5,18 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.12.2 — 2026-11-04
+
+### Highlights
+
+- **Stopping the gateway no longer hangs on a workflow still running.** A stop
+  or service restart during a run used to hang until the supervisor killed the
+  process, 90 seconds under systemd's default, with the run retrying
+  "connection error" the whole time. The gateway now exits as soon as
+  everything is saved and logs which runs it left. Those runs recover as after
+  any crash: the next start marks them `crashed`, and an automation that
+  started one tells whoever is waiting. (#722)
+
 ## 0.12.1 — 2026-11-04
 
 ### Highlights
