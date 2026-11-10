@@ -99,7 +99,7 @@ pip install -e ".[memory,mcp,web]"
 
 | Extra | Pulls in | When you need it |
 |---|---|---|
-| `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). The model downloads once — when you pick it in the onboarding wizard, or on first use — and is kept under `<durin_home>/models/embed/`. |
+| `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). The model downloads once — when you pick it in the onboarding wizard, or on first use — and is kept under `<durin_home>/models/embed/` (or the directory `FASTEMBED_CACHE_PATH` names, when you set it). |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
 | `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. On slim Linux images the bundled OpenCV needs libGL at runtime — `apt install libgl1` (or your distro's equivalent). A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
 | `mcp` | `mcp`, `httpx2` | Connect to MCP servers (durin is the MCP client). |
@@ -414,15 +414,18 @@ nothing and reports the extra as missing, with the fix: `durin doctor
 --install-missing -y`. Nor does it install while the config does not load
 cleanly: what failed runs on defaults, so your own setting could not be read.
 
-The embedding model's files are kept in `<durin_home>/models/embed/`. A copy
-in any other place — fastembed's own cache in the system temp directory, for
-one — is not used, and nothing is moved from there: the first start that finds
-no files in that directory downloads the model once. When vector memory is on
-and the files are not there, `durin doctor` says so ("embedding model files")
-and names the fix; that check only looks at the disk. Do the download while
-online — `durin gateway restart`, or picking the embedding model in `durin
-onboard` — because offline, a start without the files leaves memory search on
-keyword matching only.
+The embedding model's files are kept in `<durin_home>/models/embed/`. Setting
+`FASTEMBED_CACHE_PATH`, fastembed's own variable, to a directory keeps them
+there instead. A copy in any other place — fastembed's default cache in the
+system temp directory, for one — is not used, and nothing is moved from there:
+the first start that finds no files in the directory downloads the model once.
+When vector memory is on and the files are not there, `durin doctor` says so
+("embedding model files") and names the fix. Doctor does not download a
+missing model: with the files missing, its load check ("embedding model
+load") only asks a running embedding server, and reports the load as not
+attempted when none answers. Do the download while online — `durin gateway
+restart`, or picking the embedding model in `durin onboard` — because offline,
+a start without the files leaves memory search on keyword matching only.
 
 The complementary snapshot is `durin status` — "what do I have and is it
 running?" with no judgement. It probes the live gateway for version, uptime,

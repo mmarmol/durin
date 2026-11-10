@@ -34,6 +34,7 @@ than guessing.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import threading
 import time
 import warnings
@@ -218,16 +219,24 @@ def list_supported_models(*, install: bool = True) -> dict[str, dict[str, Any]]:
 
 
 def embedding_cache_dir() -> Path:
-    """Where the embedding model's files live: ``<durin home>/models/embed``.
+    """Where the embedding model's files live: ``<durin home>/models/embed``,
+    or the directory ``FASTEMBED_CACHE_PATH`` names when that is set.
 
     The durin home, not fastembed's own default (a ``fastembed_cache`` folder
     in the system temp directory), because the operating system empties its
     temp directory on its own schedule: a model cached there has to be
     downloaded again by the next process that loads it, and that process
-    gets no model at all while offline. Every fastembed model durin builds
-    is given this directory. The stt and ocr models are kept under the same
-    ``models/`` parent.
+    gets no model at all while offline. The stt and ocr models are kept
+    under the same ``models/`` parent. ``FASTEMBED_CACHE_PATH`` is fastembed's
+    own way to choose the directory, so a value set there still decides; an
+    empty one does not.
+
+    Every fastembed model durin builds is given this directory, and whoever
+    asks whether the files are on disk looks here.
     """
+    chosen = os.environ.get("FASTEMBED_CACHE_PATH")
+    if chosen:
+        return Path(chosen)
     return durin_home() / "models" / "embed"
 
 
@@ -423,8 +432,8 @@ class FastembedProvider(EmbeddingProvider):
         ``isolation="process"`` keeps the model out of the parent.
 
         The loaded model is discarded — this is a side-effect call to
-        populate the model's directory in the durin home
-        (:func:`embedding_cache_dir`). The next FastembedProvider
+        populate the model's directory (:func:`embedding_cache_dir`).
+        The next FastembedProvider
         instance will reload from disk in ~230 ms.
         """
         provider = cls(model=model)

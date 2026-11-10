@@ -3,6 +3,8 @@
 Every fastembed model durin builds is given ``<durin home>/models/embed`` as
 its cache directory, so the files sit next to the other local models instead
 of in the operating system's temp directory, which the system may empty.
+``FASTEMBED_CACHE_PATH``, fastembed's own way to choose the directory, is
+honoured when set.
 
 fastembed is replaced by a recorder: no model is loaded and nothing is
 downloaded.
@@ -85,6 +87,8 @@ def install_recorder(monkeypatch) -> type[_RecordingTextEmbedding]:
     monkeypatch.setattr(embedding_module, "_CATALOG_CACHE", None)
     monkeypatch.setattr(embedding_module, "_REGISTERED_CUSTOM", set())
     monkeypatch.setattr(_RecordingTextEmbedding, "built", [])
+    # A value from the shell running the suite would move the directory.
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
     return _RecordingTextEmbedding
 
 
@@ -97,45 +101,70 @@ def _in_home() -> str:
     return str(durin_home() / "models" / "embed")
 
 
+@pytest.fixture(params=["unset", "empty", "set"])
+def model_dir(request, recorder, monkeypatch, tmp_path) -> str:
+    """The directory a model must be loaded from, for each state of
+    ``FASTEMBED_CACHE_PATH``: the instance home unless the variable names
+    another directory."""
+    if request.param == "unset":
+        return _in_home()
+    if request.param == "empty":
+        monkeypatch.setenv("FASTEMBED_CACHE_PATH", "")
+        return _in_home()
+    chosen = tmp_path / "chosen-by-the-user"
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(chosen))
+    return str(chosen)
+
+
 # -- where the directory is ---------------------------------------------------
 
 
-def test_the_model_directory_is_inside_the_instance_home():
+def test_the_model_directory_is_inside_the_instance_home(monkeypatch):
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
     assert embedding_module.embedding_cache_dir() == durin_home() / "models" / "embed"
 
 
 def test_the_model_directory_follows_durin_home(monkeypatch, tmp_path):
     other = tmp_path / "another-instance"
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
     monkeypatch.setenv("DURIN_HOME", str(other))
     assert embedding_module.embedding_cache_dir() == other / "models" / "embed"
+
+
+def test_the_model_directory_is_the_one_the_fastembed_variable_names(model_dir):
+    assert str(embedding_module.embedding_cache_dir()) == model_dir
 
 
 # -- every construction uses it -------------------------------------------------
 
 
-def test_the_provider_loads_its_model_from_the_instance_home(recorder):
+def test_the_provider_loads_its_model_from_the_model_directory(recorder, model_dir):
     provider = embedding_module.FastembedProvider(model=_E5_SMALL)
     provider.embed(["hello"])
-    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": _in_home()}]
+    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": model_dir}]
 
 
-def test_the_pool_worker_loads_its_model_from_the_instance_home(recorder, monkeypatch):
+def test_the_pool_worker_loads_its_model_from_the_model_directory(
+    recorder, model_dir, monkeypatch,
+):
     from durin.memory import embedding_worker
 
     monkeypatch.setattr(embedding_worker, "_MODEL", None)
     embedding_worker.init_worker(_E5_SMALL)
-    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": _in_home()}]
+    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": model_dir}]
 
 
-def test_the_onboarding_download_fills_the_instance_home(recorder, capsys):
+def test_the_onboarding_download_fills_the_model_directory(recorder, model_dir, capsys):
     from durin.cli.onboard_wizard import _maybe_warm_embedding_model
 
     _maybe_warm_embedding_model(_E5_LARGE, "2.24 GB")
-    assert recorder.built == [{"model_name": _E5_LARGE, "cache_dir": _in_home()}]
+    assert recorder.built == [{"model_name": _E5_LARGE, "cache_dir": model_dir}]
     assert "warmup failed" not in capsys.readouterr().out
 
 
-def test_the_embed_server_loads_its_model_from_the_instance_home(recorder, monkeypatch):
+def test_the_embed_server_loads_its_model_from_the_model_directory(
+    recorder, model_dir, monkeypatch,
+):
     import uvicorn
 
     from durin.memory import embed_server
@@ -150,16 +179,17 @@ def test_the_embed_server_loads_its_model_from_the_instance_home(recorder, monke
 
     monkeypatch.setattr(uvicorn, "Server", _ServerThatDoesNotServe)
     embed_server.run_embed_server(model=_E5_SMALL)
-    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": _in_home()}]
+    assert recorder.built == [{"model_name": _E5_SMALL, "cache_dir": model_dir}]
 
 
 # -- whether the files are there ------------------------------------------------
 
 
-def store_model(repo: str, files: tuple[str, ...]) -> Path:
+def store_model(repo: str, files: tuple[str, ...], *, into: str | None = None) -> Path:
     """Lay ``repo`` out the way fastembed stores a downloaded model: the
-    content under ``blobs/``, and a snapshot whose entries are links to it."""
-    root = Path(_in_home()) / ("models--" + repo.replace("/", "--"))
+    content under ``blobs/``, and a snapshot whose entries are links to it.
+    In the instance home's model directory unless ``into`` names another."""
+    root = Path(into or _in_home()) / ("models--" + repo.replace("/", "--"))
     blobs = root / "blobs"
     snapshot = root / "snapshots" / "0a1b2c3d"
     blobs.mkdir(parents=True)
@@ -197,6 +227,17 @@ def test_the_files_are_looked_up_under_the_repository_they_come_from(recorder):
 def test_a_model_missing_one_of_its_files_is_not_on_disk(recorder):
     store_model("Qdrant/multilingual-e5-large-onnx", ("model.onnx",))
     assert embedding_module.embedding_model_on_disk(_E5_LARGE) is False
+
+
+def test_the_files_are_looked_up_in_the_directory_the_fastembed_variable_names(
+    recorder, monkeypatch, tmp_path,
+):
+    chosen = tmp_path / "chosen-by-the-user"
+    store_model("intfloat/multilingual-e5-small", ("onnx/model.onnx",))
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(chosen))
+    assert embedding_module.embedding_model_on_disk(_E5_SMALL) is False
+    store_model("intfloat/multilingual-e5-small", ("onnx/model.onnx",), into=str(chosen))
+    assert embedding_module.embedding_model_on_disk(_E5_SMALL) is True
 
 
 def test_looking_for_the_files_builds_no_model_and_creates_nothing(recorder):

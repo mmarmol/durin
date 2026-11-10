@@ -259,7 +259,8 @@ def test_vector_search_recall_crosses_languages(tmp_path):
     model shows that, so this embeds with the real E5 model, its query and
     passage prefixes included, and runs only when selected:
     ``pytest -m real_model``. The model is downloaded (about 450 MB) into the
-    test's throwaway durin home, on every run."""
+    test's throwaway durin home on every run, unless ``FASTEMBED_CACHE_PATH``
+    names a directory that keeps it between runs."""
     pytest.importorskip("fastembed")
     from durin.memory.embedding import FastembedProvider
     from durin.memory.vector_index import VectorIndex, vector_index_available

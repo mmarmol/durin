@@ -1298,7 +1298,7 @@ def _install_memory_extra(cfg: "Config", model_name: str, exc: RuntimeError) -> 
 
 def check_embedding_model_cached(cfg: "Config | None" = None) -> CheckResult:
     """Warn (never fail) when vector memory is on and the embedding model's
-    files are not on disk in the durin home.
+    files are not on disk in the directory it is loaded from.
 
     A model that is absent there — never downloaded, or a snapshot whose
     files are links to content that is gone — is downloaded by the next
@@ -1339,6 +1339,26 @@ def check_embedding_model_cached(cfg: "Config | None" = None) -> CheckResult:
     )
 
 
+def _probe_embed_server(cfg: "Config") -> list[float] | None:
+    """One vector from the standing embedding server, or None when the config
+    does not route embeds to it, none is running, or it does not answer.
+
+    Asks the server directly rather than through the provider: the provider
+    answers a failing server by loading the model in a worker of its own,
+    which downloads a model that is not on disk."""
+    if cfg.memory.embedding.isolation != "service":
+        return None
+    from durin.memory import embed_server
+
+    rec = embed_server.read_discovery()
+    if rec is None:
+        return None
+    try:
+        return embed_server.service_embed(["health probe"], rec=rec)[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def check_embedding_model_loads() -> CheckResult:
     """Smoke-test that the configured embedding model actually loads and
     produces a vector.
@@ -1347,12 +1367,16 @@ def check_embedding_model_loads() -> CheckResult:
     catalog at the boundary; this check goes further — it does a real
     load + embed of a trivial input. Catches:
 
-    - Corrupt model files (`<durin home>/models/embed` partially
-      downloaded after a failed first run)
-    - Network unreachable at install time (model exists in catalog
-      but isn't on disk yet, no internet to fetch)
+    - Corrupt model files (the model's directory partially downloaded
+      after a failed first run)
     - ONNX runtime mismatch (rare; fastembed pinned narrowly to
       avoid this — see `pyproject.toml` comment)
+
+    Doctor does not download a model that is not on disk. Loading it
+    would, so in that case the only probe is a running embedding
+    server, which answers from the copy it holds in memory; with none
+    answering the load is not attempted, and the row points at the files
+    row, which carries the fix.
 
     Skip cases (status="skipped") to avoid noise:
     - memory.enabled = false (most users)
@@ -1374,7 +1398,11 @@ def check_embedding_model_loads() -> CheckResult:
             category="state",
         )
     try:
-        from durin.memory.embedding import embedding_cache_dir, provider_from_config
+        from durin.memory.embedding import (
+            embedding_cache_dir,
+            embedding_model_on_disk,
+            provider_from_config,
+        )
     except Exception:  # noqa: BLE001
         return CheckResult(
             "embedding model load", "ok",
@@ -1395,16 +1423,33 @@ def check_embedding_model_loads() -> CheckResult:
             category="state",
         )
     try:
-        provider = provider_from_config(cfg, model=model_id)
-        vec = provider.embed(["health probe"])[0]
+        files_missing = not embedding_model_on_disk(model_id)
+    except KeyError:
+        # Not in fastembed's catalog: there is nothing to download, and the
+        # load below says what is wrong with the model.
+        files_missing = False
+    try:
+        if files_missing:
+            vec = _probe_embed_server(cfg)
+            if vec is None:
+                return CheckResult(
+                    "embedding model load", "ok",
+                    f"not attempted — {model_id} is not on disk and no embedding "
+                    "server answered (see embedding model files)",
+                    category="state",
+                )
+        else:
+            provider = provider_from_config(cfg, model=model_id)
+            vec = provider.embed(["health probe"])[0]
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             "embedding model load", "fail",
             f"load+embed raised: {type(exc).__name__}: {exc}",
             fix=(
-                f"Check `{embedding_cache_dir()}` for partial downloads "
-                "(rm -rf and re-run); confirm internet reachable; or "
-                "switch model via `durin onboard` memory submenu."
+                f"The files in `{embedding_cache_dir()}` may be damaged: "
+                "remove that directory and download the model again (see "
+                "embedding model files); or switch model via `durin "
+                "onboard` memory submenu."
             ),
             category="state",
         )
