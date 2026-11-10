@@ -632,7 +632,7 @@ class SkillsHotTierConfig(Base):
 
     The cache-stable prefix injects only the usage-ranked working set
     instead of the whole catalog; the long tail is reachable via
-    ``memory_search`` (kind="skill"). ``enabled=False`` restores the
+    ``memory_search`` (kinds="skill"). ``enabled=False`` restores the
     full-catalog injection (A/B / calibration fallback). Sizes favor
     frequent-over-the-window (the durable working set); ``recent`` is a
     smaller recency bonus. Calibrate with the shipped ``memory.skill_miss``

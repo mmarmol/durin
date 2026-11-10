@@ -83,7 +83,7 @@ high cost, maximum incentive. The hot-tier lists names and descriptions for the
 usage-ranked working set, letting the agent pull full bodies on demand with the
 `skill_view` tool. The
 searchable tier indexes every workspace skill as a memory class (FTS and vector) reachable
-via `memory_search(kind=skill)` — zero marginal cost until queried. Builtins are
+via `memory_search(kinds="skill")` — zero marginal cost until queried. Builtins are
 not indexed; they reach the agent through the catalog listing only.
 
 ---
@@ -124,7 +124,7 @@ flowchart TD
     subgraph Retrieval["Retrieval tiers"]
         AT["Always-tier\nfull body in stable prompt\nget_always_skills"]
         HT["Hot-tier\nnames + desc working-set\ncompute_working_set"]
-        SR["Searchable\nFTS + vector via SkillPage\nmemory_search kind=skill"]
+        SR["Searchable\nFTS + vector via SkillPage\nmemory_search kinds=skill"]
     end
 
     subgraph Remove["Removal"]
@@ -484,7 +484,7 @@ chat command (`/skills remove <name>`).
 3. **Searchable.** `durin/memory/skill_page.py::SkillPage` is the memory class
    for skills: it wraps the SKILL.md frontmatter and body for FTS and vector
    indexing. When `memory.index_skills` is on (default), every workspace skill
-   is reachable via `memory_search(kind=skill)`. Builtins are not indexed. The
+   is reachable via `memory_search(kinds="skill")`. Builtins are not indexed. The
    automatic per-turn memory prefetch searches the same index with the user
    message, so a workspace skill can also arrive fenced into the message as a
    `kind="skill"` hit, competing with memory hits for the prefetch's slots
@@ -590,7 +590,7 @@ there is no session left to credit.
 | `validate_skill` | `durin/agent/skills_import.py` | Checks agentskills.io format (name, description, code detection). Returns `ValidationReport` with `carries_code`. |
 | `skill_observe` / observation queue | `durin/agent/skill_observations.py` | Task-observer pattern. In-session feedback: `correction`, `gap`, `improvement`, `simplify`. Store: `skills/.observations.jsonl`. States: OPEN → APPLIED / DECLINED. Principles: `skills/.principles.jsonl` (cap 12). |
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta-curation over `mode="auto"` workspace skills. LLM judge proposes evolve / restructure / fuse / retire / principle. Change-gated: never scales with full catalog size. |
-| `SkillPage` | `durin/memory/skill_page.py` | Memory class for skills. Wraps SKILL.md frontmatter and body for FTS and vector indexing. Enables `memory_search(kind=skill)`. |
+| `SkillPage` | `durin/memory/skill_page.py` | Memory class for skills. Wraps SKILL.md frontmatter and body for FTS and vector indexing. Enables `memory_search(kinds="skill")`. |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Daily dream pass: sub-agent mines recent sessions and gap observations, calls `skill_write` for recurring procedures. Agentic (uses `AgentRunner`). |
 | `sweep_unverified_skills` | `durin/agent/skill_lifecycle.py` | Relocates no-provenance workspace skills to quarantine, prepends `unverified_origin` finding. Attributes to `agent:session:<id>` via a path-scoped git-log read when the introducing commit carries a `Session:` trailer (emits `skill.authored`, `ramp="backstop"`), else falls back to `unverified:workspace`. Runs at ContextBuilder init and on surfaces. |
 | `compute_working_set` | `durin/agent/skill_usage.py` | Hot-tier sizing: frequent (7-day window) + recent (24-hour window) skill calls from session sidecars. Returns list of skill names. |
