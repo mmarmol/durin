@@ -11,6 +11,7 @@ references these same values. ``Scope.ADMIN`` implies every other scope.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -81,6 +82,23 @@ def check_requested_scopes(scopes: Iterable[str]) -> None:
     if unknown:
         raise ValidationFailedError(
             f"unknown scope(s): {', '.join(unknown)}", details={"scopes": unknown}
+        )
+
+
+def check_requested_lifetime(ttl_s: float | None) -> None:
+    """Raise :class:`ValidationFailedError` unless ``ttl_s`` is a valid lifetime.
+
+    A valid lifetime is ``None`` (the token does not expire) or a finite number
+    of seconds greater than zero. NaN and the infinities are refused because an
+    expiry built from them is never seen as passed (NaN compares false both
+    ways), and zero or a negative number would mint a token already dead.
+    Both token-issuing paths (the CLI and the API) call this one check.
+    """
+    if ttl_s is None:
+        return
+    if not math.isfinite(ttl_s) or ttl_s <= 0:
+        raise ValidationFailedError(
+            "ttl_s must be a finite number of seconds greater than zero"
         )
 
 

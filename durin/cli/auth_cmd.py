@@ -19,7 +19,11 @@ from rich.console import Console
 from rich.table import Table
 
 from durin.security.api_tokens import ApiTokenStore
-from durin.service.principal import SCOPE_VALUES, check_requested_scopes
+from durin.service.principal import (
+    SCOPE_VALUES,
+    check_requested_lifetime,
+    check_requested_scopes,
+)
 from durin.service.types import ValidationFailedError
 
 console = Console()
@@ -106,8 +110,15 @@ def cmd_issue(
             )
         raise typer.Exit(1)
 
+    ttl_s = float(ttl) if ttl is not None else None
+    try:
+        check_requested_lifetime(ttl_s)
+    except ValidationFailedError:
+        console.print("[red]✗[/red] --ttl must be a number of seconds greater than zero.")
+        raise typer.Exit(1)
+
     store = ApiTokenStore()
-    token_id, plaintext = store.issue(parsed, label=label, ttl_s=float(ttl) if ttl is not None else None)
+    token_id, plaintext = store.issue(parsed, label=label, ttl_s=ttl_s)
 
     console.print()
     console.print("[green]✓[/green] Token issued.")

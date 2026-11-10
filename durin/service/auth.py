@@ -10,7 +10,12 @@ from __future__ import annotations
 from typing import Any
 
 from durin.security.api_tokens import ApiTokenStore, LifetimeExceedsBoundError
-from durin.service.principal import Principal, Scope, check_requested_scopes
+from durin.service.principal import (
+    Principal,
+    Scope,
+    check_requested_lifetime,
+    check_requested_scopes,
+)
 from durin.service.registry import route
 from durin.service.types import (
     Command,
@@ -93,6 +98,7 @@ class AuthService:
     ) -> IssueTokenResult:
         principal.require(Scope.SYSTEM_WRITE)
         check_requested_scopes(cmd.scopes)
+        check_requested_lifetime(cmd.ttl_s)
         # A token may grant only what its issuer holds, judged by the same
         # check every route uses, so ``admin`` covers every scope and nothing
         # else implies anything; otherwise a ``system:write`` token could mint

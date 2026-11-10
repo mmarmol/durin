@@ -534,14 +534,28 @@ def test_revoke_route_lets_admin_revoke_a_dashboard_session(client, auth, token_
     assert auth.resolve(session) is None
 
 
-def test_issue_route_refuses_a_lifetime_that_is_not_a_number(client, token_store, clock):
+
+# Python's json parser (the one the API reads bodies with) accepts the
+# non-standard NaN / Infinity / -Infinity literals, and the request model reads
+# a numeric string such as "inf" as a float, so a client can send either.
+@pytest.mark.parametrize("issuer_ttl_s", [3600.0, None], ids=["expiring", "non-expiring"])
+@pytest.mark.parametrize(
+    "ttl_json",
+    ["NaN", "Infinity", "-Infinity", '"NaN"', '"inf"', '"-inf"', "0", "-1"],
+)
+def test_issue_route_rejects_a_lifetime_that_is_not_a_positive_duration(
+    client, token_store, clock, issuer_ttl_s, ttl_json,
+):
     _id, issuer = token_store.issue(
-        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer", ttl_s=3600.0)
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer",
+        ttl_s=issuer_ttl_s)
     before = _token_ids(token_store)
     r = client.post(
         "/api/v1/auth/tokens",
-        content=b'{"scopes": ["skills:read"], "ttl_s": NaN}',
+        content=f'{{"scopes": ["skills:read"], "ttl_s": {ttl_json}}}'.encode(),
         headers={**_bearer(issuer), "Content-Type": "application/json"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 422
+    assert "problem+json" in r.headers["content-type"]
+    assert "nbwt_" not in r.text
     assert _token_ids(token_store) == before

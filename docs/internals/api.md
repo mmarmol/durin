@@ -63,7 +63,11 @@ local principal — may issue any lifetime. A request for a scope the issuer
 lacks is refused with 403 naming the missing scopes; one that would outlive
 the issuer with 403 reporting the issuer's remaining lifetime at that moment
 as `remaining_s` (the request is refused, never silently shortened); an empty scope list or a scope name
-outside the `Scope` catalog with 422. None of these stores anything. The CLI
+outside the `Scope` catalog with 422. A `ttl_s` must be omitted (non-expiring,
+where the issuer may ask for that) or a finite number of seconds greater than
+zero; NaN, an infinity, zero or a negative value is refused with 422
+(`check_requested_lifetime`, which the CLI's `--ttl` shares). None of these
+stores anything. The CLI
 (`durin auth token issue`) applies the same scope-list check
 (`check_requested_scopes`) and, running locally with full authority, may grant
 any scope and any lifetime.

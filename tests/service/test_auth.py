@@ -333,10 +333,20 @@ async def test_admin_revokes_any_token(svc, admin):
     assert svc.resolve(other) is None
 
 
-async def test_an_expiring_issuer_cannot_issue_a_lifetime_that_is_not_a_number(svc, clock):
-    issuer, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=3600.0)
+
+@pytest.mark.parametrize("issuer_ttl_s", [3600.0, None], ids=["expiring", "non-expiring"])
+@pytest.mark.parametrize(
+    "ttl_s", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0],
+    ids=["nan", "inf", "-inf", "zero", "negative"])
+async def test_a_lifetime_that_is_not_a_positive_duration_is_invalid(
+    svc, clock, issuer_ttl_s, ttl_s,
+):
+    issuer, plaintext = _issuer(
+        svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=issuer_ttl_s)
     before = _ids(svc)
-    with pytest.raises(ForbiddenError):
+    with pytest.raises(ValidationFailedError) as exc:
         await svc.issue_token(
-            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=float("nan")), issuer)
+            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=ttl_s), issuer)
+    assert "ttl_s" in exc.value.message
+    assert plaintext not in exc.value.message
     assert _ids(svc) == before
