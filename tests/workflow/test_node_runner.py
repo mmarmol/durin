@@ -202,6 +202,28 @@ def test_plan_mode_makes_a_node_read_only(tmp_path):
     assert "PLAN MODE" in system.upper()        # the read-only posture is injected
 
 
+def test_a_routing_node_in_the_default_mode_keeps_its_route_tool(tmp_path):
+    from durin.workflow.spec import parse_workflow
+    wf = parse_workflow({"name": "w", "start": "g", "nodes": [
+        {"id": "g", "kind": "work", "tools": "default", "prompt": "judge it",
+         "cases": {"PASS": None, "FAIL": None}},
+    ]})
+    node = wf.nodes["g"]
+    assert node.mode == "read"                      # no mode authored
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _runner(sessions, AgentRunResult(final_content="PASS", messages=[]))
+    nr(NodeRunRequest(
+        node=node, task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    ))
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.tools.has("route")                  # the verdict tool is not mode-filtered
+    assert spec.tools.has("read_file")              # a gate can still inspect
+    assert not spec.tools.has("write_file")         # and still cannot modify
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert "EXPLORE MODE" not in system.upper()     # not the interactive sub-agent framing
+
+
 def test_build_mode_keeps_all_tools_and_adds_no_posture(tmp_path):
     from durin.workflow.spec import WorkNode
     sessions = SessionManager(workspace=tmp_path)

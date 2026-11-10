@@ -47,13 +47,13 @@ Every work node (`"kind": "work"`, the default) has:
   servers) — scoped per node, so a node only sees what its job needs.
 - **A mode.** Non-routing work nodes default to `mode: "build"` (full
   access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
-  `cases`) default to `mode: "explore"` (read-only) — a deliberate gate
-  that can inspect but not modify. You can override either default by
-  setting `mode` explicitly, and for a gate you usually should: prefer
-  `read` (what the seeds use) for any read-only step, including a routing
-  one; `explore` and `plan` carry interactive framing (e.g. "the parent
-  should /build") that can derail a step running unattended. Neither `read`
-  nor `explore` can run commands, so a gate that runs a check needs `build`
+  `cases`) default to `mode: "read"` (read-only, neutral posture) — a
+  deliberate gate that can inspect but not modify, and still delivers its
+  verdict. Setting `mode` explicitly overrides either default and is always
+  honoured exactly: use `build` for a step that writes, `read` for any
+  read-only step; `explore` and `plan` carry interactive framing (e.g. "the
+  parent should /build") that can derail a step running unattended. Neither
+  `read` nor `explore` can run commands, so a gate that runs a check needs `build`
   (as `debug`'s `verify` does) or a script node.
 
 ## Script nodes: deterministic steps with no agent turn

@@ -176,7 +176,7 @@ node's output is threaded as neutral context (`Context from '<node>':`), since a
 dispatch between normal paths rather than a verdict on earlier work. The matched label is
 recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail does not apply).
 Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
-and `next` are mutually exclusive. Routing nodes default to **explore** (read-only) mode.
+and `next` are mutually exclusive. Routing nodes default to **read** (read-only, neutral posture) mode and every other work node to `build`; an explicit `mode` is kept as written. The `route` tool is registered after the mode filter, so a read-only gate always has it.
 
 **A script node runs a deterministic subprocess instead of an agent turn.** A
 `ScriptNode` (`durin/workflow/spec.py`) sets exactly one of `command` (inline, run via
