@@ -49,13 +49,38 @@ plaintext tokens. Tokens carry explicit scope grants (e.g.
 is shared between the gateway daemon and the CLI, so a token issued in one
 context is valid in the other without any in-memory state.
 
+A token cannot create or destroy a credential more powerful than itself.
 Issuing through `POST /api/v1/auth/tokens` needs `system:write`, and the new
 token may carry only scopes its issuer holds, judged by `Principal.has_scope`
-(`admin` covers every scope; no other scope implies another). A request for a
-scope the issuer lacks is refused with 403 naming the missing scopes, and a
-scope name outside the `Scope` catalog with 422; neither stores anything. The
-CLI (`durin auth token issue`) validates names against the same catalog and,
-running locally with full authority, may grant any scope.
+(`admin` covers every scope; no other scope implies another). It also may not
+outlive its issuer: when the presenting token expires, the new token must
+expire no later (`ttl_s` within the issuer's remaining lifetime, never
+omitted). The bound is checked inside `ApiTokenStore.issue` (`not_after`)
+against the same clock reading that stamps the new token's expiry, so a token
+granted exactly the remaining time expires exactly with its issuer. A
+credential that does not expire — the static token, a non-expiring token, the
+local principal — may issue any lifetime. A request for a scope the issuer
+lacks is refused with 403 naming the missing scopes; one that would outlive
+the issuer with 403 reporting the issuer's remaining lifetime at that moment
+as `remaining_s` (the request is refused, never silently shortened); an empty scope list or a scope name
+outside the `Scope` catalog with 422. A `ttl_s` must be omitted (non-expiring,
+where the issuer may ask for that) or a finite number of seconds greater than
+zero; NaN, an infinity, zero or a negative value is refused with 422
+(`check_requested_lifetime`, which the CLI's `--ttl` shares). None of these
+stores anything. The CLI
+(`durin auth token issue`) applies the same scope-list check
+(`check_requested_scopes`) and, running locally with full authority, may grant
+any scope and any lifetime.
+
+Revoking through `DELETE /api/v1/auth/tokens` needs `system:write`, and the
+caller must hold every scope of the token it revokes, judged the same way: a
+token can always revoke itself or a token no more powerful than itself, and
+`admin` can revoke any token, including dashboard sessions. A refused revoke
+changes nothing and answers 403 naming the scopes the caller lacks — unless
+the caller also lacks `system:read` (it cannot list tokens), in which case it
+gets the same 404 as an unknown id, so a refusal never tells it a token
+exists. `durin auth token revoke` and the dashboard's sign-out remove tokens
+directly from the store and are not subject to this check.
 
 ---
 
@@ -150,7 +175,8 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
    (timing-safe) until one matches; a hit is cached against the store file's
    mtime and size, so any issue or revoke — from this process or the CLI —
    invalidates it.
-   On a match it returns a `Principal` with the stored scope grants:
+   On a match it returns a `Principal` with the stored scope grants and
+   expiry (`expires_at`):
    `Principal.webui(subject, scopes)` for the dashboard session token
    `/webui/bootstrap` mints (stored with `kind: "webui"`), and
    `Principal.remote(subject, scopes)` for every other token. If no stored
@@ -477,7 +503,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `RouteSpec` | `durin/service/registry.py` | Frozen dataclass: `verb`, `path`, `scope`, `request_model`, `response_model`, `summary`, `status_code` (default 200) — single source for OpenAPI generation and Starlette routing |
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
-| `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind` (`local`, `webui`, `remote`); `Principal.local()` → `{ADMIN}` in-process, `Principal.webui(subject, scopes)` → the dashboard session, `Principal.remote(subject, scopes)` → any other token |
+| `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind` (`local`, `webui`, `remote`), `expires_at` (the presenting token's expiry, `None` when it does not expire); `Principal.local()` → `{ADMIN}` in-process, `Principal.webui(subject, scopes)` → the dashboard session, `Principal.remote(subject, scopes)` → any other token |
 | `Scope` | `durin/service/principal.py` | String enum of permission values: `admin`, `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, automations, system), and the write-only `channels:write` and `chat:write` |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
@@ -691,8 +717,9 @@ in plain text.
 ### CLI and in-process surfaces
 
 - **`durin auth token {list,issue,revoke}`** — operates directly on
-  `ApiTokenStore`, no gateway required; `issue` validates scopes against the
-  `Scope` enum.
+  `ApiTokenStore`, no gateway required; `issue` validates the scope list with
+  the same `check_requested_scopes` the API uses (non-empty, every name in the
+  `Scope` enum).
 - **TUI** — calls service methods in-process via `Principal.local()` with
   `{ADMIN}` authority; chat flows through the `MessageBus` / `AgentLoop`.
 - **TypeScript webui** — every authenticated call routes through

@@ -300,10 +300,13 @@ Each iteration begins with `_active_tool_definitions(spec)`, which calls
 definitions to only those allowed by the mode. The filtered list is what the LLM
 actually sees. When `mode_provider` is `None` or the mode has no restrictions
 (the default `BUILD_MODE`), the unfiltered cache is returned directly. Under a
-restricting mode, the `mcp_find_tools` schema is swapped for a copy whose
-deferred catalog lists only the tools that mode allows
-(`McpFindToolsTool.schema_for_mode()`): the registry is shared by every session,
-so its cached copy always carries the unrestricted catalog.
+restricting mode, every allowed tool is asked for its `schema_for_mode()`
+(a `Tool` method that returns `None` when the schema is the same in every
+mode). A tool whose description names other tools it can run returns a copy
+naming only the ones that mode allows: `mcp_find_tools` narrows its deferred
+catalog, and `execute_code` the list of tools its script can call. The
+registry is shared by every session, so its cached copies always carry the
+unrestricted text.
 
 After the LLM responds with tool calls, `_execute_tools()` partitions them into
 batches. Tools whose `concurrency_safe` property is `True` may run in parallel
@@ -366,16 +369,32 @@ For each tool call, `_run_tool()` applies checks in this order:
 1. **Loop-detection guard:** if the same `(name, arguments)` hash appeared as a
    failed call earlier this turn (tracked in `seen_failed_calls`), return a
    `BLOCKED` synthetic result immediately, avoiding a doomed re-execution.
-2. **Mode gate:** `refuse_tool_call(active_mode, tool_call.name)` (in
+2. **Mode gate:** `refuse_tool_call(active_mode, tool_call.name, deferred)` (in
    `agent_mode.py`) applies `is_tool_allowed` and, on a refusal, records
    `agent_mode.tool_denied` and returns an informative `Error: Tool '…' is not
    available in mode '…'` text. This fires only when the model uses a cached
-   schema after a mode switch. A tool that runs another tool by name gets the
+   schema after a mode switch. An unattended mode (a workflow node's) gets
+   wording without a person to ask: the tool is not available to this step,
+   the step's tools are listed when the mode is an allowlist, and the model is
+   told to finish with them. A tool that runs another tool by name gets the
    same gate: the runner binds the mode it applied around each `execute`
    (`bind_tool_call_mode()` / `current_tool_call_mode()`), and `mcp_invoke`
    passes the inner tool name through `refuse_tool_call` and then through
    `prepare_call()` before running it, so a deferred tool is refused, cast and
    validated exactly as a direct call to it would be, with the same text.
+   `execute_code` does the same for every tool its script calls: it reads the
+   mode once when the call starts and hands it to each RPC dispatch, which
+   applies `refuse_tool_call` and then `prepare_call()` on a private registry
+   of the script's tools. The mode only narrows the script's fixed tool set,
+   never widens it. A refusal or an invalid argument reaches the script as a
+   failed call (the stub raises `RuntimeError` with the same text a direct
+   call returns), counts against the script's call cap, and leaves the rest
+   of the script running.
+   `deferred` is the set of MCP tools deferred behind the bridges right now
+   (`deferred_tool_names()`); the definition filter passes the same set. An
+   allowlist that allows one of them allows `mcp_find_tools` and `mcp_invoke`
+   too, unless it denies them by name, so a mode reaches the MCP tools it
+   names whether or not deferral is on.
 3. **Repeated-lookup guard:** a `web_fetch` of the same URL or a
    `web_search` of the same query beyond a small per-run retry budget
    (`repeated_external_lookup_error()`) returns an error telling the model to
@@ -596,7 +615,7 @@ through byte-for-byte.
 | `truncate_with_spill` | `durin/agent/tools/output_spill.py` | Overflow helper: writes full content to `.durin/spills/`, returns head+tail+spill-ref rendering |
 | `write_spill` | `durin/agent/tools/output_spill.py` | Writes (already redacted) content to a spill file and returns its path or the reason it failed; `reuse=True` names the file by its content and reuses an existing one |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function for structured telemetry from tool code; privacy-trims free-text fields; silently no-ops when no session logger is bound |
-| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by the definition filter, the execution gate (through `refuse_tool_call`) and the deferred-MCP bridges |
+| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, `prompt_suffix` and `attended` (false for the mode a workflow node's run is gated by; it only changes how a refusal is worded); `is_tool_allowed(name, deferred)` is the single permission check called by the definition filter, the execution gate (through `refuse_tool_call`) and the deferred-MCP bridges |
 | `AgentRunner` | `durin/agent/runner.py` | Inner LLM/tool loop; owns `_execute_tools`, `_run_tool`, `_normalize_tool_result`, `_enforce_turn_budget`, `_drop_orphan_tool_results`, `_backfill_missing_tool_results`, and `_active_tool_definitions` |
 | MCP tool wrappers | `durin/agent/tools/mcp.py` | Wraps each remote MCP tool as a native `Tool` instance registered as `mcp_<server>_<tool>`; see [mcp.md](mcp.md) for the full MCP integration |
 
@@ -713,7 +732,9 @@ Below the threshold, all MCP schemas ship as before — a single small server do
 not pay the discovery indirection. Above it, `mcp_find_tools` gives the model a
 searchable catalog and `mcp_invoke` executes any deferred tool by name — any the
 active mode allows, since the runner's mode gate only sees the bridge's name and
-the bridges apply the mode to the inner tool themselves. Built-in
+the bridges apply the mode to the inner tool themselves. An allowlist mode that
+names a deferred tool gets the bridges with it, so turning deferral on does not
+change what the mode can reach. Built-in
 tools are never deferred because durin's curated surface (including `memory_search`)
 must stay structurally visible to the model.
 

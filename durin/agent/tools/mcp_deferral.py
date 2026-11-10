@@ -31,7 +31,12 @@ from typing import Any
 
 from loguru import logger
 
-from durin.agent.agent_mode import AgentMode, current_tool_call_mode, refuse_tool_call
+from durin.agent.agent_mode import (
+    DEFERRAL_BRIDGES,
+    AgentMode,
+    current_tool_call_mode,
+    refuse_tool_call,
+)
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.schema import (
@@ -41,9 +46,9 @@ from durin.agent.tools.schema import (
 )
 from durin.utils.helpers import estimate_text_tokens
 
-__all__ = ["log_mcp_deferral_status", "maybe_defer_mcp_tools"]
+__all__ = ["deferred_tool_names", "log_mcp_deferral_status", "maybe_defer_mcp_tools"]
 
-_BRIDGE_NAMES = frozenset({"mcp_find_tools", "mcp_invoke"})
+_BRIDGE_NAMES = DEFERRAL_BRIDGES
 _FIND_MAX_SCHEMAS = 8
 _CATALOG_LINE_DESC_CHARS = 100
 
@@ -64,6 +69,17 @@ def _deferrable_mcp_tools(registry: ToolRegistry) -> list[Tool]:
         if tool is not None and not getattr(tool, "_plugin_discoverable", True):
             tools.append(tool)
     return tools
+
+
+def deferred_tool_names(registry: ToolRegistry) -> frozenset[str]:
+    """Names of the MCP tools currently deferred behind the bridges.
+
+    Empty while deferral is off. A mode decision reads it at call time, so a
+    mode that allows one of these tools also gets the bridges that reach it.
+    """
+    return frozenset(
+        t.name for t in _deferrable_mcp_tools(registry) if not t.llm_visible
+    )
 
 
 def _catalog_line(tool: Tool) -> str:

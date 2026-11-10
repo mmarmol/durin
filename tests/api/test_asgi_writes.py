@@ -403,3 +403,159 @@ def test_issue_route_rejects_an_unknown_scope_name(client, token_store):
     assert r.status_code == 422
     assert "problem+json" in r.headers["content-type"]
     assert _token_ids(token_store) == before
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/auth/tokens — a token cannot create or destroy something more
+# powerful than itself
+# ---------------------------------------------------------------------------
+
+NOW = 1_800_000_000.0
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """Pin the token store's clock; tests move it by reassigning ``clock.now``."""
+
+    class _Clock:
+        now = NOW
+
+    monkeypatch.setattr("durin.security.api_tokens._now", lambda: _Clock.now)
+    return _Clock
+
+
+def _bearer(plaintext):
+    return {"Authorization": f"Bearer {plaintext}"}
+
+
+@pytest.mark.parametrize("ttl_s", [None, 3601.0])
+def test_issue_route_refuses_a_lifetime_beyond_the_issuers(client, token_store, clock, ttl_s):
+    _id, issuer = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer", ttl_s=3600.0)
+    before = _token_ids(token_store)
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["skills:read"], "ttl_s": ttl_s},
+        headers=_bearer(issuer),
+    )
+    assert r.status_code == 403
+    assert "problem+json" in r.headers["content-type"]
+    assert "remaining lifetime" in r.json()["detail"]
+    assert "nbwt_" not in r.text
+    assert _token_ids(token_store) == before
+
+
+def test_issue_route_issues_within_the_issuers_remaining_lifetime(client, token_store, clock):
+    _id, issuer = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer", ttl_s=3600.0)
+    clock.now = NOW + 600.0
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["skills:read"], "ttl_s": 3000.0},
+        headers=_bearer(issuer),
+    )
+    assert r.status_code == 200
+    assert r.json()["expires_at"] == NOW + 3600.0
+
+
+def test_issue_route_lets_a_non_expiring_issuer_choose_any_lifetime(client, token_store, clock):
+    _id, issuer = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer")
+    r = client.post(
+        "/api/v1/auth/tokens", json={"scopes": ["skills:read"]}, headers=_bearer(issuer))
+    assert r.status_code == 200
+    assert r.json()["expires_at"] is None
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["skills:read"], "ttl_s": 10 * 365 * 86400.0},
+        headers=_bearer(issuer),
+    )
+    assert r.status_code == 200
+    assert r.json()["expires_at"] == NOW + 10 * 365 * 86400.0
+
+
+def test_issue_route_rejects_an_empty_scope_list(client, token_store):
+    before = _token_ids(token_store)
+    r = client.post(
+        "/api/v1/auth/tokens", json={"scopes": []}, headers=_bearer(STATIC_TOKEN))
+    assert r.status_code == 422
+    assert "problem+json" in r.headers["content-type"]
+    assert _token_ids(token_store) == before
+
+
+def _revoke(client, token_id, plaintext):
+    return client.request(
+        "DELETE", "/api/v1/auth/tokens", json={"token_id": token_id}, headers=_bearer(plaintext))
+
+
+def test_revoke_route_refuses_a_narrower_caller(client, auth, token_store):
+    _id, caller = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SYSTEM_READ.value], label="caller")
+    target_id, target = token_store.issue([Scope.ADMIN.value], label="root")
+    r = _revoke(client, target_id, caller)
+    assert r.status_code == 403
+    assert "problem+json" in r.headers["content-type"]
+    assert r.json()["details"] == {"scopes": ["admin"]}
+    assert "nbwt_" not in r.text
+    assert auth.resolve(target) is not None
+
+
+def test_revoke_route_hides_tokens_from_a_caller_that_cannot_list(client, auth, token_store):
+    _id, caller = token_store.issue([Scope.SYSTEM_WRITE.value], label="caller")
+    target_id, target = token_store.issue([Scope.SECRETS_WRITE.value], label="other")
+    refused = _revoke(client, target_id, caller)
+    missing = _revoke(client, "0123456789abcdef", caller)
+    assert refused.status_code == missing.status_code == 404
+    assert refused.json()["detail"] == missing.json()["detail"]
+    assert auth.resolve(target) is not None
+
+
+def test_revoke_route_lets_a_covering_caller_revoke(client, auth, token_store):
+    _id, caller = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="caller")
+    target_id, target = token_store.issue([Scope.SKILLS_READ.value], label="child")
+    r = _revoke(client, target_id, caller)
+    assert r.status_code == 200
+    assert auth.resolve(target) is None
+
+
+def test_revoke_route_lets_a_token_revoke_itself(client, auth, token_store):
+    caller_id, caller = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.MEMORY_READ.value], label="caller")
+    r = _revoke(client, caller_id, caller)
+    assert r.status_code == 200
+    assert auth.resolve(caller) is None
+
+
+def test_revoke_route_lets_admin_revoke_a_dashboard_session(client, auth, token_store):
+    session_id, session = token_store.issue([Scope.ADMIN.value], label="bootstrap", kind="webui")
+    r = _revoke(client, session_id, STATIC_TOKEN)
+    assert r.status_code == 200
+    assert auth.resolve(session) is None
+
+
+
+# Python's json parser (the one the API reads bodies with) accepts the
+# non-standard NaN / Infinity / -Infinity literals, and the request model reads
+# a numeric string such as "inf" as a float, so a client can send either.
+@pytest.mark.parametrize("issuer_ttl_s", [3600.0, None], ids=["expiring", "non-expiring"])
+@pytest.mark.parametrize(
+    "ttl_json",
+    ["NaN", "Infinity", "-Infinity", '"NaN"', '"inf"', '"-inf"', "0", "-1"],
+)
+def test_issue_route_rejects_a_lifetime_that_is_not_a_positive_duration(
+    client, token_store, clock, issuer_ttl_s, ttl_json,
+):
+    _id, issuer = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer",
+        ttl_s=issuer_ttl_s)
+    before = _token_ids(token_store)
+    r = client.post(
+        "/api/v1/auth/tokens",
+        content=f'{{"scopes": ["skills:read"], "ttl_s": {ttl_json}}}'.encode(),
+        headers={**_bearer(issuer), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 422
+    assert "problem+json" in r.headers["content-type"]
+    assert "nbwt_" not in r.text
+    assert _token_ids(token_store) == before

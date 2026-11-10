@@ -13,8 +13,8 @@ thread, no sync→async bridge). Local-only v1.
 
 Security model: the child gets a curated env (HOME/LANG/TERM/PYTHONUNBUFFERED
 + PYTHONPATH for the stub — NO ambient secrets), the RPC server enforces the
-tool allowlist and the call cap server-side, and the socket file is 0600 in
-a private tempdir.
+tool allowlist, the active agent mode and the call cap server-side, and the
+socket file is 0600 in a private tempdir.
 """
 
 from __future__ import annotations
@@ -31,9 +31,11 @@ from typing import Any
 from loguru import logger
 from pydantic import Field
 
+from durin.agent.agent_mode import AgentMode, current_tool_call_mode, refuse_tool_call
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
+from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.config.schema import Base
 from durin.utils.subprocess_cleanup import aclose_subprocess
@@ -204,6 +206,11 @@ class ExecuteCodeTool(Tool):
             name: tool for name, tool in (tools or {}).items()
             if name in _ALLOWED_TOOLS
         }
+        # A private registry over the same instances, so a script's call is
+        # cast and validated by the same ``prepare_call`` a direct call uses.
+        self._registry = ToolRegistry()
+        for tool in self._tools.values():
+            self._registry.register(tool)
         self._config = config or CodeExecutionConfig()
         self._workspace = workspace
         # A workflow node's working folder: the script runs there, so its own
@@ -214,11 +221,21 @@ class ExecuteCodeTool(Tool):
     def name(self) -> str:
         return "execute_code"
 
-    @property
-    def description(self) -> str:
+    def _callable_names(self, mode: AgentMode | None) -> list[str]:
+        """The script tools *mode* would let a direct call reach, sorted."""
+        return [
+            name for name in sorted(self._tools)
+            if mode is None or mode.is_tool_allowed(name)
+        ]
+
+    def _describe(self, mode: AgentMode | None) -> str:
+        if mode is None:
+            names = ", ".join(sorted(self._tools) or _ALLOWED_TOOLS)
+        else:
+            names = ", ".join(self._callable_names(mode)) or "none in the current mode"
         return (
             "Run a Python script that can call durin tools "
-            f"({', '.join(sorted(self._tools) or _ALLOWED_TOOLS)}) via "
+            f"({names}) via "
             "'from durin_tools import ...'. Tool results stay in script "
             "variables; ONLY stdout returns to you — print exactly what you "
             "need. Use for batch operations (read/filter/aggregate many "
@@ -228,6 +245,18 @@ class ExecuteCodeTool(Tool):
         )
 
     @property
+    def description(self) -> str:
+        # The registry caches this for every session, so it names every
+        # script tool; a restricted mode is sent schema_for_mode().
+        return self._describe(None)
+
+    def schema_for_mode(self, mode: AgentMode) -> dict[str, Any]:
+        """This tool's schema naming only the script tools *mode* allows."""
+        schema = self.to_schema()
+        schema["function"]["description"] = self._describe(mode)
+        return schema
+
+    @property
     def exclusive(self) -> bool:
         return True
 
@@ -235,6 +264,11 @@ class ExecuteCodeTool(Tool):
         if not code:
             return json.dumps({"status": "error", "error": "Unknown code"})
         started = time.monotonic()
+        # The mode the runner applied to this execute_code call. Read once
+        # here and handed to every dispatch: one instance serves concurrent
+        # sessions, so it never lives on self, and each call's script
+        # answers to its own call's mode.
+        mode = current_tool_call_mode()
         # Per-tool call counts: the primary "how is execute_code actually
         # used" signal — distinguishes a real batch (many calls across a few
         # tools) from a trivial 0-1 call script that a direct tool call would
@@ -249,7 +283,7 @@ class ExecuteCodeTool(Tool):
                     line = await reader.readline()
                     if not line:
                         break
-                    response = await self._dispatch(line, tool_calls)
+                    response = await self._dispatch(line, tool_calls, mode)
                     writer.write(response + b"\n")
                     await writer.drain()
             except (ConnectionResetError, asyncio.IncompleteReadError):
@@ -326,8 +360,18 @@ class ExecuteCodeTool(Tool):
         })
         return json.dumps(result, ensure_ascii=False)
 
-    async def _dispatch(self, line: bytes, tool_calls: dict[str, int]) -> bytes:
-        """Validate + execute one RPC request; never raises."""
+    async def _dispatch(
+        self, line: bytes, tool_calls: dict[str, int], mode: AgentMode | None = None,
+    ) -> bytes:
+        """Validate + execute one RPC request under *mode*; never raises.
+
+        *mode* is the mode of the execute_code call running the script. The
+        runner's gate saw only execute_code, so each call the script makes
+        gets the decision, argument cast/validation and error text a direct
+        call to that tool would get. A refusal or invalid arguments reach
+        the script as a failed call (``ok: false``), which the stub raises
+        as ``RuntimeError``; the script decides whether to carry on.
+        """
         try:
             request = json.loads(line)
             tool_name = request.get("tool", "")
@@ -339,7 +383,7 @@ class ExecuteCodeTool(Tool):
             return json.dumps({
                 "ok": False,
                 "error": f"tool '{tool_name}' is not available in execute_code "
-                         f"(allowed: {', '.join(sorted(self._tools))})",
+                         f"(allowed: {', '.join(self._callable_names(mode))})",
             }).encode()
         if sum(tool_calls.values()) >= self._config.max_tool_calls:
             return json.dumps({
@@ -347,13 +391,20 @@ class ExecuteCodeTool(Tool):
                 "error": f"Tool call limit reached ({self._config.max_tool_calls}). "
                          "No more tool calls allowed in this execution.",
             }).encode()
+        # Counted before the mode and argument checks, like a call whose
+        # tool fails: a script retrying a refused call still hits the cap.
         tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
+        error = refuse_tool_call(mode, tool_name)
+        if error is None:
+            tool, args, error = self._registry.prepare_call(tool_name, args)
+        if error is not None:
+            return json.dumps({"ok": False, "error": error}, ensure_ascii=False).encode()
         # The result goes to the script, not into the model's context, so
         # the calling run's per-result cap does not apply: the tool keeps its
         # own limits (a script's grep is not cut to a model-sized page).
         cap_token = set_result_char_cap(None)
         try:
-            result = await self._tools[tool_name].execute(**args)
+            result = await tool.execute(**args)
         except Exception as e:  # noqa: BLE001 — tool errors flow back to the script
             return json.dumps({"ok": False, "error": str(e)[:500]}).encode()
         finally:

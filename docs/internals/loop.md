@@ -929,16 +929,21 @@ rows have no `operating_floor` entry.
 Modes ([`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py)) are pure
 data: a `name`, an optional `allowed` allowlist, a `denied` set, and a
 `prompt_suffix`, plus an optional `icon` and a `builtin` flag carried for the
-UI. The loop has no `if plan_mode` branches. Instead the runner
+UI, and an `attended` flag (true for every registered mode; false for the mode
+a workflow node is gated by) that only changes how a refusal is worded. The loop has no `if plan_mode` branches. Instead the runner
 calls a `mode_provider` callback each iteration to read the active mode (from
 `session.metadata["agent_mode"]`) and filters the tool definitions sent to the
 LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effect
 on the very next iteration. If the model emits a tool call for a denied tool
 anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
-this mode" result — tool-by-tool denial, not a stopped run. Bridges that run or
-list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`) apply
-the same decision to the inner tool, so deferral does not open a way around a
-mode. Built-ins:
+this mode" result — tool-by-tool denial, not a stopped run. Tools that run or
+list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`, and
+`execute_code` for the tools its script calls) apply the mode the runner gave
+their own call — a conversation's, a sub-agent's or a workflow node's — to the
+inner tool, so neither deferral nor a script opens a way around that mode.
+Deferral does not close a way either: an allowlist that names a deferred MCP tool
+also allows the two bridges (unless it denies them by name), which then reach
+only the tools it names. Built-ins:
 `build` (full access), `plan` (read-only planning), `explore` (read-only, for
 sub-agents), and `read` (read-only with a neutral posture — no interactive
 framing, for workflow nodes that inspect or judge). `explore` and `read` share

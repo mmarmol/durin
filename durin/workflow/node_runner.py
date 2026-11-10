@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from durin.agent.agent_mode import AgentMode, node_gate_mode
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.runner import AgentRunner, AgentRunSpec, input_budget_tokens, provider_max_output
 from durin.agent.tools.base import Tool
@@ -949,6 +950,10 @@ class AgentNodeRunner:
         # private copy of the working folder, or the workspace itself).
         tools_workspace = req.workspace_override or str(self.sessions.workspace.resolve())
         tools_registry = self._build_tools(req.node, req.workspace_override, req.output_dir)
+        # What the node's mode let through; anything registered after this is
+        # the engine's own (verdict and delivery tools), which the mode does
+        # not filter.
+        mode_filtered = set(tools_registry.tool_names)
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             user = (
                 f"{user}\n\n--- Working directory ---\n"
@@ -1088,6 +1093,23 @@ class AgentNodeRunner:
         if route_labels is not None:
             tools_registry.register(_RouteTool(route_labels, routed))
             route_decided = routed.decided
+        # The node's runs are gated by its mode the way a chat turn is gated by
+        # the session's: the runner refuses a call the mode refuses, sends only
+        # the schemas it allows (narrowed where a description names other
+        # tools), and binds it for a tool that runs other tools by name — an
+        # execute_code script runs its calls through tool instances of its own,
+        # outside this registry. A node's MCP tools are registered under their
+        # own names, so the gate decides each by name. The engine's own tools
+        # stay allowed, as the registry holds them whatever the mode, and a
+        # refusal is worded for a step nobody is attending.
+        node_mode = node_gate_mode(
+            get_mode(getattr(req.node, "mode", "build")),
+            mode_filtered,
+            [name for name in tools_registry.tool_names if name not in mode_filtered],
+        )
+
+        def mode_provider() -> AgentMode:
+            return node_mode
         # The forced calls below (re-entry assessment, `route`, `deliver`) are sent
         # from a work-loop run's messages the way that run would send its next
         # request — what it pruned stays pruned, the request fits its input
@@ -1104,7 +1126,10 @@ class AgentNodeRunner:
             context_window_tokens=node_window,
             workspace=node_workspace,
             session_key=node_session_key,
+            mode_provider=mode_provider,
         )
+        # The forced calls below send exactly the tool list the work loop sends.
+        loop_tools = AgentRunner._active_tool_definitions(view_spec)
 
         def forced_view(run) -> Callable[[list[dict]], tuple[list[dict], int | None]]:
             prune_state = run.prune_state
@@ -1132,6 +1157,7 @@ class AgentNodeRunner:
                 concurrent_tools=True,
                 hook=hook,
                 end_turn_after_tools=route_decided,
+                mode_provider=mode_provider,
             ), req.cancel_check)
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             # `messages` is the pre-turn snapshot built above. AgentRunner.run()
@@ -1167,7 +1193,7 @@ class AgentNodeRunner:
                and reentries_left > 0):
             with self._node_call_limits(node_window, node_provider):
                 wants_reentry = self._wants_reentry(
-                    result.messages, model, tools_registry,
+                    result.messages, model, loop_tools,
                     provider=node_provider, temperature=persona_temperature,
                     view=forced_view(result))
             if not wants_reentry:
@@ -1199,6 +1225,7 @@ class AgentNodeRunner:
                     concurrent_tools=True,
                     hook=hook,
                     end_turn_after_tools=route_decided,
+                    mode_provider=mode_provider,
                     # Continue what the previous run pruned, keeping its prefix.
                     prune_state=result.prune_state,
                 ), req.cancel_check)
@@ -1296,7 +1323,7 @@ class AgentNodeRunner:
             else:
                 with self._node_call_limits(node_window, node_provider):
                     route_label = self._derive_route_label(
-                        all_messages, route_labels, model, tools_registry,
+                        all_messages, route_labels, model, loop_tools,
                         provider=node_provider, temperature=persona_temperature,
                         view=forced_view(last_run))
 
@@ -1313,6 +1340,7 @@ class AgentNodeRunner:
                 with self._node_call_limits(node_window, node_provider):
                     payload = self._derive_structured_output(
                         all_messages, node_schema, model, tools_registry, delivered,
+                        tool_defs=loop_tools,
                         provider=node_provider, temperature=persona_temperature,
                         view=forced_view(last_run))
             except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
@@ -1341,12 +1369,12 @@ class AgentNodeRunner:
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
-                            tools: ToolRegistry, *, view, provider=None,
+                            tools: list[dict], *, view, provider=None,
                             temperature: float | None = None) -> str | None:
         """Deterministic routing verdict via a forced `route` tool call: the model picks exactly
         one label from this node's enum. Returns the chosen label, or None on any failure (the
-        engine then falls back to parsing the node's text output). `tools` is the SAME registry
-        the work loop just rendered — `route` is already in it from turn 1 (see `_RouteTool`) —
+        engine then falls back to parsing the node's text output). `tools` is the SAME tool list
+        the work loop sends — `route` is already in it from turn 1 (see `_RouteTool`) —
         so this call's tools array is identical to the loop's and the provider's cached prompt
         prefix survives into the turn's last request; only `tool_choice` pins the verdict.
         `view` maps the request's messages to what is sent and its output cap: the loop's
@@ -1360,7 +1388,7 @@ class AgentNodeRunner:
         }])
         try:
             resp = self._chat(
-                messages=route_messages, tools=tools.get_definitions(),
+                messages=route_messages, tools=tools,
                 tool_choice={"type": "function", "function": {"name": "route"}}, model=model,
                 provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
@@ -1410,7 +1438,7 @@ class AgentNodeRunner:
         return asyncio.run(target.chat_with_retry(**kwargs))
 
     def _wants_reentry(self, messages: list[dict], model: str | None,
-                       tools: ToolRegistry, *, view, provider=None,
+                       tools: list[dict], *, view, provider=None,
                        temperature: float | None = None) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
         essential work is still missing (re-enter) or it can already produce its
@@ -1420,7 +1448,7 @@ class AgentNodeRunner:
         Unlike `deliver`/`route`, `assess` has no early-call semantics — nothing
         in the work loop ever prompts the model to call it, so registering it in
         the node's registry from turn 1 would only add an unused tool to every
-        round. Instead this appends it to `tools`' full rendered list for just
+        round. Instead this appends it to the work loop's tool list `tools` for just
         this one call: the shared prefix (everything but the appended tail) is
         still identical to what the work loop just sent, which is what the
         provider's prompt cache keys on. `view` maps the request's messages to
@@ -1443,7 +1471,7 @@ class AgentNodeRunner:
         }])
         try:
             resp = self._chat(
-                messages=convo, tools=tools.get_definitions() + [tool],
+                messages=convo, tools=[*tools, tool],
                 tool_choice={"type": "function", "function": {"name": "assess"}}, model=model,
                 provider=provider, temperature=temperature, max_tokens=max_tokens)
             for tc in (getattr(resp, "tool_calls", None) or []):
@@ -1462,15 +1490,16 @@ class AgentNodeRunner:
     _STRUCTURED_OUTPUT_ATTEMPTS = 3
 
     def _derive_structured_output(self, messages: list[dict], schema: dict, model: str | None,
-                                  tools: ToolRegistry, captured: _DeliverCapture, *, view,
+                                  tools: ToolRegistry, captured: _DeliverCapture, *,
+                                  tool_defs: list[dict], view,
                                   provider=None, temperature: float | None = None) -> dict:
         """The node's validated payload. If the model already delivered a valid
         payload earlier in the turn — ``_DeliverTool`` is registered in ``tools``
         from turn 1, so an in-loop call lands in ``captured`` — that payload is
         returned directly with NO extra LLM call. Otherwise this forces one
         ``deliver`` tool call now, whose parameters ARE the declared schema (the
-        same machinery as the ``route`` verdict), on ``tools``' full rendered list
-        — identical to what the work loop just sent, ``deliver`` included — so the
+        same machinery as the ``route`` verdict), on ``tool_defs``, the work
+        loop's tool list — identical to what the work loop just sent, ``deliver`` included — so the
         provider's cached prompt prefix survives into the turn's last request;
         only ``tool_choice`` names the tool. A provider may not honor that name,
         so the answer is read by tool name (see ``_delivery_call``): a
@@ -1488,7 +1517,7 @@ class AgentNodeRunner:
         if captured.payload is not None:
             return captured.payload
 
-        full_tools = tools.get_definitions()
+        full_tools = tool_defs
         required_fields = [str(k) for k in (schema.get("required") or [])]
         instruction = ("Deliver your final output now by calling the `deliver` tool. "
                        "The tool's parameters are the required output schema.")

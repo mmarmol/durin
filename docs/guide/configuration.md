@@ -382,6 +382,16 @@ entry under `agent_modes` is keyed by mode name and is a `ModeConfig`:
 | `prompt_suffix` | `""` | Text appended to the system prompt while the mode is active |
 | `icon` | `null` | Optional glyph name for the UI; the picker falls back to a generic glyph when unset |
 
+While a mode is active in a conversation, a sub-agent or a workflow node, a
+script run by `execute_code` can call only the tools the mode allows: a call to
+any other one fails inside the script with the same message a direct call gets,
+and the tool's description lists only the allowed ones.
+
+An `allowed` list that names an MCP tool keeps reaching it when many MCP tools
+are connected and their definitions are deferred (see `tools.mcp_deferral`): the
+mode then also gets `mcp_find_tools` and `mcp_invoke`, which find and call only
+the MCP tools the list names. Put either one in `denied` to keep it refused.
+
 ---
 
 ### `appearance`

@@ -89,6 +89,17 @@ def test_issue_with_ttl(tokens_path) -> None:
     assert store.list_tokens()[0]["expires_at"] is not None
 
 
+@pytest.mark.parametrize("ttl", ["0", "-5"])
+def test_issue_rejects_a_lifetime_that_is_not_positive(tokens_path, ttl) -> None:
+    result = runner.invoke(
+        app,
+        ["auth", "token", "issue", "--scopes", "settings:read", "--ttl", ttl],
+    )
+    assert result.exit_code == 1, result.output
+    assert "--ttl" in result.output
+    assert ApiTokenStore(path=tokens_path).list_tokens() == []
+
+
 # ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------

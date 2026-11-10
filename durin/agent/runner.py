@@ -1732,24 +1732,41 @@ class AgentRunner:
             return all_defs
         if mode is None or (mode.allowed is None and not mode.denied):
             return all_defs
-        from durin.agent.tools.mcp_deferral import McpFindToolsTool
+        from durin.agent.tools.base import Tool
         from durin.agent.tools.registry import ToolRegistry
 
-        # The deferred-MCP finder's description lists other tools by name.
-        # The registry caches it unfiltered (one registry serves every
-        # session), so a restricted mode gets a copy listing only the tools
-        # it allows.
+        # Some descriptions list other tools by name (the deferred-MCP
+        # finder's catalog, the tools an execute_code script can call). The
+        # registry caches them unfiltered (one registry serves every
+        # session), so a restricted mode gets each tool's own copy listing
+        # only the tools it allows.
         get_tool = getattr(spec.tools, "get", None)
-        finder = get_tool("mcp_find_tools") if callable(get_tool) else None
+        deferred = AgentRunner._deferred_tool_names(spec)
         out = []
         for d in all_defs:
             name = ToolRegistry._schema_name(d)
-            if not mode.is_tool_allowed(name):
+            if not mode.is_tool_allowed(name, deferred):
                 continue
-            if isinstance(finder, McpFindToolsTool) and name == finder.name:
-                d = finder.schema_for_mode(mode)
+            tool = get_tool(name) if callable(get_tool) else None
+            if isinstance(tool, Tool):
+                d = tool.schema_for_mode(mode) or d
             out.append(d)
         return out
+
+    @staticmethod
+    def _deferred_tool_names(spec: AgentRunSpec) -> frozenset[str]:
+        """The tools deferred behind the bridges in *spec*'s registry right now.
+
+        The definition filter and the call-time gate both pass this to the
+        mode decision, so the schemas sent and the calls allowed agree on
+        whether a mode reaches the bridges.
+        """
+        from durin.agent.tools.mcp_deferral import deferred_tool_names
+        from durin.agent.tools.registry import ToolRegistry
+
+        if not isinstance(spec.tools, ToolRegistry):
+            return frozenset()
+        return deferred_tool_names(spec.tools)
 
     def _request_estimate(
         self,
@@ -2333,7 +2350,10 @@ class AgentRunner:
                 active_mode = spec.mode_provider()
             except Exception:
                 active_mode = None
-        refusal = refuse_tool_call(active_mode, tool_call.name)
+        refusal = refuse_tool_call(
+            active_mode, tool_call.name,
+            self._deferred_tool_names(spec) if active_mode is not None else (),
+        )
         if refusal is not None:
             event = {
                 "name": tool_call.name,

@@ -11,10 +11,12 @@ references these same values. ``Scope.ADMIN`` implies every other scope.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
-from durin.service.types import ForbiddenError
+from durin.service.types import ForbiddenError, ValidationFailedError
 
 
 class Scope(str, Enum):
@@ -65,6 +67,41 @@ class Scope(str, Enum):
 SCOPE_VALUES: frozenset[str] = frozenset(s.value for s in Scope)
 
 
+def check_requested_scopes(scopes: Iterable[str]) -> None:
+    """Raise :class:`ValidationFailedError` unless ``scopes`` is a valid grant.
+
+    A valid grant names at least one scope, and only scopes in the catalog.
+    Both token-issuing paths (the CLI and the API) call this one check, so they
+    accept and refuse the same requests. ``details["scopes"]`` lists the
+    unknown names, and is empty when no scope was named.
+    """
+    requested = set(scopes)
+    if not requested:
+        raise ValidationFailedError("at least one scope is required", details={"scopes": []})
+    unknown = sorted(requested - SCOPE_VALUES)
+    if unknown:
+        raise ValidationFailedError(
+            f"unknown scope(s): {', '.join(unknown)}", details={"scopes": unknown}
+        )
+
+
+def check_requested_lifetime(ttl_s: float | None) -> None:
+    """Raise :class:`ValidationFailedError` unless ``ttl_s`` is a valid lifetime.
+
+    A valid lifetime is ``None`` (the token does not expire) or a finite number
+    of seconds greater than zero. NaN and the infinities are refused because an
+    expiry built from them is never seen as passed (NaN compares false both
+    ways), and zero or a negative number would mint a token already dead.
+    Both token-issuing paths (the CLI and the API) call this one check.
+    """
+    if ttl_s is None:
+        return
+    if not math.isfinite(ttl_s) or ttl_s <= 0:
+        raise ValidationFailedError(
+            "ttl_s must be a finite number of seconds greater than zero"
+        )
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who is making a request, and what they are allowed to do.
@@ -74,13 +111,17 @@ class Principal:
     every check. ``kind`` says what presented the request: ``"local"`` for
     in-process callers (the TUI, cron, the agent's own tools), ``"webui"`` for
     the dashboard session a person signed in to, ``"remote"`` for any other
-    token (one issued for the API, or the configured static token). Frozen so
-    it is immutable and hashable — safe to stash and pass around.
+    token (one issued for the API, or the configured static token).
+    ``expires_at`` is when the presenting token stops being valid (epoch
+    seconds, the token store's clock), or ``None`` for a credential that does
+    not expire (the local principal, the static token, a non-expiring token).
+    Frozen so it is immutable and hashable — safe to stash and pass around.
     """
 
     subject: str
     scopes: frozenset[str]
     kind: str  # "local" | "remote" | "webui"
+    expires_at: float | None = None
 
     @classmethod
     def local(cls) -> "Principal":
@@ -88,15 +129,31 @@ class Principal:
         return cls(subject="local", scopes=frozenset({Scope.ADMIN.value}), kind="local")
 
     @classmethod
-    def remote(cls, subject: str, scopes: frozenset[str] | set[str]) -> "Principal":
+    def remote(
+        cls,
+        subject: str,
+        scopes: frozenset[str] | set[str],
+        *,
+        expires_at: float | None = None,
+    ) -> "Principal":
         """A token-derived principal with an explicit scope grant."""
-        return cls(subject=subject, scopes=frozenset(scopes), kind="remote")
+        return cls(
+            subject=subject, scopes=frozenset(scopes), kind="remote", expires_at=expires_at
+        )
 
     @classmethod
-    def webui(cls, subject: str, scopes: frozenset[str] | set[str]) -> "Principal":
+    def webui(
+        cls,
+        subject: str,
+        scopes: frozenset[str] | set[str],
+        *,
+        expires_at: float | None = None,
+    ) -> "Principal":
         """The dashboard session: a token ``/webui/bootstrap`` minted for the
         person signed in to the webui."""
-        return cls(subject=subject, scopes=frozenset(scopes), kind="webui")
+        return cls(
+            subject=subject, scopes=frozenset(scopes), kind="webui", expires_at=expires_at
+        )
 
     def has_scope(self, scope: "str | Scope") -> bool:
         """True if the principal holds ``scope`` (or ADMIN)."""

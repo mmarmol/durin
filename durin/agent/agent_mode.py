@@ -20,9 +20,10 @@ expressiveness and simplicity for a ~15-tool set.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from contextlib import suppress
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,11 @@ class AgentMode:
     hardcoded per mode name). ``builtin`` marks the three shipped modes, which
     the management UI shows read-only (duplicate to customise) — user-created
     modes default to ``False``.
+
+    ``attended`` says whether the mode is applied to a conversation a person
+    can act in (True, every registered mode) or to an unattended step such
+    as a workflow node (False, set by ``node_gate_mode``). It changes only
+    how a refusal is worded, never what is allowed.
     """
 
     name: str
@@ -62,13 +68,32 @@ class AgentMode:
     prompt_suffix: str = ""
     icon: str | None = None
     builtin: bool = False
+    attended: bool = True
 
-    def is_tool_allowed(self, tool_name: str) -> bool:
+    def is_tool_allowed(self, tool_name: str, deferred: Collection[str] = ()) -> bool:
+        """Whether a call to *tool_name* is allowed in this mode.
+
+        *deferred* names the tools currently deferred behind the bridges
+        (``DEFERRAL_BRIDGES``). A deferred tool is reachable only through
+        them, so an allowlist that allows one also allows the bridges —
+        which then reach only what the mode allows. That keeps a mode's
+        meaning the same whether deferral is on or not. An explicit deny of
+        a bridge still wins.
+        """
         if tool_name in self.denied:
             return False
         if self.allowed is None:
             return True
-        return tool_name in self.allowed
+        if tool_name in self.allowed:
+            return True
+        return tool_name in DEFERRAL_BRIDGES and any(
+            self.is_tool_allowed(name) for name in deferred
+        )
+
+
+# The tools that stand in for deferred tools: once tool definitions are
+# deferred, these are the only way to find and call them.
+DEFERRAL_BRIDGES = frozenset({"mcp_find_tools", "mcp_invoke"})
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +101,13 @@ class AgentMode:
 # ---------------------------------------------------------------------------
 
 
-def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
+def refuse_tool_call(
+    mode: AgentMode | None, tool_name: str, deferred: Collection[str] = (),
+) -> str | None:
     """Return the refusal for calling *tool_name* under *mode*, or None.
+
+    *deferred* names the tools currently deferred behind the bridges; see
+    ``AgentMode.is_tool_allowed``.
 
     The one decision every path that runs a tool on the model's behalf
     applies: the runner for a direct call, and any bridge tool that runs
@@ -88,10 +118,12 @@ def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
 
     The text starts with ``Error`` so a bridge that returns it as its own
     result is treated as a failed call, the same as the direct refusal.
-    It is informative so the model knows the mode must change (via /build
-    approval, typically) rather than retrying blindly.
+    In an attended mode it tells the model the mode must change (via /build
+    approval, typically) rather than retrying blindly. In an unattended one
+    nobody can change it, so it names the tools the step does have (when
+    the mode is an allowlist) and tells the model to finish with those.
     """
-    if mode is None or mode.is_tool_allowed(tool_name):
+    if mode is None or mode.is_tool_allowed(tool_name, deferred):
         return None
     from durin.telemetry.logger import current_telemetry
 
@@ -102,6 +134,16 @@ def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
                 "tool": tool_name,
                 "mode": mode.name,
             })
+    if not mode.attended:
+        available = ""
+        if mode.allowed is not None:
+            names = ", ".join(sorted(mode.allowed - mode.denied)) or "none"
+            available = f" Tools available to this step: {names}."
+        return (
+            f"Error: Tool '{tool_name}' is not available to this step in mode "
+            f"'{mode.name}'.{available} Do not retry it — finish the step "
+            "with the tools you have."
+        )
     return (
         f"Error: Tool '{tool_name}' is not available in mode "
         f"'{mode.name}'. The user must run `/build` (or "
@@ -132,6 +174,31 @@ def reset_tool_call_mode(token: Token) -> None:
 def current_tool_call_mode() -> AgentMode | None:
     """The mode the runner applied to the executing tool call, if any."""
     return _TOOL_CALL_MODE.get()
+
+
+def node_gate_mode(
+    mode: AgentMode, kept: Collection[str], engine_tools: Collection[str],
+) -> AgentMode:
+    """The mode a workflow node's run is gated by.
+
+    The node runner narrows the node's registry by *mode*, keeping the
+    tools named in *kept*, then registers tools of its own (*engine_tools*:
+    the verdict and delivery tools the node needs to finish), which the
+    mode was never meant to filter. The returned mode:
+
+    - allows the engine tools however *mode* was written (added to an
+      allowlist, dropped from the denied set), as the registry holds them;
+    - narrows an allowlist to what the node actually has (*kept* plus the
+      engine tools), so a refusal can name the tools available to the
+      step; a denylist or unrestricted mode keeps ``allowed`` as None;
+    - is unattended, so a refusal does not address a person who is not
+      there (see ``refuse_tool_call``).
+
+    Every other tool keeps *mode*'s decision.
+    """
+    engine = frozenset(engine_tools)
+    allowed = None if mode.allowed is None else frozenset(kept) | engine
+    return replace(mode, allowed=allowed, denied=mode.denied - engine, attended=False)
 
 
 # ---------------------------------------------------------------------------
