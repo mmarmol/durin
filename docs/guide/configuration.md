@@ -169,7 +169,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `max_tokens` | `8192` | Output token cap for a model whose limit nothing else declares — the last step of the [model limits](#model-limits) chain |
 | `context_window_tokens` | `65536` | Context window (tokens) for a model whose window nothing else declares — the last step of the [model limits](#model-limits) chain |
 | `temperature` | `0.4` | Generation temperature |
-| `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default |
+| `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default. `none` turns thinking off where the provider has a switch for it; elsewhere it leaves the provider default |
 | `max_tool_iterations` | `200` | Tool call iterations cap per turn |
 | `max_concurrent_subagents` | `3` | Parallel sub-agent concurrency cap (set `1` to force serial) |
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns running at once across all sessions (env `DURIN_MAX_CONCURRENT_REQUESTS` overrides at runtime) |
