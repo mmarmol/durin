@@ -521,7 +521,7 @@ own message (`ContextBuilder.build_messages`, called through
 `_build_initial_messages`); the tool definitions travel beside it, taken from
 the registry.
 
-The system message is three tiers joined by a rule line, ordered so that what
+The system message is built from tiers joined by a rule line, ordered so that what
 changes least comes first (providers cache a prompt by its prefix):
 
 - **Stable** (`_build_stable_layer`), in this order: the identity template
