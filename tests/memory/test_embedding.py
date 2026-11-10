@@ -212,7 +212,8 @@ def test_embed_lazy_loads_then_returns_embeddings() -> None:
     assert len(out) == 2
     assert len(out[0]) == 384  # e5-small dim (same as old default)
     assert _FakeTextEmbedding.last_init_kwargs == {
-        "model_name": "intfloat/multilingual-e5-small"
+        "model_name": "intfloat/multilingual-e5-small",
+        "cache_dir": str(embedding_module.embedding_cache_dir()),
     }
 
 

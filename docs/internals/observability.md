@@ -366,8 +366,11 @@ Check categories and representative checks:
   error.
 - **extras** — optional extras (`fastembed`, `lancedb`, `mcp`, etc.) importable;
   cross-encoder available when enabled; STT packages and model cache.
-- **state** — embedding model in catalog; embedding model actually loads and
-  embeds a probe vector; cross-encoder loads and scores a pair; memory store
+- **state** — embedding model in catalog; embedding model's files on disk in
+  `<durin home>/models/embed` (a `warn` with the fix when vector memory is on
+  and they are absent or the snapshot is links to missing content; the check
+  reads the disk only and downloads nothing); embedding model actually loads
+  and embeds a probe vector; cross-encoder loads and scores a pair; memory store
   document counts; `~/.cache/durin` byte count (warn at > 10 GB). With vector
   memory on and the `[memory]` extra missing, the embedding-model check
   installs the extra as doctor's own step (`ensure_extra`, gated by

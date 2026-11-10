@@ -24,10 +24,10 @@ def init_worker(model_name: str) -> None:
     global _MODEL
     from fastembed import TextEmbedding  # type: ignore[import-not-found]
 
-    from durin.memory.embedding import _register_custom_models
+    from durin.memory.embedding import _register_custom_models, embedding_cache_dir
 
     _register_custom_models()
-    _MODEL = TextEmbedding(model_name=model_name)
+    _MODEL = TextEmbedding(model_name=model_name, cache_dir=str(embedding_cache_dir()))
 
 
 def embed_batch(texts: list[str], batch_size: int) -> list[list[float]]:

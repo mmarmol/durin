@@ -1296,6 +1296,49 @@ def _install_memory_extra(cfg: "Config", model_name: str, exc: RuntimeError) -> 
     )
 
 
+def check_embedding_model_cached(cfg: "Config | None" = None) -> CheckResult:
+    """Warn (never fail) when vector memory is on and the embedding model's
+    files are not on disk in the durin home.
+
+    A model that is absent there — never downloaded, or a snapshot whose
+    files are links to content that is gone — is downloaded by the next
+    process that loads it, and cannot be loaded at all while offline. A
+    running embedding server can still be answering from the copy it holds
+    in memory, so memory search working is no evidence the files exist.
+
+    Only reads the disk: nothing is loaded, downloaded or installed. A
+    missing ``[memory]`` extra and a model outside fastembed's catalog are
+    reported by the embedding-model row, so both are skipped here.
+    """
+    name = "embedding model files"
+    try:
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(name, "ok", "skipped", category="state")
+    if not config.memory.enabled:
+        return CheckResult(name, "ok", "vector memory off", category="state")
+    model_name = config.memory.embedding.model
+    try:
+        from durin.memory.embedding import embedding_cache_dir, embedding_model_on_disk
+
+        on_disk = embedding_model_on_disk(model_name)
+    except (RuntimeError, KeyError):
+        return CheckResult(name, "ok", "skipped (see embedding model)", category="state")
+    cache_dir = embedding_cache_dir()
+    if on_disk:
+        return CheckResult(name, "ok", f"{model_name} on disk in {cache_dir}", category="state")
+    return CheckResult(
+        name, "warn",
+        f"{model_name} is not on disk in {cache_dir} — the next start downloads it, "
+        "and offline memory search falls back to keyword matching",
+        fix=(
+            "While online, run `durin gateway restart`, or pick the embedding "
+            "model again in `durin onboard`: either downloads it into that directory."
+        ),
+        category="state",
+    )
+
+
 def check_embedding_model_loads() -> CheckResult:
     """Smoke-test that the configured embedding model actually loads and
     produces a vector.
@@ -1304,7 +1347,7 @@ def check_embedding_model_loads() -> CheckResult:
     catalog at the boundary; this check goes further — it does a real
     load + embed of a trivial input. Catches:
 
-    - Corrupt fastembed cache (`~/.cache/fastembed/` partially
+    - Corrupt model files (`<durin home>/models/embed` partially
       downloaded after a failed first run)
     - Network unreachable at install time (model exists in catalog
       but isn't on disk yet, no internet to fetch)
@@ -1331,7 +1374,7 @@ def check_embedding_model_loads() -> CheckResult:
             category="state",
         )
     try:
-        from durin.memory.embedding import provider_from_config
+        from durin.memory.embedding import embedding_cache_dir, provider_from_config
     except Exception:  # noqa: BLE001
         return CheckResult(
             "embedding model load", "ok",
@@ -1359,7 +1402,7 @@ def check_embedding_model_loads() -> CheckResult:
             "embedding model load", "fail",
             f"load+embed raised: {type(exc).__name__}: {exc}",
             fix=(
-                "Check `~/.cache/fastembed/` for partial downloads "
+                f"Check `{embedding_cache_dir()}` for partial downloads "
                 "(rm -rf and re-run); confirm internet reachable; or "
                 "switch model via `durin onboard` memory submenu."
             ),
@@ -1867,6 +1910,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_specific_models())
     report.add(check_model_limits())
     report.add(embedding_model)
+    report.add(check_embedding_model_cached())
     # Smoke-test the configured models actually load + work. Goes beyond
     # `check_embedding_model` which only validates the id against the catalog.
     report.add(check_embedding_model_loads())

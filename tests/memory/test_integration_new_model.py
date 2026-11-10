@@ -258,8 +258,8 @@ def test_vector_search_recall_crosses_languages(tmp_path):
     query finds the English page that means the same. Only a real multilingual
     model shows that, so this embeds with the real E5 model, its query and
     passage prefixes included, and runs only when selected:
-    ``pytest -m real_model``. The model loads from fastembed's cache, which a
-    first run fills by downloading it (about 450 MB)."""
+    ``pytest -m real_model``. The model is downloaded (about 450 MB) into the
+    test's throwaway durin home, on every run."""
     pytest.importorskip("fastembed")
     from durin.memory.embedding import FastembedProvider
     from durin.memory.vector_index import VectorIndex, vector_index_available

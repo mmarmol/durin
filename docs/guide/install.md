@@ -99,7 +99,7 @@ pip install -e ".[memory,mcp,web]"
 
 | Extra | Pulls in | When you need it |
 |---|---|---|
-| `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
+| `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). The model downloads once — when you pick it in the onboarding wizard, or on first use — and is kept under `<durin_home>/models/embed/`. |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
 | `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. On slim Linux images the bundled OpenCV needs libGL at runtime — `apt install libgl1` (or your distro's equivalent). A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
 | `mcp` | `mcp`, `httpx2` | Connect to MCP servers (durin is the MCP client). |
@@ -221,8 +221,9 @@ that layout); see [configuration.md](configuration.md#the-config-file).
 >   touches `~/.durin`).
 >
 > The only things shared across instances are immutable caches that are not
-> instance state — the embedding model-weights cache (`~/.cache/huggingface`)
-> and the package code.
+> instance state — the cross-encoder reranker's model-weights cache
+> (`~/.cache/huggingface`) and the package code. Each instance keeps its own
+> copy of the embedding model under `<durin_home>/models/embed/`.
 
 ### Inspect
 
@@ -335,9 +336,9 @@ Flags:
   credentials the config's `${secret:…}` references and sign-ins resolve
   against (`secrets.json`, `api_tokens.json`, `oauth/`); everything else
   still goes.
-- `--keep-cache` — preserve the caches: the install's telemetry, the STT and
-  OCR model caches under `~/.durin/models/` and, for the default install, the
-  rest of `~/.cache/durin/` it would remove.
+- `--keep-cache` — preserve the caches: the install's telemetry, the
+  embedding, STT and OCR model caches under `~/.durin/models/` and, for the
+  default install, the rest of `~/.cache/durin/` it would remove.
 - `--keep-workspace` — preserve `~/.durin/workspace/`.
 
 The command prints every path it will remove, grouped, with its size, before
@@ -369,7 +370,7 @@ such a folder really is a durin home, remove it by hand.
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
 | `~/.cache/durin/telemetry/` (the default install's telemetry) | by the default install only | `--keep-cache` |
 | `$DURIN_HOME/telemetry/` (an instance's telemetry) | yes | `--keep-cache` |
-| `~/.durin/models/` (the STT and OCR model caches) | yes | `--keep-cache` |
+| `~/.durin/models/` (the embedding, STT and OCR model caches) | yes | `--keep-cache` |
 | `~/.cache/durin/models/` (model files shared by every install on the machine) | by the default install only | `--keep-cache` |
 | `~/.cache/durin/archive/` (the default install's archive) | by the default install only | `--keep-cache` |
 | everything else in `~/.durin/`, whatever its name (sessions, history, cron, media, logs, …), as long as the folder is recognizably a durin home (see above) | yes | — |
@@ -412,6 +413,16 @@ run by hand. With `install.auto_install_extras` set to `false` it installs
 nothing and reports the extra as missing, with the fix: `durin doctor
 --install-missing -y`. Nor does it install while the config does not load
 cleanly: what failed runs on defaults, so your own setting could not be read.
+
+The embedding model's files are kept in `<durin_home>/models/embed/`. A copy
+in any other place — fastembed's own cache in the system temp directory, for
+one — is not used, and nothing is moved from there: the first start that finds
+no files in that directory downloads the model once. When vector memory is on
+and the files are not there, `durin doctor` says so ("embedding model files")
+and names the fix; that check only looks at the disk. Do the download while
+online — `durin gateway restart`, or picking the embedding model in `durin
+onboard` — because offline, a start without the files leaves memory search on
+keyword matching only.
 
 The complementary snapshot is `durin status` — "what do I have and is it
 running?" with no judgement. It probes the live gateway for version, uptime,

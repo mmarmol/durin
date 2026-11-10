@@ -27,7 +27,7 @@ def _catalog_entry(model: str) -> dict:
 class _WarningTextEmbedding:
     """Stands in for fastembed.TextEmbedding: warns like >=0.6 does."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, cache_dir: str | None = None) -> None:
         warnings.warn(
             f"The model {model_name} now uses mean pooling instead of "
             "CLS embedding. In order to preserve the previous behaviour, "
@@ -44,7 +44,7 @@ class _WarningTextEmbedding:
 
 
 class _OtherWarningTextEmbedding:
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, cache_dir: str | None = None) -> None:
         warnings.warn("something else is wrong", UserWarning, stacklevel=2)
         self.model_name = model_name
 
