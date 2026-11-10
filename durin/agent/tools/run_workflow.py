@@ -62,6 +62,13 @@ def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
 # enough that the delivery turn never spills into truncated-tool-output
 # archaeology. The summary's node list is what is shortened to meet it.
 _MAX_INJECT_SUMMARY_CHARS = 8000
+# Characters of one error text the summary's failures section shows: room for a
+# provider's message or the head of a traceback, which is what names the cause.
+_MAX_FAILURE_ERROR_CHARS = 300
+# Distinct errors the failures section lists: with each at its length limit the
+# section stays under half the delivery size, so a summary carrying it and a
+# final output at its own limit stays under twice that size.
+_MAX_FAILURE_LINES = 10
 
 _PARAMETERS = {
     "type": "object",
@@ -160,10 +167,16 @@ def _approval_refusal(name: str, run_id: str, node: str | None) -> str:
     )
 
 
-def _failure_lines(runs: list) -> list[str]:
+def _failure_lines(runs: list, run_id: str) -> list[str]:
     """The failed node runs, one line per distinct error text: the node ids it
     hit, how many runs it failed, and the text itself. A fan-out whose workers
-    all die on the same provider error is one line, not one per worker."""
+    all die on the same provider error is one line, not one per worker.
+
+    Bounded, because errors that differ by an id or a timestamp do not fold: a
+    long text is cut with a mark saying how much is missing, and past a fixed
+    number of distinct errors (in the order they first occurred, so the first
+    failure is always shown) one closing line counts the rest.
+    """
     by_error: dict[str, dict] = {}
     for r in runs:
         if r.status != "node_failed":
@@ -172,10 +185,28 @@ def _failure_lines(runs: list) -> list[str]:
         entry["count"] += 1
         if r.node_id not in entry["nodes"]:
             entry["nodes"].append(r.node_id)
-    return [
-        f"  - [{', '.join(e['nodes'])}]" + (f" ×{e['count']}" if e["count"] > 1 else "") + f": {error}"
-        for error, e in by_error.items()
+
+    def shown(error: str) -> str:
+        if len(error) <= _MAX_FAILURE_ERROR_CHARS:
+            return error
+        return (error[:_MAX_FAILURE_ERROR_CHARS].rstrip()
+                + f" … [cut, {len(error) - _MAX_FAILURE_ERROR_CHARS} more characters]")
+
+    entries = list(by_error.items())
+    lines = [
+        f"  - [{', '.join(e['nodes'])}]" + (f" ×{e['count']}" if e["count"] > 1 else "")
+        + f": {shown(error)}"
+        for error, e in entries[:_MAX_FAILURE_LINES]
     ]
+    rest = entries[_MAX_FAILURE_LINES:]
+    if rest:
+        runs_left = sum(e["count"] for _error, e in rest)
+        lines.append(
+            f"  … {len(rest)} more distinct error{'s' if len(rest) != 1 else ''}, covering "
+            f"{runs_left} failed run{'s' if runs_left != 1 else ''}, not shown — "
+            f"tasks(action='status', id='{run_id}') lists the run's nodes."
+        )
+    return lines
 
 
 def _node_lines(runs: list) -> list[str]:
@@ -250,9 +281,12 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
     ``max_chars`` is the size the summary aims for when it is delivered as a
     message (None = unlimited). The node list is what gives way: it gets the
     room the rest leaves and is cut short with a note. The final output has its
-    own limit of ``max_chars`` and a pointer to the rest. The status, counts,
-    failures and files are never cut, so a summary can exceed ``max_chars`` by
-    their size.
+    own limit of ``max_chars`` and a pointer to the rest. The failures have fixed
+    limits of their own, with or without ``max_chars``: each error text is cut at
+    a set length and only so many distinct errors are listed. The status, counts
+    and files are never cut. A summary can therefore exceed ``max_chars``, but
+    only by bounded parts: the failures at their maximum are under half of it,
+    and an exhausted run's last failing check is bounded like the final output.
     """
     def bounded(text: str) -> str:
         if max_chars is None or len(text) <= max_chars:
@@ -332,7 +366,7 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
 
     # Failures ahead of the result: a run can end "completed" with most of a
     # fan-out's workers failed, and the caller must read that before the output.
-    failures = _failure_lines(result.runs)
+    failures = _failure_lines(result.runs, result.run_id)
     if failures:
         lines.append("\nFailed node runs:")
         lines.extend(failures)

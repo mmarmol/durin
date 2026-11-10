@@ -153,7 +153,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   and the result is **delivered to you automatically as a follow-up message** when it
   finishes. That summary reads top to bottom: the run's status and how many node runs
   succeeded and failed; the failures (node and error, an identical error listed once with
-  its count); the final output; the files; and last the node list, a fan-out's workers
+  its count; a long error is cut and a long list of different errors ends with a count of
+  the rest); the final output; the files; and last the node list, a fan-out's workers
   folded into one line. **`completed` does not mean every worker succeeded** — a fan-out
   completes as long as one worker does, so read the failed count and the failures before
   you use or report the output. Do NOT wait for it with

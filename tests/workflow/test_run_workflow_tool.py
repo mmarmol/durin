@@ -704,17 +704,17 @@ def _turn(output):
     return AgentRunResult(final_content=output, messages=[{"role": "assistant", "content": output}])
 
 
-def _fan_out_definition(items):
+def _fan_out_definition(items, *, max_concurrency=4, report="echo 'the report is written'"):
     return {
         "name": "batch", "start": "list", "output": {"file": True},
         "nodes": [
             {"id": "list", "kind": "script", "command": _print_cmd(json.dumps(items)),
              "next": "fan"},
             {"id": "fan", "kind": "parallel", "worker": "research", "list_from": "list",
-             "max_concurrency": 4, "next": "report"},
+             "max_concurrency": max_concurrency, "next": "report"},
             {"id": "research", "kind": "work", "prompt": "research the item"},
             {"id": "report", "kind": "script",
-             "command": "echo notes > report.md; echo 'the report is written'", "next": None},
+             "command": f"echo notes > report.md; {report}", "next": None},
         ],
     }
 
@@ -864,3 +864,87 @@ def test_summary_lists_one_failure_line_per_distinct_error():
     assert text.count("not found: item 7") == 1
     reset_line = next(line for line in text.splitlines() if "connection reset" in line)
     assert "2" in reset_line and "fetch" in reset_line
+
+
+# ---------------------------------------------------------------------------
+# The failures section is bounded: long errors are cut, many distinct errors
+# end with a count of the rest
+# ---------------------------------------------------------------------------
+
+
+def _failing_after_first(error_for):
+    """An agent turn whose first call succeeds and whose every later call fails
+    with ``error_for(call number)``. Used with one worker at a time, so call n
+    is the worker at index n - 1."""
+    state = {"calls": 0}
+
+    async def turn(_spec):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return _turn("finding 1")
+        raise RuntimeError(error_for(state["calls"]))
+
+    return turn
+
+
+@pytest.mark.asyncio
+async def test_background_summary_of_forty_different_long_errors_stays_bounded(tmp_path):
+    from durin.agent.tools.run_workflow import _MAX_INJECT_SUMMARY_CHARS
+
+    def error_for(n):
+        return f"request {n:03d} was rejected upstream: " + f"trace line for call {n}; " * 60
+
+    # The worst case for size: the final output is over its own limit as well.
+    definition = _fan_out_definition(
+        [f"topic-{i}" for i in range(41)], max_concurrency=1,
+        report="echo 'the report is written'; head -c 15000 /dev/zero | tr '\\0' x")
+    text = await _run_summary(tmp_path, definition, _failing_after_first(error_for),
+                              background=True)
+
+    assert len(text) < 2 * _MAX_INJECT_SUMMARY_CHARS
+    assert "4 succeeded, 40 failed" in text            # list, one worker, fan, report
+    assert "request 002 was rejected upstream" in text  # the first failure's opening
+    assert error_for(2) not in text                     # cut, not whole
+    assert "request 041 was rejected upstream" not in text
+    # the rest of the distinct errors are counted, with where to look
+    closing = next(line for line in text.splitlines() if "distinct errors" in line)
+    listed = sum(1 for line in text.splitlines() if "was rejected upstream" in line)
+    assert f"{40 - listed} more distinct errors" in closing
+    assert f"{40 - listed} failed runs" in closing
+    run_id = text.split("Workflow run ", 1)[1].split(":", 1)[0]
+    assert f"tasks(action='status', id='{run_id}')" in closing
+    # the result and where its files are survive
+    assert "the report is written" in text
+    assert "output files are in" in text and "report.md" in text
+
+
+@pytest.mark.asyncio
+async def test_background_summary_of_forty_identical_errors_is_one_line_with_the_count(tmp_path):
+    error = "Usage limit reached for this plan. It resets at 18:00."
+    definition = _fan_out_definition([f"topic-{i}" for i in range(41)], max_concurrency=1)
+    text = await _run_summary(tmp_path, definition, _failing_after_first(lambda _n: error),
+                              background=True)
+
+    assert "4 succeeded, 40 failed" in text
+    assert text.count(error) == 1
+    failure_line = next(line for line in text.splitlines() if error in line)
+    assert "research" in failure_line and "40" in failure_line
+    assert "distinct errors" not in text
+    assert "the report is written" in text and "output files are in" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+async def test_summary_cuts_one_very_long_error_with_a_mark(tmp_path, background):
+    error = "the upstream service answered with a page of HTML: " + "<div>filler</div>" * 400
+    definition = _fan_out_definition(["topic-0", "topic-1"], max_concurrency=1)
+    text = await _run_summary(tmp_path, definition, _failing_after_first(lambda _n: error),
+                              background=background)
+
+    assert "1 failed" in text
+    failure_line = next(line for line in text.splitlines() if "the upstream service answered" in line)
+    assert "research" in failure_line
+    assert error not in text                             # not shown whole
+    assert len(failure_line) < 1000
+    assert "more characters" in failure_line            # and says it was cut, and by how much
+    assert "the report is written" in text

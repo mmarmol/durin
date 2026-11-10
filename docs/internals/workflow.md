@@ -1457,15 +1457,23 @@ End-to-end for a single `run_workflow` call:
   to bottom: the status line and the count of node runs that succeeded and failed (a failed
   run is a `node_failed` record), with the guidance for a paused, aborted or exhausted run;
   the failures, one line per distinct error text with the node ids it hit and how many runs
-  it failed; the final output (or the questions, the proposal, or the closest result); the
+  it failed (bounded, below); the final output (or the questions, the proposal, or the closest result); the
   missing-artifact warning and the working folder with its files; and last the node list in
   walk order, where the workers of one fan-out pass fold into a single line (how many ran,
   how many failed) and a failed node is marked. The order is what makes a size limit safe:
   given a limit (the background delivery passes one), the formatter shortens the node list
   to the room the rest leaves and ends it with a note pointing at `tasks(action='status')`;
-  the final output is bounded separately, at the same size, with its own pointer; the
-  status, counts, failures and files are never cut, so a delivered summary can exceed the
-  limit by their size. A foreground return is formatted without a limit.
+  the final output is bounded separately, at the same size, with its own pointer (an
+  exhausted run's last failing check output is bounded the same way). The failures section
+  has fixed limits of its own, applied to a foreground return too, because errors that
+  differ by an id, a timestamp or a traceback do not fold: each error text is shown up to
+  `_MAX_FAILURE_ERROR_CHARS` and cut with a mark saying how much is missing, and at most
+  `_MAX_FAILURE_LINES` distinct errors are listed, in the order they first occurred (so the
+  first failure is always shown), followed by one line counting the remaining distinct
+  errors and the failed runs they cover, with the same `tasks(action='status')` pointer.
+  The two limits keep the section under half the delivery size. The status line, the
+  counts and the files are never cut, so a delivered summary can exceed the limit, but only
+  by those bounded parts. A foreground return is otherwise formatted without a limit.
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
   control global defaults, and every run honours them: the `run_workflow` tool, an HTTP or
   editor launch, an automation, and a nested sub-workflow. `max_node_visits` caps how many times
