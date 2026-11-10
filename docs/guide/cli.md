@@ -26,6 +26,8 @@ durin agent              # rich TUI (default)
 durin agent -m "hola"    # one-shot
 durin gateway start      # background daemon: webui dashboard + channels + cron
 durin gateway status     # is it running? where's the dashboard?
+durin gateway logs -f    # follow the gateway's log
+durin gateway restart
 durin gateway stop
 ```
 
@@ -64,8 +66,12 @@ durin memory forget <uri>         # delete one memory entry
 ```
 
 `durin workflow recommendations` / `durin workflow apply <name> <id>` review and
-apply workflow self-improvement suggestions; `durin mcp search|install|status`
-manage MCP servers. Append `--help` to any group for its full command list.
+apply workflow self-improvement suggestions (`durin workflow dismiss` drops
+one); `durin mcp search|install|status` manage MCP servers; `durin skill
+search|list|audit|quarantine|remove` search the skill registries, list
+installed skills with their security verdict, re-scan one, list imports
+awaiting a decision, and remove one. Append `--help` to any group for its
+full command list.
 
 ## Approvals
 

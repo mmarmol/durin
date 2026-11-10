@@ -45,8 +45,9 @@ category, computes `worst = max(status)`, and exits 0 unless the worst is
 **Gateway as daemon plus webUI delivery.** The gateway runs as a long-lived
 process forked by `durin gateway start`. It writes its own JSONL log via loguru
 (separate from telemetry), tracks its PID, and serves the dashboard over the
-websocket channel when `gateway.webui_enabled` is true. Doctor can verify that
-the daemon and webUI are actually up when the config requests them.
+websocket channel when `gateway.webui_enabled` is true. Doctor verifies that a
+started daemon is still alive and on this install's version, and that the
+webUI answers when the config enables it.
 
 ---
 
@@ -285,7 +286,8 @@ created and again when the logger moves to a new day's file, and it does not
 see lines the file already held or lines another logger writes to it.
 `get_session_logger` builds a new logger on every call, so one day's file,
 such as the gateway's, can be written by several loggers, each with its own
-count.
+count. Past the cap the logger drops the event, for the file and for every
+extra sink alike.
 
 Readers do not depend on which file an event landed in: the log viewer and the
 dream digest walk files newest modified first and read each line's own `ts`,
@@ -295,10 +297,11 @@ files dated a day either side of a run's start and end, which covers a node
 visit split across two days' files. A `TelemetryLogger` built directly on a
 path writes to that one file for its whole life.
 
-When `telemetry.push.enabled` is true, `wire_push_sink` (called from
-`AgentLoop` during initialization) constructs a `PushSink`, resolves the bearer
-token from the secret store by name (`token_secret_name`), and attaches it to
-the session logger. `PushSink` buffers events and POSTs batches to the
+When `telemetry.push.enabled` is true, `AgentLoop._run_agent_loop` calls
+`wire_push_sink` on the session logger it builds for each run: it constructs a
+`PushSink`, resolves the bearer token from the secret store by name
+(`token_secret_name`), and attaches it to that logger; the run flushes the
+sink when it ends. `PushSink` buffers events and POSTs batches to the
 configured URL when the buffer hits `batch_size` (default 10). Failed POSTs
 restore the batch into the buffer for the next drain. A run's events reach the
 sink from the event loop and from worker threads at once (`memory_search`
@@ -321,6 +324,8 @@ the instance telemetry directory, gzip-compresses `.jsonl` files older than 30 d
 and deletes `.jsonl.gz` files older than 90 days. These thresholds
 (`COMPRESSION_AGE_DAYS`, `DELETION_AGE_DAYS`) are hardcoded in
 `durin/telemetry/retention.py` and are not configurable via `config.json`.
+With `memory.health_check.enabled` off there is no tick, and telemetry files
+are neither compressed nor deleted.
 
 ### Event schema
 
@@ -335,7 +340,8 @@ Event categories in `EVENTS`: loop control, compaction, provider / tool-arg
 processing, cache / context engineering, agent mode, tool-level instrumentation
 (filesystem, exec, web, interactive tools, background processes), and the full
 memory subsystem (recall, the automatic per-turn prefetch, store, ingest,
-embedding, dream, absorb, index, health).
+embedding, dream, absorb, index, health), the skill loop (use, observe,
+curate, suggest), workflow improvement, automations, and document OCR.
 
 Conventions: `session_key` and `iteration` on all loop-scoped events; numeric
 units in field-name suffixes (`*_chars`, `*_tokens`, `*_ms`, `*_s`);
@@ -375,16 +381,22 @@ Check categories and representative checks:
   `run_checks` runs this check before the extras probes, so their rows
   describe the state after that install and `--install-missing` does not
   repeat it; its row stays in the state group.
-- **services** — when `gateway.daemon=true`, the PID file points at a live
-  process; when `gateway.webui_enabled=true`, the dashboard HTTP endpoint
-  returns 2xx.
+- **services** — `gateway daemon`: the PID file is the ground truth. It fails
+  when the file points at a dead process, whatever the config says, and when
+  `gateway.daemon=true` and nothing runs; with no PID file and daemon mode not
+  requested it passes. `gateway version`: warns when the running gateway
+  reports a different version than this install (it serves the previous code
+  until restarted). `webui dashboard`: when `gateway.webui_enabled=true`, the
+  dashboard HTTP endpoint returns 2xx.
+- **mcp** — an OAuth MCP server whose token refresh was interrupted (an
+  orphaned refresh marker) and needs a new sign-in.
 - **models** — every configured specific-model knob (`skills.security.llm_judge`,
   `memory.dream.model_override`, `agents.aux_models.*`) resolves to a servable
   `(provider, model)`; an unservable knob silently falls back to the default preset.
   "model limits" lists every configured window and output cap (a
   `providers.<p>.models` entry, a named preset, an inline fallback) that differs
-  from the model's catalog limits: above warns (the run caps it to the catalog
-  value) and the fix gives the `durin config set <path> null` that unsets each
+  from the model's real limits (a `model_capabilities` override, else the
+  catalog): above warns (the run caps it to that value) and the fix gives the `durin config set <path> null` that unsets each
   one, below is listed without warning (a deliberate cost cap is legitimate,
   a forgotten one shrinks every run on that model). It also warns about an
   `agents.defaults` window or output cap, set to something other than the
@@ -396,9 +408,9 @@ Check categories and representative checks:
 - **channels** — channel runtime dependencies are present (e.g. the WhatsApp
   bridge binary is cached).
 - **stt** — speech-to-text engine importable; local model cached or cloud-provider
-  keys present; a transcription round-trip succeeds.
+  keys present; with `--ping-model`, a transcription round-trip succeeds.
 - **tts** — text-to-speech engine importable and its model cached.
-- **opt-in** — `--ping`: HTTP GET to provider's `api_base`; `--ping-model`: a
+- **opt-in** (rows filed under `providers`) — `--ping`: HTTP GET to provider's `api_base`; `--ping-model`: a
   real round-trip to the configured model on a deliberately tiny output budget.
   It passes when the model produced *anything* — content, tool calls, or
   reasoning; a reasoning model can spend that entire budget thinking and never
@@ -406,9 +418,15 @@ Check categories and representative checks:
   is `error`, since providers report failures as an ordinary response whose
   content is the error text rather than by raising.
 
-`apply_safe_fixes()` (invoked by `--fix`) creates the workspace directory if
-missing and replays config migration. It never touches API keys or destructive
-state. Exit code 0 when `worst ∈ {ok, warn}`; exit 1 only when `worst == fail`.
+`--fix` runs `apply_safe_fixes()` before the checks: it
+creates the workspace directory if missing and replays config migration, and
+never touches API keys or destructive state. It then runs
+`apply_service_repairs()` on the check results: a dead daemon (`gateway daemon` failed) is relaunched
+without asking, and a gateway on another version (`gateway version` warned) is
+restarted after a confirmation, since that interrupts turns in flight (`-y`
+skips the question; without a terminal the answer is no). After a repair the
+checks run again and that report is the one shown. Exit code 0 when
+`worst ∈ {ok, warn}`; exit 1 only when `worst == fail`.
 
 ### Gateway daemon lifecycle
 
@@ -430,7 +448,7 @@ Not every subsystem logs through loguru directly — many (memory, security,
 several tools, telemetry) use stdlib `logging.getLogger(__name__)`. At CLI
 import `redirect_durin_logging` installs a bridge on the `durin` parent logger
 that forwards every `durin.*` record into loguru, so those records reach the
-same sinks (the stderr sink and, in daemon mode, the `gateway.log` JSONL sink).
+same sinks (the stderr sink and the `gateway.log` JSONL sink).
 Without the bridge their INFO would be dropped by stdlib's default level and
 their WARNING/ERROR would fall through to stdout/stderr — i.e. `gateway.boot.log`,
 which the Logs panel excludes. Third-party libraries are bridged selectively
@@ -481,10 +499,19 @@ Cancelling uvicorn in the middle of its exit prints a `CancelledError`
 traceback, and "Exception in ASGI application" per connected websocket
 client, into the journal on every stop. A request uvicorn is still serving
 when its graceful timeout runs out is cancelled by uvicorn itself, which logs
-it as an error. The shutdown then stops the janitor, MCP, cron, the dream and
-embed workers and the agent loop, journals queued inbound messages, stops the
+it as an error. The shutdown then stops the workspace janitor
+(`WorkspaceJanitor`, the periodic approvals-and-claims sweep), MCP, cron, the
+dream and embed workers and the agent loop. It journals the inbound messages
+still owed a turn — the message each running turn was answering, the
+follow-ups queued behind it, and what is still on the bus — and cancels those
+turns, waiting for them once, for at most `_DRAIN_CANCEL_WAIT_S`. It stops the
 channels (concurrently, each bounded; see [channels.md](channels.md)) and
-flushes sessions.
+flushes sessions. What follows depends on why it stopped. A `/restart`
+re-execs the process (`reexec`); a watchdog armed when the restart was
+requested re-execs after `RESTART_SHUTDOWN_DEADLINE_S` even if a shutdown step
+hangs. A plain stop ends the process at once when a workflow run is still
+executing on its thread (`leave_unfinished_runs`, which logs the runs it left;
+see [concurrency.md](concurrency.md)) instead of waiting for it.
 
 ---
 
@@ -497,7 +524,7 @@ flushes sessions.
 | `get_session_logger` | `durin/telemetry/logger.py` | Returns a `TelemetryLogger` writing to `<telemetry dir>/SANITIZED_KEY_YYYY-MM-DD.jsonl` (the instance directory from `get_telemetry_dir`), dated by the local date of each event, so it rolls over to the next day's file at midnight. |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function tools call to emit events. Resolves ContextVar, truncates free-text fields (200 chars), auto-injects `session_key` / `iteration`, swallows all exceptions. |
 | `PushSink` | `durin/telemetry/push.py` | Optional HTTPS fan-out sink. Buffers events and POSTs in batches. Failed POSTs restore the batch for retry. Never breaks the local JSONL write. |
-| `wire_push_sink` | `durin/telemetry/wiring.py` | Constructs and attaches a `PushSink` from config + secret store at agent startup. Returns the sink so callers can `flush()` it on shutdown. |
+| `wire_push_sink` | `durin/telemetry/wiring.py` | Constructs a `PushSink` from config + secret store and attaches it to a run's session logger; called once per agent run. Returns the sink so the run can `flush()` it when it ends. |
 | `run_retention` | `durin/telemetry/retention.py` | Applies `COMPRESSION_AGE_DAYS` (30) and `DELETION_AGE_DAYS` (90) to the instance telemetry directory. Returns `{compressed, deleted, errors}`. Called from the memory health-check tick. |
 | `EVENTS` | `durin/telemetry/schema.py` | Dict mapping every event type string to its `TypedDict`. Single source of truth for the telemetry schema catalog. |
 | `CheckResult` | `durin/cli/doctor.py` | Dataclass `(name, status, message, fix, category, extra, extras_list)`. `status ∈ {ok, warn, fail}`. Returned by every `check_*` function. |
@@ -532,11 +559,18 @@ Note: telemetry JSONL retention (`COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=9
 ```
 durin doctor [--ping] [--ping-model] [--fix] [--install-missing [-y]] [--json]
 durin gateway [start | stop | restart | status | logs | --foreground]
-durin status
+durin status [--json]
 ```
 
-`durin status` shows a factual snapshot (model, providers, channels, gateway,
-memory, config) without health judgement. Its model row carries the context window
+`durin gateway logs [-n N] [-f]` prints the tail of `gateway.log` as it is on
+disk (one JSON object per line), following it with `-f`.
+
+`durin status` shows a factual snapshot without health judgement: the model,
+configured providers, enabled channels, the gateway, the dashboard URL and its
+web token, cron, memory, and the config. It asks the running gateway
+(`/api/v1/health`, then `/api/v1/status`) for its version, uptime, per-channel
+running state and cron; with no gateway answering, those parts are left out.
+Its model row carries the context window
 the chat runs with — the active preset's model's, capped by the fallback models'
 known windows — the same value the agent loop uses, and names the fallback that
 caps it when one does. `durin doctor` runs the full check
@@ -544,12 +578,17 @@ battery with exit-code semantics. The two surfaces are deliberately distinct.
 
 ### WebUI
 
-The gateway Logs panel reads `~/.durin/logs/gateway.log` (the loguru JSONL
-sink). The sink is attached on every gateway run, so the panel works in daemon
-mode, under systemd (`gateway --foreground`), and in a plain terminal alike.
+The Logs panel has a Gateway tab and a Telemetry tab, served by one endpoint, `GET /api/v1/logs`
+(`durin/logs/reader.py`). **Gateway** reads `gateway.log` and its rotated
+segments from the instance's `logs/` directory (the loguru JSONL sink; the
+plain-text `gateway.boot.log` is excluded). **Telemetry** reads the telemetry
+JSONL files in the instance telemetry directory, compressed ones included.
+The gateway sink is attached on every gateway run, so the panel works in
+daemon mode, under systemd (`gateway --foreground`), and in a plain terminal
+alike.
 
-The telemetry JSONL files are not surfaced in the webUI directly; they are
-intended for operator tooling (Grafana, Loki, Datadog, custom dashboards).
+The telemetry files are also plain JSONL for operator tooling (Grafana, Loki,
+Datadog, custom dashboards).
 
 ---
 

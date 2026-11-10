@@ -122,9 +122,9 @@ maintaining their own copies. Each spec declares which surfaces list it
 being listed on only some surfaces — for example a TUI-only shortcut stays
 usable if typed elsewhere, it just doesn't appear in other surfaces' menus.
 Commands marked `admin` stay fully functional but are never listed on any
-surface. `GET /api/v1/commands` serves the registry scoped to a surface
-(the WebUI calls it with the `webui` surface, so its palette only shows
-webui-listed commands).
+surface. `GET /api/v1/commands` serves the registry's `webui` listing — the
+route takes no surface parameter — so the WebUI palette only shows
+webui-listed commands.
 
 **`/status` composition breakdown.** Once a turn has run, `/status` closes with
 a "Last turn — composition" block that splits its prompt into two buckets:
@@ -140,7 +140,7 @@ prefetch gets a line of its own even though its block rides inside the current
 user message on the wire: its tokens are subtracted from the message's count, so
 recalled memory is never billed as something the user typed. When that turn's
 build reused a frozen eager memory surface (`memory.eager_surface`, see
-`06_prompts_and_instructions.md` §5.5) instead of rendering the pinned block and
+[memory/06_prompts_and_instructions.md](memory/06_prompts_and_instructions.md)) instead of rendering the pinned block and
 hot layer live, both infrastructure rows carry a "(frozen at turn N)" suffix
 naming the turn the snapshot was taken on — the CLI footer's `infra:` chip shows
 the same note.
@@ -453,12 +453,12 @@ Unlike the inline work chip, it does not scroll away with the transcript.
 
 ### Work-visibility surfaces (TUI)
 
-The TUI sidebar (toggled with **Ctrl+B**) exposes a WORK section alongside the
-existing Todos, Files, and MCP tabs.
+The TUI sidebar (toggled with **Ctrl+B**) is one panel of stacked sections:
+WORK (present when it has something to show), then TODO, FILES and MCP.
 
 **Sidebar WORK section.** When work becomes active in a turn — a running
-workflow or a spawned sub-agent — the sidebar auto-opens and switches to the
-WORK tab. The section renders each active workflow as a node tree, including
+workflow or a spawned sub-agent — the sidebar auto-opens, with the WORK
+section at its top. The section renders each active workflow as a node tree, including
 nested parallel branches, with per-node status (running / done / failed /
 needs_input). Active sub-agents appear as peer entries alongside workflow
 nodes. The section is fed from `workflow_progress` and `subagent_result`
@@ -550,9 +550,8 @@ sections keep their own lists, and the page gathers them.
 The Entities tab offers two presentations of the same entity set — Table
 and Cards. A fresh session with no stored preference lands on Table, sorted
 by recent activity, so the list of what changed most recently is the first
-thing a visitor sees. The preference persists; a stored value naming a
-presentation the browser no longer offers (older installs could store the
-retired graph canvas) falls back to Table rather than being honored.
+thing a visitor sees. The preference persists; a stored value that names
+neither presentation falls back to Table.
 
 **Search filter.** The `Search memory…` box above the entity list is a
 client-side, case-insensitive substring filter over entity names, aliases and
@@ -725,7 +724,7 @@ prints) provides browser-based interaction over WebSocket.
 **Composer toolbar.** Above the text input, two pill buttons control the model
 and agent:
 - **Agent pill** (left, icon + "mode · persona"): Opens a popover with two
-  sections. The mode section lists available agent modes (build, plan, explore, read);
+  sections. The mode section lists the registered agent modes (the built-in build, plan, explore and read, plus any defined in config);
   selecting one publishes `/mode <name>`. The persona section lists all configured
   personas (each with name and optional description); selecting one publishes
   `/persona <name>`. Personas lazy-load on first popover open.
@@ -749,9 +748,21 @@ remains the hard interrupt.
 **Empty-state landing.** When a chat is first opened, a centered greeting is
 shown above the composer. There are no suggestion chips or canned prompts.
 
-**Edit affordance.** The last user message carries a dim edit hint; clicking the
-message reloads its text into the composer input for revision. This is a refill
+**Edit affordance.** The last user message shows a pencil button on hover; clicking
+it reloads the message's text into the composer input for revision. This is a refill
 only — it does not truncate history or automatically resend.
+
+**Lazy older history.** Opening a session loads only the newest page of its
+transcript; scrolling near the top fetches the previous page and prepends it
+without moving the visible content. A "Loading earlier messages…" indicator
+shows while a page is in flight, and once the start of history is reached the
+top of the thread renders a "Beginning of conversation" label instead.
+
+**Deleting a chat.** The sidebar's chat menu asks for confirmation in an
+in-page dialog, then calls `DELETE /api/v1/sessions/{key}`. The session's
+transcript, its metadata sidecar, the rendered transcript with its search
+rows, and the dashboard's own thread files are removed, so memory search does
+not find a deleted chat.
 
 ### TUI features
 
@@ -763,7 +774,7 @@ than the interactive CLI.
 
 | Binding | Action |
 |---|---|
-| Ctrl+B | Toggle the sidebar (Todos / Files / MCP / WORK tabs) |
+| Ctrl+B | Toggle the sidebar (WORK / TODO / FILES / MCP sections) |
 | Ctrl+Shift+P | Open the persona picker modal |
 
 **Persona picker.** The Ctrl+Shift+P modal lists all configured personas, showing
@@ -792,11 +803,9 @@ the durin logo/banner — no suggestion chips or canned prompts. A
 scroll-to-bottom control appears when the user has scrolled up from the latest
 message.
 
-**Lazy older history.** Opening a session loads only the newest page of its
-transcript; scrolling near the top fetches the previous page and prepends it
-without moving the visible content. A "Loading earlier messages…" indicator
-shows while a page is in flight, and once the start of history is reached the
-top of the thread renders a "Beginning of conversation" label instead.
+**Resumed sessions.** Opening a saved session replays its most recent
+messages as bubbles. When more exist, a dim note above them says how many are
+hidden and points at `/history`.
 
 ### Key config keys
 

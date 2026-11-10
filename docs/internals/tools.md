@@ -44,8 +44,8 @@ the runner that says "in plan mode, skip edits." Instead, `_active_tool_definiti
 filters the definition list to what the active mode allows before each LLM call,
 so the model never sees disallowed schemas. At execution time, `_run_tool()` applies
 a second check so that a model using a cached schema from a previous mode gets a
-`BLOCKED` synthetic result rather than a real execution — not a model error or a
-silent no-op.
+synthetic refusal that names the mode rather than a real execution — not a model
+error or a silent no-op.
 
 **3. Result governance — a result arrives whole, or as a working pointer to itself.**
 Every tool result goes through `_normalize_tool_result()` in the runner, in
@@ -115,7 +115,10 @@ normalized result already fits, the pass leaves it unchanged. Around it:
 - **Pruning near the window limit (later in the run):** once the prompt nears
   the input budget, old results are replaced in one batch by a placeholder
   that keeps the same saved-file recovery path (see [loop.md](loop.md),
-  Microcompaction).
+  Microcompaction). Only results of the tools named in `_COMPACTABLE_TOOLS`
+  (file reads and listings, `grep`, `exec`, web search and fetch) are
+  eligible; this pass leaves the results of every other tool, MCP tools
+  included, and the arguments of past tool calls as they are.
 
 ---
 
@@ -132,8 +135,10 @@ flowchart TD
     LOOP_CHECK -->|yes| LOOP_BLOCKED["BLOCKED result\n(loop guard)"]
     LOOP_CHECK -->|no| MODE_CHECK{"active_mode.\nis_tool_allowed?"}
 
-    MODE_CHECK -->|denied| MODE_BLOCKED["BLOCKED result\n+ mode hint"]
-    MODE_CHECK -->|allowed| EXEC["tool.execute(**params)"]
+    MODE_CHECK -->|denied| MODE_BLOCKED["Refusal result\n+ mode hint"]
+    MODE_CHECK -->|allowed| LOOKUP_CHECK{"Same web lookup\nrepeated past\nits retry budget?"}
+    LOOKUP_CHECK -->|yes| LOOKUP_BLOCKED["Error result\n(repeated lookup)"]
+    LOOKUP_CHECK -->|no| EXEC["tool.execute(**params)"]
 
     EXEC --> RAW["Raw result"]
     RAW --> NORM["_normalize_tool_result\nredact → coerce to text"]
@@ -145,6 +150,7 @@ flowchart TD
     PASS --> RESULTS
     LOOP_BLOCKED --> RESULTS
     MODE_BLOCKED --> RESULTS
+    LOOKUP_BLOCKED --> RESULTS
 
     RESULTS["All results collected"]
     RESULTS --> BUDGET{"Aggregate >\nDURIN_TURN_BUDGET_CHARS?"}
@@ -181,6 +187,11 @@ Two gates therefore decide whether a tool appears in a registry: the **scope**
 tool is main-agent-only unless it opts into `subagent`) and the **context**
 (`enabled(ctx)` returning `False` when a dependency the context doesn't carry
 is missing — e.g. the vision bridge without `ctx.aux_providers["vision"]`).
+A class whose `_scopes` names neither `core` nor `subagent` is never loaded
+this way: the dream's passes instantiate those tools themselves
+(`skill_acquire_seed` for the skill-extract pass, `memory_source_document` for
+the merge judge), so they appear in no chat, sub-agent or workflow-node
+registry.
 The subagent manager and the workflow node runner build their contexts with
 `aux_providers` and `app_config` populated, so subagent-scoped tools register
 there exactly as they do in the main loop (see `durin/agent/aux_bridges.py`
@@ -195,8 +206,10 @@ workspace root, reads the root's (`resolve_workspace_path(..., read=True)`);
 a file at the root itself and any write never fall back.
 
 The `subagent` scope is the *background-safe* set: files (notebooks
-included), exec, search, web, memory search and memory writes,
-`convert_to_markdown`, a bounded `sleep`, and the vision/audio bridges.
+included), exec and its background `process` companion, `execute_code`,
+search (`grep`, `repo_overview`), web, memory search and memory writes,
+`convert_to_markdown`, a bounded `sleep`, the secrets tools, and the
+vision/audio bridges.
 Tools stay core-only when they are interactive (`ask_user_question`, plan mode,
 todos), session-bound (`message`, `session_search` — the latter searches the
 live session, or any earlier session by key (`session_key`), read-only),
@@ -262,7 +275,9 @@ tools without paying for all their schemas up front.
 `ToolRegistry.get_definitions()` returns a cached list of `to_schema()` dicts for
 every tool whose `llm_visible` property is `True`. Built-in schemas (names not
 starting with `mcp_`) appear first, sorted alphabetically; MCP schemas follow,
-also sorted. The cache is invalidated on every `register()` or `unregister()` call.
+also sorted. The split is by name prefix alone, so the built-ins `mcp_manage`
+and `mcp_search` and the two deferral bridge tools sort into the second group.
+The cache is invalidated on every `register()` or `unregister()` call.
 This stable ordering helps providers that support prompt caching recognize identical
 tool arrays across turns.
 
@@ -300,8 +315,10 @@ read-only tools accept a list and fan out internally with `asyncio.gather`,
 turning N independent calls into one guaranteed-parallel call regardless of
 whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
 `web_search` (`queries`) and `read_file` (`paths`). Each takes the single form
-OR the list form, caps the list, and returns one record per item in order with
-a per-item `error` field so one failure does not abort the batch. `read_file`
+OR the list form, caps the list, and returns one record per item in order, a
+failed item carrying its own error so one failure does not abort the batch
+(an `error` field, except `web_search`, whose failed query has the error text
+as that item's `results`). `read_file`
 also takes both at once, since a model reading several files often names one
 in `path` and the rest in `paths`: it reads them as one batch, `path` first and
 each file once, under the same cap and shared page budget, instead of
@@ -321,15 +338,33 @@ For each tool call, `_run_tool()` applies checks in this order:
    failed call earlier this turn (tracked in `seen_failed_calls`), return a
    `BLOCKED` synthetic result immediately, avoiding a doomed re-execution.
 2. **Mode gate:** if `active_mode.is_tool_allowed(tool_call.name)` returns
-   `False`, return an informative `BLOCKED` result explaining the mode restriction.
+   `False`, return an informative refusal explaining the mode restriction.
    This fires only when the model uses a cached schema after a mode switch.
-3. **Preparation:** `ToolRegistry.prepare_call()` resolves the tool, casts
+3. **Repeated-lookup guard:** a `web_fetch` of the same `url` or a
+   `web_search` of the same `query` beyond a small per-run retry budget
+   (`repeated_external_lookup_error()`) returns an error telling the model to
+   use what it already has. Only the single-value forms are counted; the list
+   forms (`urls`, `queries`) are not.
+4. **Preparation:** `ToolRegistry.prepare_call()` resolves the tool, casts
    parameter types via `tool.cast_params()` (e.g., `"60"` → `60` for integer
    fields), and validates against the JSON Schema. A validation error returns an
-   error string without executing the tool.
-4. **Execution:** `tool.execute(**params)` runs the tool. Exceptions and
-   `"Error: ..."` return values are both recorded in `seen_failed_calls` so
-   identical retries are short-circuited.
+   error string without executing the tool. A name the registry does not have
+   returns an error that lists the registered names; a run that keeps calling
+   the same unknown name is ended by the unknown-tool breaker (see
+   [loop.md](loop.md)).
+5. **Execution:** `tool.execute(**params)` runs the tool. Exceptions and
+   return values that start with `Error` are both recorded in
+   `seen_failed_calls` so identical retries are short-circuited for the rest
+   of the run. A structured result that carries its failure in a field (a
+   JSON `error`, an MCP `(MCP tool error)` text) is not recorded, so the same
+   call can be made again.
+
+A failure the runner recognizes as a policy boundary is reworded before it
+reaches the model (`_classify_violation()`): an SSRF block gets a note that the
+boundary cannot be bypassed, a repeated attempt at the same path outside the
+workspace gets an escalated refusal, and an exec policy refusal keeps the
+tool's own message without the generic "try a different approach" hint that
+is appended to other error strings.
 
 ### Per-turn request context (`ContextAware`)
 
@@ -540,18 +575,36 @@ through byte-for-byte.
 | `tools.exec.deny_patterns` | `list[str]` | `[]` (added to a built-in set) | Regex patterns that block matching commands before execution. In a chat the person is asked to approve the refused command once; elsewhere the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
 | `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list; when set, a command matching none is refused like a deny match. Nothing exempts the hard floor |
 | `tools.exec.allowed_env_keys` | `list[str]` | `[]` | Extra env vars forwarded to subprocesses (beyond the minimal curated set) |
+| `tools.exec.path_append` | `str` | `""` | Directories appended to `PATH` for executed commands |
+| `tools.process.max_running` | `int` | `16` | Cap on concurrent background processes (`exec` with `background=true`, managed by `process`) |
+| `tools.process.max_output_chars` | `int` | `200000` | Rolling tail of output kept per background process |
+| `tools.process.finished_ttl_s` | `int` | `1800` | Seconds a finished background process stays listed before it is evicted |
 | `tools.my.enable` | `bool` | `true` | Enables/disables the `my` self-inspection tool |
 | `tools.my.allow_set` | `bool` | `false` | When `true`, `my(action="set", ...)` can mutate config values at runtime |
 | `tools.web.enable` | `bool` | `true` | Enables/disables both `web_search` and `web_fetch` |
 | `tools.web.search.provider` | `str` | `"duckduckgo"` | Search provider (`brave`, `tavily`, `searxng`, `jina`, `kagi`, `olostep`, `duckduckgo`) |
-| `tools.post_edit_check.enable` | `bool` | `true` | Runs configurable linters/formatters after each `edit_file` call |
+| `tools.web.search.api_key` | `str` | `""` | API key for a search provider that needs one; without it the provider falls back to DuckDuckGo |
+| `tools.web.search.base_url` | `str` | `""` | Custom search API base URL (required for `searxng`) |
+| `tools.web.search.max_results` | `int` | `5` | Results returned per query |
+| `tools.web.search.timeout` | `int` | `30` | Search request timeout in seconds |
+| `tools.web.fetch.use_jina_reader` | `bool` | `true` | Routes `web_fetch` through Jina Reader for text extraction, with a local readability fallback |
+| `tools.web.proxy` | `str \| null` | `null` | HTTP proxy for web requests |
+| `tools.web.user_agent` | `str \| null` | `null` | Custom `User-Agent`; unset uses the built-in one |
+| `tools.post_edit_check.enable` | `bool` | `true` | Runs the configured checker after each `write_file` or `edit_file` call |
+| `tools.post_edit_check.timeout_s` | `int` | `10` | Checker timeout in seconds |
 | `tools.post_edit_check.checkers` | `dict[str, str]` | built-ins for `py` (ruff) and `json` (`json.tool`) | Map of file extension → shell command; `{file}` is substituted with the edited path. User entries merge over the built-ins. A checker whose binary is absent is skipped silently |
 | `tools.post_edit_check.max_lines` | `int` | `20` | Maximum checker output lines returned to the model |
 | `tools.code_execution.enable` | `bool` | `true` | Enables/disables the `execute_code` sandboxed Python tool (Unix only) |
 | `tools.code_execution.timeout_s` | `int` | `300` | Maximum run time for a code execution in seconds |
+| `tools.code_execution.max_tool_calls` | `int` | `50` | Most durin tool calls one script may make |
+| `tools.code_execution.max_stdout_bytes` | `int` | `50000` | Script stdout returned to the model before it is cut |
+| `tools.code_execution.max_stderr_bytes` | `int` | `10000` | Script stderr returned to the model before it is cut |
 | `tools.mcp_deferral.enabled` | `bool` | `true` | Activates MCP schema deferral when aggregate MCP token cost exceeds the threshold |
 | `tools.mcp_deferral.threshold_tokens` | `int` | `20000` | Token threshold above which MCP tools are hidden behind `mcp_find_tools` / `mcp_invoke` |
 | `tools.ssrf_whitelist` | `list[str]` | `[]` | CIDR ranges exempted from the SSRF block on `web_fetch` and `exec` (e.g. `["100.64.0.0/10"]` for Tailscale) |
+
+The MCP keys under `tools` (`tools.mcp_servers`, `tools.mcp_discovery.*`) are
+listed in [mcp.md](mcp.md). Every key is accepted in snake_case or camelCase.
 
 ### Environment variables
 
@@ -562,7 +615,9 @@ through byte-for-byte.
 ### CLI / TUI / webui surfaces
 
 Tools are not configured directly through the CLI or webui — they take effect via
-`durin config set tools.<key> <value>` or by editing `~/.durin/config.json`. The
+`durin config set tools.<key> <value>` or by editing the config file
+(`~/.durin/config.json`, or `~/.durin/config.json.d/tools.json` when the config
+is split into sections). The
 webui Settings panel surfaces the MCP server list (add, remove, toggle) which
 controls which MCP tools are registered.
 
@@ -579,7 +634,7 @@ controls which MCP tools are registered.
 | Session & planning | `session_search` (searches the live session, or any earlier session by key (`session_key`), read-only), `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
 | Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `workflow_script_write` (the code a `script` node runs — the generic file tools cannot write under `workflows/`, so this door validates the name, writes under the editor's lock and commits to the workflow version history), `tasks` (list / status / stop, over sub-agents + workflow runs + [jobs](jobs.md), scoped to this session), `workflow_runs` (read-only `search` (date-filterable via `since`/`until`) / `show` / `cost` (per-run token table, including child sub-workflow runs) over every past workflow run recorded in the workspace — across every session, not just this one — so a question about prior work can be answered by reading a manifest and its artifact files instead of re-running the workflow; when answering from a prior run, state the run's date and flag a producer model/version that differs from the current configuration, and prefer re-running when the user asked for a fresh investigation), `subagent_monitor`, `subagent_output` |
-| Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps`, `skill_publish` (promote a draft under `skill-drafts/<name>/` into the active registry, through the composition gate and security scan), `skill_discard` (drop a draft; active skills are untouched) |
+| Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_install_deps`, `skill_publish` (promote a draft under `skill-drafts/<name>/` into the active registry, through the composition gate and security scan), `skill_discard` (drop a draft; active skills are untouched) |
 | MCP management | `mcp_manage` (`install`/`add`/`update`/`enable` need the user's approval under `install_policy: approve`; `remove`/`disable`/`reconnect` are not gated), `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` (`update=true` asks the user to replace an existing secret's value; the agent never sees values) |

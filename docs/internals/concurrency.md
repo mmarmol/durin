@@ -3,9 +3,9 @@
 ## 1. Purpose
 
 durin runs as several independent OS processes that share one `DURIN_HOME`
-directory: the gateway daemon, the Textual TUI (which embeds its own
-[agent loop](loop.md)), and the [cron](cron.md) scheduler. Any of them can be
-writing the same session, the same config file, or the same memory entity at the
+directory: the gateway daemon (which also runs the [cron](cron.md) scheduler),
+the Textual TUI (which embeds its own [agent loop](loop.md)), the dream worker
+the gateway spawns, and CLI commands. Any of them can be writing the same session, the same config file, or the same memory entity at the
 same instant. There is no central database server arbitrating those writes — the
 files on disk are the shared state.
 
@@ -105,7 +105,8 @@ exit would wait for them, and a run left waiting that way can do nothing, since
 executors refuse new work once the exit begins (each DNS lookup fails, and a
 provider retries it as a connection error). So neither way out waits: a restart
 re-execs, and a stop ends the process as soon as everything is flushed
-(`leave_unfinished_runs`), naming the runs it left. Either way the run ends
+(`leave_unfinished_runs`), naming the runs it left (the whole stop sequence is
+in [observability](observability.md)). Either way the run ends
 where a crash would, for the startup sweep to mark it `crashed`. Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.
@@ -143,7 +144,7 @@ flowchart TB
     subgraph procs["Processes sharing one DURIN_HOME"]
         GW["gateway daemon"]
         TUI["TUI agent loop"]
-        CRON["cron scheduler"]
+        CRON["cron scheduler<br/>(inside the gateway)"]
         DW["dream worker<br/>(spawned by gateway; also the manual CLI dream)"]
     end
 
@@ -347,24 +348,30 @@ view.
 The cron scheduler uses two **separate** `FileLock` instances on two different
 paths, and the distinction is load-bearing:
 
-- `_tick_lock` (`.tick.lock`) guards at-most-once execution. `_on_timer`
-  acquires it **non-blocking**; if another scheduler process is already ticking,
-  this one skips the tick rather than queueing. It is held for the *whole* tick
-  so a peer cannot pick up the same due job during the execution window.
+- `_tick_lock` (`.tick.lock`) keeps two scheduler processes from ticking at
+  once. `_on_timer` acquires it **non-blocking**; if another scheduler process
+  is already ticking, this one skips the tick rather than queueing.
 - `_lock` (the cron store lock) serializes the load/save read-modify-write of
   `jobs.json` for every mutator (add, remove, enable, update).
 
-The non-obvious part: `_on_timer` **releases `_lock` before running a job**, then
-re-acquires it afterward to merge run-state deltas onto a freshly reloaded store.
-This is required because `FileLock` is reentrant within a single instance on the
-same thread but does **not** reenter across instances on the same path — if a job
-callback constructed a second `CronService` and called a mutator, that mutator
-would try to take `_lock` on a second instance pointing at the same file and
-deadlock. Releasing before the (possibly minutes-long) job both avoids that and
-keeps the store readable while the job runs. Due jobs have their `next_run`
-advanced and saved *before* the lock is released, which is the at-most-once
-guard: a racing scheduler reloads the already-advanced value and finds nothing
-due.
+A tick is short and never waits on a job. Under both locks it reloads the
+store, advances `next_run_at_ms` for every due job, saves, and releases both.
+Advancing before releasing is the at-most-once guard: a racing scheduler
+reloads the already-advanced value and finds nothing due. Each due job then
+runs in a task of its own (`_run_job_task`), which waits for one of the
+`cron.max_concurrent_jobs` slots, executes with **no lock held**, and takes
+`_lock` again only to merge its run-state deltas onto a freshly reloaded
+store. A job that runs for hours therefore neither delays the other due jobs
+nor holds the timer, and the in-process `_executing` set keeps a job from
+overlapping its own previous run. A run-now (`run_job`) follows the same
+discipline and takes a slot of the same pool.
+
+Running the job outside `_lock` is required because `FileLock` is reentrant
+within a single instance on the same thread but does **not** reenter across
+instances on the same path — if a job callback constructed a second
+`CronService` and called a mutator, that mutator would try to take `_lock` on
+a second instance pointing at the same file and deadlock. It also keeps the
+store readable while the job runs.
 
 Each cron run also executes as an isolated session (`cron:<id>:run:<ts>`) and
 acquires the session turn lease through the shared turn path, so a cron job and
@@ -423,7 +430,9 @@ at the narrowest scope that needs it:
   claim *before* resuming it (release-before-resume): the claim is stale the
   instant the answer arrives, and releasing early means a fresh claim
   registered by a follow-up question inside that same resume is never wiped
-  by a stale trailing release. At gateway boot, a best-effort sweep prunes
+  by a stale trailing release. A best-effort sweep, at gateway boot and then
+  periodically while it runs (`WorkspaceJanitor`,
+  `durin/service/housekeeping.py`), prunes
   claims older than seven days, so a run that never got a reply (crash, or a
   counterpart that never answered) does not hold its key forever.
 - **Per-automation event queue** (`automations/queue/<name>.jsonl`,
@@ -514,9 +523,12 @@ The snapshot is bound by a cost contract:
   `process_direct` — `/v1`, cron, automation judges — and running sub-agents);
   workflow *runs* live in on-disk manifests (read per-session by
   `durin/agent/background_tasks.py`) and are intentionally not enumerated
-  globally. Workflow-driven work still appears as its turns/sub-agents, and the
-  ceiling counts stay exact because that work acquires the ceiling through those
-  same units.
+  globally. A run's node turns execute on the run's own thread and take neither
+  a lane nor a ceiling slot, so they appear in neither the `work` list nor the
+  lane counts; a run that a turn launched in the foreground is visible as that
+  turn. Direct turns are listed but hold
+  no slot, so `active` on the lanes counts interactive turns and sub-agents
+  only.
 - **Coalesced, never per-event.** `AgentLoop.mark_concurrency_dirty()` schedules
   a single build+publish on the next loop tick (a `loop.call_soon` guarded by a
   flag), so a burst of boundary events collapses to one frame. It is marked dirty
@@ -573,9 +585,10 @@ turn locking on or off. A few related fields:
   [memory](memory/00_overview.md)).
 
 **Surfaces.** The locks are invisible to users; their effects are not. The
-gateway, TUI, and webui all operate over the same `DURIN_HOME`, so a session open
-in two windows surfaces the "session is busy in another window" notice when a
-second turn tries to start before the first releases its lease. Cron runs and the
+gateway, TUI, and webui all operate over the same `DURIN_HOME`, so a turn on a
+session that another process is already running waits for that process to
+release its lease, and surfaces the "session is busy in another window" notice
+only when the lease's acquire timeout runs out. Cron runs and the
 API session-rename endpoint participate in the same turn-lease discipline.
 
 **Out of scope by design.** OAuth provider token files (`oauth/<provider>.json`)

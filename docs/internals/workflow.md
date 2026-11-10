@@ -73,7 +73,9 @@ the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iterati
 with lineage (`origin_type="workflow_node"`). The node's session telemetry logger is
 bound for the whole execution, so its tool events and per-call `provider.call`
 token/latency records land in a `workflow_<run>_<node>` telemetry file (see
-`docs/internals/observability.md`). A node is configured independently and
+`docs/internals/observability.md`). The engine itself emits no run- or node-level
+telemetry event: what a run cost is read by joining its manifest with those per-node
+files, which is what the `workflow_runs` tool's `cost` action does (§6). A node is configured independently and
 focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
 for nodes, `build` (full access, neutral posture) for steps that create or edit files and
 `read` (read-only, neutral posture) for steps that inspect, analyse, or judge; or a
@@ -420,7 +422,10 @@ node's input. It has three shapes — **static** (a fixed `branches` list of wor
 with its own prompt, all seeing the same input), **dynamic** (a `worker` template node +
 `list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
 per item, each getting its own list item as input; the list is emitted by the upstream node as
-a JSON array, with a newline-split fallback), and **runtime-selected** (`branches_from` names
+a JSON array, with a newline-split fallback, and is cut to a fixed number of items
+(`WorkflowEngine._parse_subtasks`); the item is the worker's whole input — it is handed over as
+both the task and the upstream text, so the run's task and its input/output framing do not reach
+a worker, and the item must carry or point at everything the worker needs), and **runtime-selected** (`branches_from` names
 the node — typically a routing script — whose output lists which DECLARED work- or script-node ids run
 this pass, as a JSON array or a comma-separated last line; heterogeneous branches chosen per
 run, so "run only the analyzers that apply" is one parallel node instead of one static block
@@ -462,9 +467,11 @@ runner surface it gracefully (the node, its last FAIL reason, and the best parti
 caller learns it did not complete and why instead of treating a partial as done. The engine hands each work node its effective budget; on a revisit the runner tells the model which pass this is ("Pass X of Y"), and on the last allowed pass says explicitly that no further iteration will happen, so loops converge deliberately instead of being cut off by the cap.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
-within a single node execution. When set on a `WorkNode`, the node runner (1) prepends a
+within a single node execution. When set on a `WorkNode`, the node runner (1) appends a
 budget note to the node's system prompt ("You
-have up to N rounds of tool use. Gather efficiently, then give your final answer."),
+have up to N rounds of tool use. Gather efficiently, then give your final answer.") — on a
+persistent session's revisit, to the revisit turn instead, since the system turn is reloaded
+as it was saved —
 (2) runs the agent with `max_iterations = max_turns` instead of the global default, and
 (3) if the run ends because the budget was exhausted, makes a second call with no tools
 and `max_iterations=1` asking the model to synthesize from what it gathered — so the node
@@ -869,7 +876,8 @@ The `WorkflowsService` exposes read routes for run manifests:
 
 The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_id`:
 the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
-carrying the user's answers. The response carries `run_id`, a per-node trace with
+carrying the user's answers, or one that ended `aborted` at a named node, which retries
+that node with the exact input it had. The response carries `run_id`, a per-node trace with
 `session_key`, `worker_index`, `branch_id`, `budget`, `status`, and `route_label` for
 each entry, plus `final_output_node` (which node's output became `final_output`),
 `needs_input_node` (the node that asked, when the run ends `needs_input`) and
@@ -883,6 +891,13 @@ tray/inbox filters on). Only the synchronous `POST .../run` response (above) sti
 them, stopping at `needs_input_node`/`final_output_node`: a caller distinguishing an
 approval pause from a question pause, or reading which verdict ended a run, needs the
 summary or the full manifest today, not the synchronous run response.
+
+`POST /api/v1/workflows/{name}/runs` is the detached launch (`WorkflowsService.launch`):
+it takes `task` and an optional `work_key`, validates the key and that the workflow
+exists, answers `202` with the pre-generated `run_id` at once, and runs the workflow in
+the background rooted at `api:<token subject>`. It takes no `input_files`,
+`output_format` or `resume_run_id`, and a failure after the response is only logged, so
+the caller follows the run through its manifest (the read routes above).
 
 ### 4g. Background mode and live progress
 
@@ -1095,8 +1110,8 @@ being published on the message bus. The WebSocket channel propagates them as
 *agent-launched* run's frames reach a client: they publish onto the calling
 session's own `chat_id`, because there IS one — the same reason the finished
 result can be injected back via `session_key_override` (above). A
-**service-path** run has no calling chat — today, an automation trigger;
-potentially a raw HTTP launch tomorrow. `WorkflowsService.__init__`
+**service-path** run has no calling chat — an automation trigger, or a raw
+HTTP launch. `WorkflowsService.__init__`
 (`durin/service/workflows.py`) instead accepts an optional `progress_publish`
 callback; when set, `execute()` wires it into the engine's `progress_emit` and
 every running-node frame is republished onto one fixed key instead of a
@@ -1117,7 +1132,7 @@ registry's own `WorkflowsService` — the instance the HTTP `/api/v1/workflows/*
 routes actually run against (`durin/service/wiring.py`) — is built with no
 `progress_publish`, so a run launched directly over
 `POST /api/v1/workflows/{name}/runs` or `.../run` publishes no `runs:feed`
-frames yet; only a loop-triggered run does. Either way, `execute()` emits no
+frames yet; only an automation-fired run does. Either way, `execute()` emits no
 terminal (`done: true`) frame of its own — unlike `run_workflow.py`'s tool
 path, which builds one explicitly from the finished `WorkflowResult` — so a
 `runs:feed` watcher sees a service-path run's live per-node progress but must
@@ -1408,7 +1423,7 @@ End-to-end for a single `run_workflow` call:
   filters by name/description, so the agent can pick which one to run; `run_workflow` runs it.
   The field is optional and backward-compatible — a workflow without it parses and runs fine.
 - **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?,
-  resume_run_id?)` LLM tool — auto-discovered into the agent's tool registry at core scope
+  resume_run_id?, work_key?)` LLM tool — auto-discovered into the agent's tool registry at core scope
   (see [tools.md](tools.md)). `input_files` (absolute paths) are seeded into the run's shared
   working folder so every node can read them, and the terminal `output_dir` is reported back
   in the run summary. When a run ends `needs_input` on a question, calling the tool again with
@@ -1419,8 +1434,10 @@ End-to-end for a single `run_workflow` call:
   waits for an answer the agent already has. A run paused for a person's **approval**
   cannot be resumed through this tool at all — it refuses `resume_run_id` outright and
   points to the workflow's runs in the webui or the API, where a person decides it
-  (see §4g). A node with
-  `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
+  (see §4g). `resume_run_id` also retries a run that ended `aborted` at a named node, and
+  `work_key` (not combinable with `resume_run_id`) picks the stable working folder of §2. A node with
+  `tools: "default"` receives the `subagent`-scoped background tool set, built with the
+  user's tools config (§2); `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
@@ -1437,8 +1454,8 @@ End-to-end for a single `run_workflow` call:
   (excess is truncated with a notice); `workflow.script_log_max_chars` (default 4000)
   caps what that node's stdout and stderr contribute to the run manifest — a separate,
   tighter bound because the manifest is rewritten in full after every node.
-- **A delete refuses while something still points at it.** A `subworkflow` node, a
-  loop, and an automation all name a workflow by name, so removing one they run
+- **A delete refuses while something still points at it.** A `subworkflow` node
+  and an automation both name a workflow by name, so removing one they run
   breaks them silently. `DELETE …/{name}` consults the reverse graph (`durin/registry_graph.py`) and returns
   a validation error naming the dependents; retarget or remove those first. This is the
   same question the dream's skill barrier asks (see

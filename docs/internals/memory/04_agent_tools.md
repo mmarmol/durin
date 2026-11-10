@@ -98,10 +98,13 @@ flowchart TD
 ### Tool registration
 
 `ToolLoader` (`durin/agent/tools/loader.py`) scans the `durin.agent.tools`
-package at startup. For each discovered `Tool` subclass it calls
-`tool_cls.enabled(ctx)` before calling `create(ctx)`. Every memory tool
-returns `True` (or inherits the default `True` from `Tool.enabled`), so
-all of them appear in the LLM's tool list.
+package at startup. For each discovered `Tool` subclass it first checks that
+the registry's scope is in the tool's `_scopes`, then calls
+`tool_cls.enabled(ctx)` before calling `create(ctx)`. No memory tool overrides
+`enabled`, so scope alone decides the surface: `memory_forget` loads for the
+main agent only, `memory_source_document` for no auto-discovered surface (the
+Dream Tier 2 judge builds it itself), and the others for the main agent and
+for subagent / workflow-node registries.
 
 ### `memory_search`
 
@@ -190,19 +193,24 @@ defaults on any load failure.
   "total": 5,
   "strategy": "hybrid",
   "ranking": "entity_aware",
-  "sectioned_rendered": "=== CANONICAL: person:marcelo (complete) ===\n..."
+  "sectioned_rendered": "## Canonical\n\n<section intro>\n\n=== CANONICAL: memory/entity_page/person:example (canonical entity page, complete) ===\n..."
 }
 ```
 
 `strategy` is derived from what the pipeline actually used (`hybrid` / `vector`
-/ `lexical` / `grep`). `ranking` is `entity_aware` when the query contained
-recognisable entity references, `default` otherwise. `recovered_from` and
-`recovery_duration_ms` appear only when the pipeline recovered from a source
-failure; they are absent on clean runs.
+/ `lexical` / `grep`, or `archive` for `scope="archive"`). `ranking` is
+`entity_aware` when the query contained recognisable entity references,
+`default` otherwise. `already_in_context` lists the uris the in-context dedup
+collapsed; those hits print as pointer lines in a trailing section of
+`sectioned_rendered`. `recovered_from` and `recovery_duration_ms` appear only
+when the pipeline recovered from a source failure; they are absent on clean
+runs. Invalid input returns `{"error": …}` (empty `query`, or an unknown
+`scope` / `level` / `kinds` value). `kinds` is ignored under
+`scope="library"`, `"undreamed"` and `"archive"`.
 
 **Following a `SESSION` hit.** A `SESSION` block names a summary *file stem*,
-not a session key — the stem is the key with every non-word character collapsed
-to `_`, so `websocket_<id>` is the session `websocket:<id>`. The follow-up is
+not a session key — the stem is the key with every character other than
+letters, digits, `_` and `-` replaced by `_`, so `websocket_<id>` is the session `websocket:<id>`. The follow-up is
 `session_search(session_key=…)` (`durin/agent/tools/session_search.py`), which
 searches another conversation's own transcript read-only; it is not a memory
 tool, so it does not appear in this document's tool list. A stem ending in
@@ -222,8 +230,13 @@ for the ref, then calls `write_entity` under `author_scope("agent_created")`.
 precedence (`user > dream > agent`), and commits via dulwich plumbing with a
 CAS (`refs.set_if_equals`), retrying up to 30 times on contention.
 
-Body is appended by default (`body_mode="append"`). A `body_mode="replace"` over
-a user-authored body is demoted to an append by the write path.
+Body is appended by default (`body_mode="append"`). A `body_mode="replace"`
+takes effect only when the agent wins the body's author precedence; over a body
+owned by a higher-ranked author it is applied as an append by the write path.
+
+The call commits the page; it does not index it. The file watcher picks the
+write up and refreshes the page's lexical and vector rows
+(see [02_indexing.md](02_indexing.md)).
 
 The agent deliberately has no `attributes` parameter — the Dream extract pass
 reads the prose `body` and writes typed attributes. This keeps the write
@@ -235,8 +248,11 @@ interface simple and lets the LLM focus on facts rather than schema.
 {"ref": "company:mxhero", "committed": true}
 ```
 
-`committed` is the CAS result. `retries` is recorded in telemetry but not
-returned to the agent.
+`committed` is true when a commit was written and false when the call changed
+nothing on an existing page. A write that cannot land returns
+`{"error": "upsert failed: …"}`; a malformed `ref` returns its own error.
+`retries` is recorded in telemetry (`memory.upsert_entity`) but not returned
+to the agent.
 
 ### `memory_ingest`
 
@@ -260,7 +276,9 @@ as-is. The storage model has three steps, all in a single call:
    to the embedded passage.
 
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
-When memory is disabled (no embedding model), only step 1 runs.
+When the vector layer is off (`memory.enabled = false` or the embedding extra
+is missing), steps 1 and 2 still run and the reference is FTS-indexed; only the
+per-chunk vector indexing of step 3 is skipped.
 
 **Scanned PDFs.** `convert_file_to_markdown` measures a PDF's per-page text
 coverage (`durin/memory/pdf_coverage.py`) and classifies it as ordinary,
@@ -490,7 +508,7 @@ per-response render budget collapsed to a one-line headline pointer
 | `sessions/<key>.md` (optionally `#turn-N`) | Session transcript, optionally a specific turn. |
 | `ingested/<id>/source.md` (optionally `#anchor`) | Verbatim ingested document, optionally a markdown section. |
 | `skills/<slug>/SKILL.md` | Skill file. |
-| Any other workspace-relative path | Read as-is. |
+| Any other path — workspace-relative, absolute or `~`-prefixed | Read as-is. |
 
 **Artifact-keyed recall:** drilling a reference document opens with the entities
 that were distilled from it, when any exist — a leading
@@ -510,8 +528,9 @@ opens with the memory entries that mention the file — see the `read_file` row 
 [tools.md](../tools.md). Both blocks lead their result rather than trailing it
 because `read_file` counts its block against its page, and an over-cap result
 reaches the model as a preview of its head (the whole result is saved), so a
-trailing block would be the part the model does not see. Both halves are gated
-by `memory.artifact_recall` (`enabled`, `max_notes`). The webui's reference detail
+trailing block would be the part the model does not see. `memory.artifact_recall`
+(`enabled`, `max_notes`) gates the `read_file` half; the drill header is added
+regardless of that setting and lists a bounded number of entity refs. The webui's reference detail
 (`graph_api._entities_derived_from`) shares the same candidate helper.
 
 **Return (single):**
@@ -550,10 +569,21 @@ own lifecycle (absorb, revert) managed through `memory_upsert_entity` and the
 Dream refine pass.
 
 The archive is reversible: an archived entry can be recovered by moving it back
-and calling `reindex_one_file`.
+under `memory/<class>/`; the file watcher (or `durin memory reindex`) restores
+its lexical and vector rows.
 
-**Parameters:** `uri` (required, `memory/<class>/<id>` form) + optional `reason`
-(recorded in archive frontmatter, defaults to `"agent_forget"`).
+A `reference:<slug>` uri forgets an ingested document instead
+(`forget_reference`): the reference file and its chunk sidecar move under
+`memory/archive/references/`, a tombstone in `memory/.deleted.json` stops the
+dream from re-distilling it, and the document's FTS row and per-chunk vector
+rows are dropped. An unknown document returns
+`{"error": "document not found: <uri>"}`. The verbatim copy under
+`ingested/<id>/` is left in place.
+
+**Parameters:** `uri` (required: a `memory/<class>/<id>` entry of a forgettable
+class — episodic, stable, corpus, session summary — or a `reference:<slug>`)
++ optional `reason` (recorded in archive frontmatter, defaults to
+`"agent_forget"`).
 
 **Return:**
 
@@ -603,23 +633,27 @@ Who last modified it and why?
 {
   "ref": "place:torrent",
   "commits": [
-    {"sha": "a3f9c0112b", "when": "2026-06-24T03:01:00+00:00",
+    {"sha": "a3f9c0112b", "when": "<ISO-8601 commit time>",
      "author": "durin-dream <dream@durin.local>",
      "message": "absorb place:torrent-valencia into place:torrent\n\nAbsorbed: place:torrent-valencia\n…"}
   ]
 }
 ```
 
-Returns `{"error": "lineage unavailable: …", "commits": []}` when the entity
-page has no git history (e.g. just created and not yet committed).
+Returns `{"ref": …, "commits": []}` when no commit touches the page (the ref
+is not validated, so an unknown ref answers the same way), and
+`{"error": "lineage unavailable: …", "commits": []}` when the memory
+repository cannot be opened or walked.
 
 ### `memory_source_session`
 
 **File:** `durin/agent/tools/memory_lineage_tools.py`
 
-Reads the **conversation turns** an entity was distilled from: the session turns
-recorded in each patch's `source_ref` provenance chain plus the `derived_from`
-reference documents. This is the primary surface for understanding *why* the
+Reads the **conversation turns** an entity was distilled from: every
+`[[sessions/<key>.md#turn-N]]` ref found in the page's `derived_from` list or in
+its per-attribute provenance `source_ref` (relation and body provenance are not
+read). Reference documents are not returned — drill the `reference:<slug>`
+instead. This is the primary surface for understanding *why* the
 entity holds a particular fact — tracing it back to the exact conversation that
 produced it.
 
@@ -638,7 +672,8 @@ produced it.
 ```
 
 Returns an empty `sources` list when no provenance source refs are recorded or
-the referenced session files are no longer present.
+the referenced session files are no longer present, and
+`{"error": "no entity <ref>", "sources": []}` when the page does not exist.
 
 ### `memory_source_document`
 
@@ -694,7 +729,7 @@ an empty `documents` list; a missing page returns `{"error": "no entity <ref>"}`
 | `MemoryForgetTool` | `durin/agent/tools/memory_forget.py` | `memory_forget` tool. Delegates to `forget_entry`; drops FTS + vector rows without loading the embedding model. |
 | `MemoryReadEntityTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_read_entity` tool. Returns `EntityPage.to_markdown()` for a single ref — complete page, no truncation. |
 | `MemoryEntityLineageTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_entity_lineage` tool. Walks the dulwich git log for an entity page; returns up to 20 commits with SHA, timestamp, author, message. |
-| `MemorySourceSessionTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_session` tool. Collects `source_ref` / `derived_from` provenance entries from an entity page and reads the matching session turns. |
+| `MemorySourceSessionTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_session` tool. Collects session-turn refs from an entity page's `derived_from` list and per-attribute provenance `source_ref`, and reads the matching session turns. |
 | `MemorySourceDocumentTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_document` tool, registered only for the Dream Tier 2 judge. Bounded excerpts, around the entity's name and aliases, of the reference documents an entity page cites; reads only files inside `memory/references/`. |
 | `ToolLoader` | `durin/agent/tools/loader.py` | Discovers `Tool` subclasses, calls `enabled(ctx)` + `create(ctx)`, registers into `ToolRegistry`. |
 | `run_search_pipeline` | `durin/memory/search_pipeline.py` | Full search pipeline entry point called by `memory_search`. |
@@ -704,7 +739,7 @@ an empty `documents` list; a missing page returns `{"error": "no entity <ref>"}`
 | `forget_entry` | `durin/memory/forget.py` | Archives entry to `memory/archive/`, drops FTS + vector rows. |
 | `ingest_artifact` | `durin/memory/ingestion.py` | Verbatim file copy + meta.json (step 1 of `memory_ingest`). |
 | `ingest_reference` | `durin/memory/reference.py` | Writes `memory/references/<slug>.md` + chunks sidecar (step 2). |
-| `FieldPatch` | `durin/memory/field_patch.py` | Immutable patch: `kind`, `value`, `author`, `source_ref`, `at`. Applied with author precedence by `write_entity`. |
+| `FieldPatch` | `durin/memory/field_patch.py` | One structured edit: `kind`, `key` (attribute patches), `value`, `source_ref`, `at`, and `author` (filled in by the writer from the ambient author scope when the caller passes none). Applied with author precedence by `write_entity`. |
 
 ---
 
@@ -714,7 +749,7 @@ an empty `documents` list; a missing page returns `{"error": "no entity <ref>"}`
 
 | Key | Default | Effect |
 |---|---|---|
-| `memory.enabled` | `true` | Gates all memory I/O; when false, tools degrade to grep-only or verbatim-copy-only paths. |
+| `memory.enabled` | `true` | Enables the vector index. When false the memory tools keep working over the lexical index and the markdown files; no embedding model is loaded and no vector rows are written. |
 | `memory.embedding.model` | `intfloat/multilingual-e5-small` | Embedding model for vector retrieval. A change triggers a vector index rebuild on next startup. |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder blend, which reorders the top-50 candidates without dropping any. The reranker is a ~100 M-param sentence-transformer, not an LLM. |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Model ID for cross-encoder reranking. Any `sentence-transformers`-compatible model works. |
@@ -776,7 +811,7 @@ These are for human operators, not agent tools.
 | `durin memory forget <uri>` | Archive an entry + drop its index rows (same helper as the agent tool). |
 | `durin memory history <entity>` | Git log for an entity's `.md` file. |
 | `durin memory show <entity> [--rev SHA]` | Print entity page content at a given revision. |
-| `durin memory diff <entity> [--from..to]` | Unified diff of an entity page between revisions. |
+| `durin memory diff <entity> <from>..<to>` | Unified diff of an entity page between revisions. |
 | `durin memory revert <commit>` | Undo a consolidation commit. |
 | `durin memory expand <entity>` | Show sources, related entities, and archived versions for an entity. |
 
@@ -789,7 +824,7 @@ agent tools and never accept mutations.
 |---|---|---|
 | `get_entity_detail(uri)` | `durin/memory/graph_api.py` | Full entity page content + git history + per-field provenance events. |
 | `get_edge_detail(from_uri, to_uri)` | `durin/memory/graph_api.py` | Co-mention evidence between two entities. |
-| `search_memory_api(query, …)` | `durin/memory/graph_api.py` | Webui equivalent of `memory_search` (paginated; different return shape). |
+| `search_memory_api(query, …)` | `durin/memory/graph_api.py` | Webui equivalent of `memory_search`: the same tool response plus the structured `results` array. |
 | `list_reference_documents()` | `durin/memory/graph_api.py` | The Library shelf: ingested reference documents (title, source, ingest time, chunk count, `distilled`). |
 | `get_reference_detail(slug)` | `durin/memory/graph_api.py` | One document's full raw body + distilled outline + entities seeded from it + a bounded chunk preview. |
 | Entity list data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the Entities table/cards. Caps at 500 nodes / 2 000 edges. |
@@ -816,8 +851,9 @@ agent must learn.
 **`memory_forget` instead of shell `rm`.** A raw deletion leaves FTS and vector
 index rows pointing at a missing file. The auto-repair cannot reconstruct them
 (it has no record of what was there). `memory_forget` moves the file to the
-archive and drops the index rows atomically, keeping the indices consistent. The
-archive is reversible; nothing is destroyed.
+archive and then removes its index rows. The move is authoritative; a failed
+index cleanup is logged and reconciled by the next reindex or health-check
+repair. The archive is reversible; nothing is destroyed.
 
 **Three read-only inspection tools, not just one.** `memory_drill` reads any
 workspace URI by path; the three inspection tools (`memory_read_entity`,
@@ -839,8 +875,9 @@ reads documents with `memory_drill` and `memory_search(scope="library")`, and
 keeping this tool off its surface spares every turn another tool schema.
 
 **Tool descriptions are canonical in code, not in docs.** The exact text the LLM
-reads lives in each tool's `_PARAMETERS["description"]` and is delegated to the
-`.description` property. `tests/memory/test_tool_description_sync.py` enforces
-that the live tools stay in sync. Documentation here describes intent and
-parameters; it does not copy the description text (which would create a third,
-unguarded copy that can drift).
+reads is each tool's `.description` property.
+[06_prompts_and_instructions.md](06_prompts_and_instructions.md) holds a
+verbatim copy, and `tests/memory/test_tool_description_sync.py` fails when the
+two differ. Documentation here describes intent and parameters; it does not
+copy the description text (which would create a third, unguarded copy that can
+drift).

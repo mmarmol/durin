@@ -46,7 +46,7 @@ flowchart LR
     subgraph Frontmatter["SKILL.md frontmatter"]
         direction TB
         ROOT["Root — agentskills.io standard\nname, description, version\nplatforms, disable-model-invocation\nallowed-tools, compatibility"]
-        DURIN["metadata.durin.*\nmode, provenance, requires\nalways, curated"]
+        DURIN["metadata.durin.*\nmode, provenance, requires\nalways, curation_rules"]
         VENDOR["metadata.hermes.* / metadata.openclaw.* / …\npreserved untouched"]
     end
     subgraph Body["SKILL.md body"]
@@ -81,7 +81,10 @@ workspace/skills/<name>/
 `<name>` is the directory name and the skill identifier. Builtin skills live in
 the durin package; a workspace copy of the same name takes precedence and is
 forked on first write (`fork_on_write`). Subdirectories are preserved on import
-and reachable via `read_file`.
+and reachable via `read_file` or `skill_view(name, file_path=...)`. The bundle
+map `skill_view` returns lists the files under `references/`, `scripts/`,
+`templates/` and `assets/`; a file in any other subdirectory is readable by
+path but not listed there.
 
 A skill built through the iterative authoring ramp
 (`02_lifecycle_and_curation.md`) is assembled at this exact layout under
@@ -93,8 +96,8 @@ whether a skill lands via a draft or a direct `skill_write`.
 
 | Field | Required | durin behavior |
 |---|---|---|
-| `name` | **yes** | 1–64 chars, lowercase letters/digits/hyphens, matches directory name. |
-| `description` | **yes** | ≤1024 chars. Load-bearing for retrieval — used as the searchable handle and the hot-tier catalog line. |
+| `name` | **yes** | 1–64 chars, lowercase letters/digits/hyphens, matches directory name. On import a missing name is an error; a non-conforming shape or a mismatch with the directory is a warning. |
+| `description` | **yes** | ≤1024 chars (longer is an import warning, not an error). Load-bearing for retrieval — used as the searchable handle and, in full, as the hot-tier catalog line. |
 | `version` | no | Preserved; surfaced in `list_skills_info`. |
 | `license` | no | Preserved; surfaced in `list_skills_info`. |
 | `compatibility` | no | Free-form environment requirements (≤500 chars). Preserved; advisory only (not enforced). |
@@ -113,15 +116,17 @@ durin keeps its own fields under `metadata.durin`, following the same
 
 | Field | Meaning |
 |---|---|
-| `metadata.durin.mode` | `manual` (dream only *proposes* edits, as suggestions on the Pending page) or `auto` (dream may author and patch it directly). The mode governs the **dream/system** side only — it is not a user lock. The user can edit a skill in either mode from the web editor; a user edit to an `auto` skill stays `auto` and is committed with `Actor: user`, which the curation judge is told to respect. Default by origin: dream-created → auto, user-created → manual, imported → manual. |
-| `metadata.durin.provenance` | `{ source, created_at, content_hash, approval_id, approved_by, … }` — where the skill came from and who authorized a gated install (`approval_id`/`approved_by`: `user`, `judge`, `operator`, or `policy`; both absent when the gate needed no decision). `source: "dream"` means crystallized from session experience; `source: "github:owner/repo/…"` means imported. |
-| `metadata.durin.requires` | `{ bins: [...], env: [...] }` — availability gate. A skill with an unmet CLI tool or missing env var is shown as `(unavailable: …)` and excluded from retrieval. |
-| `metadata.durin.always` | Truthy → full SKILL.md body is injected into the stable system prompt every turn (the always-on tier), not just name and description. |
-| `metadata.durin.curated` | Dream-curation bookkeeping (last-curated timestamp, body hash). Read by `needs_curation`; not meaningful to authors. |
+| `metadata.durin.mode` | `manual` (dream only *proposes* edits, as suggestions on the Pending page) or `auto` (dream may author and patch it directly). The mode governs the **dream/system** side only — it is not a user lock. The user can edit a skill in either mode from the web editor; a user edit to an `auto` skill stays `auto` and is committed with `Actor: user`, which the curation judge is told to respect. Stamped by origin: authored through `skill_write` or `skill_publish` (by the dream or by the agent in a session) → auto; imported → manual. Without a stamp, a workspace skill reads as manual and a pristine builtin as auto (`read_mode`). |
+| `metadata.durin.provenance` | `{ source, created_at, scan_verdict, content_hash, approval_id, approved_by, … }` — where the skill came from and who authorized a gated install (`approval_id`/`approved_by`: `user`, `judge`, `operator`, or `policy`; both absent when the gate needed no decision). `source: "dream"` means authored inside durin — by the dream's skill-extract pass or by the agent in a session, which stamp the same value; `source: "github:owner/repo/…"` means imported. `dream_processed_through` is curation bookkeeping: the body hash at the last curation, read by `needs_curation`. |
+| `metadata.durin.requires` | `{ bins: [...], env: [...] }` — availability gate. A skill with an unmet CLI tool or missing env var stays in the catalog, marked `(unavailable: …)`, and is left out of the always-on tier; `skill_view` reports what is missing. |
+| `metadata.durin.always` | Truthy → full SKILL.md body is injected into the stable system prompt every turn (the always-on tier), not just name and description. A root-level `always` is honored the same way. |
+| `metadata.durin.curation_rules` | Dream-curation bookkeeping: the curation rules version the skill was last reviewed under. Read by `needs_curation`; not meaningful to authors. |
 
 Other vendors' `metadata.<vendor>.*` blocks (for example `metadata.hermes.requires_toolsets`)
 are preserved untouched and ignored functionally — durin does not act on another
-vendor's behavior fields.
+vendor's behavior fields. The one exception is `metadata.openclaw`: when a skill
+has no `metadata.durin` block, the loader reads `requires` and `always` from
+`metadata.openclaw` instead (`SkillsLoader._parse_durin_metadata`).
 
 ### Round-trip fidelity guarantee
 
@@ -142,10 +147,12 @@ stamp the durin namespace":
 1. Fetch the skill (URL, GitHub, marketplace) — copy `SKILL.md` plus any
    `references/`, `scripts/`, `assets/`, `templates/` directories.
 2. Stamp `metadata.durin.provenance.source` and `metadata.durin.mode`.
-3. Optionally map a foreign requirement declaration
-   (`metadata.hermes.requires_*`, `required_environment_variables`,
-   `metadata.openclaw.requires`) to `metadata.durin.requires` if durin should
-   gate on it.
+3. A foreign requirement declaration (`metadata.hermes.requires_*`,
+   `required_environment_variables`) is not translated: to have durin gate on
+   it, write it into `metadata.durin.requires` by hand. That includes
+   `metadata.openclaw.requires`: the loader's fallback to `metadata.openclaw`
+   (see above) applies only while a skill has no `metadata.durin` block, and
+   step 2 creates one.
 
 Everything else works because the format is shared. The security gate that
 precedes the stamp is covered in [`00_overview.md`](00_overview.md) §4 Import.

@@ -121,8 +121,9 @@ trigger (or vice versa) is rejected at parse time, so the four shapes never mix:
   optional — an unknown timezone raises regardless of whether `croniter` ran);
   either failure fails the save, not the first firing.
 - **`channel`** — `channel` (`email`/`telegram`/`slack`/`discord`/`whatsapp`),
-  `filters` (an open key→value map — see §4c for how a filter is matched and which
-  keys each channel actually populates), an optional `semantic` condition (prose
+  `filters` (an open key→value map — see §4c for how a filter is matched;
+  `CHANNEL_FILTER_KEYS` in `channel_meta.py` declares which keys each channel
+  actually populates), an optional `semantic` condition (prose
   judged by the aux model), and `match` (`"wake_or_new"` default, or
   `"always_new"` — see §4c).
 - **`webhook`** — `hook`, the name that maps to `POST /api/v1/hooks/{hook}` (§6).
@@ -163,7 +164,9 @@ because a trigger delivered new information (a cron tick, a channel/webhook matc
 chain outcome, a manual/chat request) — insistence, when wanted, comes from the
 trigger's own schedule plus `life`, not from a timer inside the runtime.
 
-**`fire`** (manual/scheduled/chain entry) loads the spec, raises `AutomationBusyError` if
+**`fire`** (the entry for a manual or chat request, a matched channel message or
+webhook, a chain, a drained queue event and an orphan relaunch) loads the spec, raises
+`AutomationBusyError` if
 `concurrency == "single"` and a run is already active, then runs. **`try_fire`**
 (the cron dispatch path) additionally no-ops silently on a disabled automation or a
 busy one, rather than raising — a scheduled tick that finds nothing to do is not an
@@ -172,7 +175,7 @@ error. Both mint a `run_id`, write the run's manifest via `run_log.start_run` wi
 `origin` (the trigger context: which channel/session/webhook/chain caused this,
 used later for reply routing), then execute the workflow.
 
-**The `work_key` rule.** A channel-triggered fire's `origin["thread"]` becomes the
+**The `work_key` rule.** A channel- or webhook-triggered fire's `origin["thread"]` becomes the
 workflow's `work_key` (the engine's stable-working-folder / reuse-gate entrance;
 `docs/internals/workflow.md` §2) **only** when that thread is a
 correlate-derived claim key — matcher-minted as `"custom:<automation>:<capture>"`,
@@ -180,7 +183,8 @@ the exact string `claims.register` used to park the run this fire might be wakin
 A plain per-channel thread key never becomes a `work_key` on its own: it has no bound
 entity behind it, so passing it through would let two unrelated conversations in the
 same thread silently share a working folder. Every other fire (cron, manual, chain,
-or a channel fire with no `correlate`) gets the engine's default per-run folder.
+or a channel or webhook fire whose trigger captured no `correlate` value) gets the
+engine's default per-run folder.
 
 **Classification** (`durin.automations.classify.classify`) reads the workflow's
 `WorkflowResult` in this precedence order — the checks are disjoint by
@@ -194,7 +198,10 @@ construction, so exactly one status always applies:
 | `result.status == "completed"` | `completed` | |
 | anything else (`exhausted`, `aborted`, `cancelled`) | `failed` | |
 
-One case never reaches classification at all: if the workflow result is
+Some results never reach classification at all. A `cancelled` result that is not a
+rejection, outside a shutdown, is an operator stop and finalizes `interrupted`
+directly (see Stopping, below) — so `cancelled` only ever classifies through the
+`rejected` row. And if the workflow result is
 `aborted`/`cancelled`, not a deliberate rejection, and the gateway is mid graceful
 shutdown (`is_shutting_down()`), `_handle_result` leaves the run's manifest exactly
 as `"running"` and reports nothing — a SIGTERM cutting a workflow short has not
@@ -209,11 +216,17 @@ party the automation corresponds with, not the operator; the tag is stripped bef
 storage. If the run's `origin` carries a thread, the run parks, a claim is
 registered on that thread key, and the question is delivered on the triggering
 channel via the counterpart lane (never the help channel) — a later reply on that
-thread wakes this exact run. With no thread to reply into (e.g. a webhook or manual
-fire with nobody to answer), the ask falls back to the ordinary help lane with a
+thread wakes this exact run. A webhook origin whose trigger captured a `correlate`
+value does carry a thread (the correlate key), so the run parks and holds the claim,
+but a webhook has no reply channel: nothing is posted, the question shows on the
+paused run, and a later POST carrying the same captured value resumes it. With no
+thread to reply into (e.g. a manual fire, or a webhook fire with no `correlate`
+capture), the ask falls back to the ordinary help lane with a
 note appended so it is never silently lost. An untagged ask is always operator-bound
 and goes straight to the help lane, registering a claim on the receipt's thread key
-(when the channel returns one) so a reply there also resumes the run. The help-lane
+(when the channel returns one — Slack and email do; a help message sent through any
+other channel leaves no claim, so that pause is answered through the answer route)
+so a reply there also resumes the run. The help-lane
 message is English, like every message durin posts into a channel
 (`_automation_help_body` in the gateway): the automation's name and the ask, and for
 an approval the proposal and the replies the thread takes (`approve`, `reject`, or
@@ -376,11 +389,22 @@ outcome is deterministic:
    whose channel trigger matches this channel — every `filters` entry holds
    (`_contains` keys are case-insensitive substrings on prose; every other key is an
    exact, case-insensitive match on a core fact or a channel's own `extra` key — a
-   filter naming a key the channel never populates matches nothing and was warned
-   about at save time) — and whose optional `semantic` condition, if any, the aux
+   filter naming a key the channel never populates matches nothing; the parser logs
+   a warning each time it parses such a definition, and the save itself succeeds
+   without reporting it) — and whose optional `semantic` condition, if any, the aux
    model judges true (fail-closed: no judge configured or a judge error both mean
    no match) — wins. A match dispatches (fire or queue, next paragraph); no match
    lets the message fall through as an ordinary agent turn.
+
+The `semantic` judge is one agent turn (`AgentLoop.process_direct`, wired in
+`durin.cli.commands`) on a throwaway `automation:filter:run:<ms>` session, which
+the cron session reaper (`durin/cron/reaper.py`) removes like a cron run session.
+Its prompt (`build_filter_prompt`) carries the condition, the sender, the subject
+when there is one and a capped excerpt of the text; the reply is parsed as strict
+JSON (`parse_filter_verdict`), and anything else is a no-match. The matcher awaits
+the verdict inside the bus interceptor, so the message is neither consumed nor
+enqueued until the turn ends. A trigger with a `semantic` condition and no `filters`
+judges every message on its channel that reaches trigger matching.
 
 A woken claim honors the claim-holder automation's own `match` setting on this
 channel: `"wake_or_new"` (default) resumes the parked run; `"always_new"` leaves the
@@ -413,7 +437,8 @@ structure: a **wake pass** tries every enabled automation's matching webhook tri
 with a `correlate` that captures on the payload, purely structurally (same
 semantic-blind reasoning as above); only if nothing woke does the **fire pass** run,
 where `semantic` gates entry before `_dispatch_match` decides fire vs. queue. The
-route answers `202` with `{"result": "woken"|"fired"|"queued", "automation": ...}`,
+route answers `202` with `{"result": "woken"|"fired"|"queued", "automation": ...}`
+(a `woken` result also names the `run_id` it resumed),
 or `404` (`no_match`) when no enabled automation's webhook trigger accepts the
 payload.
 
@@ -460,8 +485,9 @@ jobs, one per trigger, with a deterministic id
 (`automation:<automation-name>:<trigger-index>`) and
 `payload.kind == "automation_trigger"`. `sync_automation_jobs` diffs the wanted set
 against the automation's existing `automation:`-prefixed jobs and reconciles via
-`register_system_job`/`remove_system_job`; it runs on every automation save and
-delete (`durin.service.automations`, `durin.agent.tools.automations`), and after
+`register_system_job`/`remove_system_job`; it runs on every automation save
+(`durin.service.automations`, `durin.agent.tools.automations`; a delete calls
+`remove_automation_jobs` instead), and after
 the runtime's own auto-disable (achieved or `escalate_pause`, §4b) via
 `AutomationsRuntime`'s `on_spec_saved` callback (wired in `durin.cli.commands`) —
 without it, a disabled automation's schedule-trigger job would keep ticking
@@ -479,7 +505,8 @@ so `cron_sync` writes and removes it through the same `register_system_job`/
 jobs (`docs/internals/cron.md` §4/§5 covers the general mechanism).
 
 When an `automation_trigger` job fires, the gateway's cron dispatch calls
-`AutomationsRuntime.try_fire(automation, source="schedule", paced=True)` directly — no
+`AutomationsRuntime.try_fire(automation, source="schedule", paced=True)` directly, with
+the trigger's `task` (carried on the job as `payload.message`) as the run's task — no
 `agent_turn` prompt is built, and no `origin` is passed: a scheduled fire has nobody
 waiting on it, so its outcome is governed entirely by the automation's own
 `delivery`/`help` configuration. `paced=True` rides through to
@@ -576,21 +603,22 @@ one bad file never aborts the boot.
 | `migrate_loops` | `durin/automations/migrate.py` | Boot-time converter: a pre-existing `loops/` workspace becomes its `automations/` equivalent |
 | `build_filter_prompt`, `parse_filter_verdict` | `durin/automations/judge.py` | The `semantic` trigger-filter judge's prompt and strict-JSON verdict parse |
 | `AutomationVersionStore` | `durin/automations/version_store.py` | Git-backed version history for `automations/`, same mechanism as workflows/skills/memory |
-| `AutomationsService` | `durin/service/automations.py` | HTTP surface: list/get/save/delete/fire/answer/runs/hooks-secret |
+| `AutomationsService` | `durin/service/automations.py` | HTTP surface: list/get/save/delete/fire/answer/stop/runs/hooks-secret |
 | `AutomationsTool` | `durin/agent/tools/automations.py` | Chat-facing tool: list/status/fire/answer/enable/pause/create |
 
 ## 6. Configuration & surfaces
 
 ### Telemetry
 
-Five `emit_tool_event` events, bound to an `automation:<name>` session telemetry
+`emit_tool_event` events (schemas in `durin/telemetry/schema.py`), bound to an
+`automation:<name>` session telemetry
 logger whenever a call runs outside a live agent turn (cron dispatch, webhook POST):
 
 | Event | Payload | Emitted when |
 |---|---|---|
-| `automations.fired` | `automation`, `source`, `skipped` | `fire`/`try_fire` starts a run (`skipped=True` when `try_fire` found the automation disabled or busy) |
+| `automations.fired` | `automation`, `source`, `skipped` | `fire`/`try_fire` starts a run (`skipped=True` when `try_fire` found a `single`-concurrency automation busy; a tick on a disabled automation emits nothing) |
 | `automations.event_matched` | `automation`, `source_channel`, `action` | The matcher or hook dispatcher decides what to do with a matching message, or the runtime takes a queued event off an automation's queue — `action` one of `woke`/`fired`/`failed`/`queued`/`passed_busy`/`drained`. A matching message's decision is recorded once, as `woke`, `fired`, `failed`, `queued` or `passed_busy`: `fired` is recorded when the run starts (through `fire`'s `on_started` callback), not when it ends, so it is on record even if the run later raises; `failed` means the fire raised before the run started; a fire refused as busy records `queued` or `passed_busy`, never `fired` too. A queued event then gets a `drained` row each time `_drain_queue_if_single` takes it off the queue to fire it (again if that fire finds the automation busy and puts it back), none if it expires on the queue first, and the run it starts adds no `fired` row. A chain event queued for a busy target is drained the same way, with an empty `source_channel` |
-| `automations.run_finished` | `automation`, `run_id`, `status`, `final_route_label` | A run reaches a terminal status (`_post_finish`) |
+| `automations.run_finished` | `automation`, `run_id`, `status`, `final_route_label` | A run reaches a terminal status (`_post_finish`, and the operator-stop finalizes that bypass it) |
 | `automations.delivered` | `automation`, `run_id`, `channel`, `result` | An outcome is routed — `result` one of `delivered`/`failed`/`silenced` |
 | `automations.escalated` | `automation`, `run_id`, `consecutive_unachieved` | `life.on_stuck` fires (`notify` or `escalate_pause`) |
 

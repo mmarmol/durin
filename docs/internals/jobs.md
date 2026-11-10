@@ -276,8 +276,8 @@ way. Failing at the check says so before spending the OCR, and leaves
 A gateway restart orphans a `process_registry.py`-tracked background `exec`
 (a limitation documented there); jobs recover their own rows. On every gateway
 start, `AgentLoop.run()`
-(`durin/agent/loop.py`) calls `JobRegistry.reconcile(alive=pid_alive)` before
-serving any traffic. `reconcile` finds every `running` row and requeues it
+(`durin/agent/loop.py`) runs `_resume_jobs`, which calls
+`JobRegistry.reconcile(alive=pid_alive)`, before serving any traffic. `reconcile` finds every `running` row and requeues it
 (clearing `pid`/`started_at`, keeping its finished units) when either:
 
 - its `pid` fails `pid_alive` (`durin/utils/process.py`) — the cross-platform
@@ -289,6 +289,14 @@ serving any traffic. `reconcile` finds every `running` row and requeues it
   a low number, so a stale row's `pid` can coincidentally match a real,
   unrelated live process, and liveness alone would then misreport the job as
   fine.
+
+A worker that is still alive is not disturbed by a restart: it is a detached
+process the gateway's shutdown does not stop, so it keeps transcribing with no
+gateway running, its row stays `running` under a live pid, and `reconcile`
+leaves it alone. A `durin agent` session (the TUI or the REPL) runs the same
+`AgentLoop.run()`, so it makes this pass and starts the
+[periodic sweep](#the-periodic-sweep) as well; `claim` being atomic is what
+keeps a launch from two processes harmless.
 
 Each requeued job is individually handed to `respawn()`, which re-`Popen`s
 the right worker module for the job's `kind`. Both the reconcile call and each
@@ -371,9 +379,9 @@ foreign pid), and a row that vanished outright. The distinction is
 load-bearing because cancel composes with [retry](#retry): a stop followed
 promptly by a retry requeues the row and claims it for a fresh worker, and
 both can land inside one page's transcription time — before the old worker's
-next boundary re-read. A check that only asked "was I cancelled?" read that
-successor's `running` as all clear and kept a second OCR engine transcribing
-the same job's whole remaining tail (observed live): two workers' full
+next boundary re-read. A check that only asked "was I cancelled?" would read
+that successor's `running` as all clear and keep a second OCR engine
+transcribing the same job's whole remaining tail: two workers' full
 resource cost on one job, the exact condition the cap exists to prevent,
 with only `record_unit`'s idempotence and `finish`'s pid guard keeping it
 *correct*. The ownership check makes the old worker stand down at the
@@ -539,8 +547,7 @@ and the prune keeps the table small anyway.
 `ocr_worker.run_job` (`python -m durin.jobs.ocr_worker <job_id>`) is a
 subprocess rather than an in-process task for three reasons, in order of
 weight: the OCR engine's ONNX runtime memory is released when the process
-exits instead of sitting resident in the gateway for its whole uptime (the
-gateway has already taken an OOM from resident model memory once); a
+exits instead of sitting resident in the gateway for its whole uptime; a
 CPU-bound transcription loop never touches the gateway's asyncio event loop;
 and progress needs no purpose-built IPC channel — the worker writes
 `job_units` and `units_done` directly, and the gateway (or a CLI/API reader)
@@ -571,6 +578,17 @@ exists: `memory_ingest` returned before any of it had been produced. The jobs
 layer knows only that name; what a Library entry is and how it is indexed
 stays behind it (see [Memory: agent
 tools](memory/04_agent_tools.md#memory_ingest)).
+
+A worker run that ends reports itself with one `documents.ocr.job` telemetry
+event (`DocumentsOcrJobEvent` in `durin/telemetry/schema.py`): the job id, the
+job's page count, how many of those pages an earlier run had already
+transcribed, this run's own duration, and the status. A run that owned the
+outcome reports `done`, `failed` or `cancelled`; one that lost the job — its
+row vanished, or a late cancel or a takeover landed after its per-page loop —
+reports the row state it observed instead (`gone` for a vanished row); a run
+whose claim was refused, or that stood down mid-loop to a successor, reports
+nothing. The
+event is best-effort and never changes the job's outcome.
 
 A failure at any step — the completeness check, a page's transcription, the
 sidecar assembly, or the Library indexing — is recorded as `status="failed"`
@@ -616,13 +634,13 @@ Unlike `reconcile` and the tray rendering, the concurrency cap, the
 finish-time chain, and gateway startup's queued-job pickup are not generic
 across kinds today: `MAX_CONCURRENT_OCR_JOBS`, the `kind_cap` passed to
 `claim` in `ocr_worker.run_job`, and the `queued_jobs("ocr", ...)` call in
-`AgentLoop.run()` are all specific to `"ocr"` (see [Concurrency cap and
+`_resume_jobs` are all specific to `"ocr"` (see [Concurrency cap and
 chaining](#concurrency-cap-and-chaining)). A second kind that needs the same
 protection adds its own cap constant and wires its own `kind_cap`, chain, and
 pickup the same way — none of that is inherited automatically, including the
-[periodic sweep](#the-periodic-sweep)'s pickup, which reads `"ocr"` for the
-same reason `AgentLoop.run()`'s startup pickup does (`reconcile` inside that
-same pass is kind-agnostic and does cover a second kind's orphans).
+[periodic sweep](#the-periodic-sweep)'s pickup, which is the same
+`_resume_jobs` pass startup runs and so reads `"ocr"` too (`reconcile` inside
+that pass is kind-agnostic and does cover a second kind's orphans).
 
 One more gap worth knowing before adding a second kind: `ocr_worker.run_job`'s
 own inline `reconcile()` call (the cap-refusal self-heal, see
@@ -666,7 +684,7 @@ transcribed at a time").
 | `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. The child prints one JSON object whose per-page values mirror `TranscribedPage` field for field; the parent rebuilds them and logs a one-line score summary (the child's stderr is discarded on success, so this is where the scores reach a log). Admits one child at a time (a module-level semaphore in the same file) for the same measured reason `MAX_CONCURRENT_OCR_JOBS` exists — the registry's cap governs workers only and never sees this path. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |
-| `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop`, across all three background-work categories. |
+| `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop` across all three background-work categories, plus `retry` for jobs. |
 | `TasksService` | `durin/service/tasks.py` | `GET /api/v1/tasks` — read-only HTTP mirror of `collect_tasks`. |
 | `WorkItemCard` | `webui/src/components/work/WorkItemCard.tsx` | Renders one tray row; a `kind="job"` item shows "N of M pages". |
 | `jobs_db_path` | `durin/config/paths.py` | `$DURIN_HOME/jobs/jobs.db`. |
@@ -703,6 +721,11 @@ recovery next to the recorded error — in the tool's render only, never
 inside the stored error string, which the webui tray shows to humans
 verbatim. The id namespace is shared and resolved automatically across all
 three kinds, so the agent does not need to know which one it is asking about.
+
+A job's end is not announced. A finished sub-agent or workflow run reaches the
+session as a follow-up message; a job pushes nothing, so the agent learns the
+outcome only by calling `status` or `list` again — the tool's description and
+its `stop`/`retry` replies say so.
 
 ### API routes
 

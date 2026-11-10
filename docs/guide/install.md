@@ -102,7 +102,7 @@ pip install -e ".[memory,mcp,web]"
 | `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
 | `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. On slim Linux images the bundled OpenCV needs libGL at runtime — `apt install libgl1` (or your distro's equivalent). A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
-| `mcp` | `mcp` | Connect to MCP servers (durin is the MCP client). |
+| `mcp` | `mcp`, `httpx2` | Connect to MCP servers (durin is the MCP client). |
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
 | `discord` | `discord.py` | Discord channel. |
@@ -188,8 +188,8 @@ current config; `--no-wizard` merges any new schema defaults into the existing
 file without overwriting your values. (`--advanced` is the legacy field-by-field
 walker.)
 
-After onboarding, drop your provider API key in `~/.durin/config.json`
-(field `providers.<vendor>.api_key`) or via `durin config set`:
+After onboarding, set your provider API key (field
+`providers.<vendor>.api_key`) with `durin config set`:
 
 ```bash
 durin config set providers.zhipu.api_key sk-...
@@ -199,8 +199,10 @@ durin config set providers.zhipu.api_key sk-...
 
 ## Configure
 
-durin keeps a single canonical config at `~/.durin/config.json`, validated by
+durin keeps one config per instance in the durin home, validated by
 the Pydantic `Config` schema in [durin/config/schema.py](../../durin/config/schema.py).
+On disk it is split by section under `config.json.d/` (`config.json` only marks
+that layout); see [configuration.md](configuration.md#the-config-file).
 
 > **`DURIN_HOME` — durin is multi-instance.** A durin *instance* is a
 > self-contained data root selected by this env var; everything is relative to
@@ -262,11 +264,12 @@ ValidationError is printed.
 ### Hand-edit
 
 ```bash
-durin config edit             # opens $EDITOR (or vi) on the live file
+durin config edit             # opens the whole config in $EDITOR
 ```
 
-The file is reloaded + validated when the editor exits; on validation
-failure the previous version is restored and the diff is reported.
+The editor opens a merged copy of the config. It is validated when the editor
+exits and saved only if it validates; on a JSON or validation error the edit
+is rejected with the error and the config is left untouched.
 
 ### Channel & provider auth
 
@@ -275,7 +278,7 @@ plugins, not single-key edits:
 
 ```bash
 durin channels status
-durin channels login telegram
+durin channels login whatsapp
 durin oauth login openai_codex
 durin oauth login github_copilot
 durin oauth logout github_copilot
@@ -291,6 +294,7 @@ thing:
 | Detected mode | What `durin upgrade` runs |
 |---|---|
 | Editable checkout (`pip install -e .`) | `git pull --ff-only` + `pip install -e .` |
+| pipx install | `pipx upgrade durin-agent` (keeps injected extras) |
 | Wheel install (PyPI / local wheel) | `pip install --upgrade durin-agent` |
 
 Useful flags:
@@ -395,7 +399,7 @@ durin doctor --json | jq      # machine-readable for CI / scripts
 
 `durin doctor` is the canonical "is anything broken?" check. It groups
 results by category (system, config, providers, tools, extras, state,
-services) and prints a list of suggested fixes at the bottom. Exit code 0
+services, and more) and prints a list of suggested fixes at the bottom. Exit code 0
 means no `fail` — `warn` results don't break the exit code, so you can wire
 it into CI. The services category compares the running gateway's version
 against the installed CLI, so a reinstall that forgot to restart the gateway

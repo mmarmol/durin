@@ -29,6 +29,10 @@ outside that table, so the contract does not list them. This guide covers what
 the contract cannot: chatting, the event stream, and how a client should use
 them.
 
+In the contract every operation's inputs are listed as its request schema. For
+a `GET`, send those fields as query parameters, not a body; a field named in
+the path template (`{key}`, `{name}`) is the path segment.
+
 Looking to plug in a client that already speaks OpenAI? Use the
 [OpenAI-compatible API](openai-api.md) instead: one request per message,
 answered with text only (no tool or progress events).
@@ -48,6 +52,7 @@ durin auth token issue --scopes chat:write,sessions:read --label my-app
 |---|---|
 | `chat:write` | sending messages and stopping a turn |
 | `sessions:read` | watching the event stream and reading conversation history |
+| `sessions:write` | deleting or renaming a conversation |
 
 `durin auth token issue --help` lists every scope. The plaintext token is
 printed once; `durin auth token list` and `durin auth token revoke <id>`
@@ -70,6 +75,18 @@ sessions (`slack:…`, `telegram:…`) can be read; a token with `channels:write
 can also post into their conversation as durin with `POST /api/v1/channels/post`
 (the post is recorded in that session unless `record` is `false`; no turn
 runs).
+
+To delete a conversation:
+
+```bash
+curl -X DELETE http://127.0.0.1:8765/api/v1/sessions/websocket:report-42 \
+  -H "Authorization: Bearer $DURIN_TOKEN"
+```
+
+It needs `sessions:write`. It removes the session, its rendered transcript
+with that transcript's search rows, and the dashboard's stored thread, so
+search does not find a deleted conversation. It answers
+`{"deleted": true}`, or `{"deleted": false}` when there was no such session.
 
 ### Send a message
 
@@ -137,8 +154,9 @@ the connection drops, the turn still finishes; catch up from the history. A
 gateway stop or restart ends the stream early, without that `turn_end`; the
 gateway answers the message once it is running again, so reattach and catch
 up from the history.
-Commands (`/status`, `/stop`, …) are refused in this form (`422`) — they answer
-without a turn; send them with the plain form.
+A message that starts with `/` is refused in this form (`422`): commands
+(`/status`, `/stop`, …) answer without a turn, so send those with the plain
+form.
 
 ## Events
 
@@ -210,6 +228,9 @@ stream open while a turn may ask.
 answered, and the same turn then takes it (`queued_consumed` lists your
 `client_msg_id`) — match on that, not on `turn_end.client_msg_id`. With
 `steer: true` it is injected into the running turn as guidance instead.
+Queueing is the dashboard channel's default; with
+`channels.queue_mode.websocket` set to `steer`, every message sent mid-turn
+steers.
 
 **Browsers.** The gateway sends no CORS headers, so a web page can call it only
 from the gateway's own origin or through a proxy. `EventSource` cannot send an

@@ -348,8 +348,8 @@ That hand-off only helps while the process keeps consuming the bus. The bus
 and the pending queues are in-memory, a stopping gateway never reads the bus
 again, and no channel redelivers (Telegram confirms its offset before the
 handler runs, Slack acks the envelope before publishing, email marks the
-message seen inside the fetch), so every restart with a turn in flight used
-to discard the follow-ups queued behind it. The gateway's shutdown now calls
+message seen inside the fetch), so a restart with a turn in flight would
+discard the follow-ups queued behind it. The gateway's shutdown therefore calls
 `drain_inbound_for_shutdown()`: it records and cancels every turn in flight
 first, across every session key, before awaiting any of them — awaiting one
 would let the others run, and a turn whose own wait (an ask_user answer, an
@@ -442,8 +442,13 @@ The handlers, in order:
   by that model (compacting before building so the prompt fits), sets the
   per-tool request context, slices history (`session.get_history`, within
   the same model's input budget), then resolves the session's frozen eager
-  memory surface (the pinned block and hot layer rendered on the session's
-  first build, `memory.eager_surface`) and binds it for the turn (task-scoped,
+  memory surface (the pinned block and hot layer as rendered by the build
+  that last froze them: the session's first, or the first after a
+  compaction, `/new`, the `memory.eager_surface.refresh_after_min` window or
+  a stored snapshot that cannot be read; each freeze is one
+  `memory.eager_surface` row with its reason; sessions that run unattended,
+  and every session when `memory.eager_surface.freeze` is off, render both
+  live instead) and binds it for the turn (task-scoped,
   released in `_state_save`) before any search runs, so `memory_search`'s
   in-context dedup — the loop's own prefetch included — judges the text this
   prompt carries rather than the live workspace. It then runs one automatic
@@ -509,6 +514,60 @@ The handlers, in order:
   suppressing it when the turn already streamed its answer through the
   `message` tool.
 
+### The prompt: `ContextBuilder`
+
+BUILD's request is one system message, the replayed history and the turn's
+own message (`ContextBuilder.build_messages`, called through
+`_build_initial_messages`); the tool definitions travel beside it, taken from
+the registry.
+
+The system message is built from tiers joined by a rule line, ordered so that what
+changes least comes first (providers cache a prompt by its prefix):
+
+- **Stable** (`_build_stable_layer`), in this order: the identity template
+  (`agent/identity.md`: runtime, workspace paths, memory and skills guidance,
+  the platform policy and the channel's format hint), the bootstrap file
+  (`AGENTS.md`), the SOUL (the active persona's, else the workspace
+  `SOUL.md`), the operating floor, the content of always-on skills, the skills
+  catalog (the usage-ranked working set when `skills_hot_tier` is on, the full
+  catalog otherwise), pinned memory, the rich-output guide, and the memory hot
+  layer last. Pinned memory and the hot layer are the frozen eager surface
+  described under `_state_build`.
+- **Context** (`_build_context_layer`): the prompt suffix of the session's
+  agent mode.
+- **Volatile** (`_build_volatile_layer`): the archived-context summary, the
+  only block there. It changes when a compaction or the nightly
+  session-summary pass writes the session's summary, and when a fresh
+  session stops carrying the previous session's.
+
+The turn's own message is built for the wire only. After the user's text come
+the memory prefetch block, when the automatic search found something, and
+then the runtime context: the current time, channel, chat and sender, the
+`<task-state>` block (goal, decisions and findings, todos, the executing
+plan), and once the path of a plan just approved. The session stores the
+user's text alone, so none of it is replayed. A replayed user message carries
+a `[Message Time: …]` prefix instead; tool messages are replayed as stored,
+and an assistant message with its text cleaned for replay
+(`_sanitize_assistant_replay_text`) and the reasoning the provider returned
+for it (the provider adapter leaves it off the request where the endpoint's
+message schema rejects it).
+
+What this means for a provider's prompt cache: within a turn each request is
+the previous one plus new messages. Across turns the prefix holds up to the
+previous turn's user message, which was sent with its wire-only suffix and is
+replayed without it, so the messages of the previous turn are read uncached
+once, on the next turn's first request. A compaction rewrites the summary and
+the history, and the build after it also renders a fresh eager surface. Where
+a provider takes explicit cache breakpoints (`cache_control`), the provider
+adapter places them on the system message, on the tool list and on the
+second-to-last message; other providers cache by prefix on their own (see
+[providers.md](providers.md)).
+
+Every real build writes one `context.composition` row with a token estimate
+per block of each tier, the history, the message, the prefetch block and the
+tool definitions (a consolidator probe build writes none);
+`summarize_composition` rolls it into the two figures `/status` shows.
+
 ### The iteration core: `AgentRunner`
 
 `_run_agent_loop` is the bridge from loop to runner. It builds the hook,
@@ -526,7 +585,11 @@ with the run's messages so far, when it returns true the turn ends there with
 the text sent alongside those calls as its final content (or, when that reply
 has none, the latest text of the turn), and no further request is made. Around
 that core it layers guards and context governance — loop detection on repeated
-failed calls, an unknown-tool breaker, an idle-timeout breaker, message
+failed calls, an unknown-tool breaker, an idle-timeout breaker, a
+post-compaction loop guard (armed by the consolidator for the session's next
+few tool calls; the same call with the same result repeated through that
+window ends the turn with `stop_reason=post_compaction_loop`, see
+`durin/utils/post_compaction_guard.py`), message
 sanitization (dropping orphan tool results, backfilling missing ones),
 per-result and per-turn tool-output budgets with spill-to-disk, and microcompact
 / media pruning of the in-flight message list. Message sanitization,
@@ -792,8 +855,7 @@ The active persona for a turn is resolved once in `_state_build` by
    carry its own identity and refine it per conversation.
 4. **Global default** — `agents.defaults.persona` in config (applies to every
    new conversation until overridden).
-5. **No persona** — default `SOUL.md` and global default model, unchanged from
-   pre-persona behavior.
+5. **No persona** — default `SOUL.md` and global default model.
 
 The resolved persona's soul body replaces the default SOUL in the stable system-
 prompt layer (via `ContextBuilder`), and the compaction checks of the session's
@@ -847,7 +909,10 @@ into the stable system-prompt layer by `ContextBuilder._build_operating_floor`
 independent of which SOUL is active. Swapping a SOUL never removes these rules.
 The only exception is backward compatibility: if the active SOUL already contains
 a `## Execution Rules` section (a pre-existing workspace `SOUL.md` with embedded
-rules), the floor injection is skipped to avoid duplication.
+rules), the floor injection is skipped to avoid duplication. Such a workspace
+runs on the rules its own `SOUL.md` carries: a rule the floor template has and
+that section lacks does not reach its prompt, and its `context.composition`
+rows have no `operating_floor` entry.
 
 ### Agent modes (permission-as-data)
 
@@ -898,7 +963,7 @@ User-defined modes are persisted as `ModeConfig` entries under `agent_modes` in
 config and registered into the same registry at startup (`register_config_modes`,
 which never shadows a built-in). The same `ModesService` route handles
 `POST`/`DELETE` to create, edit, and remove them (the settings UI), re-registering
-after each mutation so a change takes effect without a restart; the three
+after each mutation so a change takes effect without a restart; the
 built-ins are immutable.
 
 ### Default model (live-applied from settings)
@@ -1025,17 +1090,23 @@ Two metadata splits matter:
   Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact
-  for recovery. See [memory/01_data_and_entities.md](memory/01_data_and_entities.md)
+  for recovery. The frame the summary is shown in (`_format_pending_summary`)
+  ends with a fixed line saying the archived turns are still reachable and
+  naming the call that returns them, `session_search(query=…)`: the prompt
+  has no other place that tells the model where a value the summary dropped
+  went. See [memory/01_data_and_entities.md](memory/01_data_and_entities.md)
   for the summary's on-disk shape and
   [memory/06_prompts_and_instructions.md](memory/06_prompts_and_instructions.md)
   for what the archive prompt extracts.
 - **The decision log resists eviction pressure differently than the summary.**
   `session.metadata["decision_log"]` is a line-0 identity key (not derived),
   so it rides every save and survives compaction untouched by the sidecar
-  split. Each compaction round that advances the cursor — the primary
-  token-triggered loop, the replay-window overflow path, and early-return
-  compactions alike — runs a best-effort LLM extraction over the span just
-  archived and appends any decisions/findings found. When the log's
+  split. Each consolidation call that produced a summary — through the primary
+  token-triggered loop, the replay-window overflow path, or an early-return
+  path alike — runs a best-effort LLM extraction over the whole span that
+  call archived and appends any decisions/findings found, in the order the
+  extraction returned them. A call whose span the nightly session-summary
+  pass had already covered makes no summary and extracts nothing. When the log's
   entry/char caps are hit, auto-extracted entries are evicted first;
   a manually authored (`note_decision`) entry is only dropped once no
   auto-extracted entry remains to take its place. Two rules keep that priority
@@ -1182,6 +1253,21 @@ every tool round, and there the runner's own microcompaction, at its pressure
 share of the input budget, is what trims it. So the cap bounds what each turn
 starts from, not what a single turn may reach.
 
+A session's consolidation checks run one at a time, under a per-session lock
+(`Consolidator.get_lock`) held from the trigger check to the end of the work a
+compaction sets off. After a call that produced a summary
+(`_post_compaction_hooks`), still under the lock, the consolidator parks the
+real-usage accounting (the `post_compaction` veto below), drops the session's
+frozen eager memory surface so the next build renders a fresh one, arms the
+post-compaction loop guard, notifies the dream's post-compaction hook, and
+runs the decision-log and learnings extractions over the archived span, each a
+model call of its own per summarizer-sized run. A turn whose BUILD arrives
+while the consolidation scheduled by the previous turn's SAVE is still
+running therefore waits for all of it. The wait is bounded
+(`DURIN_COMPACTION_LOCK_TIMEOUT_S`): past it the check is skipped for that
+turn, with a `compaction.lock_timeout` row, and the turn goes on with the
+prompt it has.
+
 `compaction.preemptive_trigger`, `compaction.deferred` and
 `compaction.completed` name the bound that set the trigger in `trigger_bound`
 (`ratio`; `floor` when the small-window floor raised the ratio; `cap`;
@@ -1303,7 +1389,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `max_tool_iterations` | `200` | Hard cap on runner iterations per turn. |
 | `max_messages` | `480` | History replay window (token-budget is the effective bound on large-context models). |
 | `unified_session` | `false` | Collapse all channels to one shared session. |
-| `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
+| `consolidation_ratio` | `0.5` | The level a compaction reduces the prompt to, as a fraction of the trigger. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
 | `preemptive_compact_max_tokens` | `256000` | Absolute cap on the preemptive trigger, in tokens (at least `64000`): compaction fires at the smaller of this and the ratio's trigger; `null` or `0` for the ratio alone — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
@@ -1323,11 +1409,12 @@ Read at runtime (mostly in the runner / loop):
 | `DURIN_LLM_TIMEOUT_S` | unset | Wall-clock outer timeout per LLM request; an explicit value applies everywhere, `0` disables. Unset: `1800` backstop on natively-streaming providers (the idle watchdog is the primary hang detector), `300` on the rest. |
 | `DURIN_STREAM_IDLE_TIMEOUT_S` | `90` | Provider idle-stall watchdog: seconds of stream silence before the request is declared stalled. `0` disables. Local endpoints default to disabled. |
 | `DURIN_COMPACTION_GRACE_S` | `30` | One-shot deadline extension when consolidation is in flight. |
-| `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS` | `1` | Idle-timeout circuit breaker (trips on the next timeout). |
+| `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS` | `1` | Idle-timeout circuit breaker: consecutive iterations that may end in a timeout with no progress in between (one is tolerated, the one after trips). |
 | `DURIN_MAX_UNKNOWN_TOOL_ATTEMPTS` | `2` | Unknown-tool breaker (trips on the third call to a bad name). |
 | `DURIN_TURN_BUDGET_CHARS` | `200000` | Aggregate per-turn tool-output budget (`0` disables). |
 | `DURIN_HISTORY_IMAGE_PRESERVE_TURNS` | `3` | Keep media only in the most recent N turns. |
-| `DURIN_HOME` | `~/.durin` | Workspace root for sessions, memory, and locks. |
+| `DURIN_COMPACTION_LOCK_TIMEOUT_S` | `180` | How long a consolidation check waits for the session's consolidation lock before the turn goes on without consolidating (`compaction.lock_timeout`); `0` or negative waits without bound. |
+| `DURIN_HOME` | `~/.durin` | Home data root: the config, and by default the workspace (`<home>/workspace`) that holds sessions, memory, and locks. |
 
 ### Surfaces
 

@@ -22,7 +22,7 @@ Three principles shape every LLM-facing string in the memory system.
 
 ## 3. Memory tool descriptions
 
-The blocks below are the canonical LLM-facing tool descriptions, kept in sync with code by `tests/memory/test_tool_description_sync.py`. Each tool class exposes a `description` property emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Skills are a searchable memory pseudo-class surfaced via `memory_search kind=skill`; a matching `=== SKILL: <name> ===` result block contains steps to follow as a procedure, not facts to cite.
+The blocks below are the canonical LLM-facing tool descriptions, kept in sync with code by `tests/memory/test_tool_description_sync.py`. Each tool class exposes a `description` property emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Skills are a searchable memory pseudo-class surfaced via `memory_search` with `kinds="skill"`; a matching `=== SKILL: <name> ===` result block contains steps to follow as a procedure, not facts to cite.
 
 ### 3.1 `memory_search`
 
@@ -170,7 +170,7 @@ flowchart TD
 
 Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Both the `function.description` field and the `function.parameters.description` field carry the same string so there is no divergence between them.
 
-The sync test (`tests/memory/test_tool_description_sync.py`) asserts that each tool's `.description` property matches the string in `_PARAMETERS["description"]`.
+The sync test (`tests/memory/test_tool_description_sync.py`) asserts that each tool's `.description` property equals the fenced block under its heading in this section.
 
 The active memory tools and their descriptions:
 
@@ -252,7 +252,7 @@ Up to `max_retries` (default 2) re-attempts are made on parse failure; each retr
 
 ### 5.5 Hot layer
 
-`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders these sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (the most recently updated entity pages by `updated_at`, skipping the pages the pinned block already renders — the principal's page and the `always_on` guidance — so the budget goes to pages the model would not otherwise see), Recent fragments (post-cursor episodic/stable entries by `valid_from` desc), Key Points (recent headlines), and Known types (every entity type on disk with its page count). Each section has a hard character budget — the constants at the top of `hot_layer.py` are the reference — sized so the whole block stays within a single prompt-cache window between Dream passes.
+`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders these sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (the most recently updated entity pages by `updated_at`, skipping the pages the pinned block already renders — the principal's page and the `always_on` guidance — so the budget goes to pages the model would not otherwise see), Recent fragments (the newest entity-tagged episodic/stable entries by `valid_from` desc), Key Points (recent headlines), and Known types (every entity type on disk with its page count). Each section has a hard character budget — the constants at the top of `hot_layer.py` are the reference — sized so the whole block stays within a single prompt-cache window between Dream passes.
 
 **The eager surface is frozen per session.** The hot layer and the pinned block above it are the two workspace-global renderings in the stable tier, and both move whenever an entity page is written — the hot layer reorders by `updated_at`, the pinned block re-renders the principal and the `always_on` pins. Read off disk on every prompt build, one write mid-session would therefore hand the provider a different cached prefix on the very next call. So the first build of a session renders both blocks, stores them together in the session (`EagerSnapshot` in `durin/memory/eager_surface.py`, kept in the derived metadata sidecar), and every later build of that session reuses that text verbatim. The snapshot's `turn` is the 1-based ordinal of the message that froze it, counted over the session's *full* history rather than its current live message count — `Session.enforce_file_cap` trims older messages, so after archival the ordinal it reports can exceed how many messages the session actually still holds. `/status` and the CLI footer surface it verbatim as "frozen at turn N" next to the pinned block and hot layer rows. What is written afterwards still reaches the model — through the per-turn prefetch (§5.7) and the searches the model runs itself — it just does not move the prefix. One exception: the pinned block's `always_on` pages are normally injected unconditionally, independent of retrieval — a page newly pinned `always_on`, or edited, after the freeze reaches the model only if a search happens to hit it, until the next boundary or `refresh_after_min` re-renders the block. The freeze covers only these two blocks: the bootstrap files, the SOUL body, and the skills blocks that sit earlier in the stable tier are still read fresh on every build and can move the cached prefix on their own — a skill authored mid-session, for instance. `memory.eager_surface.freeze = false` restores the per-build read. Contexts with no session to freeze for — workflow nodes, subagents, and the runtime's autonomous session kinds, the same set the prefetch skips — always render live.
 
@@ -264,7 +264,7 @@ Two consumers have to look at the frozen text rather than at disk, or they would
 
 **`## Memory: Known types`** lists the distinct entity-type subdirectories of `memory/entities/` that contain at least one page, alphabetically, each with its page count (`person (312), project (40)`). The list is derived from the same disk walk as the rest of the hot layer and capped; a count past the cap is logged as a warning so it surfaces in the gateway log rather than silently bloating the prompt. The purpose is type vocabulary plus scale: the agent reads this before authoring or updating an entity, reuses an existing type instead of coining a near-synonym, and can tell a populated class (search before assuming) from a one-off. Sections with zero entries are omitted.
 
-Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Reconcile with the canonical above using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
+Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Recent episodic entries — raw memories that may carry newer info than the canonical above. Reconcile using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
 
 A canonical block whose entity carries `derived_from` also renders a `Sources: reference:<slug>, …` line (in both the hot layer and `memory_search` results). This is the thread from an entity back to the documents it was distilled from or that were linked to it — the agent drills a `reference:<slug>` to read the source. Without it the link lives only in frontmatter and never reaches the model.
 
@@ -275,7 +275,7 @@ Structural markers appear in both hot-layer output and `memory_search` results. 
 | Marker pattern | Class |
 |---|---|
 | `=== CANONICAL: <uri> (consolidated <iso_ts>) ===` | Entity pages |
-| `=== FRAGMENT: <path> (ts <iso_ts>) ===` | Post-cursor episodic and stable entries |
+| `=== FRAGMENT: <path> (ts <iso_ts>) ===` | The newest entity-tagged episodic and stable entries |
 | `=== SESSION: <session_id>/<turn_or_summary> (ts <iso_ts>) ===` | Session summaries and raw session hits |
 | `=== INGESTED: <ingest_id>/<chunk_or_source> ===` | Corpus and raw ingested documents |
 | `=== SKILL: <name> ===` | Skill procedures (follow, do not cite) |
@@ -355,7 +355,7 @@ The marker names the previous session's summary file stem, so the agent can reac
 
 | Config key | Default | Effect |
 |---|---|---|
-| `memory.enabled` | `true` | Master gate for all memory I/O including Dream prompts and hot-layer injection |
+| `memory.enabled` | `true` | Enables vector retrieval; when false the memory tools, the Dream prompts and the hot-layer injection keep working over the markdown files and the lexical index |
 | `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop (`extract_learnings`); when false, no LLM call is made at compaction time for durable learnings |
 | `memory.dream.enabled` | `true` | Gates cron and reactive Dream triggers; `durin memory dream` (manual) always runs |
 | `memory.dream.cron` | `"0 3 * * *"` | Daily schedule for the dream consolidation run |
@@ -366,14 +366,14 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`; `0` disables; daily cron is never throttled |
-| `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
+| `memory.dream.max_seconds_per_run` | `3600` | Wall-clock cap for each of the extract, refine and skill-review passes; a pass yields at the cap (extract after the current session, where the per-session cursor resumes on the next trigger) |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Cross-encoder model for reranking |
 | `memory.search.warm_excerpt_chars` | `600` | Per-hit summary cut at `level=warm`, applied to every result class |
 | `memory.search.warm_max_chars` | `8000` | Per-response rendering budget at `level=warm`; hits past it render as headline pointers |
 | `memory.prefetch.enabled` | `true` | Runs the automatic per-turn search (§5.7) and fences its hits into the message |
 | `memory.prefetch.limit` | `3` | Hits the prefetch asks the tool for |
-| `memory.prefetch.max_chars` | `2500` | Cut applied to the rendered hits before fencing |
+| `memory.prefetch.max_chars` | `2500` | Budget the search tool renders the recalled hits within; a hit past it becomes a pointer line instead of a full block |
 | `memory.prefetch.min_query_chars` | `40` | Messages shorter than this are not searched |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the turn will wait for the search |
 | `memory.prefetch.backoff_s` | `60.0` | Seconds the prefetch is skipped after a timeout or error; `0` disables the backoff |
@@ -391,7 +391,7 @@ The marker names the previous session's summary file stem, so the agent can reac
 - `durin memory absorb-suggest` — surface alias-overlap candidates without auto-merging
 - `durin memory absorb <ref-a> <ref-b>` — merge two entities manually
 - `durin memory history` — show memory write history including absorb reasoning
-- `durin init` — onboarding wizard; memory submenu configures vector-memory toggle, embedding model, cross-encoder opt-in, Dream auto-absorb, and aux model for memory tasks
+- `durin onboard` — onboarding wizard; memory submenu configures vector-memory toggle, embedding model, cross-encoder opt-in, Dream auto-absorb, and aux model for memory tasks
 
 **Onboarding wizard defaults:**
 - Vector memory: ON (the semantic layer is the default experience)

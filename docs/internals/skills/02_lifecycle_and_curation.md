@@ -112,7 +112,9 @@ entirely) when both are empty:
    (`_SESSIONS_WINDOW_CHARS`) and is **head+tail windowed on its own**. The end
    of a session is where the procedure that finally worked sits; trimming the
    joined text instead would keep the oldest session's end and drop the newest
-   one's.
+   one's. The selection is by file modification time alone — the pass keeps no
+   cursor, so the same sessions are rendered again on every run until newer
+   ones displace them.
 2. **Logged gaps.** Any OPEN observation whose `skill` field starts with
    `new:` — a coverage gap flagged in hindsight (see below) — is surfaced as a
    `LOGGED GAPS` block with its working name and issue text, followed by its
@@ -275,7 +277,8 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
   covers and that looks likely to recur; its `skill` field is normalized to
   `new:<working-name>`. The prompt carries the catalog (every skill's name and
   a one-line description, bounded) and the open gaps. A procedure a skill
-  already covers, even in part, is a `correction` on that skill, and a
+  already covers, even in part, is a `correction` on that skill — whether or
+  not the session loaded it; the record does not say which — and a
   procedure an open gap names reuses that gap's name.
 
 Unlike entity discovery (which **head**-truncates, because identity facts tend
@@ -687,8 +690,8 @@ manual mode means the skill is the user's to control. Instead:
    differently run to run) and checked against
    `skill_suggestions.is_tombstoned` before being enqueued.
 4. A surviving proposal is written to `.suggestions.json` with a rendered
-   unified diff (`make_patch`) for `evolve`, and surfaced in the webui Dream
-   Inbox for the user to accept or reject.
+   unified diff (`make_patch`) for `evolve`, and surfaced on the webui Pending
+   page for the user to accept or reject.
 
 The judge reviews the manual delta in the same batches as `curate_catalog`,
 with the same refusal of an unfinished or unreadable answer, split-and-retry,

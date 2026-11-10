@@ -116,7 +116,7 @@ flowchart TB
     RUNNER --> MEM
     LOOP --> SKILLS
     RUNNER --> WF
-    CRON --> BUS
+    CRON --> LOOP
     DREAM --> MEM
     DREAM -."skill_extract pass".-> SKILLS
 
@@ -148,10 +148,12 @@ End-to-end flow for a single inbound message:
    transcript, posts an `OutboundMessage` to `MessageBus.outbound`, and the
    originating channel adapter delivers the reply.
 5. **Cold path.** The dream cron job reads session transcripts, runs a sequence of
-   consolidation passes (extract → derived_from → the document passes → skill_extract
-   → refine → consolidate_relations → always_on), then curates skills, and writes
-   results back to `memory/` and skills files. The cron scheduler posts inbound
-   messages for agent tasks and manages per-run sessions.
+   consolidation passes (extract → derived_from → session summaries → the
+   document passes → skill_extract → refine → consolidate_relations → always_on
+   → workflow improvement), then curates skills, and writes
+   results back to `memory/` and skills files. The cron scheduler runs agent
+   tasks as direct turns on the loop (`AgentLoop.process_direct`), each in its
+   own per-run session.
 
 ## 6. Core entry points
 

@@ -66,6 +66,9 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
 - **Client-defined tools are rejected.** durin runs its own tools inside the
   turn; a request carrying `tools`, `tool_choice`, `functions`, or
   `function_call` gets a 400 rather than silently ignoring them.
+- **Other request fields are ignored.** Only `messages`, `session_id`, `model`
+  and `stream` are read; sampling and limit fields (`temperature`,
+  `max_tokens`, …) have no effect — the agent's own configuration applies.
 - **A token cannot approve privileged actions.** durin's own tool call to
   install or edit a skill, install its dependencies, add or change an MCP
   server, or run a shell command outside its guardrails is not this turn's to
