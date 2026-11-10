@@ -231,6 +231,19 @@ class LLMProvider(ABC):
         "out of quota",
         "exceeded your current quota",
     )
+    # Z.AI business codes for an exhausted usage window (the 5-hour, weekly and
+    # monthly plan limits, with or without paid extra usage). The endpoint sends
+    # them as HTTP 429 and names the reset time, which is hours away.
+    _USAGE_WINDOW_EXHAUSTED_ERROR_CODES = frozenset({
+        "1308",
+        "1310",
+        "1316",
+        "1317",
+        "1318",
+        "1319",
+        "1320",
+        "1321",
+    })
     _RETRYABLE_429_TEXT_MARKERS = (
         "rate limit",
         "rate_limit",
@@ -450,6 +463,9 @@ class LLMProvider(ABC):
     @classmethod
     def _is_transient_response(cls, response: LLMResponse) -> bool:
         """Prefer structured error metadata, fallback to text markers for legacy providers."""
+        if cls._is_usage_window_exhausted(response):
+            return False
+
         if response.error_should_retry is not None:
             return bool(response.error_should_retry)
 
@@ -534,6 +550,18 @@ class LLMProvider(ABC):
             return True
         content = (response.content or "").lower()
         return "temporarily overloaded" in content or "is overloaded" in content
+
+    @classmethod
+    def _is_usage_window_exhausted(cls, response: LLMResponse) -> bool:
+        """Return True when the account has used up its usage window.
+
+        The window reopens at a time the provider states, far beyond any backoff
+        schedule, so a retry only repeats the same answer. Checked ahead of every
+        other retry signal: the endpoint reports it with a rate-limit status, and
+        the caller needs the error (and its reset time) at once.
+        """
+        code = cls._normalize_error_token(response.error_code)
+        return code in cls._USAGE_WINDOW_EXHAUSTED_ERROR_CODES
 
     def _recover_request_for_error(
         self, kw: dict[str, Any], response: LLMResponse,
