@@ -53,6 +53,19 @@ async def _inject(bus: MessageBus, content: str, **metadata: Any) -> None:
     )
 
 
+async def _pause_until(pilot, condition, timeout: float = 5.0) -> None:
+    """Let the app run until ``condition()`` holds.
+
+    One ``pilot.pause()`` is not a promise that a published frame has been
+    consumed and that the widgets it mounts or removes have settled: on a
+    loaded machine the frame can still be in flight. Waiting for the
+    condition itself is; the bound keeps a real regression a failure rather
+    than a hang — the assertion after the call reports what was wrong."""
+    deadline = _time.monotonic() + timeout
+    while not condition() and _time.monotonic() < deadline:
+        await pilot.pause()
+
+
 # ---------------------------------------------------------------------------
 # Streaming deltas
 # ---------------------------------------------------------------------------
@@ -295,7 +308,7 @@ async def test_memory_prefetch_empty_recall_leaves_no_bubble(tmp_path) -> None:
             {"version": 1, "phase": "start", "call_id": "memory_prefetch:t3",
              "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: len(list(chat.query(ToolCallBubble))) == 1)
         assert len(list(chat.query(ToolCallBubble))) == 1
 
         await _inject(bus, "", _tool_hint=True, _tool_events=[
@@ -304,7 +317,7 @@ async def test_memory_prefetch_empty_recall_leaves_no_bubble(tmp_path) -> None:
              "arguments": {"query": "no matches here", "hits": 0},
              "result": {"refs": []}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: not list(chat.query(ToolCallBubble)))
         assert list(chat.query(ToolCallBubble)) == []
 
 
@@ -325,7 +338,7 @@ async def test_memory_prefetch_empty_recall_decrements_cluster_tool_count(tmp_pa
             {"version": 1, "phase": "start", "call_id": "memory_prefetch:t4",
              "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: len(list(chat.query(ActivityCluster))) == 1)
         cluster = chat.query_one(ActivityCluster)
         assert cluster._tool_count == 1
 
@@ -335,7 +348,8 @@ async def test_memory_prefetch_empty_recall_decrements_cluster_tool_count(tmp_pa
              "arguments": {"query": "no matches here", "hits": 0},
              "result": {"refs": []}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: not list(chat.query(ToolCallBubble))
+                           and cluster._tool_count == 0)
         assert list(chat.query(ToolCallBubble)) == []
         assert cluster._tool_count == 0
 
@@ -357,7 +371,7 @@ async def test_memory_prefetch_empty_recall_removes_an_emptied_cluster(tmp_path)
             {"version": 1, "phase": "start", "call_id": "memory_prefetch:t5",
              "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: len(list(chat.query(ActivityCluster))) == 1)
         assert len(list(chat.query(ActivityCluster))) == 1
 
         await _inject(bus, "", _tool_hint=True, _tool_events=[
@@ -366,7 +380,8 @@ async def test_memory_prefetch_empty_recall_removes_an_emptied_cluster(tmp_path)
              "arguments": {"query": "no matches here", "hits": 0},
              "result": {"refs": []}},
         ])
-        await pilot.pause()
+        await _pause_until(pilot, lambda: not list(chat.query(ToolCallBubble))
+                           and not list(chat.query(ActivityCluster)))
         assert list(chat.query(ToolCallBubble)) == []
         assert list(chat.query(ActivityCluster)) == []
         assert app._active_cluster is None
