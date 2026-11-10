@@ -1,4 +1,6 @@
-"""An exhausted usage window is answered once, not walked down the backoff ladder.
+"""An account or plan state no retry can change is answered once, not walked down
+the backoff ladder: an exhausted usage window, an expired plan, a plan or key
+that does not cover the request.
 
 Every test drives the real OpenAI-compatible adapter: the SDK receives an HTTP
 response from a mock transport, raises its own status error, the adapter turns
@@ -19,6 +21,10 @@ from durin.providers.registry import find_by_name
 _RESET_AT = "2031-03-04 05:06:07"
 _WINDOW_MESSAGE = f"Usage limit reached for 5 hour. Your limit will reset at {_RESET_AT}"
 _MESSAGES = [{"role": "user", "content": "hello"}]
+_IMAGE_MESSAGES = [{"role": "user", "content": [
+    {"type": "text", "text": "what is in this picture?"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+]}]
 
 
 def _error(code: str, message: str, headers: dict[str, str] | None = None) -> httpx2.Response:
@@ -76,8 +82,8 @@ def sleeps(monkeypatch) -> list[float]:
     return recorded
 
 
-async def _call(provider: OpenAICompatProvider, entry_point: str):
-    return await getattr(provider, entry_point)(messages=list(_MESSAGES))
+async def _call(provider: OpenAICompatProvider, entry_point: str, messages=_MESSAGES):
+    return await getattr(provider, entry_point)(messages=list(messages))
 
 
 _ENTRY_POINTS = ("chat_with_retry", "chat_stream_with_retry")
@@ -141,6 +147,82 @@ async def test_other_exhausted_windows_are_attempted_once(
     assert wire.requests == 1
     assert sleeps == []
     assert _RESET_AT in response.content
+
+
+@pytest.mark.parametrize("entry_point", _ENTRY_POINTS)
+async def test_exhausted_usage_window_is_attempted_once_on_a_conversation_with_images(
+    provider, sleeps, entry_point,
+) -> None:
+    wire = _Wire(provider, [_error("1308", _WINDOW_MESSAGE)])
+
+    response = await _call(provider, entry_point, _IMAGE_MESSAGES)
+
+    assert response.finish_reason == "error"
+    assert _RESET_AT in response.content
+    assert wire.requests == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            "1309",
+            "Your GLM Coding Plan package has expired and is temporarily unavailable. "
+            "You can resume using it after renewing the subscription on the official "
+            "website.",
+        ),
+        ("1311", "Your current subscription plan does not yet include access to test-model"),
+        ("1314", "Your enterprise package has expired. Please contact your enterprise administrator."),
+        (
+            "1315",
+            "This API Key is limited to enterprise coding package scenarios. Please go "
+            "to the official website to replace the API Key of the corresponding "
+            "product type.",
+        ),
+    ],
+)
+@pytest.mark.parametrize("entry_point", _ENTRY_POINTS)
+async def test_plan_or_key_that_does_not_cover_the_request_is_attempted_once(
+    provider, sleeps, entry_point, code, message,
+) -> None:
+    wire = _Wire(provider, [_error(code, message)])
+
+    response = await _call(provider, entry_point)
+
+    assert response.finish_reason == "error"
+    assert message in response.content
+    assert wire.requests == 1
+    assert sleeps == []
+
+
+async def test_expired_plan_is_attempted_once_on_a_conversation_with_images(
+    provider, sleeps,
+) -> None:
+    wire = _Wire(provider, [
+        _error("1314", "Your enterprise package has expired. Please contact your enterprise administrator."),
+    ])
+
+    await _call(provider, "chat_with_retry", _IMAGE_MESSAGES)
+
+    assert wire.requests == 1
+
+
+async def test_fair_usage_frequency_limit_is_still_retried(provider, sleeps) -> None:
+    wire = _Wire(provider, [
+        _error(
+            "1313",
+            "Your account's current usage pattern does not comply with the Fair Usage "
+            "Policy, and your request frequency has been limited.",
+        ),
+        _completion("ok"),
+    ])
+
+    response = await _call(provider, "chat_with_retry")
+
+    assert response.content == "ok"
+    assert wire.requests == 2
+    assert sleeps == [1]
 
 
 @pytest.mark.parametrize("entry_point", _ENTRY_POINTS)

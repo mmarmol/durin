@@ -440,14 +440,19 @@ implement this:
   HTTP 429 code `1305`, "service temporarily overloaded") switches the retry loop
   from the fast default schedule to a wider one (`_OVERLOAD_BACKOFF_DELAYS`) so it
   stops hammering a still-hot endpoint.
-- **An exhausted usage window is not retried.** `_is_usage_window_exhausted`
-  recognises the business codes Z.AI sends when the account has used up its 5-hour,
-  weekly or monthly plan limit (`_USAGE_WINDOW_EXHAUSTED_ERROR_CODES`). They arrive
-  as HTTP 429, like a request rate limit, but the window reopens hours later, at a
-  time the error states. `_is_transient_response` checks this ahead of every other
-  retry signal — the status code, an `x-should-retry` header, the text markers — so
-  the call is attempted once and the caller gets the provider's message, reset time
-  included, with no backoff. Failover to a fallback model (§4.4) still applies.
+- **An account or plan state is not retried.** `_is_account_state_response`
+  recognises the business codes Z.AI sends for a state no retry can change
+  (`_ACCOUNT_STATE_ERROR_CODES`): the 5-hour, weekly or monthly usage window is
+  used up (the error states when it reopens, hours later), the plan has expired,
+  the plan does not include the requested model, or the API key belongs to another
+  package. They arrive as HTTP 429, like a request rate limit.
+  `_is_transient_response` checks this ahead of every other retry signal — the
+  status code, an `x-should-retry` header, the text markers — and the retry loop
+  returns before the second attempts it makes on other non-transient errors (the
+  request without its images, or the recovered request described below), so exactly
+  one request is sent and the caller gets the provider's message intact, with no
+  backoff. A request rate limit and a fair-usage frequency limit
+  keep the normal retry schedule. Failover to a fallback model (§4.4) still applies.
 
 The self-healing net is `_recover_request_for_error(kw, response)`. On a
 *non-transient* error the retry loop calls it once; a provider overrides it to strip
