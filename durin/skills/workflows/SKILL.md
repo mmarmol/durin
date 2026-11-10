@@ -107,7 +107,7 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   changes its script too: it prints the label as its last stdout line and exits 0 (a
   non-zero exit on a `cases` node aborts the run).
 - **Per node**: a `model` **or** a `persona` (a SOUL + its model); a work `mode` (`build` =
-  may write files, `read` = read-only); built-in `tools` (`none` / `default` — `default` is
+  may write files, `read` = read-only; unset, a routing node runs in `read` and any other in `build`); built-in `tools` (`none` / `default` — `default` is
   the background tool set: files, shell, search, web, memory search and memory writes,
   plus the vision/audio interpretation bridges when aux models are configured; interactive
   and orchestration tools — asking the user, messaging channels, spawning subagents,

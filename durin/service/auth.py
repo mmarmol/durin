@@ -10,9 +10,16 @@ from __future__ import annotations
 from typing import Any
 
 from durin.security.api_tokens import ApiTokenStore
-from durin.service.principal import Principal, Scope
+from durin.service.principal import SCOPE_VALUES, Principal, Scope
 from durin.service.registry import route
-from durin.service.types import Command, NotFoundError, Query, Result
+from durin.service.types import (
+    Command,
+    ForbiddenError,
+    NotFoundError,
+    Query,
+    Result,
+    ValidationFailedError,
+)
 
 # Scopes used by this service's own routes.
 _SYSTEM_READ = Scope.SYSTEM_READ.value
@@ -86,6 +93,21 @@ class AuthService:
         self, cmd: IssueTokenCommand, principal: Principal
     ) -> IssueTokenResult:
         principal.require(Scope.SYSTEM_WRITE)
+        unknown = sorted(set(cmd.scopes) - SCOPE_VALUES)
+        if unknown:
+            raise ValidationFailedError(
+                f"unknown scope(s): {', '.join(unknown)}", details={"scopes": unknown}
+            )
+        # A token may grant only what its issuer holds, judged by the same
+        # check every route uses, so ``admin`` covers every scope and nothing
+        # else implies anything; otherwise a ``system:write`` token could mint
+        # an ``admin`` one.
+        lacking = sorted(s for s in set(cmd.scopes) if not principal.has_scope(s))
+        if lacking:
+            raise ForbiddenError(
+                f"cannot grant scope(s) the issuer does not hold: {', '.join(lacking)}",
+                details={"scopes": lacking},
+            )
         token_id, plaintext = self._store.issue(
             cmd.scopes,
             label=cmd.label,

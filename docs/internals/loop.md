@@ -322,6 +322,16 @@ to the next spawn without a restart. Resolution failure (bad preset, missing
 key) logs a warning and falls back to the inherited session model — spawning
 must never break on a misconfigured aux model.
 
+**Subagent prompt layout.** A subagent's system prompt (`agent/subagent_system.md`)
+holds only text that is the same for every spawn from one manager: the role and
+parallel-call rules, the shared snippets, the workspace path and the skills
+summary. It carries no clock, so two subagents spawned minutes apart share the
+whole prefix for the provider's prompt cache. The task is the first user
+message, and the current time follows it in the same runtime-context block the
+loop appends to its own user turns. When a finished subagent's conversation is
+stored as its own session, that block is removed from the stored user message,
+as the loop does for its own turns, so a replay never repeats a stale time.
+
 A child runs under the context window of the model it actually uses. The loop
 hands `SubagentManager` its own `context_window_tokens` / `context_block_limit`
 at construction and re-points the window on every provider snapshot swap; a
@@ -925,7 +935,10 @@ calls a `mode_provider` callback each iteration to read the active mode (from
 LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effect
 on the very next iteration. If the model emits a tool call for a denied tool
 anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
-this mode" result — tool-by-tool denial, not a stopped run. Built-ins:
+this mode" result — tool-by-tool denial, not a stopped run. Bridges that run or
+list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`) apply
+the same decision to the inner tool, so deferral does not open a way around a
+mode. Built-ins:
 `build` (full access), `plan` (read-only planning), `explore` (read-only, for
 sub-agents), and `read` (read-only with a neutral posture — no interactive
 framing, for workflow nodes that inspect or judge). `explore` and `read` share

@@ -274,7 +274,8 @@ session close) run only the extract pass, throttled by `ReactiveDreamGate`.
 
 3. **Skill-extract** (`dream_passes.run_skill_extract_pass`): an agentic sub-agent
    (spins `AgentRunner`) mines recent sessions and logged skill gaps for reusable
-   procedures, then calls `skill_write` to author or update skills.
+   procedures, then calls `skill_write` to author or update skills. It makes no
+   model call when its whole request matches the last completed run's.
 
 4. **Refine** (`dream_passes.run_refine_pass` → `refine_dream.run_refine`): find
    entity pairs sharing aliases via `AliasIndex`, skip cross-type / tombstoned /

@@ -20,6 +20,8 @@ expressiveness and simplicity for a ~15-tool set.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,6 +69,69 @@ class AgentMode:
         if self.allowed is None:
             return True
         return tool_name in self.allowed
+
+
+# ---------------------------------------------------------------------------
+# Tool-call gate
+# ---------------------------------------------------------------------------
+
+
+def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
+    """Return the refusal for calling *tool_name* under *mode*, or None.
+
+    The one decision every path that runs a tool on the model's behalf
+    applies: the runner for a direct call, and any bridge tool that runs
+    another tool by name. Sharing it means a tool cannot be reached through
+    a bridge in a mode that refuses it, and the model reads the same
+    refusal either way. No mode means no restriction. A refusal is
+    recorded as ``agent_mode.tool_denied`` telemetry.
+
+    The text starts with ``Error`` so a bridge that returns it as its own
+    result is treated as a failed call, the same as the direct refusal.
+    It is informative so the model knows the mode must change (via /build
+    approval, typically) rather than retrying blindly.
+    """
+    if mode is None or mode.is_tool_allowed(tool_name):
+        return None
+    from durin.telemetry.logger import current_telemetry
+
+    logger_obj = current_telemetry()
+    if logger_obj is not None:
+        with suppress(Exception):
+            logger_obj.log("agent_mode.tool_denied", {
+                "tool": tool_name,
+                "mode": mode.name,
+            })
+    return (
+        f"Error: Tool '{tool_name}' is not available in mode "
+        f"'{mode.name}'. The user must run `/build` (or "
+        "the active mode must change) before this tool can be "
+        "called. Do not retry — adjust your approach."
+    )
+
+
+# The mode the runner applied to the tool call now executing. The runner
+# binds it around each tool's ``execute`` so a bridge tool that runs another
+# tool by name (``mcp_invoke``) or lists tools (``mcp_find_tools``) applies
+# the same mode to the inner tool. A ContextVar keeps concurrent tool calls
+# apart, and the runner binds it for every call (None included) and resets
+# it when the call returns, so a nested run never inherits its parent's
+# mode. Unset (None) outside a runner tool call: no restriction.
+_TOOL_CALL_MODE: ContextVar[AgentMode | None] = ContextVar("tool_call_mode", default=None)
+
+
+def bind_tool_call_mode(mode: AgentMode | None) -> Token:
+    """Publish the mode of the tool call about to run; returns the reset token."""
+    return _TOOL_CALL_MODE.set(mode)
+
+
+def reset_tool_call_mode(token: Token) -> None:
+    _TOOL_CALL_MODE.reset(token)
+
+
+def current_tool_call_mode() -> AgentMode | None:
+    """The mode the runner applied to the executing tool call, if any."""
+    return _TOOL_CALL_MODE.get()
 
 
 # ---------------------------------------------------------------------------

@@ -699,6 +699,57 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     return tools
 
 
+# The fingerprint of what the last COMPLETED skill-extract run sent its model.
+# The pass picks the newest sessions with no cursor and re-reads the same open
+# gaps, so on a night where nothing moved a run can only repeat itself; the
+# fingerprint lets the pass skip that run. A run that failed, raised or hit its
+# iteration budget is not recorded, so the next run tries again.
+_SKILL_EXTRACT_INPUT_FILE = ".skill_extract_input.json"
+
+
+def _skill_extract_input_path(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / _SKILL_EXTRACT_INPUT_FILE
+
+
+def _skill_extract_fingerprint(messages: list[dict], tool_defs: list[dict],
+                               model: str | None) -> str:
+    """Hash of the whole request the sub-agent starts from: its messages (the
+    assembled system prompt and the sessions/gaps/evidence block), the tool
+    schemas it is offered, and the model that answers. Hashing the assembled
+    request rather than its sources means every input reaching the prompt is
+    covered, and nothing that does not reach it can force a run."""
+    import hashlib
+    import json
+
+    payload = json.dumps({"model": model or "", "messages": messages, "tools": tool_defs},
+                         sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _last_skill_extract_fingerprint(workspace: Path) -> str | None:
+    import json
+
+    try:
+        data = json.loads(_skill_extract_input_path(workspace).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get("fingerprint") if isinstance(data, dict) else None
+
+
+def _record_skill_extract_fingerprint(workspace: Path, fingerprint: str) -> None:
+    """Replace the stored fingerprint atomically. Best-effort: a failed write
+    keeps the previous file whole, which only costs one more run."""
+    import json
+
+    from durin.utils import atomic_write
+
+    path = _skill_extract_input_path(workspace)
+    try:
+        atomic_write.atomic_write_text(path, json.dumps({"fingerprint": fingerprint}))
+    except OSError as exc:
+        logger.warning("skill-extract: could not record its input fingerprint: {}", exc)
+
+
 def run_skill_extract_pass(
     workspace: Path,
     *,
@@ -743,6 +794,16 @@ async def _skill_extract_async(
         if provider is None:
             provider = make_provider(config, preset=preset)
 
+    fingerprint = _skill_extract_fingerprint(messages, tools.get_definitions(), model)
+    if fingerprint == _last_skill_extract_fingerprint(workspace):
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        _emit("memory.dream.skill_extract", skills_touched=0, gaps_closed=0,
+              duration_ms=duration_ms, skipped="unchanged")
+        logger.info("skill-extract dream: skipped, input unchanged since the last "
+                    "completed run")
+        return {"skills_touched": 0, "gaps_closed": 0, "duration_ms": duration_ms,
+                "skipped": "unchanged"}
+
     try:
         result = await AgentRunner(provider).run(AgentRunSpec(
             initial_messages=messages, tools=tools, model=model,
@@ -750,7 +811,15 @@ async def _skill_extract_async(
             fail_on_tool_error=False, workspace=Path(workspace),
         ))
     except Exception as exc:  # noqa: BLE001
+        _emit("memory.dream.skill_extract", skills_touched=0, gaps_closed=0,
+              duration_ms=int((time.perf_counter() - t0) * 1000),
+              stop_reason="exception")
         return {"skills_touched": 0, "error": str(exc)}
+
+    # Only a run that reached its answer settles this input; a provider
+    # error, an empty reply or the iteration budget leaves it open.
+    if result.stop_reason == "completed":
+        _record_skill_extract_fingerprint(workspace, fingerprint)
 
     def _authored(ev: dict) -> bool:
         # A composition-reject or quarantine also produces a skill_write/
@@ -774,8 +843,9 @@ async def _skill_extract_async(
     gaps_closed = _resolve_gap_observations(workspace)
     duration_ms = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.skill_extract", skills_touched=touched,
-          gaps_closed=gaps_closed, duration_ms=duration_ms)
-    logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed in {}ms",
-                touched, gaps_closed, duration_ms)
+          gaps_closed=gaps_closed, duration_ms=duration_ms,
+          stop_reason=result.stop_reason)
+    logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed in {}ms ({})",
+                touched, gaps_closed, duration_ms, result.stop_reason)
     return {"skills_touched": touched, "gaps_closed": gaps_closed,
-            "duration_ms": duration_ms}
+            "duration_ms": duration_ms, "stop_reason": result.stop_reason}

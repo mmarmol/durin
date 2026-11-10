@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.table import Table
 
 from durin.security.api_tokens import ApiTokenStore
-from durin.service.principal import Scope
+from durin.service.principal import SCOPE_VALUES
 
 console = Console()
 
@@ -34,8 +34,6 @@ token_app = typer.Typer(
 )
 
 auth_app.add_typer(token_app, name="token")
-
-_VALID_SCOPES = {s.value for s in Scope}
 
 
 def _fmt_ts(ts: float | None) -> str:
@@ -82,7 +80,7 @@ def cmd_issue(
         "-s",
         help=(
             "Comma-separated list of scopes to grant.  "
-            f"Valid values: {', '.join(sorted(_VALID_SCOPES))}."
+            f"Valid values: {', '.join(sorted(SCOPE_VALUES))}."
         ),
     ),
     label: str = typer.Option("", "--label", "-l", help="Human-readable label for this token."),
@@ -98,11 +96,11 @@ def cmd_issue(
         console.print("[red]✗[/red] --scopes must not be empty.")
         raise typer.Exit(1)
 
-    unknown = sorted(set(parsed) - _VALID_SCOPES)
+    unknown = sorted(set(parsed) - SCOPE_VALUES)
     if unknown:
         console.print(
             f"[red]✗[/red] Unknown scope(s): {', '.join(unknown)}\n"
-            f"Valid scopes: {', '.join(sorted(_VALID_SCOPES))}"
+            f"Valid scopes: {', '.join(sorted(SCOPE_VALUES))}"
         )
         raise typer.Exit(1)
 

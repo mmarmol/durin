@@ -114,7 +114,8 @@ MAX_SEARCH_QUERIES: int = 5
             description=(
                 f"List of queries to run in one call (max {MAX_SEARCH_QUERIES}). "
                 "They run in parallel and results come back in the same order, "
-                "each as a `{query, results}` record. Prefer this form when a "
+                "each as a `{query, results}` record (`{query, error}` when that "
+                "query failed). Prefer this form when a "
                 "multi-faceted question needs 2+ independent searches."
             ),
         ),
@@ -253,10 +254,17 @@ class WebSearchTool(Tool):
             # duckduckgo batch must run serially; any other provider fans
             # out in parallel.
             if self._effective_provider() == "duckduckgo":
-                results = [{"query": q, "results": await self._search_one(q, count)} for q in qs]
+                outcomes = [await self._search_one(q, count) for q in qs]
             else:
-                gathered = await asyncio.gather(*[self._search_one(q, count) for q in qs])
-                results = [{"query": q, "results": r} for q, r in zip(qs, gathered)]
+                outcomes = await asyncio.gather(*[self._search_one(q, count) for q in qs])
+            # A failed query carries its own ``error`` (like a failed web_fetch
+            # url); the others keep their ``results``.
+            results = [
+                {"query": q, "error": r}
+                if isinstance(r, str) and r.startswith("Error")
+                else {"query": q, "results": r}
+                for q, r in zip(qs, outcomes)
+            ]
             return {"results": results}
 
         return await self._search_one(str(query), count)
@@ -501,8 +509,21 @@ class WebSearchTool(Tool):
             except Exception as e:  # noqa: BLE001
                 return f"Error: DuckDuckGo search failed ({e})"
         except Exception as e:  # noqa: BLE001
-            logger.warning("DuckDuckGo search failed: {}", e)
-            return f"Error: DuckDuckGo search failed ({e})"
+            kind = _classify_ddgs_failure(e)
+            if kind == "transport":
+                logger.warning("DuckDuckGo search transport failure ({}); retrying once", e)
+                await _search_retry_backoff()
+                try:
+                    raw = await _run()
+                except Exception as e2:  # noqa: BLE001
+                    e, kind = e2, _classify_ddgs_failure(e2)
+                else:
+                    kind = ""
+            if kind == "no_results":
+                return f"No results for: {query}"
+            if kind:
+                logger.warning("DuckDuckGo search failed: {}", e)
+                return f"Error: DuckDuckGo search failed ({e})"
         if not raw:
             return f"No results for: {query}"
         items = [
@@ -510,6 +531,46 @@ class WebSearchTool(Tool):
             for r in raw
         ]
         return _format_results(query, items, n)
+
+
+async def _search_retry_backoff() -> None:
+    """Pause before the single retry of a transport failure (patchable in tests)."""
+    await asyncio.sleep(1.0)
+
+
+def _classify_ddgs_failure(exc: BaseException) -> str:
+    """Tell a query with no hits from a transport failure from any other failure.
+
+    Returns ``"no_results"``, ``"transport"`` or ``"other"``.
+
+    The client library ends a search by raising its base exception with the
+    last engine failure as the first argument, or with a plain text message
+    when every engine simply came back empty. So a base exception whose first
+    argument is not an exception means "no hits". Its HTTP layer wraps every
+    transport error in the base exception while chaining the original error as
+    the cause, so an engine failure that carries a cause came from the
+    transport, and one without a cause is something else (parsing, bad input).
+    Timeouts and rate limits have their own classes.
+    """
+    errors: tuple[type[BaseException], ...] = (TimeoutError, ConnectionError)
+    base: type[BaseException] | None = None
+    try:
+        from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
+    except ImportError:
+        pass
+    else:
+        errors = (*errors, RatelimitException, TimeoutException)
+        base = DDGSException
+    if isinstance(exc, errors):
+        return "transport"
+    if base is None or type(exc) is not base:
+        return "other"
+    inner = exc.args[0] if exc.args else None
+    if not isinstance(inner, BaseException):
+        return "no_results"
+    if isinstance(inner, errors) or inner.__cause__ is not None:
+        return "transport"
+    return "other"
 
 
 def _ddgs_text(query: str, n: int):

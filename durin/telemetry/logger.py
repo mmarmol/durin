@@ -193,32 +193,6 @@ class TelemetryLogger:
                     type(sink).__name__, exc,
                 )
 
-    def log_rate_limit(
-        self,
-        attempt: int,
-        delay_s: float,
-        error_snippet: str,
-        status_code: int | None = None,
-        persistent: bool = False,
-    ) -> None:
-        self.log("provider.rate_limit", {
-            "attempt": attempt,
-            "delay_s": round(delay_s, 1),
-            "status_code": status_code,
-            "persistent": persistent,
-            "error": error_snippet[:200],
-        })
-
-    def log_rate_limit_exhausted(
-        self,
-        attempts: int,
-        error_snippet: str,
-    ) -> None:
-        self.log("provider.rate_limit_exhausted", {
-            "attempts": attempts,
-            "error": error_snippet[:200],
-        })
-
 
 def _local_date(ts: float) -> str:
     """The local calendar date of ``ts``, as telemetry file names carry it."""

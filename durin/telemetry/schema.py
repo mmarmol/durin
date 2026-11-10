@@ -298,19 +298,43 @@ class ToolCallArgumentRepairEvent(TypedDict):
 
 
 class ProviderRateLimitEvent(TypedDict):
-    """Transient rate-limit response triggered a retry-with-backoff
-    inside ``LLMProvider._run_with_retry``."""
+    """The retry loop in ``LLMProvider._run_with_retry`` is about to back off
+    and try again after a transient failure. Despite the name it covers every
+    transient failure the loop retries — rate limits, overload, transport
+    errors, 5xx — not only HTTP 429; ``status_code``, ``error_kind`` and
+    ``error_code`` say which. One row per retry attempt, emitted before the
+    sleep; ``delay_s`` is the wait about to be slept. The sink is the
+    ContextVar-bound session logger, falling back to the logger attached via
+    ``set_telemetry()`` — the same as ``provider.call``. ``provider``,
+    ``model`` and ``purpose`` are as on ``provider.call``. A second attempt
+    that changes the request instead of waiting (images stripped, a recovered
+    request shape) is not a retry in this sense and emits nothing."""
     attempt: int
     delay_s: float
     status_code: NotRequired[int | None]
     persistent: bool
     error: str
+    provider: str
+    model: str
+    purpose: str
+    error_kind: NotRequired[str | None]
+    error_code: NotRequired[str | None]
 
 
 class ProviderRateLimitExhaustedEvent(TypedDict):
-    """All retry attempts exhausted by repeated rate-limit responses."""
+    """The retry loop gave up on a transient failure: the standard schedule
+    ran out, or a persistent retry saw the same error too many times in a
+    row. One row per give-up, with the same sink and identity fields as
+    ``provider.rate_limit``; ``attempts`` is the number of requests made and
+    ``error`` the final response's text, truncated and lower-cased."""
     attempts: int
     error: str
+    provider: str
+    model: str
+    purpose: str
+    status_code: NotRequired[int | None]
+    error_kind: NotRequired[str | None]
+    error_code: NotRequired[str | None]
 
 
 class ProviderCallEvent(TypedDict):
@@ -493,7 +517,7 @@ class AgentModeSwitchEvent(TypedDict):
 class AgentModeToolDeniedEvent(TypedDict):
     """Tool call was blocked because the active mode's allow-list
     excluded it (cached LLM-side tool definition referenced a tool no
-    longer available)."""
+    longer available, or ``mcp_invoke`` was asked to run it)."""
     tool: str
     mode: str
 
@@ -1583,11 +1607,21 @@ class MemoryHotLayerFailureEvent(TypedDict):
 
 
 class MemoryDreamSkillExtractEvent(TypedDict):
-    """The extract dream's skill pass wrote/updated procedural skills."""
+    """One skill-extract pass of the dream: what it wrote, or why it did not run.
+
+    ``skipped: "unchanged"`` marks a pass that made no model call because its
+    whole request (messages, tool schemas, model) matched the last completed
+    run's. On a pass that did run, ``stop_reason`` is the agent runner's stop
+    reason (``"completed"`` for an answer, ``"error"`` for a provider failure,
+    ``"max_iterations"`` for a budget stop, among the runner's others), or
+    ``"exception"`` when the run raised — so a failed night reads apart from
+    one that found nothing."""
 
     skills_touched: int
     gaps_closed: NotRequired[int]
     duration_ms: NotRequired[int]
+    stop_reason: NotRequired[str]
+    skipped: NotRequired[str]  # "unchanged"
 
 
 class MemoryDreamSkillSignalsEvent(TypedDict):

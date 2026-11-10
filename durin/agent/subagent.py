@@ -24,6 +24,37 @@ from durin.providers.base import LLMProvider
 from durin.utils.prompt_templates import render_template
 
 
+def _without_runtime_context(message: dict[str, Any]) -> dict[str, Any]:
+    """A user message without the runtime-context block appended for the model.
+
+    The block (the current time) is per-request metadata; a stored copy would
+    show it as if the user had written it, and replaying the stored messages
+    would repeat a stale time. Same rule the main loop applies when it saves
+    its own user turns.
+    """
+    from durin.agent.context import ContextBuilder
+
+    if message.get("role") != "user":
+        return message
+    tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+    content = message.get("content")
+    if isinstance(content, str) and tag in content:
+        return {**message, "content": content[: content.find(tag)].rstrip("\n ")}
+    if isinstance(content, list):
+        kept = [
+            b for b in content
+            if not (
+                isinstance(b, dict)
+                and b.get("type") == "text"
+                and isinstance(b.get("text"), str)
+                and b["text"].startswith(tag)
+            )
+        ]
+        if len(kept) != len(content):
+            return {**message, "content": kept}
+    return message
+
+
 def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str, int] | None:
     """Resolve ``agents.aux_models.subagents`` to ``(provider, model,
     context_window_tokens)``.
@@ -377,11 +408,7 @@ class SubagentManager:
         purpose_token = bind_call_purpose("subagent")
         try:
             tools = self._build_tools()
-            system_prompt = self._build_subagent_prompt()
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
-            ]
+            messages = self._build_initial_messages(task)
 
             sess_key = origin.get("session_key")
             llm_timeout = (
@@ -571,7 +598,10 @@ class SubagentManager:
 
             parent_meta = self._sessions.get_or_create(parent_key).metadata
             root = root_of(parent_meta, default=parent_key)
-            session = Session(key=f"subagent:{task_id}", messages=list(result.messages))
+            session = Session(
+                key=f"subagent:{task_id}",
+                messages=[_without_runtime_context(m) for m in result.messages],
+            )
             session.metadata.update(build_lineage(
                 parent_session_id=parent_key, root_id=root,
                 origin_type="subagent", origin_id=task_id,
@@ -672,19 +702,36 @@ class SubagentManager:
             lines.append(f"- {result.error}")
         return "\n".join(lines) or (result.error or "Error: subagent execution failed.")
 
-    def _build_subagent_prompt(self) -> str:
-        """Build a focused system prompt for the subagent."""
+    def _build_initial_messages(self, task: str) -> list[dict[str, Any]]:
+        """The system prompt plus the task as the first user message.
+
+        The current time is not part of the system prompt: it changes every
+        minute, and anything after it would miss the provider's prompt cache
+        for every subagent spawned in a different minute. It rides after the
+        task in the user message instead, in the runtime-context block the
+        main loop appends to its own user turns.
+        """
         from durin.agent.context import ContextBuilder
-        from durin.agent.skills import SkillsLoader
 
         time_ctx = ContextBuilder._build_runtime_context(None, None)
+        return [
+            {"role": "system", "content": self._build_subagent_prompt()},
+            {"role": "user", "content": f"{task}\n\n{time_ctx}"},
+        ]
+
+    def _build_subagent_prompt(self) -> str:
+        """Build a focused system prompt for the subagent.
+
+        Everything in it is the same for every spawn from this manager.
+        """
+        from durin.agent.skills import SkillsLoader
+
         skills_summary = SkillsLoader(
             self.workspace,
             disabled_skills=self.disabled_skills,
         ).build_skills_summary()
         return render_template(
             "agent/subagent_system.md",
-            time_ctx=time_ctx,
             workspace=str(self.workspace),
             skills_summary=skills_summary or "",
         )

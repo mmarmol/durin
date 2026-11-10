@@ -268,7 +268,11 @@ named `mcp_<server>_<tool>`, callable directly. When the aggregate MCP schema
 size exceeds `tools.mcp_deferral.threshold_tokens`, `maybe_defer_mcp_tools()`
 sets `_llm_visible = False` on every MCP tool and injects two bridge tools —
 `mcp_find_tools` and `mcp_invoke` — so the model can discover and call deferred
-tools without paying for all their schemas up front.
+tools without paying for all their schemas up front. The bridges answer to the
+active agent mode as a direct call would: `mcp_find_tools` leaves out of its
+catalog and search results every tool the mode refuses, and `mcp_invoke` gives
+the inner tool the runner's own mode decision and argument preparation (see the
+mode gate below).
 
 ### The registry cache and definition ordering
 
@@ -295,7 +299,11 @@ Each iteration begins with `_active_tool_definitions(spec)`, which calls
 `spec.mode_provider()` to obtain the current `AgentMode` and filters the cached
 definitions to only those allowed by the mode. The filtered list is what the LLM
 actually sees. When `mode_provider` is `None` or the mode has no restrictions
-(the default `BUILD_MODE`), the unfiltered cache is returned directly.
+(the default `BUILD_MODE`), the unfiltered cache is returned directly. Under a
+restricting mode, the `mcp_find_tools` schema is swapped for a copy whose
+deferred catalog lists only the tools that mode allows
+(`McpFindToolsTool.schema_for_mode()`): the registry is shared by every session,
+so its cached copy always carries the unrestricted catalog.
 
 After the LLM responds with tool calls, `_execute_tools()` partitions them into
 batches. Tools whose `concurrency_safe` property is `True` may run in parallel
@@ -325,8 +333,8 @@ whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
 `web_search` (`queries`) and `read_file` (`paths`). Each takes the single form
 OR the list form, caps the list, and returns one record per item in order, a
 failed item carrying its own error so one failure does not abort the batch
-(an `error` field, except `web_search`, whose failed query has the error text
-as that item's `results`). `read_file`
+(an `error` field; for `web_search` the failed query's record is
+`{query, error}` instead of `{query, results}`). `read_file`
 also takes both at once, since a model reading several files often names one
 in `path` and the rest in `paths`: it reads them as one batch, `path` first and
 each file once, under the same cap and shared page budget, instead of
@@ -340,19 +348,43 @@ counts as not given, so the call reads `paths` alone. The others reject both.
 and no list parameter, and fans that query across the vector, lexical and grep
 paths inside a single call.
 
+On the default DuckDuckGo path, `web_search` classifies a client-library failure
+structurally (`_classify_ddgs_failure()`), not by message text. The library's
+base exception whose first argument is not an exception means every engine
+came back empty: that is an answer, returned as the same non-error
+`No results for: ...` text an empty result list gets. A failure is a transport
+failure when the library raises its timeout or rate-limit class, the call hits
+the configured timeout, or the base exception wraps an engine error that has a
+`__cause__` (the library chains the HTTP client's own error). A transport
+failure is retried once after a short pause, then returned as
+`Error: DuckDuckGo search failed (...)` if it fails again. Any other engine
+failure (no transport cause) is returned at once without a retry. A test drives
+the real library function with faked engines to pin these shapes.
+
 For each tool call, `_run_tool()` applies checks in this order:
 
 1. **Loop-detection guard:** if the same `(name, arguments)` hash appeared as a
    failed call earlier this turn (tracked in `seen_failed_calls`), return a
    `BLOCKED` synthetic result immediately, avoiding a doomed re-execution.
-2. **Mode gate:** if `active_mode.is_tool_allowed(tool_call.name)` returns
-   `False`, return an informative refusal explaining the mode restriction.
-   This fires only when the model uses a cached schema after a mode switch.
-3. **Repeated-lookup guard:** a `web_fetch` of the same `url` or a
-   `web_search` of the same `query` beyond a small per-run retry budget
+2. **Mode gate:** `refuse_tool_call(active_mode, tool_call.name)` (in
+   `agent_mode.py`) applies `is_tool_allowed` and, on a refusal, records
+   `agent_mode.tool_denied` and returns an informative `Error: Tool '…' is not
+   available in mode '…'` text. This fires only when the model uses a cached
+   schema after a mode switch. A tool that runs another tool by name gets the
+   same gate: the runner binds the mode it applied around each `execute`
+   (`bind_tool_call_mode()` / `current_tool_call_mode()`), and `mcp_invoke`
+   passes the inner tool name through `refuse_tool_call` and then through
+   `prepare_call()` before running it, so a deferred tool is refused, cast and
+   validated exactly as a direct call to it would be, with the same text.
+3. **Repeated-lookup guard:** a `web_fetch` of the same URL or a
+   `web_search` of the same query beyond a small per-run retry budget
    (`repeated_external_lookup_error()`) returns an error telling the model to
-   use what it already has. Only the single-value forms are counted; the list
-   forms (`urls`, `queries`) are not.
+   use what it already has. Each URL or query counts as its own lookup,
+   whether it arrives in the single form (`url`, `query`) or inside the list
+   form (`urls`, `queries`), normalised the same way (trimmed, lower-cased);
+   a target repeated inside one call counts once. A list call is blocked only
+   when every one of its targets is past the budget; a single fresh target
+   lets it through.
 4. **Preparation:** `ToolRegistry.prepare_call()` resolves the tool, casts
    parameter types via `tool.cast_params()` (e.g., `"60"` → `60` for integer
    fields), and validates against the JSON Schema. A validation error returns an
@@ -564,7 +596,7 @@ through byte-for-byte.
 | `truncate_with_spill` | `durin/agent/tools/output_spill.py` | Overflow helper: writes full content to `.durin/spills/`, returns head+tail+spill-ref rendering |
 | `write_spill` | `durin/agent/tools/output_spill.py` | Writes (already redacted) content to a spill file and returns its path or the reason it failed; `reuse=True` names the file by its content and reuses an existing one |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function for structured telemetry from tool code; privacy-trims free-text fields; silently no-ops when no session logger is bound |
-| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by both the definition filter and the execution gate |
+| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by the definition filter, the execution gate (through `refuse_tool_call`) and the deferred-MCP bridges |
 | `AgentRunner` | `durin/agent/runner.py` | Inner LLM/tool loop; owns `_execute_tools`, `_run_tool`, `_normalize_tool_result`, `_enforce_turn_budget`, `_drop_orphan_tool_results`, `_backfill_missing_tool_results`, and `_active_tool_definitions` |
 | MCP tool wrappers | `durin/agent/tools/mcp.py` | Wraps each remote MCP tool as a native `Tool` instance registered as `mcp_<server>_<tool>`; see [mcp.md](mcp.md) for the full MCP integration |
 
@@ -679,7 +711,9 @@ MCP servers are third-party and unbounded in number. Shipping every MCP tool
 schema to the model on every request is wasteful when most tools are never called.
 Below the threshold, all MCP schemas ship as before — a single small server does
 not pay the discovery indirection. Above it, `mcp_find_tools` gives the model a
-searchable catalog and `mcp_invoke` executes any deferred tool by name. Built-in
+searchable catalog and `mcp_invoke` executes any deferred tool by name — any the
+active mode allows, since the runner's mode gate only sees the bridge's name and
+the bridges apply the mode to the inner tool themselves. Built-in
 tools are never deferred because durin's curated surface (including `memory_search`)
 must stay structurally visible to the model.
 

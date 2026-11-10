@@ -86,7 +86,7 @@ class WorkNode:
     session: Literal["fresh", "persistent"] = "fresh"  # persistent = revisits resume the SAME session
     prompt: str = ""                      # agent system/role framing (empty = upstream context only)
     next: str | None = None              # next node id; None = end (mutually exclusive with on_pass/on_fail)
-    mode: str = "build"                   # AgentMode name: build (full) / plan / explore / custom
+    mode: str = "build"                   # AgentMode name: build (full) / read / plan / explore / custom
     tools: Literal["none", "default"] = "none"   # "default" = standard tool set
     skills: tuple[str, ...] = ()          # named skills to inject into this node only
     mcps: tuple[str, ...] = ()            # MCP servers (already configured) whose tools this node may use
@@ -462,7 +462,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"node {node_id!r}: reuse cannot be combined with context='shared' "
                 "(a reused pass contributes no shared-context messages)"
             )
-        mode_default = "explore" if routes else "build"
+        mode_default = "read" if routes else "build"
         mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
             raise WorkflowError(f"node {node_id!r}: mode must be a non-empty string, got {mode!r}")
@@ -876,7 +876,7 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     # to its producer. If a predecessor P (agent WorkNode, P.id != J.id) shares the
     # same model, mode, and prompt as routing agent node J, the graph is rejected.
     # A self-loop (on_fail == J.id) is exempt — we only compare distinct node pairs.
-    # Routing nodes default to mode="explore" while producers default to mode="build",
+    # Routing nodes default to mode="read" while producers default to mode="build",
     # so this fires only when a user explicitly makes the judge identical to its producer.
     predecessor_map: dict[str, list[str]] = {n: [] for n in nodes}
     for src_node in nodes.values():

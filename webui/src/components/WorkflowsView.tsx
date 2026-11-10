@@ -378,7 +378,7 @@ function CasesEditor({
 // routing-shape select (binary vs multi-way), the on_pass/on_fail selects, the
 // cases editor, and the `next` field fallback when routing is off. `routingExtras`
 // merges extra fields when routing is switched on — work nodes default the mode to
-// "explore"; script nodes pass nothing, since mode does not apply to them.
+// "read"; script nodes pass nothing, since mode does not apply to them.
 // JSON textarea with LOCAL raw-text state: parsing on every keystroke into a
 // controlled input eats separators mid-typing, so the def is only patched on blur
 // (valid JSON) and an inline hint shows while the draft text does not parse.
@@ -1200,7 +1200,7 @@ function NodeConfigPanel({
                 />
               )}
 
-          <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} routingExtras={{ mode: "explore" }} />
+          <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} routingExtras={{ mode: "read" }} />
 
           <Field label={t("workflows.maxVisits")}>
             <Input

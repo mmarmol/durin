@@ -312,7 +312,7 @@ def test_rejects_structurally_identical_producer_and_judge():
 def test_allows_judge_differing_by_model_or_prompt():
     wf = parse_workflow(_wf([
         {"id": "p", "kind": "work", "model": "m", "prompt": "do x", "next": "j"},
-        {"id": "j", "kind": "work", "model": "m", "mode": "explore", "prompt": "grade x",
+        {"id": "j", "kind": "work", "model": "m", "mode": "read", "prompt": "grade x",
          "on_pass": "done", "on_fail": "p"},
         {"id": "done", "kind": "work"},
     ], start="p"))
@@ -438,11 +438,44 @@ def test_cases_node_routes_property_is_true():
     assert wf.nodes["a"].routes is True
 
 
-def test_cases_node_mode_defaults_explore():
+def test_cases_node_mode_defaults_read():
     wf = parse_workflow({"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "cases": {"DONE": None}},
     ]})
-    assert wf.nodes["a"].mode == "explore"
+    assert wf.nodes["a"].mode == "read"
+
+
+def test_routing_node_without_mode_defaults_read_and_others_build():
+    wf = parse_workflow(_wf([
+        {"id": "p", "kind": "work", "next": "j"},
+        {"id": "j", "kind": "work", "on_pass": "done", "on_fail": "p"},
+        {"id": "done", "kind": "work"},
+    ], start="p"))
+    assert wf.nodes["j"].mode == "read"
+    assert wf.nodes["p"].mode == "build"
+    assert wf.nodes["done"].mode == "build"
+
+
+def test_explicit_mode_is_kept_on_routing_and_plain_nodes():
+    wf = parse_workflow(_wf([
+        {"id": "p", "kind": "work", "mode": "read", "next": "j"},
+        {"id": "j", "kind": "work", "mode": "build", "on_pass": "done", "on_fail": "p"},
+        {"id": "k", "kind": "work", "mode": "explore", "cases": {"X": None}},
+        {"id": "done", "kind": "work"},
+    ], start="p"))
+    assert (wf.nodes["p"].mode, wf.nodes["j"].mode, wf.nodes["k"].mode) == ("read", "build", "explore")
+
+
+def test_judge_and_producer_with_the_same_model_and_prompt_stay_distinct_by_default():
+    # The defaults differ (read vs build), so a gate authored without a mode is
+    # never silently identical to the producer it grades.
+    wf = parse_workflow(_wf([
+        {"id": "p", "kind": "work", "model": "m", "prompt": "do x", "next": "j"},
+        {"id": "j", "kind": "work", "model": "m", "prompt": "do x",
+         "on_pass": "done", "on_fail": "p"},
+        {"id": "done", "kind": "work"},
+    ], start="p"))
+    assert wf.nodes["j"].mode != wf.nodes["p"].mode
 
 
 def test_cases_and_next_are_mutually_exclusive():

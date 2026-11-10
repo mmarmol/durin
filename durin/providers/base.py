@@ -302,6 +302,48 @@ class LLMProvider(ABC):
         """Attach a TelemetryLogger for structured rate limit tracking."""
         self._telemetry = telemetry
 
+    def _telemetry_sink(self) -> Any:
+        """The logger this provider's telemetry events go to: the
+        ContextVar-bound session logger (bound per turn / per workflow node /
+        per dream worker) first, then the logger attached via
+        ``set_telemetry()``. ``None`` when neither exists, or the one found
+        cannot take events. Every event the provider layer emits resolves its
+        sink here, so the events of one call can never land in different
+        places."""
+        from durin.telemetry.logger import current_telemetry
+
+        sink = current_telemetry() or getattr(self, "_telemetry", None)
+        if sink is None or not hasattr(sink, "log"):
+            return None
+        return sink
+
+    def _emit_retry_event(self, event_type: str, kw: dict[str, Any],
+                          response: LLMResponse, **fields: Any) -> None:
+        """Log one retry-loop event (``provider.rate_limit`` before a backoff,
+        ``provider.rate_limit_exhausted`` when the loop gives up) to the same
+        sink as the call's ``provider.call`` row. Beside ``fields`` it names
+        the provider, the model, the purpose and the error's class and code,
+        so an incident reads from telemetry alone. No sink → dropped;
+        telemetry must never break or delay the call, so everything is
+        exception-suppressed."""
+        with suppress(Exception):
+            from durin.telemetry.logger import current_call_purpose
+
+            sink = self._telemetry_sink()
+            if sink is None:
+                return
+            snippet = (response.content or "")[:200].lower()
+            sink.log(event_type, {
+                **fields,
+                "provider": self.provider_key or type(self).__name__,
+                "model": str(kw.get("model") or self.get_default_model() or ""),
+                "purpose": current_call_purpose() or "unknown",
+                "status_code": response.error_status_code,
+                "error_kind": response.error_kind,
+                "error_code": response.error_code,
+                "error": snippet,
+            })
+
     def emit_call_telemetry(self, *, model: Any, response: LLMResponse,
                             duration_ms: float, purpose: str | None = None,
                             max_tokens: int | None = None,
@@ -323,11 +365,10 @@ class LLMProvider(ABC):
             from durin.telemetry.logger import (
                 current_call_limits,
                 current_call_purpose,
-                current_telemetry,
             )
 
-            sink = current_telemetry() or getattr(self, "_telemetry", None)
-            if sink is None or not hasattr(sink, "log"):
+            sink = self._telemetry_sink()
+            if sink is None:
                 return
             resolved_model = model
             if not resolved_model:
@@ -1077,6 +1118,9 @@ class LLMProvider(ABC):
                     identical_error_count,
                     (response.content or "")[:120].lower(),
                 )
+                self._emit_retry_event(
+                    "provider.rate_limit_exhausted", kw, response, attempts=attempt,
+                )
                 if on_retry_wait:
                     await on_retry_wait(
                         f"Persistent retry stopped after {identical_error_count} identical errors.",
@@ -1098,11 +1142,9 @@ class LLMProvider(ABC):
                     attempt,
                     exhaustion_snippet,
                 )
-                if self._telemetry and hasattr(self._telemetry, "log_rate_limit_exhausted"):
-                    self._telemetry.log_rate_limit_exhausted(
-                        attempts=attempt,
-                        error_snippet=exhaustion_snippet,
-                    )
+                self._emit_retry_event(
+                    "provider.rate_limit_exhausted", kw, response, attempts=attempt,
+                )
                 if on_retry_wait:
                     await on_retry_wait(
                         f"Model request failed after {attempt} retries, giving up.",
@@ -1134,14 +1176,10 @@ class LLMProvider(ABC):
                 int(round(delay)),
                 error_snippet,
             )
-            if self._telemetry and hasattr(self._telemetry, "log_rate_limit"):
-                self._telemetry.log_rate_limit(
-                    attempt=attempt,
-                    delay_s=delay,
-                    error_snippet=error_snippet,
-                    status_code=response.error_status_code,
-                    persistent=persistent,
-                )
+            self._emit_retry_event(
+                "provider.rate_limit", kw, response,
+                attempt=attempt, delay_s=round(delay, 1), persistent=persistent,
+            )
             await self._sleep_with_heartbeat(
                 delay,
                 attempt=attempt,

@@ -339,3 +339,67 @@ def test_read_route_still_mounted(client):
     assert r.status_code == 200
     body = r.json()
     assert "secrets" in body
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/auth/tokens — a token cannot mint a stronger token
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def system_write_token(token_store):
+    _id, plaintext = token_store.issue(
+        [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], label="issuer"
+    )
+    return plaintext
+
+
+def _token_ids(store):
+    return sorted(t["token_id"] for t in store.list_tokens())
+
+
+def test_issue_route_refuses_a_scope_the_issuer_lacks(client, token_store, system_write_token):
+    before = _token_ids(token_store)
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["skills:read", "admin"]},
+        headers={"Authorization": f"Bearer {system_write_token}"},
+    )
+    assert r.status_code == 403
+    assert "problem+json" in r.headers["content-type"]
+    body = r.json()
+    assert body["details"] == {"scopes": ["admin"]}
+    assert "nbwt_" not in r.text
+    assert _token_ids(token_store) == before
+
+
+def test_issue_route_grants_a_subset_of_the_issuers_scopes(client, system_write_token):
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["skills:read"]},
+        headers={"Authorization": f"Bearer {system_write_token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["scopes"] == ["skills:read"]
+
+
+def test_issue_route_lets_an_admin_issuer_grant_the_scopes_admin_implies(client):
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["secrets:write", "system:write"]},
+        headers={"Authorization": f"Bearer {STATIC_TOKEN}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["scopes"] == ["secrets:write", "system:write"]
+
+
+def test_issue_route_rejects_an_unknown_scope_name(client, token_store):
+    before = _token_ids(token_store)
+    r = client.post(
+        "/api/v1/auth/tokens",
+        json={"scopes": ["not-a-scope"]},
+        headers={"Authorization": f"Bearer {STATIC_TOKEN}"},
+    )
+    assert r.status_code == 422
+    assert "problem+json" in r.headers["content-type"]
+    assert _token_ids(token_store) == before

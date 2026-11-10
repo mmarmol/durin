@@ -200,17 +200,32 @@ def build_reasoning_truncation_message() -> dict[str, str]:
     return {"role": "user", "content": REASONING_TRUNCATION_PROMPT}
 
 
-def external_lookup_signature(tool_name: str, arguments: dict[str, Any]) -> str | None:
-    """Stable signature for repeated external lookups we want to throttle."""
+def external_lookup_signatures(tool_name: str, arguments: dict[str, Any]) -> list[str]:
+    """Stable signatures, one per distinct target, for lookups we want to throttle.
+
+    Each URL / query counts as its own lookup whether it arrives in the single
+    argument (``url`` / ``query``) or inside the list argument (``urls`` /
+    ``queries``), so the same target is recognised in either form. A target
+    repeated inside one call is listed once.
+    """
     if tool_name == "web_fetch":
-        url = str(arguments.get("url") or "").strip()
-        if url:
-            return f"web_fetch:{url.lower()}"
-    if tool_name == "web_search":
-        query = str(arguments.get("query") or arguments.get("search_term") or "").strip()
-        if query:
-            return f"web_search:{query.lower()}"
-    return None
+        prefix = "web_fetch"
+        raw = [arguments.get("url")]
+        listed = arguments.get("urls")
+    elif tool_name == "web_search":
+        prefix = "web_search"
+        raw = [arguments.get("query") or arguments.get("search_term")]
+        listed = arguments.get("queries")
+    else:
+        return []
+    if isinstance(listed, list):
+        raw.extend(listed)
+    signatures: dict[str, None] = {}
+    for item in raw:
+        target = str(item or "").strip()
+        if target:
+            signatures[f"{prefix}:{target.lower()}"] = None
+    return list(signatures)
 
 
 def repeated_external_lookup_error(
@@ -218,14 +233,23 @@ def repeated_external_lookup_error(
     arguments: dict[str, Any],
     seen_counts: dict[str, int],
 ) -> str | None:
-    """Block repeated external lookups after a small retry budget."""
-    signature = external_lookup_signature(tool_name, arguments)
-    if signature is None:
+    """Block repeated external lookups after a small retry budget.
+
+    Every target in the call is counted. The call is blocked only when all of
+    its targets are past the budget; one fresh target lets it through.
+    """
+    signatures = external_lookup_signatures(tool_name, arguments)
+    if not signatures:
         return None
-    count = seen_counts.get(signature, 0) + 1
-    seen_counts[signature] = count
-    if count <= _MAX_REPEAT_EXTERNAL_LOOKUPS:
+    over_budget = []
+    for signature in signatures:
+        count = seen_counts.get(signature, 0) + 1
+        seen_counts[signature] = count
+        if count > _MAX_REPEAT_EXTERNAL_LOOKUPS:
+            over_budget.append((signature, count))
+    if len(over_budget) < len(signatures):
         return None
+    signature, count = over_budget[0]
     logger.warning(
         "Blocking repeated external lookup {} on attempt {}",
         signature[:160],

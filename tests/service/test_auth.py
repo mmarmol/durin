@@ -12,7 +12,7 @@ from durin.service.auth import (
     RevokeTokenCommand,
 )
 from durin.service.principal import Principal, Scope
-from durin.service.types import ForbiddenError, NotFoundError
+from durin.service.types import ForbiddenError, NotFoundError, ValidationFailedError
 
 
 @pytest.fixture()
@@ -158,3 +158,46 @@ async def test_resolve_scoped_principal_enforces_scope(svc, admin):
     assert principal is not None
     assert principal.has_scope(Scope.SECRETS_READ)
     assert not principal.has_scope(Scope.SECRETS_WRITE)
+
+
+# ---------------------------------------------------------------------------
+# issue_token — an issuer cannot grant more than it holds
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def system_writer():
+    return Principal.remote("issuer", frozenset({Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value}))
+
+
+async def test_issue_refuses_a_scope_the_issuer_lacks(svc, system_writer):
+    cmd = IssueTokenCommand(scopes=[Scope.SKILLS_READ.value, Scope.ADMIN.value])
+    with pytest.raises(ForbiddenError) as exc:
+        await svc.issue_token(cmd, system_writer)
+    assert "admin" in exc.value.message
+    assert exc.value.details == {"scopes": ["admin"]}
+    assert svc._store.list_tokens() == []
+
+
+async def test_issue_grants_exactly_a_subset_of_the_issuers_scopes(svc, system_writer):
+    cmd = IssueTokenCommand(scopes=[Scope.SKILLS_READ.value])
+    result = await svc.issue_token(cmd, system_writer)
+    assert result.scopes == [Scope.SKILLS_READ.value]
+    issued = svc.resolve(result.token)
+    assert issued is not None
+    assert issued.scopes == frozenset({Scope.SKILLS_READ.value})
+
+
+async def test_an_admin_issuer_can_grant_the_scopes_admin_implies(svc):
+    remote_admin = Principal.remote("root", frozenset({Scope.ADMIN.value}))
+    wanted = [Scope.SECRETS_WRITE.value, Scope.SYSTEM_WRITE.value, Scope.ADMIN.value]
+    result = await svc.issue_token(IssueTokenCommand(scopes=wanted), remote_admin)
+    assert result.scopes == wanted
+
+
+async def test_issue_rejects_an_unknown_scope_name(svc, admin):
+    cmd = IssueTokenCommand(scopes=[Scope.SKILLS_READ.value, "not-a-scope"])
+    with pytest.raises(ValidationFailedError) as exc:
+        await svc.issue_token(cmd, admin)
+    assert "not-a-scope" in exc.value.message
+    assert svc._store.list_tokens() == []
