@@ -552,24 +552,133 @@ async def test_duckduckgo_transport_failure_twice_returns_the_error(monkeypatch)
     assert sleeps == [1]
 
 
-@pytest.mark.asyncio
-async def test_duckduckgo_non_transport_exception_is_not_retried(monkeypatch):
+def _engine_failure(cause: bool):
+    """The outer exception the library raises when an engine failed."""
     from ddgs.exceptions import DDGSException
 
-    calls, sleeps = _ddgs_scripted(monkeypatch, [DDGSException("boom"), _HIT])
+    inner = DDGSException("ConnectError: boom")
+    if cause:
+        try:
+            raise inner from ConnectionResetError("reset")
+        except DDGSException as raised:
+            inner = raised
+    return DDGSException(inner)
+
+
+def _no_hits():
+    from ddgs.exceptions import DDGSException
+
+    return DDGSException("No results found.")
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_no_hits_is_the_empty_result_text_without_retry(monkeypatch):
+    calls, sleeps = _ddgs_scripted(monkeypatch, [_no_hits()])
+    tool = _tool(provider="duckduckgo")
+    result = await tool.execute(query="zzz")
+    assert result == "No results for: zzz"
+    assert len(calls) == 1 and sleeps == []
+
+    _ddgs_scripted(monkeypatch, [[]])
+    assert await tool.execute(query="zzz") == result
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_transport_caused_engine_failure_is_retried_once(monkeypatch):
+    calls, sleeps = _ddgs_scripted(monkeypatch, [_engine_failure(cause=True), _HIT])
     result = await _tool(provider="duckduckgo").execute(query="q")
-    assert result == "Error: DuckDuckGo search failed (boom)"
-    assert len(calls) == 1
-    assert sleeps == []
+    assert "Hit" in result and not result.startswith("Error")
+    assert len(calls) == 2 and sleeps == [1]
 
 
 @pytest.mark.asyncio
-async def test_queries_failed_query_carries_error_field(monkeypatch):
-    from ddgs.exceptions import DDGSException
+async def test_duckduckgo_transport_caused_failure_twice_returns_the_error(monkeypatch):
+    calls, sleeps = _ddgs_scripted(
+        monkeypatch, [_engine_failure(cause=True), _engine_failure(cause=True)]
+    )
+    result = await _tool(provider="duckduckgo").execute(query="q")
+    assert result.startswith("Error: DuckDuckGo search failed (")
+    assert len(calls) == 2 and sleeps == [1]
 
-    _ddgs_scripted(monkeypatch, [_HIT, DDGSException("boom"), _HIT])
+
+@pytest.mark.asyncio
+async def test_duckduckgo_retry_that_finds_nothing_is_not_an_error(monkeypatch):
+    _ddgs_scripted(monkeypatch, [_engine_failure(cause=True), _no_hits()])
+    result = await _tool(provider="duckduckgo").execute(query="q")
+    assert result == "No results for: q"
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_engine_failure_without_cause_is_not_retried(monkeypatch):
+    calls, sleeps = _ddgs_scripted(monkeypatch, [_engine_failure(cause=False), _HIT])
+    result = await _tool(provider="duckduckgo").execute(query="q")
+    assert result.startswith("Error: DuckDuckGo search failed (")
+    assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_queries_no_hits_is_normal_and_failure_carries_error(monkeypatch):
+    _ddgs_scripted(
+        monkeypatch,
+        [_HIT, _no_hits(), _engine_failure(cause=False)],
+    )
     out = await _tool(provider="duckduckgo").execute(queries=["a", "b", "c"])
     first, second, third = out["results"]
     assert "Hit" in first["results"] and "error" not in first
-    assert second == {"query": "b", "error": "Error: DuckDuckGo search failed (boom)"}
-    assert "Hit" in third["results"] and "error" not in third
+    assert second == {"query": "b", "results": "No results for: b"}
+    assert third["query"] == "c" and third["error"].startswith("Error: DuckDuckGo")
+    assert "results" not in third
+
+
+class _FakeEngine:
+    """Engine double: ``search`` runs *action* like a real engine would."""
+
+    provider = "fake"
+    name = "fake"
+    priority = 1
+
+    def __init__(self, action):
+        self._action = action
+
+    def search(self, query, **kwargs):
+        return self._action()
+
+
+def _real_library_failure(monkeypatch, action):
+    """Run the real ddgs search with its engine list replaced; return the raised exception."""
+    # The real class: ``ddgs.DDGS`` is a lazy proxy that would not see the patch.
+    from ddgs.ddgs import DDGS
+
+    engine = _FakeEngine(action)
+    monkeypatch.setattr(DDGS, "_get_engines", lambda self, category, backend: [engine])
+    with pytest.raises(Exception) as info:
+        DDGS(timeout=1).text("anything", max_results=3)
+    return info.value
+
+
+def test_classifier_matches_what_the_real_library_raises(monkeypatch):
+    """Guards the shapes the classifier relies on against a library upgrade."""
+    from ddgs.http_client import HttpClient
+
+    from durin.agent.tools.web import _classify_ddgs_failure
+
+    # (a) every engine returns nothing -> no hits
+    empty = _real_library_failure(monkeypatch, lambda: [])
+    assert _classify_ddgs_failure(empty) == "no_results"
+
+    # (b) an engine's HTTP request fails -> transport
+    class FailingTransport:
+        def request(self, *args, **kwargs):
+            raise ConnectionResetError("connection reset")
+
+    http = object.__new__(HttpClient)
+    http.client = FailingTransport()
+    transport = _real_library_failure(monkeypatch, lambda: http.get("https://engine.example"))
+    assert _classify_ddgs_failure(transport) == "transport"
+
+    # (c) an engine fails for a non-transport reason -> other
+    def parse_failure():
+        raise ValueError("bad markup")
+
+    other = _real_library_failure(monkeypatch, parse_failure)
+    assert _classify_ddgs_failure(other) == "other"

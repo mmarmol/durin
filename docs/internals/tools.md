@@ -340,13 +340,18 @@ counts as not given, so the call reads `paths` alone. The others reject both.
 and no list parameter, and fans that query across the vector, lexical and grep
 paths inside a single call.
 
-On the default DuckDuckGo path, `web_search` retries a transport failure once
-after a short pause before returning `Error: DuckDuckGo search failed (...)`.
-A failure counts as transport when the client library raises its timeout or
-rate-limit class, or the call hits the configured timeout; any other client
-exception is returned at once. The client library has no distinct exception
-for a query with no hits, and wraps connection errors in its base class, so
-those two cases are not told apart and are not retried.
+On the default DuckDuckGo path, `web_search` classifies a client-library failure
+structurally (`_classify_ddgs_failure()`), not by message text. The library's
+base exception whose first argument is not an exception means every engine
+came back empty: that is an answer, returned as the same non-error
+`No results for: ...` text an empty result list gets. A failure is a transport
+failure when the library raises its timeout or rate-limit class, the call hits
+the configured timeout, or the base exception wraps an engine error that has a
+`__cause__` (the library chains the HTTP client's own error). A transport
+failure is retried once after a short pause, then returned as
+`Error: DuckDuckGo search failed (...)` if it fails again. Any other engine
+failure (no transport cause) is returned at once without a retry. A test drives
+the real library function with faked engines to pin these shapes.
 
 For each tool call, `_run_tool()` applies checks in this order:
 

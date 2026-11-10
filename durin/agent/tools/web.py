@@ -509,16 +509,21 @@ class WebSearchTool(Tool):
             except Exception as e:  # noqa: BLE001
                 return f"Error: DuckDuckGo search failed ({e})"
         except Exception as e:  # noqa: BLE001
-            if not isinstance(e, _ddgs_transport_errors()):
+            kind = _classify_ddgs_failure(e)
+            if kind == "transport":
+                logger.warning("DuckDuckGo search transport failure ({}); retrying once", e)
+                await _search_retry_backoff()
+                try:
+                    raw = await _run()
+                except Exception as e2:  # noqa: BLE001
+                    e, kind = e2, _classify_ddgs_failure(e2)
+                else:
+                    kind = ""
+            if kind == "no_results":
+                return f"No results for: {query}"
+            if kind:
                 logger.warning("DuckDuckGo search failed: {}", e)
                 return f"Error: DuckDuckGo search failed ({e})"
-            logger.warning("DuckDuckGo search transport failure ({}); retrying once", e)
-            await _search_retry_backoff()
-            try:
-                raw = await _run()
-            except Exception as e2:  # noqa: BLE001
-                logger.warning("DuckDuckGo search failed: {}", e2)
-                return f"Error: DuckDuckGo search failed ({e2})"
         if not raw:
             return f"No results for: {query}"
         items = [
@@ -533,17 +538,39 @@ async def _search_retry_backoff() -> None:
     await asyncio.sleep(1.0)
 
 
-def _ddgs_transport_errors() -> tuple[type[BaseException], ...]:
-    """Exception classes that mean the request itself failed, so a retry can help.
+def _classify_ddgs_failure(exc: BaseException) -> str:
+    """Tell a query with no hits from a transport failure from any other failure.
 
-    The ddgs classes are looked up lazily because the `web` extra may be absent.
+    Returns ``"no_results"``, ``"transport"`` or ``"other"``.
+
+    The client library ends a search by raising its base exception with the
+    last engine failure as the first argument, or with a plain text message
+    when every engine simply came back empty. So a base exception whose first
+    argument is not an exception means "no hits". Its HTTP layer wraps every
+    transport error in the base exception while chaining the original error as
+    the cause, so an engine failure that carries a cause came from the
+    transport, and one without a cause is something else (parsing, bad input).
+    Timeouts and rate limits have their own classes.
     """
     errors: tuple[type[BaseException], ...] = (TimeoutError, ConnectionError)
+    base: type[BaseException] | None = None
     try:
-        from ddgs.exceptions import RatelimitException, TimeoutException
+        from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
     except ImportError:
-        return errors
-    return (*errors, RatelimitException, TimeoutException)
+        pass
+    else:
+        errors = (*errors, RatelimitException, TimeoutException)
+        base = DDGSException
+    if isinstance(exc, errors):
+        return "transport"
+    if base is None or type(exc) is not base:
+        return "other"
+    inner = exc.args[0] if exc.args else None
+    if not isinstance(inner, BaseException):
+        return "no_results"
+    if isinstance(inner, errors) or inner.__cause__ is not None:
+        return "transport"
+    return "other"
 
 
 def _ddgs_text(query: str, n: int):
