@@ -27,11 +27,41 @@ def _write_script(workspace: Path, name: str) -> None:
     p.chmod(0o755)
 
 
-def _wf(n_scripts: int, n_llm: int, **fan_extra):
+def _write_meeting_script(workspace: Path, name: str, parties: int) -> Path:
+    """A script that only succeeds in company: it signs in, then waits until
+    ``parties`` scripts are signed in at once and records that it met them;
+    one that waits alone signs out and gives up. So the number of scripts that
+    met says whether they held the script lane together, whatever the
+    machine's speed. Returns the directory the records land in."""
+    d = workspace / "workflows" / "scripts"
+    d.mkdir(parents=True, exist_ok=True)
+    room = workspace / "meeting"
+    room.mkdir(exist_ok=True)
+    p = d / name
+    p.write_text(
+        "import os, pathlib, sys, time\n"
+        f"room = pathlib.Path({str(room)!r})\n"
+        "(room / f'started-{os.getpid()}').write_text('')\n"
+        "deadline = time.monotonic() + 10\n"
+        "while time.monotonic() < deadline:\n"
+        f"    if len(list(room.glob('started-*'))) >= {parties}:\n"
+        "        (room / f'met-{os.getpid()}').write_text('')\n"
+        "        print('ok')\n"
+        "        sys.exit(0)\n"
+        "    time.sleep(0.01)\n"
+        "(room / f'started-{os.getpid()}').unlink()\n"
+        "print('alone')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8")
+    p.chmod(0o755)
+    return room
+
+
+def _wf(n_scripts: int, n_llm: int, script: str = "slow.py", **fan_extra):
     nodes = [{"id": "fan", "kind": "parallel",
               "branches": [f"s{i}" for i in range(n_scripts)] + [f"w{i}" for i in range(n_llm)],
               "reconcile": "read", "next": "join", **fan_extra}]
-    nodes += [{"id": f"s{i}", "kind": "script", "script": "slow.py"} for i in range(n_scripts)]
+    nodes += [{"id": f"s{i}", "kind": "script", "script": script} for i in range(n_scripts)]
     nodes += [{"id": f"w{i}", "kind": "work"} for i in range(n_llm)]
     nodes += [{"id": "join", "kind": "work", "next": None}]
     return parse_workflow({"name": "d", "start": "fan", "nodes": nodes})
@@ -89,21 +119,19 @@ class TestSpec:
 
 class TestSplitCaps:
     def test_script_branches_run_wider_than_the_llm_cap(self, tmp_path):
-        # 3 scripts + 2 work branches, llm_cap=1, script_cap=3: with the old
-        # uniform pool of 1 everything would serialize; split caps let all 3
-        # scripts overlap while work branches go one at a time.
-        _write_script(tmp_path, "slow.py")
+        # 3 scripts + 2 work branches, llm_cap=1, script_cap=3: with a uniform
+        # pool of 1 everything would serialize; split caps let all 3 scripts
+        # hold the script lane together while work branches go one at a time.
+        # Each script waits for the other two, so all three meeting is the
+        # proof — no wall-clock threshold a busy machine could miss.
+        room = _write_meeting_script(tmp_path, "meet.py", parties=3)
         tracker = _Tracker()
-        t0 = time.monotonic()
         res = _engine(tmp_path, tracker.run, llm_cap=1, script_cap=3).run(
-            _wf(3, 2), "t")
-        wall = time.monotonic() - t0
+            _wf(3, 2, script="meet.py"), "t")
 
         assert res.status == "completed"
         assert tracker.peak == 1                      # LLM lane honored its cap
-        # 3 overlapped scripts (~0.15s) + 2 serial work runs (~0.3s) comfortably
-        # beat the ~0.75s a uniform pool of 1 would need for 5 x 0.15s branches.
-        assert wall < 0.7, f"scripts appear serialized behind the LLM cap ({wall:.2f}s)"
+        assert len(list(room.glob("met-*"))) == 3, "scripts did not run together"
 
     def test_explicit_cap_stays_uniform_across_kinds(self, tmp_path):
         # max_concurrency=1 on the node: strictly one branch at a time,
