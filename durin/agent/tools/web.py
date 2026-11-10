@@ -114,7 +114,8 @@ MAX_SEARCH_QUERIES: int = 5
             description=(
                 f"List of queries to run in one call (max {MAX_SEARCH_QUERIES}). "
                 "They run in parallel and results come back in the same order, "
-                "each as a `{query, results}` record. Prefer this form when a "
+                "each as a `{query, results}` record (`{query, error}` when that "
+                "query failed). Prefer this form when a "
                 "multi-faceted question needs 2+ independent searches."
             ),
         ),
@@ -253,10 +254,17 @@ class WebSearchTool(Tool):
             # duckduckgo batch must run serially; any other provider fans
             # out in parallel.
             if self._effective_provider() == "duckduckgo":
-                results = [{"query": q, "results": await self._search_one(q, count)} for q in qs]
+                outcomes = [await self._search_one(q, count) for q in qs]
             else:
-                gathered = await asyncio.gather(*[self._search_one(q, count) for q in qs])
-                results = [{"query": q, "results": r} for q, r in zip(qs, gathered)]
+                outcomes = await asyncio.gather(*[self._search_one(q, count) for q in qs])
+            # A failed query carries its own ``error`` (like a failed web_fetch
+            # url); the others keep their ``results``.
+            results = [
+                {"query": q, "error": r}
+                if isinstance(r, str) and r.startswith("Error")
+                else {"query": q, "results": r}
+                for q, r in zip(qs, outcomes)
+            ]
             return {"results": results}
 
         return await self._search_one(str(query), count)
@@ -501,8 +509,16 @@ class WebSearchTool(Tool):
             except Exception as e:  # noqa: BLE001
                 return f"Error: DuckDuckGo search failed ({e})"
         except Exception as e:  # noqa: BLE001
-            logger.warning("DuckDuckGo search failed: {}", e)
-            return f"Error: DuckDuckGo search failed ({e})"
+            if not isinstance(e, _ddgs_transport_errors()):
+                logger.warning("DuckDuckGo search failed: {}", e)
+                return f"Error: DuckDuckGo search failed ({e})"
+            logger.warning("DuckDuckGo search transport failure ({}); retrying once", e)
+            await _search_retry_backoff()
+            try:
+                raw = await _run()
+            except Exception as e2:  # noqa: BLE001
+                logger.warning("DuckDuckGo search failed: {}", e2)
+                return f"Error: DuckDuckGo search failed ({e2})"
         if not raw:
             return f"No results for: {query}"
         items = [
@@ -510,6 +526,24 @@ class WebSearchTool(Tool):
             for r in raw
         ]
         return _format_results(query, items, n)
+
+
+async def _search_retry_backoff() -> None:
+    """Pause before the single retry of a transport failure (patchable in tests)."""
+    await asyncio.sleep(1.0)
+
+
+def _ddgs_transport_errors() -> tuple[type[BaseException], ...]:
+    """Exception classes that mean the request itself failed, so a retry can help.
+
+    The ddgs classes are looked up lazily because the `web` extra may be absent.
+    """
+    errors: tuple[type[BaseException], ...] = (TimeoutError, ConnectionError)
+    try:
+        from ddgs.exceptions import RatelimitException, TimeoutException
+    except ImportError:
+        return errors
+    return (*errors, RatelimitException, TimeoutException)
 
 
 def _ddgs_text(query: str, n: int):

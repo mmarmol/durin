@@ -325,8 +325,8 @@ whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
 `web_search` (`queries`) and `read_file` (`paths`). Each takes the single form
 OR the list form, caps the list, and returns one record per item in order, a
 failed item carrying its own error so one failure does not abort the batch
-(an `error` field, except `web_search`, whose failed query has the error text
-as that item's `results`). `read_file`
+(an `error` field; for `web_search` the failed query's record is
+`{query, error}` instead of `{query, results}`). `read_file`
 also takes both at once, since a model reading several files often names one
 in `path` and the rest in `paths`: it reads them as one batch, `path` first and
 each file once, under the same cap and shared page budget, instead of
@@ -339,6 +339,14 @@ counts as not given, so the call reads `paths` alone. The others reject both.
 `memory_search` is parallel in a different sense — it takes one scalar `query`
 and no list parameter, and fans that query across the vector, lexical and grep
 paths inside a single call.
+
+On the default DuckDuckGo path, `web_search` retries a transport failure once
+after a short pause before returning `Error: DuckDuckGo search failed (...)`.
+A failure counts as transport when the client library raises its timeout or
+rate-limit class, or the call hits the configured timeout; any other client
+exception is returned at once. The client library has no distinct exception
+for a query with no hits, and wraps connection errors in its base class, so
+those two cases are not told apart and are not retried.
 
 For each tool call, `_run_tool()` applies checks in this order:
 
