@@ -336,7 +336,15 @@ class ProviderCallEvent(TypedDict):
     and ``input_budget_tokens`` (the window minus the capped output
     reservation and safety buffer, or ``context_block_limit`` when set);
     calls outside a run (memory, judge, compaction, the aux bridges) carry
-    neither."""
+    neither.
+
+    ``output_chars`` and ``reasoning_chars`` are the sizes, in characters of
+    text (not tokens), of the visible answer and of the reasoning text the
+    response carried; tool-call arguments count in neither. They are always
+    present: 0 means the response had no answer text (a tool-call-only reply)
+    or no reasoning text. A provider that does not return its reasoning shows
+    0 even if the model reasoned. Reasoning exposed under two response fields
+    is counted once. Only lengths are recorded, never the text."""
     provider: str
     model: str
     prompt_tokens: int
@@ -345,6 +353,8 @@ class ProviderCallEvent(TypedDict):
     duration_ms: float
     finish_reason: str
     purpose: str
+    output_chars: int
+    reasoning_chars: int
     max_tokens: NotRequired[int]
     context_window_tokens: NotRequired[int]
     input_budget_tokens: NotRequired[int]
