@@ -320,7 +320,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # api_base + separate API key. Keyword 'zai-coding' is intentionally
     # rare so auto-routing by model name keeps falling through to the
     # plain `zhipu` provider — operators pick this one explicitly when
-    # they have a coding-plan subscription.
+    # they have a coding-plan subscription. The endpoint thinks by default
+    # and ignores an absent effort, so without the thinking switch a
+    # configured ``reasoning_effort: none`` would send nothing and the model
+    # would keep reasoning.
     ProviderSpec(
         name="zai_coding_plan",
         keywords=("zai-coding",),
@@ -328,6 +331,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Z.ai Coding Plan",
         backend="openai_compat",
         default_api_base="https://api.z.ai/api/coding/paas/v4",
+        thinking_style="thinking_type",
     ),
     # DashScope (通义): Qwen models, OpenAI-compatible endpoint
     ProviderSpec(

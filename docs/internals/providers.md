@@ -263,6 +263,10 @@ After construction, `provider.generation` is set from the preset's generation se
 (`temperature`, `max_tokens`, `reasoning_effort`). The `reasoning_effort` value is
 translated into provider-specific extra_body fields (e.g. `{"thinking": {"type":
 "enabled"}}` for providers with `thinking_style="thinking_type"`) only at request time.
+`none` is never sent as an effort: on a provider that declares a thinking style it
+becomes that provider's switch set to off; on one that declares none the request
+carries no reasoning parameter at all and the provider's own default applies, which
+for a model that thinks by default means it keeps thinking.
 
 ### 4.4 Fallback chain
 

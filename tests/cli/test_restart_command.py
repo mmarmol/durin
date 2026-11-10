@@ -434,7 +434,7 @@ class TestRestartCommand:
         session = MagicMock()
         session.get_history.return_value = [{"role": "user"}] * 3
         loop.sessions.get_or_create.return_value = session
-        loop._start_time = time.time() - 125
+        loop._start_time = 1_000_000.0
         loop._last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
         loop.consolidator.estimate_session_prompt_tokens = MagicMock(
             return_value=(20500, "tiktoken")
@@ -443,7 +443,12 @@ class TestRestartCommand:
 
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/status")
 
-        response = await loop._process_message(msg)
+        # The uptime line is read off the clock when the status is built, so the
+        # clock is held still: however long the turn takes, 125 s have passed.
+        clock = MagicMock(wraps=time)
+        clock.time.return_value = loop._start_time + 125
+        with patch("durin.utils.helpers.time", clock):
+            response = await loop._process_message(msg)
 
         assert response is not None
         assert "Model: test-model" in response.content
