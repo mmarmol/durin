@@ -117,7 +117,28 @@ flowchart TD
 ### Telemetry emission
 
 `AgentLoop.from_config` calls `provider.set_telemetry(logger)` so the provider
-can emit rate-limit events directly without going through `emit_tool_event`.
+can emit its events directly without going through `emit_tool_event`.
+
+Every event the provider layer emits (`provider.call`, `provider.rate_limit`,
+`provider.rate_limit_exhausted`) resolves its sink through one helper,
+`LLMProvider._telemetry_sink`: the ContextVar-bound session logger first (bound
+per turn, per workflow node, per dream worker), then the `set_telemetry()` logger,
+and no sink means the event is dropped. A call made outside any agent loop (a
+dream worker, a workflow node) therefore records its retries wherever it records
+its `provider.call` row. Emission is exception-suppressed and never delays the
+call.
+
+The retry events describe the retry loop inside `_run_with_retry`.
+`provider.rate_limit` is one row per retry attempt, written before the backoff
+sleep: `attempt`, `delay_s` (the wait about to be slept), `persistent`, `provider`,
+`model`, `purpose` (as on `provider.call`), `status_code`, `error_kind`,
+`error_code` and the truncated error text. `provider.rate_limit_exhausted` is one
+row per give-up (the schedule ran out, or a persistent retry saw the same error
+repeatedly): `attempts` plus the same identity and error fields. The names say
+"rate limit" but the events cover every transient failure the loop retries
+(overload, transport errors, 5xx); `status_code` / `error_kind` / `error_code`
+tell them apart. An error that is not retried, and the single recovery attempt
+after a non-transient error (images stripped, request reshaped), emit neither.
 
 Every LLM round-trip emits a `provider.call` event from the provider layer
 itself: `LLMProvider._run_with_retry` times the retry loop and logs once per

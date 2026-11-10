@@ -298,19 +298,43 @@ class ToolCallArgumentRepairEvent(TypedDict):
 
 
 class ProviderRateLimitEvent(TypedDict):
-    """Transient rate-limit response triggered a retry-with-backoff
-    inside ``LLMProvider._run_with_retry``."""
+    """The retry loop in ``LLMProvider._run_with_retry`` is about to back off
+    and try again after a transient failure. Despite the name it covers every
+    transient failure the loop retries — rate limits, overload, transport
+    errors, 5xx — not only HTTP 429; ``status_code``, ``error_kind`` and
+    ``error_code`` say which. One row per retry attempt, emitted before the
+    sleep; ``delay_s`` is the wait about to be slept. The sink is the
+    ContextVar-bound session logger, falling back to the logger attached via
+    ``set_telemetry()`` — the same as ``provider.call``. ``provider``,
+    ``model`` and ``purpose`` are as on ``provider.call``. A second attempt
+    that changes the request instead of waiting (images stripped, a recovered
+    request shape) is not a retry in this sense and emits nothing."""
     attempt: int
     delay_s: float
     status_code: NotRequired[int | None]
     persistent: bool
     error: str
+    provider: str
+    model: str
+    purpose: str
+    error_kind: NotRequired[str | None]
+    error_code: NotRequired[str | None]
 
 
 class ProviderRateLimitExhaustedEvent(TypedDict):
-    """All retry attempts exhausted by repeated rate-limit responses."""
+    """The retry loop gave up on a transient failure: the standard schedule
+    ran out, or a persistent retry saw the same error too many times in a
+    row. One row per give-up, with the same sink and identity fields as
+    ``provider.rate_limit``; ``attempts`` is the number of requests made and
+    ``error`` the final response's text, truncated and lower-cased."""
     attempts: int
     error: str
+    provider: str
+    model: str
+    purpose: str
+    status_code: NotRequired[int | None]
+    error_kind: NotRequired[str | None]
+    error_code: NotRequired[str | None]
 
 
 class ProviderCallEvent(TypedDict):

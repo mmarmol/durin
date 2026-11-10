@@ -457,6 +457,16 @@ implement this:
   one request is sent and the caller gets the provider's message intact, with no
   backoff. A request rate limit and a fair-usage frequency limit
   keep the normal retry schedule. Failover to a fallback model (§4.4) still applies.
+- **Retries are telemetry rows.** Each backoff the retry loop is about to sleep emits
+  one `provider.rate_limit` event (attempt, delay, provider, model, purpose, status
+  code, error kind and code), and each give-up emits one
+  `provider.rate_limit_exhausted`, to the same sink as the call's `provider.call`
+  row (`LLMProvider._telemetry_sink`: the bound session logger, else the
+  `set_telemetry()` logger). The names predate the broader scope: the events cover
+  every transient failure the loop retries, not only rate limits. An account-state
+  error, a non-transient error and the one-shot recovery attempts emit neither.
+  Failover happens inside a single attempt, so a fallback's answer is one attempt of
+  the primary's loop and the rows name the primary's provider and model.
 
 The self-healing net is `_recover_request_for_error(kw, response)`. On a
 *non-transient* error the retry loop calls it once; a provider overrides it to strip
