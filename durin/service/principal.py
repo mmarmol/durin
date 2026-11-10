@@ -60,6 +60,11 @@ class Scope(str, Enum):
     SYSTEM_WRITE = "system:write"
 
 
+# Every scope name a token may carry. Token issuing (the CLI and the API)
+# validates requested scopes against this one set.
+SCOPE_VALUES: frozenset[str] = frozenset(s.value for s in Scope)
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who is making a request, and what they are allowed to do.

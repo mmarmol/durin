@@ -983,7 +983,7 @@ durin approvals discard ID            # delete a record without deciding it
 
 | Route | Scope required | Description |
 |---|---|---|
-| `POST /api/v1/auth/tokens` | `system:write` | Issue a new API token (plaintext returned once) |
+| `POST /api/v1/auth/tokens` | `system:write` | Issue a new API token (plaintext returned once); it may carry only scopes the issuer holds (`admin` covers all), and unknown scope names are rejected |
 | `GET  /api/v1/auth/tokens` | `system:read` | List token metadata (no hashes or plaintexts) |
 | `DELETE /api/v1/auth/tokens` | `system:write` | Revoke a token (token_id in request body) |
 | `GET  /api/v1/secrets` | `secrets:read` | List stored secret names and metadata |

@@ -49,6 +49,14 @@ plaintext tokens. Tokens carry explicit scope grants (e.g.
 is shared between the gateway daemon and the CLI, so a token issued in one
 context is valid in the other without any in-memory state.
 
+Issuing through `POST /api/v1/auth/tokens` needs `system:write`, and the new
+token may carry only scopes its issuer holds, judged by `Principal.has_scope`
+(`admin` covers every scope; no other scope implies another). A request for a
+scope the issuer lacks is refused with 403 naming the missing scopes, and a
+scope name outside the `Scope` catalog with 422; neither stores anything. The
+CLI (`durin auth token issue`) validates names against the same catalog and,
+running locally with full authority, may grant any scope.
+
 ---
 
 ## 3. Diagram

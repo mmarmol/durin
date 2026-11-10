@@ -58,6 +58,11 @@ durin auth token issue --scopes chat:write,sessions:read --label my-app
 printed once; `durin auth token list` and `durin auth token revoke <id>`
 manage them. Add `--ttl <seconds>` for a token that expires on its own.
 
+A program can also issue tokens through `POST /api/v1/auth/tokens` with a
+token that holds `system:write`. The new token can carry only scopes the
+issuing token holds itself (an `admin` token can grant any scope); asking for
+more is refused with 403, and an unknown scope name with 422.
+
 ## Chat
 
 ### Conversations
