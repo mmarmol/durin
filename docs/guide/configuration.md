@@ -387,6 +387,11 @@ While a mode is active in a conversation or a sub-agent, a script run by
 fails inside the script with the same message a direct call gets, and the
 tool's description lists only the allowed ones.
 
+An `allowed` list that names an MCP tool keeps reaching it when many MCP tools
+are connected and their definitions are deferred (see `tools.mcp_deferral`): the
+mode then also gets `mcp_find_tools` and `mcp_invoke`, which find and call only
+the MCP tools the list names. Put either one in `denied` to keep it refused.
+
 ---
 
 ### `appearance`

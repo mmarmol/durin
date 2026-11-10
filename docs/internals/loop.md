@@ -940,7 +940,9 @@ list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`, and
 `execute_code` for the tools its script calls) apply the mode the runner gave
 their own call — a conversation's or a sub-agent's — to the inner tool, so
 neither deferral nor a script opens a way around that mode.
-Built-ins:
+Deferral does not close a way either: an allowlist that names a deferred MCP tool
+also allows the two bridges (unless it denies them by name), which then reach
+only the tools it names. Built-ins:
 `build` (full access), `plan` (read-only planning), `explore` (read-only, for
 sub-agents), and `read` (read-only with a neutral posture — no interactive
 framing, for workflow nodes that inspect or judge). `explore` and `read` share

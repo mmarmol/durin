@@ -20,6 +20,7 @@ expressiveness and simplicity for a ~15-tool set.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from contextlib import suppress
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -63,12 +64,30 @@ class AgentMode:
     icon: str | None = None
     builtin: bool = False
 
-    def is_tool_allowed(self, tool_name: str) -> bool:
+    def is_tool_allowed(self, tool_name: str, deferred: Collection[str] = ()) -> bool:
+        """Whether a call to *tool_name* is allowed in this mode.
+
+        *deferred* names the tools currently deferred behind the bridges
+        (``DEFERRAL_BRIDGES``). A deferred tool is reachable only through
+        them, so an allowlist that allows one also allows the bridges —
+        which then reach only what the mode allows. That keeps a mode's
+        meaning the same whether deferral is on or not. An explicit deny of
+        a bridge still wins.
+        """
         if tool_name in self.denied:
             return False
         if self.allowed is None:
             return True
-        return tool_name in self.allowed
+        if tool_name in self.allowed:
+            return True
+        return tool_name in DEFERRAL_BRIDGES and any(
+            self.is_tool_allowed(name) for name in deferred
+        )
+
+
+# The tools that stand in for deferred tools: once tool definitions are
+# deferred, these are the only way to find and call them.
+DEFERRAL_BRIDGES = frozenset({"mcp_find_tools", "mcp_invoke"})
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +95,13 @@ class AgentMode:
 # ---------------------------------------------------------------------------
 
 
-def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
+def refuse_tool_call(
+    mode: AgentMode | None, tool_name: str, deferred: Collection[str] = (),
+) -> str | None:
     """Return the refusal for calling *tool_name* under *mode*, or None.
+
+    *deferred* names the tools currently deferred behind the bridges; see
+    ``AgentMode.is_tool_allowed``.
 
     The one decision every path that runs a tool on the model's behalf
     applies: the runner for a direct call, and any bridge tool that runs
@@ -91,7 +115,7 @@ def refuse_tool_call(mode: AgentMode | None, tool_name: str) -> str | None:
     It is informative so the model knows the mode must change (via /build
     approval, typically) rather than retrying blindly.
     """
-    if mode is None or mode.is_tool_allowed(tool_name):
+    if mode is None or mode.is_tool_allowed(tool_name, deferred):
         return None
     from durin.telemetry.logger import current_telemetry
 

@@ -1741,16 +1741,32 @@ class AgentRunner:
         # session), so a restricted mode gets each tool's own copy listing
         # only the tools it allows.
         get_tool = getattr(spec.tools, "get", None)
+        deferred = AgentRunner._deferred_tool_names(spec)
         out = []
         for d in all_defs:
             name = ToolRegistry._schema_name(d)
-            if not mode.is_tool_allowed(name):
+            if not mode.is_tool_allowed(name, deferred):
                 continue
             tool = get_tool(name) if callable(get_tool) else None
             if isinstance(tool, Tool):
                 d = tool.schema_for_mode(mode) or d
             out.append(d)
         return out
+
+    @staticmethod
+    def _deferred_tool_names(spec: AgentRunSpec) -> frozenset[str]:
+        """The tools deferred behind the bridges in *spec*'s registry right now.
+
+        The definition filter and the call-time gate both pass this to the
+        mode decision, so the schemas sent and the calls allowed agree on
+        whether a mode reaches the bridges.
+        """
+        from durin.agent.tools.mcp_deferral import deferred_tool_names
+        from durin.agent.tools.registry import ToolRegistry
+
+        if not isinstance(spec.tools, ToolRegistry):
+            return frozenset()
+        return deferred_tool_names(spec.tools)
 
     def _request_estimate(
         self,
@@ -2334,7 +2350,10 @@ class AgentRunner:
                 active_mode = spec.mode_provider()
             except Exception:
                 active_mode = None
-        refusal = refuse_tool_call(active_mode, tool_call.name)
+        refusal = refuse_tool_call(
+            active_mode, tool_call.name,
+            self._deferred_tool_names(spec) if active_mode is not None else (),
+        )
         if refusal is not None:
             event = {
                 "name": tool_call.name,

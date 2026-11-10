@@ -18,7 +18,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from durin.agent.agent_mode import BUILD_MODE, AgentMode
+from durin.agent.agent_mode import (
+    BUILD_MODE,
+    EXPLORE_MODE,
+    PLAN_MODE,
+    READ_MODE,
+    AgentMode,
+)
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.mcp import MCPToolWrapper
 from durin.agent.tools.mcp_deferral import maybe_defer_mcp_tools
@@ -264,3 +270,109 @@ async def test_full_run_refuses_a_denied_tool_through_mcp_invoke():
     assert f"Tool '{CREATE}' is not available in mode 'no-create'" in str(
         tool_messages[0]["content"]
     )
+
+
+# --- An allowlist that names a deferred tool reaches it through the bridges ---
+
+ALLOW_ONLY_CREATE = AgentMode(
+    name="create-only", description="allowlist naming one MCP tool, no bridge",
+    allowed=frozenset({CREATE}),
+)
+ALLOW_NO_MCP = AgentMode(
+    name="files-only", description="allowlist naming no MCP tool",
+    allowed=frozenset({"read_file"}),
+)
+ALLOW_CREATE_DENY_INVOKE = AgentMode(
+    name="create-no-invoke", description="allows one MCP tool, denies the invoke bridge",
+    allowed=frozenset({CREATE}),
+    denied=frozenset({"mcp_invoke"}),
+)
+
+
+def _offered(registry: ToolRegistry, mode: Any) -> set[str]:
+    return {
+        schema["function"]["name"]
+        for schema in AgentRunner._active_tool_definitions(_spec(registry, mode))
+    }
+
+
+@pytest.mark.asyncio
+async def test_allowlist_naming_a_deferred_tool_reaches_it_through_the_bridges():
+    registry, conn = _registry()
+
+    assert _offered(registry, ALLOW_ONLY_CREATE) == {"mcp_find_tools", "mcp_invoke"}
+    description = _find_tools_description(registry, ALLOW_ONLY_CREATE)
+    assert CREATE in description and LIST not in description
+
+    found, find_event = await _call(registry, ALLOW_ONLY_CREATE, "mcp_find_tools", {})
+    assert find_event["status"] == "ok"
+    assert _found_names(found) == {CREATE}
+
+    ran, ran_event = await _call(
+        registry, ALLOW_ONLY_CREATE, "mcp_invoke", _invoke(CREATE, {"count": "2"}),
+    )
+    assert ran_event["status"] == "ok", ran
+    assert conn.calls == [("create_ticket", {"count": 2})]
+
+    direct, _ = await _call(registry, ALLOW_ONLY_CREATE, LIST, {})
+    refused, _ = await _call(registry, ALLOW_ONLY_CREATE, "mcp_invoke", _invoke(LIST, {}))
+    assert refused == direct
+    assert f"Tool '{LIST}' is not available in mode 'create-only'" in refused
+    assert conn.calls == [("create_ticket", {"count": 2})]
+
+
+@pytest.mark.asyncio
+async def test_allowlist_naming_an_mcp_tool_is_unchanged_without_deferral():
+    conn = _FakeConnection()
+    registry = ToolRegistry()
+    for name in ("create_ticket", "list_tickets"):
+        registry.register(MCPToolWrapper(conn, "tracker", mcp_types.Tool(
+            name=name, description=f"{name} in the tracker",
+            input_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+        )))
+
+    assert _offered(registry, ALLOW_ONLY_CREATE) == {CREATE}
+    ran, event = await _call(registry, ALLOW_ONLY_CREATE, CREATE, {"count": "2"})
+    assert event["status"] == "ok", ran
+    _, list_event = await _call(registry, ALLOW_ONLY_CREATE, LIST, {})
+    assert list_event["detail"] == "denied by mode 'create-only'"
+    assert conn.calls == [("create_ticket", {"count": 2})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", [ALLOW_NO_MCP, PLAN_MODE, EXPLORE_MODE, READ_MODE],
+    ids=["custom", "plan", "explore", "read"],
+)
+async def test_allowlist_naming_no_deferred_tool_keeps_the_bridges_refused(mode):
+    registry, conn = _registry()
+
+    assert not _offered(registry, mode) & {"mcp_find_tools", "mcp_invoke"}
+    for name, arguments in (
+        ("mcp_find_tools", {}),
+        ("mcp_invoke", _invoke(LIST, {})),
+    ):
+        _, event = await _call(registry, mode, name, arguments)
+        assert event["detail"] == f"denied by mode '{mode.name}'"
+    assert conn.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_mode_denying_mcp_invoke_by_name_still_refuses_it():
+    registry, conn = _registry()
+
+    assert "mcp_invoke" not in _offered(registry, ALLOW_CREATE_DENY_INVOKE)
+    _, event = await _call(
+        registry, ALLOW_CREATE_DENY_INVOKE, "mcp_invoke", _invoke(CREATE, {"count": 1}),
+    )
+
+    assert event["detail"] == "denied by mode 'create-no-invoke'"
+    assert conn.calls == []
+
+
+def test_denylist_mode_offers_the_bridges_as_before():
+    registry, _ = _registry()
+
+    assert {"mcp_find_tools", "mcp_invoke"} <= _offered(registry, DENY_CREATE)
+    assert {"mcp_find_tools"} <= _offered(registry, REFUSE_INVOKE)
+    assert "mcp_invoke" not in _offered(registry, REFUSE_INVOKE)

@@ -369,7 +369,7 @@ For each tool call, `_run_tool()` applies checks in this order:
 1. **Loop-detection guard:** if the same `(name, arguments)` hash appeared as a
    failed call earlier this turn (tracked in `seen_failed_calls`), return a
    `BLOCKED` synthetic result immediately, avoiding a doomed re-execution.
-2. **Mode gate:** `refuse_tool_call(active_mode, tool_call.name)` (in
+2. **Mode gate:** `refuse_tool_call(active_mode, tool_call.name, deferred)` (in
    `agent_mode.py`) applies `is_tool_allowed` and, on a refusal, records
    `agent_mode.tool_denied` and returns an informative `Error: Tool '…' is not
    available in mode '…'` text. This fires only when the model uses a cached
@@ -387,6 +387,11 @@ For each tool call, `_run_tool()` applies checks in this order:
    failed call (the stub raises `RuntimeError` with the same text a direct
    call returns), counts against the script's call cap, and leaves the rest
    of the script running.
+   `deferred` is the set of MCP tools deferred behind the bridges right now
+   (`deferred_tool_names()`); the definition filter passes the same set. An
+   allowlist that allows one of them allows `mcp_find_tools` and `mcp_invoke`
+   too, unless it denies them by name, so a mode reaches the MCP tools it
+   names whether or not deferral is on.
 3. **Repeated-lookup guard:** a `web_fetch` of the same URL or a
    `web_search` of the same query beyond a small per-run retry budget
    (`repeated_external_lookup_error()`) returns an error telling the model to
@@ -724,7 +729,9 @@ Below the threshold, all MCP schemas ship as before — a single small server do
 not pay the discovery indirection. Above it, `mcp_find_tools` gives the model a
 searchable catalog and `mcp_invoke` executes any deferred tool by name — any the
 active mode allows, since the runner's mode gate only sees the bridge's name and
-the bridges apply the mode to the inner tool themselves. Built-in
+the bridges apply the mode to the inner tool themselves. An allowlist mode that
+names a deferred tool gets the bridges with it, so turning deferral on does not
+change what the mode can reach. Built-in
 tools are never deferred because durin's curated surface (including `memory_search`)
 must stay structurally visible to the model.
 
