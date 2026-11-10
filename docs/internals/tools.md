@@ -348,11 +348,15 @@ For each tool call, `_run_tool()` applies checks in this order:
 2. **Mode gate:** if `active_mode.is_tool_allowed(tool_call.name)` returns
    `False`, return an informative refusal explaining the mode restriction.
    This fires only when the model uses a cached schema after a mode switch.
-3. **Repeated-lookup guard:** a `web_fetch` of the same `url` or a
-   `web_search` of the same `query` beyond a small per-run retry budget
+3. **Repeated-lookup guard:** a `web_fetch` of the same URL or a
+   `web_search` of the same query beyond a small per-run retry budget
    (`repeated_external_lookup_error()`) returns an error telling the model to
-   use what it already has. Only the single-value forms are counted; the list
-   forms (`urls`, `queries`) are not.
+   use what it already has. Each URL or query counts as its own lookup,
+   whether it arrives in the single form (`url`, `query`) or inside the list
+   form (`urls`, `queries`), normalised the same way (trimmed, lower-cased);
+   a target repeated inside one call counts once. A list call is blocked only
+   when every one of its targets is past the budget; a single fresh target
+   lets it through.
 4. **Preparation:** `ToolRegistry.prepare_call()` resolves the tool, casts
    parameter types via `tool.cast_params()` (e.g., `"60"` → `60` for integer
    fields), and validates against the JSON Schema. A validation error returns an
