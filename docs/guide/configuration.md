@@ -382,6 +382,11 @@ entry under `agent_modes` is keyed by mode name and is a `ModeConfig`:
 | `prompt_suffix` | `""` | Text appended to the system prompt while the mode is active |
 | `icon` | `null` | Optional glyph name for the UI; the picker falls back to a generic glyph when unset |
 
+While a mode is active in a conversation or a sub-agent, a script run by
+`execute_code` can call only the tools the mode allows: a call to any other one
+fails inside the script with the same message a direct call gets, and the
+tool's description lists only the allowed ones.
+
 ---
 
 ### `appearance`

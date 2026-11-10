@@ -300,10 +300,13 @@ Each iteration begins with `_active_tool_definitions(spec)`, which calls
 definitions to only those allowed by the mode. The filtered list is what the LLM
 actually sees. When `mode_provider` is `None` or the mode has no restrictions
 (the default `BUILD_MODE`), the unfiltered cache is returned directly. Under a
-restricting mode, the `mcp_find_tools` schema is swapped for a copy whose
-deferred catalog lists only the tools that mode allows
-(`McpFindToolsTool.schema_for_mode()`): the registry is shared by every session,
-so its cached copy always carries the unrestricted catalog.
+restricting mode, every allowed tool is asked for its `schema_for_mode()`
+(a `Tool` method that returns `None` when the schema is the same in every
+mode). A tool whose description names other tools it can run returns a copy
+naming only the ones that mode allows: `mcp_find_tools` narrows its deferred
+catalog, and `execute_code` the list of tools its script can call. The
+registry is shared by every session, so its cached copies always carry the
+unrestricted text.
 
 After the LLM responds with tool calls, `_execute_tools()` partitions them into
 batches. Tools whose `concurrency_safe` property is `True` may run in parallel
@@ -376,6 +379,14 @@ For each tool call, `_run_tool()` applies checks in this order:
    passes the inner tool name through `refuse_tool_call` and then through
    `prepare_call()` before running it, so a deferred tool is refused, cast and
    validated exactly as a direct call to it would be, with the same text.
+   `execute_code` does the same for every tool its script calls: it reads the
+   mode once when the call starts and hands it to each RPC dispatch, which
+   applies `refuse_tool_call` and then `prepare_call()` on a private registry
+   of the script's tools. The mode only narrows the script's fixed tool set,
+   never widens it. A refusal or an invalid argument reaches the script as a
+   failed call (the stub raises `RuntimeError` with the same text a direct
+   call returns), counts against the script's call cap, and leaves the rest
+   of the script running.
 3. **Repeated-lookup guard:** a `web_fetch` of the same URL or a
    `web_search` of the same query beyond a small per-run retry budget
    (`repeated_external_lookup_error()`) returns an error telling the model to

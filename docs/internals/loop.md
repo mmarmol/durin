@@ -935,10 +935,12 @@ calls a `mode_provider` callback each iteration to read the active mode (from
 LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effect
 on the very next iteration. If the model emits a tool call for a denied tool
 anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
-this mode" result — tool-by-tool denial, not a stopped run. Bridges that run or
-list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`) apply
-the same decision to the inner tool, so deferral does not open a way around a
-mode. Built-ins:
+this mode" result — tool-by-tool denial, not a stopped run. Tools that run or
+list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`, and
+`execute_code` for the tools its script calls) apply the mode the runner gave
+their own call — a conversation's or a sub-agent's — to the inner tool, so
+neither deferral nor a script opens a way around that mode.
+Built-ins:
 `build` (full access), `plan` (read-only planning), `explore` (read-only, for
 sub-agents), and `read` (read-only with a neutral posture — no interactive
 framing, for workflow nodes that inspect or judge). `explore` and `read` share

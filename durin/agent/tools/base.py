@@ -10,6 +10,7 @@ from typing import Any, TypeVar
 if typing.TYPE_CHECKING:
     from pydantic import BaseModel
 
+    from durin.agent.agent_mode import AgentMode
     from durin.agent.tools.context import ToolContext
 
 _ToolT = TypeVar("_ToolT", bound="Tool")
@@ -312,6 +313,17 @@ class Tool(ABC):
                 "parameters": parameters,
             },
         }
+
+    def schema_for_mode(self, mode: AgentMode) -> dict[str, Any] | None:
+        """This tool's schema as seen under a restricting *mode*, or None
+        when it is the same in every mode.
+
+        A tool whose description names other tools it can run (a bridge or
+        a script sandbox) returns a copy naming only the ones *mode* allows.
+        The registry caches one unfiltered schema for every session, so the
+        runner asks for this per turn instead of editing the cached copy.
+        """
+        return None
 
 
 def tool_parameters(schema: dict[str, Any]) -> Callable[[type[_ToolT]], type[_ToolT]]:
