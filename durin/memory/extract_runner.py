@@ -1,10 +1,11 @@
 """Extract dream orchestration — run the extractor over a session's new turns.
 
-Per-session cursor (stored in the session's ``.meta.json`` ``derived`` block):
-process only turns after the cursor, discover the entities the agent authored
-in those turns (``memory_upsert_entity`` tool calls), extract attributes for
-each, and advance the cursor to the last turn. Re-running is safe — the
-extractor's writes are idempotent under per-field precedence.
+Per-session cursor (a top-level key of the session's ``.meta.json``): only
+the turns after it are read. That unread span is cut at message boundaries
+into pieces that each fit one stage prompt, the stages run per piece, and the
+cursor moves past a piece once the model has answered for it — never past a
+message no prompt carried. Re-running is safe — the extractor's writes are
+idempotent under per-field precedence.
 
 The discovery is precise (the agent's explicit upsert refs in the new turns);
 mention-based discovery for entities the agent did not upsert is a refinement.
@@ -12,12 +13,20 @@ mention-based discovery for entities the agent did not upsert is a refinement.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
-from durin.memory.extract_dream import discover_entities, extract_entity, mine_learnings
+from durin.memory.extract_dream import (
+    PIECE_CHARS,
+    ProviderError,
+    discover_entities,
+    extract_entity,
+    mine_learnings,
+)
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
+from durin.utils.runtime import runs_that_fit, without_failure_placeholders
 
 __all__ = [
     "load_session",
@@ -28,6 +37,11 @@ __all__ = [
 ]
 
 LLMInvoke = Callable[..., Any]
+
+# Roles whose messages the pass renders; every other message is passed over.
+_READ_ROLES = ("user", "assistant")
+
+_clock = time.perf_counter  # module-level so tests can move the budget clock
 
 
 def load_session(jsonl_path: Path) -> tuple[dict, list[dict]]:
@@ -135,16 +149,45 @@ def run_extract_for_session(
     semantic_distance_threshold: float = 0.30,
     alias_index: "Any | None" = None,
     vector_index: "Any | None" = None,
+    deadline: float | None = None,
 ) -> dict:
     """Distil this session's new turns into entities (and skill signals).
 
-    Stage 1 (extract): for entities the agent upserted, pull structured
-    attributes. Stage 2 (discover, when ``discover``): find durable facts about
-    entities the agent did NOT upsert and create/update them as dream-authored
-    pages — the experience→knowledge bridge for non-declared entities.
-    Stage 3 (skill_signals, when ``skill_signals``): detect skill corrections/gaps
-    from the same turns and log them as observations for the curation pass.
+    The pass reads what the user and the assistant said: the unread span is
+    rendered as the session-summary pass renders a conversation — one line
+    per user or assistant message that has content, turns that produced no
+    answer left out — and tool output is not sent to the model. Each line is prefixed with its ``[turn-N]``
+    tag, and cut at message boundaries into pieces of at most
+    ``PIECE_CHARS``. A message with no line stays in the piece of the one
+    before it, so the cursor passes it with that piece; a piece with no text
+    at all makes no model call and the cursor moves past it. A single message larger than that is a piece of its
+    own, and the stage prompts keep its head. Per piece:
+
+    Stage 1 (extract): for entities the agent upserted in the piece, pull
+    structured attributes. Stage 2 (discover, when ``discover``): find durable
+    facts about entities the agent did NOT upsert and create/update them as
+    dream-authored pages — the experience→knowledge bridge for non-declared
+    entities. Stage 4 (learnings, when ``learnings``): mine durable
+    preferences and corrections into feedback/stance/practice pages.
+
+    The cursor moves past a piece when its stages have answered; an answer
+    that cannot be parsed counts, since the model read the piece. A model
+    call that fails (``ProviderError``) stops the session there with the
+    cursor before that piece (``stopped`` / ``error`` in the result), and a
+    ``deadline`` (``time.perf_counter()``) passed before the next piece does
+    the same (``yielded``): the next run resumes at that piece.
+
+    Stage 3 (skill_signals, when ``skill_signals``) runs once, after the last
+    piece, over what this run read: it detects skill corrections/gaps and
+    logs them as observations for the curation pass.
+
+    ``pieces`` / ``span_chars`` / ``sent_chars`` in the result measure
+    coverage: the pieces the cursor moved past, their characters, and how
+    many of those the stage prompts carried.
     """
+    # Imported here: that module imports this one for the session loader.
+    from durin.memory.session_summary_dream import _format_turns
+
     jsonl_path = Path(jsonl_path)
     _meta, msgs = load_session(jsonl_path)
     cursor = get_extract_cursor(jsonl_path)
@@ -157,50 +200,77 @@ def run_extract_for_session(
         return {"session": jsonl_path.stem, "skipped": "no_new_turns", "cursor": cursor}
 
     new_msgs = msgs[cursor:]                       # turns cursor+1 .. total
-    text = "\n".join(
-        f"[turn-{cursor + i + 1}] {str(m.get('role') or '?').upper()}: {m.get('content')}"
-        for i, m in enumerate(new_msgs) if m.get("content")
-    )
-    refs = entity_refs_in_messages(new_msgs)
-    src = f"[[sessions/{jsonl_path.stem}.md#turn-{total}]]"
-    extracted: list[dict] = []
-    for ref in refs:
-        r = extract_entity(
-            workspace, ref, text,
-            llm_invoke=llm_invoke, model=model, source_ref=src,
-        )
-        extracted.append({"ref": ref, "committed": r.committed})
-    discovered: list[dict] = []
-    if discover:
-        discovered = discover_entities(
-            workspace, text, existing_refs=refs,
-            llm_invoke=llm_invoke, model=model, source_ref=src,
-            confidence_threshold=confidence_threshold,
-            semantic_distance_threshold=semantic_distance_threshold,
-            alias_index=alias_index, vector_index=vector_index,
-        )
-    signals: list[dict] = []
+    turn = {id(m): i + 1 for i, m in enumerate(msgs)}
+
+    def line(message: dict) -> str:
+        # What the user and the assistant said. Any other message (tool
+        # output) renders to nothing: the splitter keeps it in the piece
+        # of the message before it, so the cursor still passes it.
+        if message.get("role") not in _READ_ROLES:
+            return ""
+        rendered = _format_turns([message])
+        return f"[turn-{turn[id(message)]}] {rendered}" if rendered else ""
+
+    pieces = runs_that_fit(
+        without_failure_placeholders(new_msgs), PIECE_CHARS, line=line, count=len)
+    out: dict[str, Any] = {
+        "session": jsonl_path.stem, "extracted": [], "discovered": [],
+        "skill_signals": [], "learnings": [], "cursor": cursor,
+        "new_turns": len(new_msgs), "pieces": 0, "span_chars": 0, "sent_chars": 0,
+    }
+    read: list[str] = []
+    for n, piece in enumerate(pieces):
+        if n and deadline is not None and _clock() >= deadline:
+            out["yielded"] = True
+            return out
+        text = "\n".join(filter(None, map(line, piece)))
+        end = turn[id(piece[-1])]
+        if not text:                               # nothing said: pass it over
+            set_extract_cursor(jsonl_path, end)
+            out["cursor"] = end
+            continue
+        src = f"[[sessions/{jsonl_path.stem}.md#turn-{end}]]"
+        refs = entity_refs_in_messages(piece)
+        try:
+            for ref in refs:
+                r = extract_entity(
+                    workspace, ref, text,
+                    llm_invoke=llm_invoke, model=model, source_ref=src,
+                )
+                out["extracted"].append({"ref": ref, "committed": r.committed})
+            if discover:
+                out["discovered"].extend(discover_entities(
+                    workspace, text, existing_refs=refs,
+                    llm_invoke=llm_invoke, model=model, source_ref=src,
+                    confidence_threshold=confidence_threshold,
+                    semantic_distance_threshold=semantic_distance_threshold,
+                    alias_index=alias_index, vector_index=vector_index,
+                ))
+            if learnings:
+                out["learnings"].extend(mine_learnings(
+                    workspace, text, llm_invoke=llm_invoke, model=model, source_ref=src,
+                    alias_index=alias_index, vector_index=vector_index,
+                    confidence_threshold=confidence_threshold,
+                    semantic_distance_threshold=semantic_distance_threshold))
+        except ProviderError as exc:
+            out["stopped"] = "provider_error"
+            out["error"] = str(exc)
+            return out
+        set_extract_cursor(jsonl_path, end)        # advance per piece
+        out["cursor"] = end
+        out["pieces"] += 1
+        out["span_chars"] += len(text)
+        out["sent_chars"] += min(len(text), PIECE_CHARS)
+        read.append(text)
     if skill_signals:
         from durin.agent.skill_signals import discover_skill_signals
         from durin.agent.skill_usage import extract_skill_calls
-        signals = discover_skill_signals(
-            workspace, text, skill_loads=extract_skill_calls(new_msgs, workspace=workspace),
+        out["skill_signals"] = discover_skill_signals(
+            workspace, "\n".join(read),
+            skill_loads=extract_skill_calls(new_msgs, workspace=workspace),
             llm_invoke=llm_invoke, model=model, session=jsonl_path.stem,
         )
-    learned: list[dict] = []
-    if learnings:
-        learned = mine_learnings(
-            workspace, text, llm_invoke=llm_invoke, model=model, source_ref=src,
-            alias_index=alias_index, vector_index=vector_index,
-            confidence_threshold=confidence_threshold,
-            semantic_distance_threshold=semantic_distance_threshold)
-    set_extract_cursor(jsonl_path, total)          # advance per-batch
-    return {
-        "session": jsonl_path.stem,
-        "extracted": extracted,
-        "discovered": discovered,
-        "skill_signals": signals,
-        "learnings": learned,
-        "cursor": total,
-        "new_turns": len(new_msgs),
-    }
+    # What follows the last piece is turns that produced no answer, left out.
+    set_extract_cursor(jsonl_path, total)
+    out["cursor"] = total
+    return out

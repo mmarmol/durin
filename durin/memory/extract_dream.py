@@ -37,12 +37,43 @@ def _mine_emit_tool_event(name: str, payload: dict) -> None:
 
 
 __all__ = [
+    "PIECE_CHARS", "ProviderError",
     "build_extract_prompt", "parse_attributes", "extract_entity",
     "build_discover_prompt", "parse_discoveries", "discover_entities",
     "mine_learnings",
 ]
 
 LLMInvoke = Callable[..., Any]
+
+# Characters of conversation one stage prompt carries. The runner cuts a
+# session's unread span into pieces of at most this size, so a prompt holds
+# its piece whole; only a single message larger than this is cut to it.
+PIECE_CHARS = 12000
+
+
+class ProviderError(Exception):
+    """A stage's model call produced no answer: it raised, or the provider
+    gave up after its own retries and returned its error text in place of
+    one. That is a property of the moment, not of the turns, so the caller
+    must not count the turns as read. A reply that cannot be parsed is not
+    this: the model read the turns."""
+
+
+def _ask(llm_invoke: LLMInvoke, prompt: str, model: str | None) -> tuple[str, Any]:
+    """Send one stage prompt; returns ``(text, response)``.
+
+    Raises :class:`ProviderError` when the call raises or the response's
+    ``finish_reason`` is ``"error"`` — the provider layer reports a failure
+    it stopped retrying as a response whose text is the error message, and
+    parsing that text would read as "nothing found"."""
+    try:
+        resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
+    except Exception as exc:  # noqa: BLE001 — whatever the call raised, no answer came
+        raise ProviderError(str(exc)[:300]) from exc
+    raw = resp.text if hasattr(resp, "text") else str(resp)
+    if getattr(resp, "finish_reason", "stop") == "error":
+        raise ProviderError(raw[:300])
+    return raw, resp
 
 _EXTRACT_PROMPT = """You are durin's memory extractor. From the conversation turns \
 below, extract STRUCTURED ATTRIBUTES about the entity {ref} ({name}).
@@ -70,7 +101,7 @@ def build_extract_prompt(page: EntityPage, turns: str) -> str:
         name=page.name,
         existing=", ".join(sorted(page.attributes.keys())) or "(none)",
         body=(page.body or "(empty)")[:4000],
-        turns=turns[:12000],
+        turns=turns[:PIECE_CHARS],
     )
 
 
@@ -111,7 +142,9 @@ def extract_entity(
     model: str | None = None,
     source_ref: str | None = None,
 ) -> WriteResult:
-    """Extract attributes for ``entity_ref`` from ``turns`` and apply as dream."""
+    """Extract attributes for ``entity_ref`` from ``turns`` and apply as dream.
+
+    A model call that fails raises :class:`ProviderError`."""
     llm_invoke = llm_invoke or default_llm_invoke
     # The extract dream respects a delete tombstone — it never re-creates
     # an entity the user deleted (the user overrides by explicitly re-authoring).
@@ -128,8 +161,7 @@ def extract_entity(
     )
 
     prompt = build_extract_prompt(page, turns)
-    resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if hasattr(resp, "text") else str(resp)
+    raw, resp = _ask(llm_invoke, prompt, model)
     attrs = parse_attributes(raw)
     if attrs is None:
         emit_parse_failure("extract", source=entity_ref, raw=raw,
@@ -209,7 +241,7 @@ JSON:"""
 
 def build_discover_prompt(turns: str, existing: str = "") -> str:
     return _DISCOVER_PROMPT.format(
-        turns=turns[:12000],
+        turns=turns[:PIECE_CHARS],
         types="/".join(SUGGESTED_TYPES_ORDERED),
         existing=existing.strip() or "(none yet)",
     )
@@ -390,6 +422,8 @@ def discover_entities(
     Discovered ``name`` is set via ``write_entity(name=...)`` (last-writer-wins,
     so a later agent/user correction simply overwrites it); attributes are
     ``author="dream"`` so user/agent values keep precedence.
+
+    A model call that fails raises :class:`ProviderError`.
     """
     from durin.memory.deletion import is_deleted
     llm_invoke = llm_invoke or default_llm_invoke
@@ -404,8 +438,7 @@ def discover_entities(
         workspace, query=turns[-MAX_QUERY_CHARS:], limit=20,
         vector_index=vector_index)
     prompt = build_discover_prompt(turns, existing=existing)
-    resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if hasattr(resp, "text") else str(resp)
+    raw, resp = _ask(llm_invoke, prompt, model)
     proposals = parse_discoveries(raw)
     if proposals is None:
         emit_parse_failure("discover", source=source_ref, raw=raw,
@@ -556,8 +589,9 @@ def mine_learnings(
     before writing — a re-worded fact updates the existing entity rather than
     creating a duplicate slug. The refine pass remains the cross-run backstop.
 
-    Best-effort: empty text, LLM failure, or parse failure yield []. Never writes
-    a principal or other non-learning type.
+    Empty text or an unparseable reply yield []; a model call that fails
+    raises :class:`ProviderError`. Never writes a principal or other
+    non-learning type.
     """
     from durin.utils.prompt_templates import render_template
     llm_invoke = llm_invoke or default_llm_invoke
@@ -570,17 +604,13 @@ def mine_learnings(
         workspace, types=list(_LEARNING_TYPES), limit=40, full_body=True)
     prompt = (render_template("agent/consolidator_learnings.md",
                               existing=existing or "(none yet)")
-              + "\n\nCONVERSATION SPAN:\n" + text[:12000])
-    try:
-        resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-        raw = resp.text if hasattr(resp, "text") else str(resp)
-        learnings = _parse_learnings(raw)
-        if learnings is None:
-            emit_parse_failure("learnings", source=source_ref, raw=raw,
-                               finish_reason=getattr(resp, "finish_reason", None))
-            learnings = []
-    except Exception:
-        return []
+              + "\n\nCONVERSATION SPAN:\n" + text[:PIECE_CHARS])
+    raw, resp = _ask(llm_invoke, prompt, model)
+    learnings = _parse_learnings(raw)
+    if learnings is None:
+        emit_parse_failure("learnings", source=source_ref, raw=raw,
+                           finish_reason=getattr(resp, "finish_reason", None))
+        learnings = []
     if not learnings:
         return []
 

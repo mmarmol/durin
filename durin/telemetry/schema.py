@@ -970,7 +970,10 @@ class MemoryDreamEndEvent(TypedDict):
     present, the rest are per-pass. The extract pass sets
     ``entities_consolidated`` / ``entities_discovered`` / ``skill_signals`` /
     ``entities_failed`` / ``sessions`` / ``yielded`` (``yielded=True`` when the
-    ``max_seconds_per_run`` cap was hit and the cursor will resume next time);
+    ``max_seconds_per_run`` cap was hit and the cursor will resume next time)
+    and its coverage: ``pieces`` / ``span_chars`` / ``sent_chars`` — the
+    pieces of user and assistant text the session cursors moved past, their characters,
+    and how many of those characters the stage prompts carried;
     the refine pass sets ``merged`` / ``kept`` / ``candidates``; the
     derived_from and session-summary passes set ``sessions`` / ``yielded`` /
     ``errors``, the derived_from pass adds ``links`` and the session-summary
@@ -984,9 +987,12 @@ class MemoryDreamEndEvent(TypedDict):
     entities_consolidated: NotRequired[int]
     entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted
     skill_signals: NotRequired[int]  # extract: skill corrections/gaps logged as observations in hindsight
-    entities_failed: NotRequired[int]
+    entities_failed: NotRequired[int]  # extract: sessions that raised or stopped at a failed model call
     sessions: NotRequired[int]
     yielded: NotRequired[bool]
+    pieces: NotRequired[int]  # extract: pieces of user/assistant text read and marked done
+    span_chars: NotRequired[int]  # extract: characters in those pieces
+    sent_chars: NotRequired[int]  # extract: characters of them the stage prompts carried
     merged: NotRequired[int]
     kept: NotRequired[int]
     candidates: NotRequired[int]

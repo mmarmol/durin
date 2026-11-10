@@ -101,7 +101,7 @@ def test_run_extract_calls_learnings_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(er, "set_extract_cursor", lambda p, n: None)
     r = er.run_extract_for_session(tmp_path, tmp_path / "s.jsonl",
                                    skill_signals=False, discover=False, learnings=True)
-    assert "[turn-1] USER: hola" in calls["text"]
+    assert "[turn-1] [?] USER: hola" in calls["text"]
     assert r["learnings"] == [{"ref": "feedback:x", "committed": True}]
     calls.clear()
     er.run_extract_for_session(tmp_path, tmp_path / "s.jsonl",
@@ -124,8 +124,8 @@ def test_extract_text_numbers_turns(tmp_path, monkeypatch):
     monkeypatch.setattr(er, "set_extract_cursor", lambda p, n: None)
     er.run_extract_for_session(tmp_path, tmp_path / "s.jsonl",
                                skill_signals=False, discover=True)
-    assert "[turn-1] USER: hi" in captured["text"]
-    assert "[turn-2] ASSISTANT: yo" in captured["text"]
+    assert "[turn-1] [?] USER: hi" in captured["text"]
+    assert "[turn-2] [?] ASSISTANT: yo" in captured["text"]
 
 
 def test_cursor_past_the_end_restarts_the_conversation(tmp_path):
