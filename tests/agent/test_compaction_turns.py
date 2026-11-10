@@ -617,7 +617,7 @@ async def test_a_block_limit_keeps_a_large_window_session_under_it(tmp_path):
     wait for the cap's 256,000 and fail every turn past 40,000."""
     from durin.agent.runner import input_budget_tokens
 
-    result = await _run_turns(tmp_path, turns=12, window=1_000_000, context_block_limit=40_000)
+    result = await _run_turns(tmp_path, turns=16, window=1_000_000, context_block_limit=40_000)
 
     failed = [r for r in result["replies"] if not r or r.startswith(_OVERFLOW_REPLY)]
     assert failed == [], result["replies"]

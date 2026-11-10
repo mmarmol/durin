@@ -168,7 +168,7 @@ flowchart TD
 
 ### 5.2 Tool descriptions
 
-Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Both the `function.description` field and the `function.parameters.description` field carry the same string so there is no divergence between them.
+Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. The schema root is only where the text is stored: `Tool.to_schema()` leaves a root `description` that repeats the tool's description out of the emitted `function.parameters`, so the model receives the text once.
 
 The sync test (`tests/memory/test_tool_description_sync.py`) asserts that each tool's `.description` property equals the fenced block under its heading in this section.
 

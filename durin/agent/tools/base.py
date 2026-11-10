@@ -292,13 +292,24 @@ class Tool(ABC):
         return Schema.validate_json_schema_value(params, {**schema, "type": "object"}, "")
 
     def to_schema(self) -> dict[str, Any]:
-        """OpenAI function schema."""
+        """OpenAI function schema.
+
+        The description is emitted once, as the function's own field. Many
+        tools keep that text at the root of their parameters schema and read
+        ``description`` from there; emitting the root copy as well would send
+        the same text twice in every request, so it is left out. A root
+        description that says something else is emitted as authored.
+        """
+        description = self.description
+        parameters = self.parameters
+        if parameters.get("description") == description:
+            parameters = {k: v for k, v in parameters.items() if k != "description"}
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
+                "description": description,
+                "parameters": parameters,
             },
         }
 

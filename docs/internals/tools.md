@@ -281,6 +281,14 @@ The cache is invalidated on every `register()` or `unregister()` call.
 This stable ordering helps providers that support prompt caching recognize identical
 tool arrays across turns.
 
+Each `to_schema()` dict is an OpenAI-style function definition: `name`, `description`
+and `parameters`. The tool's description is emitted once, as the function's own field.
+Many built-ins store that text at the root of their parameters schema and read
+`description` from there; a root `description` equal to the tool's description is left
+out of the emitted `parameters`, while one that says something else (a note about the
+parameters, an MCP server's own root description) is emitted unchanged. Validation and
+casting read the tool's `parameters`, not the emitted copy.
+
 ### Per-iteration dispatch
 
 Each iteration begins with `_active_tool_definitions(spec)`, which calls
