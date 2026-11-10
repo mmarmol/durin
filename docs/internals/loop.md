@@ -322,6 +322,16 @@ to the next spawn without a restart. Resolution failure (bad preset, missing
 key) logs a warning and falls back to the inherited session model — spawning
 must never break on a misconfigured aux model.
 
+**Subagent prompt layout.** A subagent's system prompt (`agent/subagent_system.md`)
+holds only text that is the same for every spawn from one manager: the role and
+parallel-call rules, the shared snippets, the workspace path and the skills
+summary. It carries no clock, so two subagents spawned minutes apart share the
+whole prefix for the provider's prompt cache. The task is the first user
+message, and the current time follows it in the same runtime-context block the
+loop appends to its own user turns. When a finished subagent's conversation is
+stored as its own session, that block is removed from the stored user message,
+as the loop does for its own turns, so a replay never repeats a stale time.
+
 A child runs under the context window of the model it actually uses. The loop
 hands `SubagentManager` its own `context_window_tokens` / `context_block_limit`
 at construction and re-points the window on every provider snapshot swap; a
