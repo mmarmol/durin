@@ -138,7 +138,7 @@ Four dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` p
 **Passes that emit a single named event (no start/end):**
 
 - **Skill-extract** — emits `memory.dream.skill_extract` (`skills_touched`, `gaps_closed`, optional `duration_ms`) and `memory.dream.skill_signals` (`proposed`, `logged`, optional `skills` list).
-- **Always-on** — emits `memory.dream.always_on` (`selected`, `pruned`, `dropped`, `tokens`, `duration_ms`).
+- **Always-on** — emits `memory.dream.always_on` (`selected`, `pruned`, `dropped`, `tokens`, `changed`, `duration_ms`). `changed` is the number of pages whose `always_on` flag the run set or cleared; it is 0 on a run over pages whose content did not change.
 
 Additional dream events:
 

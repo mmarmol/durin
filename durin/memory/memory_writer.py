@@ -323,10 +323,18 @@ def write_entity(
     *,
     create: bool = False,
     name: str | None = None,
+    curation: bool = False,
 ) -> WriteResult:
     """Optimistically write ``patches`` into entity ``ref``'s page.
 
     ``name`` sets the display name (authored, not precedence-arbitrated).
+
+    ``curation`` marks a write that records state a pass keeps about the
+    page, not content (the flag that pins it into every prompt). On a page
+    that already exists it leaves ``updated_at`` and the page-level author
+    as they are: ``updated_at`` says when the content last changed, and
+    every reader that orders pages by recency or leaves user-managed pages
+    alone would otherwise react to the pass's own bookkeeping.
     """
     root = Path(workspace) / "memory"
     _ensure_repo(root)
@@ -366,9 +374,13 @@ def write_entity(
             # (direct edit / dashboard), which the refine dream then leaves alone.
             # (Guarding memory_writer from writing an already-user_authored page
             # is the human-edit phase; here writes are agent/dream by definition.)
-            page.author = "agent_created"
-
+            # A curation write authors nothing, so an existing page keeps its
+            # author and its updated_at.
             is_new = raw is None
+            touch = is_new or not curation
+            if touch:
+                page.author = "agent_created"
+
             changed = False
             name_changed = name is not None and page.name != name
             if name_changed:
@@ -381,7 +393,8 @@ def write_entity(
             if not changed and raw is not None:
                 return WriteResult(ref, committed=False, retries=attempt)  # no-op
 
-            page.updated_at = datetime.now(timezone.utc)
+            if touch:
+                page.updated_at = datetime.now(timezone.utc)
             content = page.to_markdown().encode("utf-8")
             new_commit = build_commit_with_file(
                 root, base, rel, content,

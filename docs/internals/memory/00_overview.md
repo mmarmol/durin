@@ -285,8 +285,11 @@ session close) run only the extract pass, throttled by `ReactiveDreamGate`.
    `git revert` of the absorb commit. Manual `durin memory absorb` is always available.
 
 5. **always_on** (`always_on_dream.run_always_on_pass`): gather stance, practice, and
-   feedback entity pages, rank them via an LLM judge that drops contradictions, fit the
-   ranked list within `always_on_token_budget` tokens, and flip `always_on` flags.
+   feedback entity pages (those seeded from an ingested document are not candidates),
+   rank them — user-written first, then most recently updated; a model judge that drops
+   contradictions only when the caller supplies a model call, which the nightly run does
+   not — fit the ranked list within `always_on_token_budget` tokens, and flip `always_on`
+   flags.
    Only the flag changes; no entities are ever deleted by this pass. The principal
    resolver injects always_on entities into the pinned context on every agent turn.
 

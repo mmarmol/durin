@@ -779,14 +779,48 @@ deliberately left out until the vocabulary is large enough to warrant it.
 (`durin/memory/always_on_dream.py`) chooses which **feedback entities** —
 `stance` / `practice` / `feedback` types — are injected into *every* prompt (the
 pinned "Always-on guidance" block built by `principal.build_pinned_context`). It
-gathers and token-counts those pages, ranks them best-first via an LLM judge that
-**drops any item contradicting a higher-priority one** (fallback when no LLM:
-user-authored first, then most-recently-updated), fits the ranked list into
-`token_budget` (a hard ceiling; a smaller later item may still fit, so overflow
-*skips* rather than breaks), and flips the `always_on` flag on the survivors via
-`principal.mark_always_on` while unmarking the rest. **Only the flag changes — no
-entity is ever deleted**, so a pruned or contradicted item returns automatically
-when the budget frees or the conflict resolves.
+gathers and token-counts the candidate pages, ranks them best-first, fits the
+ranked list into `token_budget` (a hard ceiling; a smaller later item may still
+fit, so overflow *skips* rather than breaks), and flips the `always_on` flag on
+the survivors via `principal.mark_always_on` while unmarking every other page of
+those types. **Only the flag changes — no entity is ever deleted**, so a pruned
+item returns automatically when the budget frees.
+
+**Candidates.** Every page of those types is a candidate except one seeded from
+an ingested document: the pin carries rules stated in conversation — written by
+the user, by the live agent, or mined from a conversation by the extract pass —
+not what a document says. A page counts as document-seeded when the seed pass
+(Pass 2c) linked it to the document it was reading (a `derived_from` link whose
+provenance `source_ref` is the reference file; a link the agent or the
+derived_from pass adds is sourced from a session) **and** its body is empty or
+was itself written from a reference file. The second condition keeps a rule
+that a document also covers: the seed pass reuses the ref of an existing page,
+but it never replaces a body, so that page keeps its conversational body and
+stays a candidate. A document-seeded page that carries the flag from an earlier
+run loses it.
+
+Body provenance names one writer — the highest-ranking one — and a merge keeps
+the surviving page's. So two pages that hold a conversational rule are still
+read as document-seeded: a seeded page with a body that the agent later appended
+a rule to, and a seeded page with a body that survived a refine merge with a
+rule.
+
+**Ranking.** The order depends on what the caller passes:
+
+- **No `llm_invoke`** — pages the user wrote by hand (page-level author
+  `user_authored`) first, then the most recently updated (`updated_at`). The
+  nightly run and `durin memory dream` both call the pass this way.
+- **With `llm_invoke`** — a judge receives every candidate, returns the refs in
+  priority order and **drops any item contradicting a higher-priority one**. If
+  the call raises or names no known ref, the order above applies.
+
+**Stability.** `mark_always_on` is a *curation write*
+(`write_entity(..., curation=True)`): on an existing page it changes neither
+`updated_at` nor the page-level author, so `updated_at` keeps meaning "the
+content changed" and a flag flip moves neither part of the ranking key. A run
+over pages whose content did not change therefore selects the same set and
+flips nothing. The refine pass's content fingerprint excludes the flag for the
+same reason. `memory.dream.always_on` reports the flips as `changed`.
 
 The principal's own page ("Who you're talking to") is rendered with its **body**
 capped and a pointer to `memory_read_entity`; its attributes and relations lines

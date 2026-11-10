@@ -88,13 +88,16 @@ def ensure_owner(workspace: Path, owner_ref: str, *, name: str | None = None) ->
 
 
 def mark_always_on(workspace: Path, ref: str, on: bool = True) -> None:
-    """Mark a feedback entity always_on (dream-owned attribute)."""
+    """Mark a feedback entity always_on (dream-owned attribute).
+
+    A curation write: the flag says where the page is shown, not what it
+    says, so the page keeps its ``updated_at`` and its page-level author."""
     write_entity(
         workspace, ref,
         [FieldPatch(kind="attribute", key="always_on", value=bool(on),
                     author="dream", source_ref="hot_layer_policy",
                     at=datetime.now(timezone.utc))],
-        create=True,
+        create=True, curation=True,
     )
 
 
