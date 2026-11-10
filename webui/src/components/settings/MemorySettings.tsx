@@ -67,6 +67,7 @@ interface MemoryConfigShape {
       judge_concurrency?: number;
       recheck_days?: number;
       semantic_name_gate?: string;
+      judge_reasoning_effort?: string | null;
     };
   };
 }
@@ -88,10 +89,15 @@ interface DreamState {
   judgeConcurrency: number;
   recheckDays: number;
   nameGate: NameGate;
+  /** "" = the memory model's own setting (the config key is unset). */
+  judgeEffort: JudgeEffort;
 }
 
 type NameGate = "prioritize" | "require" | "off";
 const NAME_GATES: NameGate[] = ["prioritize", "require", "off"];
+
+type JudgeEffort = "" | "low" | "medium" | "high" | "adaptive" | "none";
+const JUDGE_EFFORTS: JudgeEffort[] = ["", "low", "medium", "high", "adaptive", "none"];
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
   const memory = config?.memory as MemoryConfigShape | undefined;
@@ -134,6 +140,9 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     nameGate: NAME_GATES.includes(d.auto_absorb?.semantic_name_gate as NameGate)
       ? (d.auto_absorb?.semantic_name_gate as NameGate)
       : "prioritize",
+    judgeEffort: JUDGE_EFFORTS.includes(d.auto_absorb?.judge_reasoning_effort as JudgeEffort)
+      ? (d.auto_absorb?.judge_reasoning_effort as JudgeEffort)
+      : "",
   };
 }
 
@@ -389,6 +398,18 @@ export function MemorySettings({ token }: { token: string }) {
             disabled={!dream.enabled || !dream.autoAbsorb}
             saving={savingPath === "memory.dream.auto_absorb.semantic_name_gate"}
             onSelect={(g) => void onSave("memory.dream.auto_absorb.semantic_name_gate", g)}
+          />
+          <DreamChoiceRow
+            title={t("settings.memory.rows.dreamJudgeEffort")}
+            description={t("settings.memory.help.dreamJudgeEffort")}
+            value={dream.judgeEffort}
+            options={JUDGE_EFFORTS.map((e) => ({
+              value: e,
+              label: t(`settings.memory.judgeEffort.${e || "inherit"}`),
+            }))}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.judge_reasoning_effort"}
+            onSelect={(e) => void onSave("memory.dream.auto_absorb.judge_reasoning_effort", e || null)}
           />
           <DreamNumberRow
             title={t("settings.memory.rows.dreamThrottle")}

@@ -548,6 +548,14 @@
         "require": "Wajibkan",
         "off": "Nonaktif"
       },
+      "judgeEffort": {
+        "inherit": "Pengaturan model memori",
+        "low": "Rendah",
+        "medium": "Sedang",
+        "high": "Tinggi",
+        "adaptive": "Adaptif",
+        "none": "Tidak ada"
+      },
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Model reranker",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "Panggilan juri paralel",
         "dreamRecheckDays": "Nilai ulang pasangan yang belum tuntas setelah (hari)",
         "dreamNameGate": "Sinyal nama pada kandidat semantik",
+        "dreamJudgeEffort": "Upaya penalaran juri pertama",
         "dreamAlwaysOnBudget": "Anggaran always-on (token)"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "Berapa banyak panggilan juri yang berjalan bersamaan selama pass refine (1-8). Penggabungan tetap diterapkan satu per satu, sesuai urutan kandidat.",
         "dreamRecheckDays": "Jumlah hari sebelum pasangan tanpa verdict yang tuntas (balasan yang tidak bisa diurai, sebuah 'unclear', sebuah 'same' di bawah ambang penggabungan) dinilai ulang. 0 menilai ulang setiap kali berjalan.",
         "dreamNameGate": "Bagaimana sinyal nama mengarahkan kandidat yang berdekatan secara embedding: 'prioritize' menilai lebih dulu pasangan yang namanya berbagi token atau saling memuat, lalu sisanya berdasarkan jarak; 'require' hanya menilai yang seperti itu; 'off' mengurutkan berdasarkan jarak saja. Pasangan alias selalu dinilai.",
+        "dreamJudgeEffort": "Seberapa banyak juri pertama bernalar sebelum menjawab. 'Pengaturan model memori' membiarkannya seperti yang dimiliki model memori; nilai lainnya hanya mengatur juri ini, bukan juri investigasi atau tahap dream lainnya. Penalaran yang lebih sedikit lebih cepat dan, tergantung modelnya, dapat mengubah jawaban, jadi periksa pada pasangan milik instans ini. Mengubahnya tidak menilai ulang pasangan yang sudah tuntas.",
         "dreamAlwaysOnBudget": "Anggaran token untuk panduan 'always-on' yang dipasang di setiap prompt. Dream me-rangking feedback (stance/practice), membuang kontradiksi, dan memasukkan item prioritas tertinggi ke dalam anggaran ini. 0 menonaktifkan pin."
       },
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",

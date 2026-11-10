@@ -974,7 +974,8 @@ class MemoryDreamEndEvent(TypedDict):
     and its coverage: ``pieces`` / ``span_chars`` / ``sent_chars`` — the
     pieces of user and assistant text the session cursors moved past, their characters,
     and how many of those characters the stage prompts carried;
-    the refine pass sets ``merged`` / ``kept`` / ``candidates``; the
+    the refine pass sets ``merged`` / ``kept`` / ``candidates`` (and
+    ``judge_reasoning_effort`` when the first judge has its own setting); the
     derived_from and session-summary passes set ``sessions`` / ``yielded`` /
     ``errors``, the derived_from pass adds ``links`` and the session-summary
     pass adds ``written`` / ``skipped``.
@@ -983,6 +984,7 @@ class MemoryDreamEndEvent(TypedDict):
     kind: str
     judged: NotRequired[int]  # refine: pairs the judge answered this run
     stop_reason: NotRequired[str | None]  # refine: "max_seconds" | "judge_unavailable" when yielded
+    judge_reasoning_effort: NotRequired[str]  # refine: the first judge's thinking effort, present only when auto_absorb.judge_reasoning_effort is set
     duration_ms: int
     entities_consolidated: NotRequired[int]
     entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted

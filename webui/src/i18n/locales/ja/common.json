@@ -548,6 +548,14 @@
         "require": "必須",
         "off": "オフ"
       },
+      "judgeEffort": {
+        "inherit": "メモリモデルの設定",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "adaptive": "適応",
+        "none": "なし"
+      },
       "rows": {
         "crossEncoderEnabled": "クロスエンコーダー・リランカー",
         "crossEncoderModel": "リランカーモデル",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "審査呼び出しの同時実行数",
         "dreamRecheckDays": "未確定ペアの再審査までの日数",
         "dreamNameGate": "意味的候補への名前シグナル",
+        "dreamJudgeEffort": "最初の審査の推論量",
         "dreamAlwaysOnBudget": "常時適用の予算（トークン）"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "refine パス中に同時実行される審査呼び出しの数です（1〜8）。マージは候補の順序どおり、依然として1件ずつ適用されます。",
         "dreamRecheckDays": "判定が確定していないペア（解析不能な応答、'unclear'、統合基準を下回る 'same'）を再審査するまでの日数です。0 にすると毎回のパスで再審査します。",
         "dreamNameGate": "名前シグナルが embedding の近い候補をどう誘導するかです。'prioritize' は名前が同じトークンを共有するか互いを含むペアを先に審査し、残りは距離順にします。'require' はそれらのペアのみを審査します。'off' は距離のみで並べます。エイリアスのペアは常に審査されます。",
+        "dreamJudgeEffort": "最初の審査が回答する前にどれだけ推論するかです。「メモリモデルの設定」ではメモリモデルの設定のままになります。それ以外の値はこの審査だけに適用され、調査を行う審査や他のドリームのパスには影響しません。推論を減らすと速くなりますが、モデルによっては答えが変わることがあるため、このインスタンス自身のペアで確認してください。変更しても、確定済みのペアは再審査されません。",
         "dreamAlwaysOnBudget": "すべてのプロンプトに常時固定される「常時適用」ガイダンスのトークン予算です。dream はフィードバック（stance/practice）をランク付けし、矛盾を取り除き、優先度の高い項目からこの予算に収めます。0 で固定を無効化します。"
       },
       "crossEncoderModelPlaceholder": "モデル ID（例: BAAI/bge-reranker-base）",

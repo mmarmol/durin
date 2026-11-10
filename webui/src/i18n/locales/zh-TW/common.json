@@ -548,6 +548,14 @@
         "require": "必須",
         "off": "關閉"
       },
+      "judgeEffort": {
+        "inherit": "記憶模型的設定",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "adaptive": "自適應",
+        "none": "無"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder 重新排序器",
         "crossEncoderModel": "重新排序模型",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "並行評判呼叫數",
         "dreamRecheckDays": "未決配對重新評判的間隔（天）",
         "dreamNameGate": "語意候選的名稱訊號",
+        "dreamJudgeEffort": "第一評判的推理強度",
         "dreamAlwaysOnBudget": "常駐預算（token 數）"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "精煉處理程序中同時執行的評判呼叫數量（1-8）。合併作業仍會依候選順序逐一套用。",
         "dreamRecheckDays": "尚無確定裁定的一對（無法解析的回覆、一個 'unclear'、一個低於合併門檻的 'same'）要間隔多少天才重新評判。0 代表每次執行都會重新評判。",
         "dreamNameGate": "名稱訊號如何引導 embedding 距離相近的候選：'prioritize' 會優先評判名稱共用某個詞元或互相包含的一對，其餘按距離排序；'require' 只評判這類候選；'off' 僅按距離排序。別名配對永遠會被評判。",
+        "dreamJudgeEffort": "第一評判在作答前推理多少。「記憶模型的設定」保持記憶模型原有的設定；其他值只對這個評判生效，不影響調查評判或任何其他夢境階段。推理越少越快，但視模型而定可能改變答案，因此請在本實例自己的配對上檢查。更改它不會重新評判已確定的配對。",
         "dreamAlwaysOnBudget": "固定在每個提示中的「常駐」指引所使用的 token 預算。Dream 會為回饋排序（立場／作法）、捨棄矛盾之處，並將優先度最高的項目放入此預算內。0 會停用此固定內容。"
       },
       "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",

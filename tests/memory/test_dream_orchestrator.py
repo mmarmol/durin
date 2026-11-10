@@ -298,3 +298,20 @@ def test_full_dream_emits_rss_waypoints(stubbed_passes, tmp_path):
     phases = [e["phase"] for e in events if e.get("kind") == "rss"]
     assert "extract" in phases
     assert "refine" in phases
+
+
+def test_the_refine_pass_gets_the_configured_judge_reasoning_effort(stubbed_passes, tmp_path, monkeypatch):
+    import durin.memory.dream_passes as dream_passes
+    from durin.memory.dream_orchestrator import run_full_dream
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        dream_passes, "run_refine_pass",
+        lambda *a, **k: seen.append(k) or {"merged": [], "kept_separate": []},
+    )
+    cfg = _cfg()
+    run_full_dream(cfg, tmp_path, progress=lambda _e: None)
+    cfg.memory.dream.auto_absorb.judge_reasoning_effort = "low"
+    run_full_dream(cfg, tmp_path, progress=lambda _e: None)
+
+    assert [k["judge_reasoning_effort"] for k in seen] == [None, "low"]

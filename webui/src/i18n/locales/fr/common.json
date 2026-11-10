@@ -548,6 +548,14 @@
         "require": "Exiger",
         "off": "Désactivé"
       },
+      "judgeEffort": {
+        "inherit": "Réglage du modèle de mémoire",
+        "low": "Faible",
+        "medium": "Moyen",
+        "high": "Élevé",
+        "adaptive": "Adaptatif",
+        "none": "Aucun"
+      },
       "rows": {
         "crossEncoderEnabled": "Reclasseur cross-encoder",
         "crossEncoderModel": "Modèle du reclasseur",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "Appels au juge en parallèle",
         "dreamRecheckDays": "Réexamen des paires non tranchées après (jours)",
         "dreamNameGate": "Signal de nom sur les candidats sémantiques",
+        "dreamJudgeEffort": "Effort de raisonnement du premier juge",
         "dreamAlwaysOnBudget": "Budget permanent (tokens)"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "Combien d’appels au juge s’exécutent en même temps pendant la passe refine (1-8). Les fusions restent appliquées une par une, dans l’ordre des candidats.",
         "dreamRecheckDays": "Nombre de jours avant qu’une paire sans verdict tranché (une réponse illisible, un 'unclear', un 'same' en dessous du seuil de fusion) ne soit rejugée. 0 la rejuge à chaque exécution.",
         "dreamNameGate": "Comment le signal de nom oriente les candidats proches par embedding : 'prioritize' juge d’abord les paires dont les noms partagent un terme ou se contiennent l’un l’autre, puis le reste par distance ; 'require' ne juge que celles-là ; 'off' trie uniquement par distance. Les paires par alias sont toujours jugées.",
+        "dreamJudgeEffort": "Combien le premier juge raisonne avant de répondre. « Réglage du modèle de mémoire » le laisse tel que le modèle de mémoire l’a ; les autres valeurs ne le fixent que pour ce juge, pas pour le juge investigateur ni pour une autre passe du dream. Raisonner moins est plus rapide et, selon le modèle, peut changer les réponses : vérifiez-le sur les paires de cette instance. Le modifier ne rejuge pas les paires déjà tranchées.",
         "dreamAlwaysOnBudget": "Budget de tokens pour les consignes « toujours actives » épinglées dans chaque prompt. Le dream classe les retours (stance/practice), supprime les contradictions et fait entrer les éléments les plus prioritaires dans ce budget. 0 désactive l’épinglage."
       },
       "crossEncoderModelPlaceholder": "id du modèle (p. ex. BAAI/bge-reranker-base)",

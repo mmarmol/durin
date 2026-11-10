@@ -208,10 +208,12 @@ def _emit_invoke_failure(purpose: str, preset, exc: BaseException) -> None:
         pass
 
 
-def _purpose_invoke(prompt, *, purpose: str, model=None, temperature: float = 0.1) -> LLMResponse:
+def _purpose_invoke(prompt, *, purpose: str, model=None, temperature: float = 0.1,
+                    reasoning_effort: str | None = None) -> LLMResponse:
     """Resolve the ``purpose`` preset (specific-or-default, never hardcoded) and run
     ``prompt`` through it. A truthy ``model`` overrides only the model name on the
-    resolved provider (legacy per-call override)."""
+    resolved provider (legacy per-call override); a non-None ``reasoning_effort``
+    overrides only the preset's thinking effort, the same way."""
     from durin.config.loader import load_config
     from durin.memory.model_resolve import resolve_aux_preset
 
@@ -219,6 +221,8 @@ def _purpose_invoke(prompt, *, purpose: str, model=None, temperature: float = 0.
     preset = resolve_aux_preset(config, purpose=purpose)
     if model:
         preset = preset.model_copy(update={"model": str(model)})
+    if reasoning_effort is not None:
+        preset = preset.model_copy(update={"reasoning_effort": reasoning_effort})
     try:
         return aux_llm_invoke(prompt, preset=preset, config=config, temperature=temperature)
     except Exception as exc:
@@ -250,11 +254,14 @@ async def _purpose_astream(
         raise
 
 
-def default_llm_invoke(prompt: str, *, model: str | None = None, temperature: float = 0.1) -> LLMResponse:
+def default_llm_invoke(prompt: str, *, model: str | None = None, temperature: float = 0.1,
+                       reasoning_effort: str | None = None) -> LLMResponse:
     """Memory-dream default invoke. Resolves the memory preset (``aux_models.memory``
     → ``dream.model_override`` → the user's default preset) and runs through that
-    provider. No hardcoded z.ai endpoint, no hardcoded glm-5.1."""
-    return _purpose_invoke(prompt, purpose="memory", model=model, temperature=temperature)
+    provider. No hardcoded z.ai endpoint, no hardcoded glm-5.1. A non-None
+    ``reasoning_effort`` replaces the preset's own for this call only."""
+    return _purpose_invoke(prompt, purpose="memory", model=model, temperature=temperature,
+                           reasoning_effort=reasoning_effort)
 
 
 def judge_llm_invoke(prompt: str, *, model: str | None = None, temperature: float = 0.1) -> LLMResponse:
