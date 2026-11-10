@@ -18,6 +18,11 @@ from typing import Any
 
 from loguru import logger
 
+from durin.agent.agent_mode import (
+    bind_tool_call_mode,
+    refuse_tool_call,
+    reset_tool_call_mode,
+)
 from durin.agent.hook import AgentHook, AgentHookContext
 from durin.agent.tools.context import reset_result_char_cap, set_result_char_cap
 from durin.agent.tools.registry import ToolRegistry
@@ -1727,12 +1732,24 @@ class AgentRunner:
             return all_defs
         if mode is None or (mode.allowed is None and not mode.denied):
             return all_defs
+        from durin.agent.tools.mcp_deferral import McpFindToolsTool
         from durin.agent.tools.registry import ToolRegistry
 
-        return [
-            d for d in all_defs
-            if mode.is_tool_allowed(ToolRegistry._schema_name(d))
-        ]
+        # The deferred-MCP finder's description lists other tools by name.
+        # The registry caches it unfiltered (one registry serves every
+        # session), so a restricted mode gets a copy listing only the tools
+        # it allows.
+        get_tool = getattr(spec.tools, "get", None)
+        finder = get_tool("mcp_find_tools") if callable(get_tool) else None
+        out = []
+        for d in all_defs:
+            name = ToolRegistry._schema_name(d)
+            if not mode.is_tool_allowed(name):
+                continue
+            if isinstance(finder, McpFindToolsTool) and name == finder.name:
+                d = finder.schema_for_mode(mode)
+            out.append(d)
+        return out
 
     def _request_estimate(
         self,
@@ -2309,33 +2326,21 @@ class AgentRunner:
         # Sprint B / L3 — mode-based denial. The filtered tool definitions
         # passed to the LLM already exclude tools not allowed in the current
         # mode, so this branch fires only when the model emits a cached
-        # tool name. The denial is informative so the model knows to switch
-        # mode (via /build approval, typically) rather than to retry blindly.
+        # tool name.
+        active_mode = None
         if spec.mode_provider is not None:
             try:
                 active_mode = spec.mode_provider()
             except Exception:
                 active_mode = None
-            if active_mode is not None and not active_mode.is_tool_allowed(tool_call.name):
-                msg = (
-                    f"Tool '{tool_call.name}' is not available in mode "
-                    f"'{active_mode.name}'. The user must run `/build` (or "
-                    "the active mode must change) before this tool can be "
-                    "called. Do not retry — adjust your approach."
-                )
-                event = {
-                    "name": tool_call.name,
-                    "status": "error",
-                    "detail": f"denied by mode '{active_mode.name}'",
-                }
-                logger_obj = current_telemetry()
-                if logger_obj is not None:
-                    with suppress(Exception):
-                        logger_obj.log("agent_mode.tool_denied", {
-                            "tool": tool_call.name,
-                            "mode": active_mode.name,
-                        })
-                return msg + hint, event, None
+        refusal = refuse_tool_call(active_mode, tool_call.name)
+        if refusal is not None:
+            event = {
+                "name": tool_call.name,
+                "status": "error",
+                "detail": f"denied by mode '{active_mode.name}'",
+            }
+            return refusal + hint, event, None
 
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
@@ -2382,6 +2387,9 @@ class AgentRunner:
             return prep_error + hint, event, (
                 RuntimeError(prep_error) if spec.fail_on_tool_error else None
             )
+        # A bridge tool that runs or lists other tools by name applies this
+        # call's mode to them; see ``refuse_tool_call``.
+        mode_token = bind_tool_call_mode(active_mode)
         try:
             if tool is not None:
                 result = await tool.execute(**params)
@@ -2415,6 +2423,8 @@ class AgentRunner:
             if spec.fail_on_tool_error:
                 return payload, event, exc
             return payload, event, None
+        finally:
+            reset_tool_call_mode(mode_token)
 
         if isinstance(result, str) and result.startswith("Error"):
             # 1A — the tool returned an explicit error string. Mark signature

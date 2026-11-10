@@ -517,7 +517,7 @@ class AgentModeSwitchEvent(TypedDict):
 class AgentModeToolDeniedEvent(TypedDict):
     """Tool call was blocked because the active mode's allow-list
     excluded it (cached LLM-side tool definition referenced a tool no
-    longer available)."""
+    longer available, or ``mcp_invoke`` was asked to run it)."""
     tool: str
     mode: str
 

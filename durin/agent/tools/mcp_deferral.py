@@ -31,6 +31,7 @@ from typing import Any
 
 from loguru import logger
 
+from durin.agent.agent_mode import AgentMode, current_tool_call_mode, refuse_tool_call
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.schema import (
@@ -158,15 +159,16 @@ class McpFindToolsTool(Tool):
     def read_only(self) -> bool:
         return True
 
-    def _deferred(self) -> list[Tool]:
+    def _deferred(self, mode: AgentMode | None = None) -> list[Tool]:
+        """Deferred tools, less those *mode* would refuse a direct call to."""
         return [
             t for t in _deferrable_mcp_tools(self._registry)
             if not t.llm_visible
+            and (mode is None or mode.is_tool_allowed(t.name))
         ]
 
-    @property
-    def description(self) -> str:
-        catalog = "\n".join(_catalog_line(t) for t in self._deferred())
+    def _describe(self, mode: AgentMode | None) -> str:
+        catalog = "\n".join(_catalog_line(t) for t in self._deferred(mode))
         return (
             "Many MCP tools are available but their schemas are not "
             "loaded to save context. Search here to get full schemas, "
@@ -174,9 +176,21 @@ class McpFindToolsTool(Tool):
             "Deferred catalog:\n" + (catalog or "(empty)")
         )
 
+    @property
+    def description(self) -> str:
+        # The registry caches this for every session, so it is the
+        # unrestricted catalog; a restricted mode is sent schema_for_mode().
+        return self._describe(None)
+
+    def schema_for_mode(self, mode: AgentMode) -> dict[str, Any]:
+        """This tool's schema with the catalog narrowed to what *mode* allows."""
+        schema = self.to_schema()
+        schema["function"]["description"] = self._describe(mode)
+        return schema
+
     async def execute(self, **kwargs: Any) -> Any:
         query = str(kwargs.get("query") or "").strip().casefold()
-        deferred = self._deferred()
+        deferred = self._deferred(current_tool_call_mode())
         if not query:
             return {
                 "tools": [_catalog_line(t) for t in deferred],
@@ -260,4 +274,13 @@ class McpInvokeTool(Tool):
                     "Use mcp_find_tools to list what is available."
                 ),
             }
+        # The runner's mode gate saw only this bridge's name, so the inner
+        # tool gets the decision and the argument cast/validation a direct
+        # call to it would get, and the same error text either way.
+        refusal = refuse_tool_call(current_tool_call_mode(), name)
+        if refusal is not None:
+            return refusal
+        tool, arguments, error = self._registry.prepare_call(name, arguments)
+        if error:
+            return error
         return await tool.execute(**arguments)
