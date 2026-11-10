@@ -81,7 +81,14 @@ for nodes, `build` (full access, neutral posture) for steps that create or edit 
 `read` (read-only, neutral posture) for steps that inspect, analyse, or judge; or a
 registered custom mode — that sets the node's posture (a prompt suffix) and filters its
 tool registry to what the mode allows, so a read-only node literally cannot write
-regardless of what the model attempts. The interactive `plan`/`explore` modes also exist
+regardless of what the model attempts. The node's runs are also gated by that mode the
+way a chat turn is gated by the session's (`mode_provider` on the run spec): a call the
+mode refuses is refused with the same text, descriptions that name other tools list only
+allowed ones, and an `execute_code` script's calls answer to the mode too. A node's MCP
+tools are registered under their own names (a node registry never defers them), so the
+gate decides each by name. The tools the engine adds after filtering (`route`, `deliver`,
+`deliver_file`) are admitted into that mode (`admit_tools()`), so no mode removes them,
+whatever it denies. The interactive `plan`/`explore` modes also exist
 but carry conversation/sub-agent framing (exit_plan_mode, "the parent should /build",
 fail-fast-if-modification) that derails a workflow node — e.g. a `verify` gate told it is
 a read-only sub-agent that should bail stops emitting its verdict; nodes use the neutral

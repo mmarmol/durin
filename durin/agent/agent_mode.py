@@ -23,7 +23,7 @@ import json
 from collections.abc import Collection
 from contextlib import suppress
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -156,6 +156,26 @@ def reset_tool_call_mode(token: Token) -> None:
 def current_tool_call_mode() -> AgentMode | None:
     """The mode the runner applied to the executing tool call, if any."""
     return _TOOL_CALL_MODE.get()
+
+
+def admit_tools(mode: AgentMode, names: Collection[str]) -> AgentMode:
+    """*mode* with the tools in *names* always allowed.
+
+    For a caller that narrows a tool registry by *mode* and then registers
+    tools of its own that the mode was never meant to filter — a workflow
+    node's verdict and delivery tools, which the node needs to finish. Those
+    tools are added to an allowlist and dropped from the denied set, so a
+    run gated by the returned mode accepts them however the mode was
+    written, exactly as the narrowed registry already holds them. Every
+    other tool keeps *mode*'s decision. Returns *mode* itself when nothing
+    changes, so an unrestricted mode stays unrestricted.
+    """
+    admitted = frozenset(names)
+    allowed = None if mode.allowed is None else mode.allowed | admitted
+    denied = mode.denied - admitted
+    if allowed == mode.allowed and denied == mode.denied:
+        return mode
+    return replace(mode, allowed=allowed, denied=denied)
 
 
 # ---------------------------------------------------------------------------

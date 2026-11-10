@@ -938,8 +938,8 @@ anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
 this mode" result — tool-by-tool denial, not a stopped run. Tools that run or
 list other tools by name (the deferred-MCP `mcp_invoke` / `mcp_find_tools`, and
 `execute_code` for the tools its script calls) apply the mode the runner gave
-their own call — a conversation's or a sub-agent's — to the inner tool, so
-neither deferral nor a script opens a way around that mode.
+their own call — a conversation's, a sub-agent's or a workflow node's — to the
+inner tool, so neither deferral nor a script opens a way around that mode.
 Deferral does not close a way either: an allowlist that names a deferred MCP tool
 also allows the two bridges (unless it denies them by name), which then reach
 only the tools it names. Built-ins:
