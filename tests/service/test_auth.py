@@ -201,3 +201,142 @@ async def test_issue_rejects_an_unknown_scope_name(svc, admin):
         await svc.issue_token(cmd, admin)
     assert "not-a-scope" in exc.value.message
     assert svc._store.list_tokens() == []
+
+
+# ---------------------------------------------------------------------------
+# A token cannot create or destroy something more powerful than itself
+# ---------------------------------------------------------------------------
+
+NOW = 1_800_000_000.0
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """Pin the token store's clock; tests move it by reassigning ``clock.now``."""
+
+    class _Clock:
+        now = NOW
+
+    monkeypatch.setattr("durin.security.api_tokens._now", lambda: _Clock.now)
+    return _Clock
+
+
+def _issuer(svc, scopes, *, ttl_s=None):
+    """Issue a token in the store and resolve it the way a request does."""
+    _id, plaintext = svc._store.issue(list(scopes), label="issuer", ttl_s=ttl_s)
+    principal = svc.resolve(plaintext)
+    assert principal is not None
+    return principal, plaintext
+
+
+def _ids(svc):
+    return sorted(t["token_id"] for t in svc._store.list_tokens())
+
+
+@pytest.mark.parametrize("ttl_s", [None, 3600.0 + 1.0, 10 * 365 * 86400.0])
+async def test_an_expiring_issuer_cannot_issue_a_token_that_outlives_it(svc, clock, ttl_s):
+    issuer, plaintext = _issuer(
+        svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=3600.0)
+    before = _ids(svc)
+    with pytest.raises(ForbiddenError) as exc:
+        await svc.issue_token(
+            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=ttl_s), issuer)
+    assert "remaining lifetime" in exc.value.message
+    assert exc.value.details == {"remaining_s": 3600.0}
+    assert plaintext not in exc.value.message
+    assert "nbwt_" not in exc.value.message
+    assert _ids(svc) == before
+
+
+async def test_an_expiring_issuer_issues_within_its_remaining_lifetime(svc, clock):
+    issuer, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=3600.0)
+    clock.now = NOW + 600.0  # 3000 s of the issuer's lifetime remain
+    for ttl_s in (60.0, 3000.0):
+        result = await svc.issue_token(
+            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=ttl_s), issuer)
+        assert result.expires_at == clock.now + ttl_s
+        assert svc.resolve(result.token) is not None
+
+
+async def test_the_remaining_lifetime_shrinks_as_the_issuer_ages(svc, clock):
+    issuer, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=3600.0)
+    clock.now = NOW + 3000.0
+    with pytest.raises(ForbiddenError):
+        await svc.issue_token(
+            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=601.0), issuer)
+
+
+@pytest.mark.parametrize("ttl_s", [None, 60.0, 10 * 365 * 86400.0])
+async def test_a_non_expiring_issuer_may_issue_any_lifetime(svc, clock, ttl_s):
+    issuer, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value])
+    result = await svc.issue_token(
+        IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=ttl_s), issuer)
+    assert result.expires_at == (None if ttl_s is None else NOW + ttl_s)
+
+
+async def test_the_local_principal_may_issue_any_lifetime(svc, clock, admin):
+    result = await svc.issue_token(IssueTokenCommand(scopes=[Scope.ADMIN.value]), admin)
+    assert result.expires_at is None
+
+
+async def test_issue_rejects_an_empty_scope_list(svc, admin):
+    with pytest.raises(ValidationFailedError):
+        await svc.issue_token(IssueTokenCommand(scopes=[]), admin)
+    assert svc._store.list_tokens() == []
+
+
+async def test_a_narrower_caller_cannot_revoke_a_broader_token(svc):
+    caller, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SYSTEM_READ.value])
+    target_id, target = svc._store.issue([Scope.ADMIN.value], label="root")
+    with pytest.raises(ForbiddenError) as exc:
+        await svc.revoke_token(RevokeTokenCommand(token_id=target_id), caller)
+    assert exc.value.details == {"scopes": ["admin"]}
+    assert "admin" in exc.value.message
+    assert "nbwt_" not in exc.value.message
+    assert svc.resolve(target) is not None
+
+
+async def test_a_caller_that_cannot_list_learns_nothing_from_a_refused_revoke(svc):
+    caller, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value])
+    target_id, target = svc._store.issue([Scope.SECRETS_WRITE.value], label="other")
+    with pytest.raises(NotFoundError) as refused:
+        await svc.revoke_token(RevokeTokenCommand(token_id=target_id), caller)
+    with pytest.raises(NotFoundError) as missing:
+        await svc.revoke_token(RevokeTokenCommand(token_id="0123456789abcdef"), caller)
+    assert refused.value.message == missing.value.message
+    assert refused.value.details.keys() == missing.value.details.keys()
+    assert svc.resolve(target) is not None
+
+
+async def test_a_caller_covering_the_token_revokes_it(svc):
+    caller, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value])
+    target_id, target = svc._store.issue([Scope.SKILLS_READ.value], label="child")
+    result = await svc.revoke_token(RevokeTokenCommand(token_id=target_id), caller)
+    assert result.ok is True
+    assert svc.resolve(target) is None
+
+
+async def test_a_token_may_revoke_itself(svc):
+    caller, plaintext = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.MEMORY_READ.value])
+    result = await svc.revoke_token(RevokeTokenCommand(token_id=caller.subject), caller)
+    assert result.ok is True
+    assert svc.resolve(plaintext) is None
+
+
+async def test_admin_revokes_any_token(svc, admin):
+    remote_admin, _ = _issuer(svc, [Scope.ADMIN.value])
+    session_id, session = svc._store.issue([Scope.ADMIN.value], label="bootstrap", kind="webui")
+    await svc.revoke_token(RevokeTokenCommand(token_id=session_id), remote_admin)
+    assert svc.resolve(session) is None
+    other_id, other = svc._store.issue([Scope.ADMIN.value], label="root")
+    await svc.revoke_token(RevokeTokenCommand(token_id=other_id), admin)
+    assert svc.resolve(other) is None
+
+
+async def test_an_expiring_issuer_cannot_issue_a_lifetime_that_is_not_a_number(svc, clock):
+    issuer, _ = _issuer(svc, [Scope.SYSTEM_WRITE.value, Scope.SKILLS_READ.value], ttl_s=3600.0)
+    before = _ids(svc)
+    with pytest.raises(ForbiddenError):
+        await svc.issue_token(
+            IssueTokenCommand(scopes=[Scope.SKILLS_READ.value], ttl_s=float("nan")), issuer)
+    assert _ids(svc) == before

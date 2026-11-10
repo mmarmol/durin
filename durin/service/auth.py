@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from durin.security.api_tokens import ApiTokenStore
-from durin.service.principal import SCOPE_VALUES, Principal, Scope
+from durin.security.api_tokens import ApiTokenStore, LifetimeExceedsBoundError
+from durin.service.principal import Principal, Scope, check_requested_scopes
 from durin.service.registry import route
 from durin.service.types import (
     Command,
@@ -18,7 +18,6 @@ from durin.service.types import (
     NotFoundError,
     Query,
     Result,
-    ValidationFailedError,
 )
 
 # Scopes used by this service's own routes.
@@ -93,11 +92,7 @@ class AuthService:
         self, cmd: IssueTokenCommand, principal: Principal
     ) -> IssueTokenResult:
         principal.require(Scope.SYSTEM_WRITE)
-        unknown = sorted(set(cmd.scopes) - SCOPE_VALUES)
-        if unknown:
-            raise ValidationFailedError(
-                f"unknown scope(s): {', '.join(unknown)}", details={"scopes": unknown}
-            )
+        check_requested_scopes(cmd.scopes)
         # A token may grant only what its issuer holds, judged by the same
         # check every route uses, so ``admin`` covers every scope and nothing
         # else implies anything; otherwise a ``system:write`` token could mint
@@ -108,11 +103,22 @@ class AuthService:
                 f"cannot grant scope(s) the issuer does not hold: {', '.join(lacking)}",
                 details={"scopes": lacking},
             )
-        token_id, plaintext = self._store.issue(
-            cmd.scopes,
-            label=cmd.label,
-            ttl_s=cmd.ttl_s,
-        )
+        # Nor may it outlive its issuer: an expiring issuer that could mint a
+        # non-expiring (or longer-lived) token would never lose its access.
+        # The request is refused rather than shortened, so a caller never gets
+        # a token that dies sooner than it asked for without being told.
+        try:
+            token_id, plaintext = self._store.issue(
+                cmd.scopes,
+                label=cmd.label,
+                ttl_s=cmd.ttl_s,
+                not_after=principal.expires_at,
+            )
+        except LifetimeExceedsBoundError as exc:
+            raise ForbiddenError(
+                "requested lifetime exceeds the issuer's remaining lifetime",
+                details={"remaining_s": exc.remaining_s},
+            ) from None
         # Retrieve expires_at from the stored metadata so it is consistent.
         entry = self._find_entry(token_id)
         expires_at = entry.get("expires_at") if entry else None
@@ -161,16 +167,37 @@ class AuthService:
         self, cmd: RevokeTokenCommand, principal: Principal
     ) -> RevokeTokenResult:
         principal.require(Scope.SYSTEM_WRITE)
+        not_found = NotFoundError("token not found", details={"token_id": cmd.token_id})
+        entry = self._find_entry(cmd.token_id)
+        if entry is None:
+            raise not_found
+        # A caller may revoke only a token it covers, judged by the same check
+        # issuing uses — so a token can always revoke itself or anything it
+        # could have issued, ``admin`` can revoke anything, and a narrow token
+        # cannot cut off a broader one.
+        lacking = sorted(
+            s for s in set(entry.get("scopes", [])) if not principal.has_scope(s)
+        )
+        if lacking:
+            # A caller that cannot list tokens is not told this one exists.
+            if not principal.has_scope(Scope.SYSTEM_READ):
+                raise not_found
+            raise ForbiddenError(
+                f"cannot revoke a token holding scope(s) the caller does not hold: "
+                f"{', '.join(lacking)}",
+                details={"scopes": lacking},
+            )
         if not self._store.revoke(cmd.token_id):
-            raise NotFoundError("token not found", details={"token_id": cmd.token_id})
+            raise not_found
         return RevokeTokenResult(ok=True)
 
     def resolve(self, plaintext: str) -> Principal | None:
         """Resolve a bearer token to a :class:`Principal`, or ``None``.
 
         Called by the channel adapter (not a route).  Delegates hash-checking
-        to the store; builds a principal from the stored scopes so the service
-        layer can enforce fine-grained scope checks. A dashboard session token
+        to the store; builds a principal from the stored scopes and expiry so
+        the service layer can enforce fine-grained scope checks and bound what
+        the token issues by its own lifetime. A dashboard session token
         (stored ``kind: "webui"``) becomes a ``Principal.webui``; every other
         token a ``Principal.remote``.
         """
@@ -178,9 +205,10 @@ class AuthService:
         if entry is None:
             return None
         scopes = frozenset(entry.get("scopes", []))
+        expires_at = entry.get("expires_at")
         if entry.get("kind") == "webui":
-            return Principal.webui(entry["token_id"], scopes)
-        return Principal.remote(entry["token_id"], scopes)
+            return Principal.webui(entry["token_id"], scopes, expires_at=expires_at)
+        return Principal.remote(entry["token_id"], scopes, expires_at=expires_at)
 
     # ------------------------------------------------------------------
     # Private helpers

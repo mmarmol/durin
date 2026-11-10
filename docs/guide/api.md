@@ -60,8 +60,18 @@ manage them. Add `--ttl <seconds>` for a token that expires on its own.
 
 A program can also issue tokens through `POST /api/v1/auth/tokens` with a
 token that holds `system:write`. The new token can carry only scopes the
-issuing token holds itself (an `admin` token can grant any scope); asking for
-more is refused with 403, and an unknown scope name with 422.
+issuing token holds itself (an `admin` token can grant any scope), and if the
+issuing token expires, the new one must expire no later: give a `ttl_s`
+within the issuing token's remaining lifetime. Asking for more scopes or a
+longer lifetime is refused with 403 (the lifetime refusal reports the issuing
+token's remaining lifetime as `remaining_s`); an empty or unknown scope list
+with 422.
+
+`DELETE /api/v1/auth/tokens` with `{"token_id": "<id>"}` revokes a token. It
+needs `system:write`, and the calling token must hold every scope of the
+token it revokes — a token can always revoke itself, and an `admin` token can
+revoke any token. `durin auth token revoke` on the machine running durin can
+revoke any token.
 
 ## Chat
 

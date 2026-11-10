@@ -19,7 +19,8 @@ from rich.console import Console
 from rich.table import Table
 
 from durin.security.api_tokens import ApiTokenStore
-from durin.service.principal import SCOPE_VALUES
+from durin.service.principal import SCOPE_VALUES, check_requested_scopes
+from durin.service.types import ValidationFailedError
 
 console = Console()
 
@@ -92,16 +93,17 @@ def cmd_issue(
 ) -> None:
     """Issue a new API token.  The plaintext is printed ONCE — store it now."""
     parsed = [s.strip() for s in scopes.split(",") if s.strip()]
-    if not parsed:
-        console.print("[red]✗[/red] --scopes must not be empty.")
-        raise typer.Exit(1)
-
-    unknown = sorted(set(parsed) - SCOPE_VALUES)
-    if unknown:
-        console.print(
-            f"[red]✗[/red] Unknown scope(s): {', '.join(unknown)}\n"
-            f"Valid scopes: {', '.join(sorted(SCOPE_VALUES))}"
-        )
+    try:
+        check_requested_scopes(parsed)
+    except ValidationFailedError as exc:
+        unknown = exc.details["scopes"]
+        if not unknown:
+            console.print("[red]✗[/red] --scopes must not be empty.")
+        else:
+            console.print(
+                f"[red]✗[/red] Unknown scope(s): {', '.join(unknown)}\n"
+                f"Valid scopes: {', '.join(sorted(SCOPE_VALUES))}"
+            )
         raise typer.Exit(1)
 
     store = ApiTokenStore()

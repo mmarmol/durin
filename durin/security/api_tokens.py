@@ -62,6 +62,28 @@ def _invalidate_resolve_cache(path: Path) -> None:
 _MAX_TOKENS = 10_000
 
 
+def _now() -> float:
+    """The clock token expiry is measured against (wall time, epoch seconds).
+
+    Every expiry decision — stamping a new token, rejecting an expired one,
+    bounding a token by its issuer's expiry — reads this one function, so a
+    test can move time by patching it.
+    """
+    return time.time()
+
+
+class LifetimeExceedsBoundError(ValueError):
+    """A requested token would expire later than the bound it was issued under.
+
+    ``remaining_s`` is how long the bound still had to run when the request
+    was judged (never negative).
+    """
+
+    def __init__(self, remaining_s: float) -> None:
+        super().__init__("requested lifetime exceeds the remaining lifetime of its bound")
+        self.remaining_s = remaining_s
+
+
 def _hash_token(salt_hex: str, plaintext: str) -> str:
     """Return SHA-256 hex of ``salt_bytes + plaintext.encode()``."""
     salt = bytes.fromhex(salt_hex)
@@ -142,6 +164,7 @@ class ApiTokenStore:
         label: str = "",
         ttl_s: float | None = None,
         kind: str = "remote",
+        not_after: float | None = None,
     ) -> tuple[str, str]:
         """Mint a new token.
 
@@ -152,13 +175,23 @@ class ApiTokenStore:
         session ``/webui/bootstrap`` mints, ``"remote"`` for everything issued
         to a program. Only server code chooses it; the token-issuing API and
         CLI never pass it, so a program cannot mint a dashboard session.
+
+        ``not_after`` bounds the new token's expiry (epoch seconds): a token
+        that would expire later than it, or never, raises
+        :class:`LifetimeExceedsBoundError` and nothing is stored. It is judged
+        against the same clock reading that stamps the token, so a token
+        granted exactly the remaining time expires exactly at the bound.
         """
         plaintext = f"nbwt_{secrets.token_urlsafe(32)}"
         token_id = secrets.token_hex(8)
         salt_hex = secrets.token_hex(16)
         hash_hex = _hash_token(salt_hex, plaintext)
-        now = time.time()
+        now = _now()
         expires_at = now + ttl_s if ttl_s is not None else None
+        # Written as "refuse unless provably within the bound" so a lifetime
+        # that compares false both ways (NaN) is refused, not let through.
+        if not_after is not None and not (expires_at is not None and expires_at <= not_after):
+            raise LifetimeExceedsBoundError(max(0.0, not_after - now))
 
         with _LOCK, cross_process_lock(self._path):
             data = self._load()
@@ -191,7 +224,7 @@ class ApiTokenStore:
         ``_LAST_USED_PERSIST_INTERVAL_S`` per token; the returned entry
         always carries the fresh timestamp.
         """
-        now = time.time()
+        now = _now()
         key = _cache_key(self._path, plaintext)
         try:
             st = self._path.stat()

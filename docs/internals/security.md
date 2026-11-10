@@ -844,8 +844,9 @@ lookup misses the cache, and then at most once per minute per token.
 
 `Principal` (`durin/service/principal.py`) is an immutable dataclass carrying
 `subject` (token id or `"local"`), `scopes` (a `frozenset[str]` of scope string
-values), and `kind`: `"local"` for in-process callers, `"webui"` for the
-dashboard session, `"remote"` for every other token. In-process callers (TUI,
+values), `kind`: `"local"` for in-process callers, `"webui"` for the
+dashboard session, `"remote"` for every other token — and `expires_at`, the
+presenting token's expiry (`None` for a credential that does not expire). In-process callers (TUI,
 cron, the agent's own tools) use `Principal.local()`, which carries
 `Scope.ADMIN` and is never checked against a token. Remote callers receive a
 `Principal` built from the verified token's stored scopes; a token stored with
@@ -858,6 +859,16 @@ system) plus two write-only powers — `channels:write` (speaking as durin in a
 conversation with an external party) and `chat:write` (conversing with durin
 through the native chat routes and `/v1`; an API-originated turn never carries
 a person's authority to approve privileged actions).
+
+A token cannot create or destroy a credential more powerful than itself. Over
+the API, a token may issue only scopes it holds, and only a lifetime that ends
+no later than its own (an expiring token cannot issue a non-expiring one); it
+may revoke only a token whose every scope it holds — so it can always revoke
+itself, and `admin` can revoke anything. Both checks use
+`Principal.has_scope`; a refusal stores or removes nothing and carries no
+token material. An empty scope list is invalid on the API and the CLI alike
+(one shared check). The CLI, running with local authority, issues and revokes
+without these bounds.
 
 **Dashboard bootstrap and the local socket.** `GET /webui/bootstrap` (`WebSocketChannel.bootstrap`)
 mints the dashboard session: an admin token stored with `kind: "webui"`. With a
