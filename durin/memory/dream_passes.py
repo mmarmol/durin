@@ -115,32 +115,42 @@ def run_extract_pass(
     skipped. Best-effort per session: one bad session doesn't abort the pass.
 
     ``max_seconds`` (0 = unbounded) is a hard wall-clock cap: when the elapsed
-    time crosses it the pass yields after the current session, and the cursor
-    resumes the remainder on the next trigger (``memory.dream.max_seconds_per_run``).
+    time crosses it the pass yields after the piece of the session it is
+    reading, and the cursor resumes the remainder on the next trigger
+    (``memory.dream.max_seconds_per_run``).
+
+    A session whose model call failed stops at the piece that failed and is
+    counted in ``errors``; its cursor stays before that piece.
     """
     import time
     t0 = time.perf_counter()
+    deadline = t0 + max_seconds if max_seconds else None
     _emit("memory.dream.start", kind="extract")
     from durin.memory.aliases_index import AliasIndex
     _alias_index = AliasIndex(Path(workspace) / "memory")
     _alias_index.build()
     sessions_dir = Path(workspace) / "sessions"
     out: dict[str, Any] = {"sessions": 0, "entities": 0, "discovered": 0,
-                           "skill_signals": 0, "errors": [], "yielded": False}
+                           "skill_signals": 0, "errors": [], "yielded": False,
+                           "pieces": 0, "span_chars": 0, "sent_chars": 0}
+
+    def _yield() -> None:
+        out["yielded"] = True
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        _emit("memory.dream.max_seconds_reached", kind="extract",
+              max_seconds=max_seconds, elapsed_ms=elapsed_ms,
+              sessions_done=out["sessions"])
+        logger.warning(
+            "extract dream hit max_seconds_per_run ({}s) after {} session(s) "
+            "in {}ms; the per-session cursor resumes the remainder on the "
+            "next trigger", max_seconds, out["sessions"], elapsed_ms)
+
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
             if is_workflow_session_file(jsonl_path):
                 continue   # internal workflow execution trace — not mined into memory
-            if max_seconds and (time.perf_counter() - t0) >= max_seconds:
-                out["yielded"] = True
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
-                _emit("memory.dream.max_seconds_reached", kind="extract",
-                      max_seconds=max_seconds, elapsed_ms=elapsed_ms,
-                      sessions_done=out["sessions"])
-                logger.warning(
-                    "extract dream hit max_seconds_per_run ({}s) after {} session(s) "
-                    "in {}ms; the per-session cursor resumes the remainder on the "
-                    "next trigger", max_seconds, out["sessions"], elapsed_ms)
+            if deadline is not None and time.perf_counter() >= deadline:
+                _yield()
                 break
             try:
                 r = run_extract_for_session(
@@ -149,7 +159,8 @@ def run_extract_pass(
                     learnings=learnings,
                     confidence_threshold=confidence_threshold,
                     semantic_distance_threshold=semantic_distance_threshold,
-                    alias_index=_alias_index, vector_index=vector_index)
+                    alias_index=_alias_index, vector_index=vector_index,
+                    deadline=deadline)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
@@ -159,6 +170,21 @@ def run_extract_pass(
                     out["entities"] += len(extracted)
                     out["discovered"] += len(discovered)
                     out["skill_signals"] += len(sig)
+                for key in ("pieces", "span_chars", "sent_chars"):
+                    out[key] += r.get(key) or 0
+                if r.get("error"):
+                    # The model call failed on a piece: the session stopped
+                    # there and its cursor did not move past it.
+                    out["errors"].append({"session": jsonl_path.stem, "error": r["error"]})
+                    logger.warning(
+                        "extract dream: session {} stopped at turn {}, the model "
+                        "call failed: {}", jsonl_path.stem, r.get("cursor"),
+                        str(r["error"])[:300])
+                if r.get("yielded"):
+                    # Out of time inside this session: the rest of it, and
+                    # the sessions after it, wait for the next pass.
+                    _yield()
+                    break
             except Exception as exc:  # noqa: BLE001 — never abort the whole pass
                 out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
                 # The pass only counts its failures; without this line the
@@ -172,7 +198,8 @@ def run_extract_pass(
           entities_consolidated=out["entities"], entities_discovered=out["discovered"],
           skill_signals=out["skill_signals"], entities_failed=len(out["errors"]),
           sessions=out["sessions"], yielded=out["yielded"],
-          duration_ms=out["duration_ms"])
+          pieces=out["pieces"], span_chars=out["span_chars"],
+          sent_chars=out["sent_chars"], duration_ms=out["duration_ms"])
     return out
 
 

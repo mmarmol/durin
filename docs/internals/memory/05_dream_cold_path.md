@@ -103,12 +103,15 @@ retries up to four times; the version prune that follows a verified rewrite
 is skipped, not failed, if a writer commits in between. The
 `memory.index.compacted` event carries `attempts` and `quiet_wait_ms`.
 
-**3. Per-session cursor → idempotent, lossless.** The extract pass tracks
-progress with a single integer **per-session cursor** (turns already processed).
-A re-run re-processes nothing already seen; a skipped or failed run is harmless
-because the cursor only advances over turns that completed. Combined with
-per-field author precedence on writes (user > dream > agent), re-running over the
-same turns never corrupts a page.
+**3. Per-session cursor → idempotent, and it only passes what was read.** The
+extract pass tracks progress with a single integer **per-session cursor** (turns
+already processed). The unread span is read in pieces that each fit one stage
+prompt, and the cursor moves past a piece only once the model has answered for
+it: a re-run re-processes nothing already read, and a run that stops — a model
+call that failed, the time budget spent — leaves the rest for the next run. The
+one text the pass marks done without reading is the tail of a single message
+larger than a piece. Combined with per-field author precedence on writes
+(user > dream > agent), re-running over the same turns never corrupts a page.
 
 ## 3. Diagram
 
@@ -182,8 +185,35 @@ skill-extract passes also do — and calls
    end of the file is the exception: the file shrank (`/new` emptied it, or the
    file cap trimmed it) without resetting the cursor, so the turns there now
    are a new conversation and the cursor restarts at zero.
-3. Render the new turns (`messages[cursor:]`) as text.
-4. **Stage 1 (extract).** `entity_refs_in_messages` scans the new turns'
+3. Render the new turns (`messages[cursor:]`) and cut them into **pieces**.
+   The rendering is the session-summary pass's (Pass 2e): one line per message
+   that has content — every role, tool output included — in the shape
+   `[timestamp] ROLE [tools: …]: content`, with the placeholders of turns that
+   produced no answer left out; here each line is prefixed with its `[turn-N]`
+   tag, which Stage 2 reads. The splitter is the one that pass and compaction
+   use (`runs_that_fit`): the lines are cut at message boundaries into pieces
+   of at most `PIECE_CHARS` characters (`durin/memory/extract_dream.py`), the
+   length of conversation a stage prompt carries. A single message larger
+   than that is a piece of its own and the stage prompts keep its head; its
+   tail is the only text the pass does not read.
+
+   Steps 4, 5 and 7 run **once per piece**, in order, on that piece's text.
+   When they have answered, the cursor is set to the piece's last turn. Two
+   things stop a session before its last piece, and in both the cursor stays
+   at the last completed piece, where the next run resumes:
+
+   - **A model call that fails.** A stage raises `ProviderError` when its
+     call raises or when the response's `finish_reason` is `"error"` — the
+     provider layer reports a failure it stopped retrying as a response whose
+     text is the error message. The session's result carries
+     `stopped="provider_error"` and the error; the pass counts the session
+     in `errors` and logs it, then goes on to the next session. A reply that
+     cannot be parsed is a different thing: the model read the piece, so
+     `memory.dream.parse_failure` is emitted, the stage yields nothing and
+     the cursor advances.
+   - **The time budget.** `max_seconds` is checked before every piece after
+     a session's first.
+4. **Stage 1 (extract).** `entity_refs_in_messages` scans the piece's
    `tool_calls` for `memory_upsert_entity` and collects each call's `ref`. For
    each ref, `extract_entity` (`durin/memory/extract_dream.py`) loads (or
    creates) the `EntityPage`, builds a prompt from the entity's name, its
@@ -195,7 +225,7 @@ skill-extract passes also do — and calls
    `memory_writer.write_entity(..., create=True)`. A deleted entity is honored
    (`is_deleted`) and never re-created.
 5. **Stage 2 (discover, when `discover=True`).** `discover_entities` makes one
-   LLM call over the *same* turns for durable identity-class facts (identity,
+   LLM call over the *same* piece for durable identity-class facts (identity,
    roles, relationships, commitments, life events — ephemeral chatter and
    shown-not-asserted third-party content excluded by prompt rules)
    about entities the agent did **not** upsert, and writes them as
@@ -215,9 +245,9 @@ skill-extract passes also do — and calls
    invented. The proposal also includes a `turn` field: the turn number where
    the entity's durable fact first appears. Each patch written by `discover_entities`
    carries a `source_ref` of `[[sessions/<stem>.md#turn-N]]` using that turn
-   number, falling back to the window-end marker when the proposal omits `turn`,
-   so provenance points to the turn the fact came from rather than the session's
-   window-end watermark. Before creating a new page, each proposal
+   number, falling back to the piece-end marker when the proposal omits `turn`,
+   so provenance points to the turn the fact came from rather than the end of
+   the piece. Before creating a new page, each proposal
    is resolved against the existing graph by name within the same entity type
    (via the alias index): a **unique** match updates that entity in place instead
    of minting a new slug; an **ambiguous** match (more than one candidate) creates
@@ -247,11 +277,16 @@ skill-extract passes also do — and calls
    pass builds a **single `AliasIndex`** once per pass (refreshed across all
    sessions processed in that run) and passes it to each `discover_entities`
    call; callers that omit it fall back to building their own.
-6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
-   gaps in the same turns are logged as observations for later skill curation
-   (out of scope here — see the skills internals docs).
+6. **Stage 3 (skill signals, when `skill_signals=True`).** Not per piece: one
+   call per session, after the last piece, over the text this run read. Its
+   prompt keeps the last `12,000` characters of that text — a correction lands
+   at the end of an interaction — and does not read the rest. Skill
+   corrections and gaps found there are logged as observations for later skill
+   curation (out of scope here — see the skills internals docs). A session
+   that stopped before its last piece runs this step on the run that reaches
+   it.
 7. **Stage 4 (learnings sweep, when `learnings=True`).** `mine_learnings`
-   (`durin/memory/extract_dream.py`) makes one LLM call over the same turns —
+   (`durin/memory/extract_dream.py`) makes one LLM call over the same piece —
    reusing the compaction learnings prompt — to extract durable learnings:
    preferences, corrections, standing constraints, and stable project facts. It
    writes each result as a `feedback`, `stance`, or `practice` entity with
@@ -263,20 +298,29 @@ skill-extract passes also do — and calls
    canonical resolution the discover path applies: a re-worded fact updates the
    existing entity in place rather than creating a duplicate slug. The refine pass
    remains the cross-run backstop for any duplicates that slip through. Gated by
-   `memory.dream.learnings_sweep_enabled` (default true). Best-effort: an empty
-   turn span, LLM failure, or parse failure yields an empty list without aborting
-   the session.
-8. Advance the cursor to the total turn count via `set_extract_cursor`.
+   `memory.dream.learnings_sweep_enabled` (default true). An empty piece or a
+   parse failure yields an empty list without aborting the session.
+8. After the last piece, set the cursor to the total turn count via
+   `set_extract_cursor` (what can follow the last piece is placeholders of
+   turns that produced no answer).
 
 The `source_ref` in each patch's provenance points to the turn the fact came from.
-Stage 1 (extract) uses the session window-end marker `[[sessions/<stem>.md#turn-<N>]]`.
+Stage 1 (extract) and Stage 4 (learnings) use the piece-end marker
+`[[sessions/<stem>.md#turn-<N>]]`.
 Stage 2 (discover) uses the per-entity `turn` from the LLM proposal when present,
 producing a more precise `[[sessions/<stem>.md#turn-<M>]]` that anchors to the
 specific turn where the entity's durable fact first appears; when the proposal
-omits `turn`, it falls back to the same window-end marker. `max_seconds`
+omits `turn`, it falls back to the same piece-end marker. `max_seconds`
 (0 = unbounded) is a hard wall-clock cap: when elapsed time crosses it the pass
-yields **after the current session**, emits `memory.dream.max_seconds_reached`,
-and the cursor resumes the remainder on the next trigger.
+yields **after the piece it is reading**, emits
+`memory.dream.max_seconds_reached`, and the cursor resumes the remainder on the
+next trigger.
+
+**Coverage.** Each session's result, and the pass's `memory.dream.end` event
+summed over sessions, carry `pieces` (pieces read and marked done),
+`span_chars` (their characters) and `sent_chars` (the characters of them the
+stage prompts carried). The two character counts differ only by the tails of
+messages larger than a piece.
 
 ### Pass 2 — derived_from: link entities to source documents
 
@@ -882,7 +926,9 @@ and the parser's error where the caller has them, so an answer cut at the
 output limit reads apart from a malformed one — and that
 call yields an empty result — distinguishing "model returned garbage" from
 "nothing to extract". The cursor still advances, so a persistent parse failure
-surfaces in telemetry rather than blocking the pass. Each parse failure also
+surfaces in telemetry rather than blocking the pass. A response that is the
+provider's own error (`finish_reason="error"`) is not a parse failure: the
+extract stages raise on it and the session's cursor stays where it was. Each parse failure also
 appears in the webui Dream feed as a `warning` item (one per unparseable
 response, deep-linked to the entity when the source is an entity ref) — a run
 full of them makes a misbehaving dream model loudly visible, which is the
@@ -970,7 +1016,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
-| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap applied to each pass separately, not to the run: extract, derived_from, session summaries, the document passes, refine, relations and the skill review (curation and suggestions) each get the full budget; the pass yields (extract after the current session, refine after the current chunk, the skill review after the current batch) and resumes on the next run. The skill-extract, always_on and workflow-improve passes take no budget. 0 = run to completion. |
+| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap applied to each pass separately, not to the run: extract, derived_from, session summaries, the document passes, refine, relations and the skill review (curation and suggestions) each get the full budget; the pass yields (extract after the piece of the session it is reading, refine after the current chunk, the skill review after the current batch) and resumes on the next run. The skill-extract, always_on and workflow-improve passes take no budget. 0 = run to completion. |
 | `memory.dream.session_summaries_enabled` | `true` | Run the session-summary pass (Pass 2e). |
 | `memory.dream.session_summary_idle_hours` | `6` | Hours a conversation must have been idle before Pass 2e summarizes it. |
 | `memory.dream.distill_references_enabled` | `true` | Run the outline pass (Pass 2b). |
