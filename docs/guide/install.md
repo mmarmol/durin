@@ -313,7 +313,7 @@ onboard` (no-wizard) performs.
 
 With vector memory on, the first start after an upgrade downloads the
 embedding model once (~450 MB for the default) when `<durin_home>/models/embed/`
-holds no model files yet, as happens when the model was cached elsewhere before.
+holds no model files yet.
 Restart the gateway while online; see [Sanity checks](#sanity-checks) for what
 `durin doctor` reports until the files are there.
 
