@@ -109,8 +109,8 @@ already processed). The unread span is read in pieces that each fit one stage
 prompt, and the cursor moves past a piece only once the model has answered for
 it: a re-run re-processes nothing already read, and a run that stops — a model
 call that failed, the time budget spent — leaves the rest for the next run. The
-one text the pass marks done without reading is the tail of a single message
-larger than a piece. Combined with per-field author precedence on writes
+pass reads what the user and the assistant said; the texts it marks done without
+reading are tool output and the tail of a single message larger than a piece. Combined with per-field author precedence on writes
 (user > dream > agent), re-running over the same turns never corrupts a page.
 
 ## 3. Diagram
@@ -186,11 +186,19 @@ skill-extract passes also do — and calls
    file cap trimmed it) without resetting the cursor, so the turns there now
    are a new conversation and the cursor restarts at zero.
 3. Render the new turns (`messages[cursor:]`) and cut them into **pieces**.
-   The rendering is the session-summary pass's (Pass 2e): one line per message
-   that has content — every role, tool output included — in the shape
-   `[timestamp] ROLE [tools: …]: content`, with the placeholders of turns that
-   produced no answer left out; here each line is prefixed with its `[turn-N]`
-   tag, which Stage 2 reads. The splitter is the one that pass and compaction
+   The pass reads what the user and the assistant said: one line per `user`
+   or `assistant` message that has content, in the shape
+   `[timestamp] ROLE [tools: …]: content` the session-summary pass (Pass 2e)
+   uses, with the placeholders of turns that produced no answer left out;
+   here each line is prefixed with its `[turn-N]` tag, which Stage 2 reads.
+   **Tool output is not read**: a message of any other role contributes no
+   text. It stays in the piece of the message before it, so the cursor still
+   passes it; a piece with no text at all makes no model call and the cursor
+   moves past it. A fact that appears only in a tool's output, and that the
+   assistant never states, does not reach an entity page through this pass;
+   the raw transcript and the session summary (which renders every role)
+   still hold it. Stage 1 still finds the entities the agent upserted, since
+   it reads the `tool_calls` of the piece's assistant messages. The splitter is the one that pass and compaction
    use (`runs_that_fit`): the lines are cut at message boundaries into pieces
    of at most `PIECE_CHARS` characters (`durin/memory/extract_dream.py`), the
    length of conversation a stage prompt carries. A single message larger
@@ -278,7 +286,8 @@ skill-extract passes also do — and calls
    sessions processed in that run) and passes it to each `discover_entities`
    call; callers that omit it fall back to building their own.
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Not per piece: one
-   call per session, after the last piece, over the text this run read. Its
+   call per session, after the last piece, over the text this run read (the
+   user and assistant lines of the pieces, no tool output). Its
    prompt keeps the last `12,000` characters of that text — a correction lands
    at the end of an interaction — and does not read the rest. Skill
    corrections and gaps found there are logged as observations for later skill
@@ -317,8 +326,8 @@ yields **after the piece it is reading**, emits
 next trigger.
 
 **Coverage.** Each session's result, and the pass's `memory.dream.end` event
-summed over sessions, carry `pieces` (pieces read and marked done),
-`span_chars` (their characters) and `sent_chars` (the characters of them the
+summed over sessions, carry `pieces` (pieces with text, read and marked done),
+`span_chars` (their characters of user and assistant text) and `sent_chars` (the characters of them the
 stage prompts carried). The two character counts differ only by the tails of
 messages larger than a piece.
 

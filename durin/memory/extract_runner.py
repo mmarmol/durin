@@ -38,6 +38,9 @@ __all__ = [
 
 LLMInvoke = Callable[..., Any]
 
+# Roles whose messages the pass renders; every other message is passed over.
+_READ_ROLES = ("user", "assistant")
+
 _clock = time.perf_counter  # module-level so tests can move the budget clock
 
 
@@ -150,11 +153,14 @@ def run_extract_for_session(
 ) -> dict:
     """Distil this session's new turns into entities (and skill signals).
 
-    The unread span is rendered as the session-summary pass renders a
-    conversation — one line per message that has content, turns that
-    produced no answer left out — each line prefixed with its ``[turn-N]``
+    The pass reads what the user and the assistant said: the unread span is
+    rendered as the session-summary pass renders a conversation — one line
+    per user or assistant message that has content, turns that produced no
+    answer left out — and tool output is not sent to the model. Each line is prefixed with its ``[turn-N]``
     tag, and cut at message boundaries into pieces of at most
-    ``PIECE_CHARS``. A single message larger than that is a piece of its
+    ``PIECE_CHARS``. A message with no line stays in the piece of the one
+    before it, so the cursor passes it with that piece; a piece with no text
+    at all makes no model call and the cursor moves past it. A single message larger than that is a piece of its
     own, and the stage prompts keep its head. Per piece:
 
     Stage 1 (extract): for entities the agent upserted in the piece, pull
@@ -197,6 +203,11 @@ def run_extract_for_session(
     turn = {id(m): i + 1 for i, m in enumerate(msgs)}
 
     def line(message: dict) -> str:
+        # What the user and the assistant said. Any other message (tool
+        # output) renders to nothing: the splitter keeps it in the piece
+        # of the message before it, so the cursor still passes it.
+        if message.get("role") not in _READ_ROLES:
+            return ""
         rendered = _format_turns([message])
         return f"[turn-{turn[id(message)]}] {rendered}" if rendered else ""
 
@@ -214,6 +225,10 @@ def run_extract_for_session(
             return out
         text = "\n".join(filter(None, map(line, piece)))
         end = turn[id(piece[-1])]
+        if not text:                               # nothing said: pass it over
+            set_extract_cursor(jsonl_path, end)
+            out["cursor"] = end
+            continue
         src = f"[[sessions/{jsonl_path.stem}.md#turn-{end}]]"
         refs = entity_refs_in_messages(piece)
         try:

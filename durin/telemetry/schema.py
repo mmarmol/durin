@@ -972,7 +972,7 @@ class MemoryDreamEndEvent(TypedDict):
     ``entities_failed`` / ``sessions`` / ``yielded`` (``yielded=True`` when the
     ``max_seconds_per_run`` cap was hit and the cursor will resume next time)
     and its coverage: ``pieces`` / ``span_chars`` / ``sent_chars`` — the
-    pieces of conversation the session cursors moved past, their characters,
+    pieces of user and assistant text the session cursors moved past, their characters,
     and how many of those characters the stage prompts carried;
     the refine pass sets ``merged`` / ``kept`` / ``candidates``; the
     derived_from and session-summary passes set ``sessions`` / ``yielded`` /
@@ -990,7 +990,7 @@ class MemoryDreamEndEvent(TypedDict):
     entities_failed: NotRequired[int]  # extract: sessions that raised or stopped at a failed model call
     sessions: NotRequired[int]
     yielded: NotRequired[bool]
-    pieces: NotRequired[int]  # extract: pieces of conversation read and marked done
+    pieces: NotRequired[int]  # extract: pieces of user/assistant text read and marked done
     span_chars: NotRequired[int]  # extract: characters in those pieces
     sent_chars: NotRequired[int]  # extract: characters of them the stage prompts carried
     merged: NotRequired[int]

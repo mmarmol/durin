@@ -95,7 +95,7 @@ def _long_session(ws):
     messages = []
     for i in range(40):
         if i == 17:
-            messages.append(_message(i, role="tool", chars=PIECE_CHARS + 5000))
+            messages.append(_message(i, role="assistant", chars=PIECE_CHARS + 5000))
         elif i % 5 == 3:
             messages.append(_message(i, role="tool", chars=2500))
         elif i % 2:
@@ -103,6 +103,11 @@ def _long_session(ws):
         else:
             messages.append(_message(i))
     return _session(ws, messages), messages
+
+
+def _said(messages: list[dict]) -> list[int]:
+    """The marks of the messages the extract pass reads: user and assistant."""
+    return [i for i, m in enumerate(messages) if m["role"] in ("user", "assistant")]
 
 
 def _run(ws, path, model, **kwargs):
@@ -120,7 +125,7 @@ def test_every_message_of_a_long_span_is_sent_in_exactly_one_piece(tmp_path):
         pieces = model.pieces(stage)
         assert len(pieces) > 3
         sent = [i for piece in pieces for i in piece]
-        assert sent == list(range(len(messages))), stage  # no gap, no overlap, in order
+        assert sent == _said(messages), stage  # no gap, no overlap, in order
     assert [17] in model.pieces("discover")  # the oversized message is a piece of its own
     assert out["cursor"] == len(messages) == get_extract_cursor(path)
     assert out["pieces"] == len(model.pieces("discover"))
@@ -132,13 +137,14 @@ def test_the_cursor_never_passes_a_message_that_was_not_sent(tmp_path):
 
     _run(tmp_path, path, model)
 
+    tool_marks = {i for i, m in enumerate(messages) if m["role"] == "tool"}
     sent: set[int] = set()
     for stage, marks, cursor in model.calls:
         if stage == "discover":  # the first stage to read a piece
-            assert set(range(cursor)) <= sent
-            assert marks and marks[0] == cursor
+            assert set(range(cursor)) - tool_marks <= sent
+            assert marks and set(range(cursor, marks[0])) <= tool_marks
         sent |= set(marks)
-    assert sent == set(range(len(messages)))
+    assert sent == set(_said(messages))
 
 
 @pytest.mark.parametrize("stage", ["discover", "learnings"])
@@ -153,7 +159,7 @@ def test_provider_failure_stops_at_the_piece_and_the_next_run_resumes_there(
 
     done = failing.pieces("discover")[:2]
     failed_piece = failing.pieces("discover")[2]
-    assert get_extract_cursor(path) == done[-1][-1] + 1 == failed_piece[0]
+    assert get_extract_cursor(path) == failed_piece[0]
     assert out["cursor"] == failed_piece[0]
     assert out["stopped"] == "provider_error" and out["error"]
     assert out["pieces"] == 2
@@ -164,7 +170,7 @@ def test_provider_failure_stops_at_the_piece_and_the_next_run_resumes_there(
 
     assert healthy.pieces("discover")[0] == failed_piece
     resumed = [i for piece in healthy.pieces("discover") for i in piece]
-    assert resumed == list(range(failed_piece[0], len(messages)))
+    assert resumed == [i for i in _said(messages) if i >= failed_piece[0]]
     assert again["cursor"] == len(messages) == get_extract_cursor(path)
     assert "stopped" not in again
 
@@ -225,7 +231,7 @@ def test_time_budget_spent_mid_span_leaves_the_cursor_at_the_last_completed_piec
     assert len(pieces) == 2
     assert model.pieces("learnings") == pieces  # the piece in flight was finished
     assert out["yielded"] is True
-    assert out["cursor"] == pieces[-1][-1] + 1 == get_extract_cursor(path)
+    assert out["cursor"] == get_extract_cursor(path) > pieces[-1][-1]
     assert out["cursor"] < len(messages)
 
 
@@ -238,7 +244,7 @@ def test_unparseable_reply_still_advances_the_cursor(tmp_path):
     assert "stopped" not in out
     assert out["cursor"] == len(messages) == get_extract_cursor(path)
     sent = [i for piece in model.pieces("discover") for i in piece]
-    assert sent == list(range(len(messages)))
+    assert sent == _said(messages)
 
 
 def test_coverage_counts_the_span_and_what_was_sent(tmp_path):
@@ -250,7 +256,7 @@ def test_coverage_counts_the_span_and_what_was_sent(tmp_path):
     # Only the message larger than a stage prompt loses text: its tail.
     assert out["span_chars"] - out["sent_chars"] > 4000
     assert out["span_chars"] - out["sent_chars"] < 6000
-    assert out["sent_chars"] > 60_000
+    assert out["sent_chars"] > 30_000
 
 
 def test_failure_placeholders_are_passed_over_without_a_call(tmp_path):
@@ -327,3 +333,87 @@ def test_pass_budget_spent_inside_a_session_yields_and_keeps_the_rest(tmp_path, 
     assert out["yielded"] is True and out["pieces"] == 1
     assert 0 < get_extract_cursor(path) < len(messages)
     assert [n for n, _d in events].count("memory.dream.max_seconds_reached") == 1
+
+
+# --- what the pass reads: the user and the assistant, not tool output --------
+
+
+def _tool(i: int, chars: int = 900) -> dict:
+    return _message(i, role="tool", chars=chars)
+
+
+def test_tool_output_is_never_sent_to_the_model(tmp_path):
+    path, messages = _long_session(tmp_path)
+    model = Model(path)
+
+    _run(tmp_path, path, model)
+
+    tool_marks = {i for i, m in enumerate(messages) if m["role"] == "tool"}
+    assert tool_marks
+    for stage, marks, _cursor in model.calls:
+        assert not tool_marks & set(marks), stage
+
+
+def test_a_span_ending_in_tool_messages_is_fully_passed_over(tmp_path):
+    messages = [_message(0), _message(1, role="assistant"), _tool(2), _tool(3)]
+    path = _session(tmp_path, messages)
+
+    first = Model(path)
+    out = _run(tmp_path, path, first)
+
+    assert first.pieces("discover") == [[0, 1]]
+    assert out["cursor"] == 4 == get_extract_cursor(path)
+
+    second = Model(path)
+    again = _run(tmp_path, path, second)
+
+    assert second.calls == []
+    assert again["skipped"] == "no_new_turns"
+
+
+def test_a_span_of_only_tool_messages_makes_no_call_and_is_passed_over(tmp_path):
+    path = _session(tmp_path, [_tool(0), _tool(1), _tool(2)])
+    model = Model(path)
+
+    out = _run(tmp_path, path, model)
+
+    assert model.calls == []
+    assert out["cursor"] == 3 == get_extract_cursor(path)
+    assert out["pieces"] == 0 and out["span_chars"] == 0 and out["sent_chars"] == 0
+
+
+def test_a_stretch_of_tool_messages_before_an_oversized_message_is_passed_over(tmp_path):
+    messages = [_tool(0), _tool(1), _message(2, chars=PIECE_CHARS + 5000), _message(3)]
+    path = _session(tmp_path, messages)
+    model = Model(path, fail={("discover", 1): "error"})
+
+    out = _run(tmp_path, path, model)
+
+    # the tool-only stretch costs no call and the cursor leaves it behind
+    assert model.pieces("discover") == [[2]]
+    assert out["stopped"] == "provider_error"
+    assert get_extract_cursor(path) == 2
+
+
+def test_tool_output_bulk_does_not_multiply_the_calls(tmp_path):
+    messages = []
+    for i in range(0, 60, 3):
+        messages += [_message(i, chars=200), _message(i + 1, role="assistant", chars=300),
+                     _tool(i + 2, 20_000)]
+    path = _session(tmp_path, messages)
+    model = Model(path)
+
+    out = _run(tmp_path, path, model)
+
+    assert len(model.pieces("discover")) == 1
+    assert len(model.pieces("learnings")) == 1
+    assert out["pieces"] == 1
+    assert out["cursor"] == len(messages) == get_extract_cursor(path)
+
+
+def test_session_summary_still_renders_tool_output():
+    from durin.memory.session_summary_dream import _format_turns
+
+    text = _format_turns([_message(0), _tool(1, 5)])
+
+    assert "TOOL" in text and "msg-0001" in text

@@ -259,7 +259,8 @@ passes; the core ones are listed below. Reactive triggers (session compaction,
 session close) run only the extract pass, throttled by `ReactiveDreamGate`.
 
 1. **Extract** (`dream_passes.run_extract_pass`): iterate sessions ordered by name.
-   For each session with turns beyond the stored `extract_cursor`, cut those turns at
+   For each session with turns beyond the stored `extract_cursor`, render the
+   user and assistant text of those turns (tool output is not read), cut it at
    message boundaries into pieces that each fit one stage prompt and, per piece, scan
    tool calls for `memory_upsert_entity` references (Stage 1), call an LLM to extract
    typed attributes, and write via `memory_writer`. Optionally (Stage 2,
