@@ -113,6 +113,26 @@ class LLMResponse:
         return self.finish_reason in ("tool_calls", "stop")
 
 
+def _reasoning_chars(response: LLMResponse) -> int:
+    """Length of the reasoning text a response carries, each text counted once.
+
+    Providers expose reasoning under two fields: ``reasoning_content`` (plain
+    text) and ``thinking_blocks`` (structured blocks whose ``thinking`` key
+    holds the text). Some providers fill both with the same text, others only
+    one, so the plain text wins when present and the blocks are summed only
+    when it is absent. Redacted blocks carry opaque data, not text, and add
+    nothing."""
+    text = getattr(response, "reasoning_content", None)
+    if isinstance(text, str) and text:
+        return len(text)
+    total = 0
+    for block in getattr(response, "thinking_blocks", None) or []:
+        thinking = block.get("thinking") if isinstance(block, dict) else None
+        if isinstance(thinking, str):
+            total += len(thinking)
+    return total
+
+
 @dataclass(frozen=True)
 class GenerationSettings:
     """Default generation settings."""
@@ -322,6 +342,8 @@ class LLMProvider(ABC):
                 "duration_ms": round(float(duration_ms), 1),
                 "finish_reason": getattr(response, "finish_reason", "stop"),
                 "purpose": purpose or current_call_purpose() or "unknown",
+                "output_chars": len(getattr(response, "content", None) or ""),
+                "reasoning_chars": _reasoning_chars(response),
             }
             if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
                 event["max_tokens"] = max_tokens

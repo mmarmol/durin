@@ -132,11 +132,21 @@ are the only callers left that invoke `emit_call_telemetry` directly, outside
 the retry wrappers. The event carries the provider's
 config-registry name (stamped as `provider_key` by the factory), the model,
 prompt/cached/completion token counts, `duration_ms`, the final
-`finish_reason`, and `purpose` — the universal "who spent the tokens" record;
+`finish_reason`, `purpose`, and `output_chars` / `reasoning_chars` — the universal "who spent the tokens" record;
 `cache.usage` remains the agent-loop-only cache-ratio view. When a fallback
 model produced the response, the row names the fallback's provider and model
 and the `max_tokens` it was sent, not the primary's the request started with.
-Sink resolution:
+`output_chars` and
+`reasoning_chars` are character counts of text, not tokens: the length of the
+visible answer and of the reasoning text the response carried. They are always
+present, and 0 is a value — no answer text (a tool-call-only reply) or no
+reasoning text. Tool-call arguments count in neither, and only lengths are
+recorded. Reasoning is read from the response's plain reasoning text, or from
+its structured thinking blocks when there is none, so text a provider exposes
+under both is counted once; redacted blocks carry no text and add nothing. A
+provider that returns no reasoning text shows 0 even if the model reasoned, so
+the pair is the one reasoning signal available for every provider, not a
+measure of reasoning tokens. Sink resolution:
 the ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
 

@@ -548,6 +548,14 @@
         "require": "必须",
         "off": "关闭"
       },
+      "judgeEffort": {
+        "inherit": "记忆模型的设置",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "adaptive": "自适应",
+        "none": "无"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder 重排序器",
         "crossEncoderModel": "重排序模型",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "并发评判调用数",
         "dreamRecheckDays": "未决对再次评判的间隔（天）",
         "dreamNameGate": "语义候选的名称信号",
+        "dreamJudgeEffort": "第一评判的推理强度",
         "dreamAlwaysOnBudget": "常驻预算（token 数）"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "精炼流程中同时运行的评判调用数量（1-8）。合并操作仍按候选顺序逐一执行。",
         "dreamRecheckDays": "对没有确定裁定的一对（无法解析的回复、一个 'unclear'、一个低于合并门槛的 'same'）多少天后重新评判。0 表示每次运行都会重新评判。",
         "dreamNameGate": "名称信号如何引导嵌入距离相近的候选：'prioritize' 会优先评判名称共享某个词符或互相包含的一对，其余按距离排序；'require' 只评判这类候选；'off' 仅按距离排序。别名对总会被评判。",
+        "dreamJudgeEffort": "第一评判在作答前推理多少。“记忆模型的设置”保持记忆模型原有的设置；其他值只对这个评判生效，不影响调查评判或任何其他梦境阶段。推理越少越快，但视模型而定可能改变答案，因此请在本实例自己的实体对上检查。更改它不会重新评判已确定的实体对。",
         "dreamAlwaysOnBudget": "固定注入每个提示词中的「常驻」指导内容的 token 预算。Dream 会对反馈（立场/实践）排序、剔除矛盾项，并在此预算内塞入优先级最高的内容。0 表示禁用该固定注入。"
       },
       "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",

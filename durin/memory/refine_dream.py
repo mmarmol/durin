@@ -14,6 +14,7 @@ user's revert.
 """
 from __future__ import annotations
 
+import functools
 import json
 import time
 from pathlib import Path
@@ -497,6 +498,7 @@ def run_refine(
     auto_resolve: bool = True,
     resolve_threshold: int = 85,
     auto_rename: bool = True,
+    judge_reasoning_effort: str | None = None,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
@@ -550,11 +552,23 @@ def run_refine(
     ``auto_rename`` off keeps every key as it is. A ``different`` /
     ``related`` that changes nothing is settled and not flagged, whichever
     tier answered; an ``unclear`` goes to a person.
+
+    ``judge_reasoning_effort`` replaces the memory model's thinking effort for
+    the first judge's calls only, when ``llm_invoke`` is not injected (an
+    injected one is used as given); None leaves the memory model's own. It is
+    recorded as ``effort`` on each remembered verdict but is not part of the
+    verdict's identity, so changing it never re-judges a settled pair.
     """
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
 
-    llm_invoke = llm_invoke or default_llm_invoke
+    if llm_invoke is None:
+        # The setting reaches only this first judge's calls: the investigating
+        # judge and the other passes call default_llm_invoke unbound.
+        llm_invoke = (
+            functools.partial(default_llm_invoke, reasoning_effort=judge_reasoning_effort)
+            if judge_reasoning_effort is not None else default_llm_invoke
+        )
     t0 = _clock()
 
     def _elapsed_ms() -> int:
@@ -609,7 +623,12 @@ def run_refine(
 
     def _remember(ref_a: str, ref_b: str, pair_fp: str, **fields) -> None:
         nonlocal unsaved
-        verdict_cache[_pair_key(ref_a, ref_b)] = {"fp": pair_fp, "judge": judge_id, "at": _now(), **fields}
+        entry = {"fp": pair_fp, "judge": judge_id, "at": _now(), **fields}
+        if judge_reasoning_effort is not None:
+            # Informational only: not part of judge_id, so changing the setting
+            # never invalidates a remembered verdict.
+            entry["effort"] = judge_reasoning_effort
+        verdict_cache[_pair_key(ref_a, ref_b)] = entry
         unsaved += 1
 
     def _prepare(cand) -> dict | None:

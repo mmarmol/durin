@@ -548,6 +548,14 @@
         "require": "필수",
         "off": "끄기"
       },
+      "judgeEffort": {
+        "inherit": "메모리 모델의 설정",
+        "low": "낮음",
+        "medium": "보통",
+        "high": "높음",
+        "adaptive": "적응형",
+        "none": "없음"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder 리랭커",
         "crossEncoderModel": "리랭커 모델",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "동시 진행 심사 호출 수",
         "dreamRecheckDays": "미확정 쌍 재심사까지(일)",
         "dreamNameGate": "의미 후보의 이름 신호",
+        "dreamJudgeEffort": "첫 번째 심사의 추론 강도",
         "dreamAlwaysOnBudget": "상시 고정 예산(토큰)"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "정제 단계에서 동시에 실행되는 심사 호출 수입니다(1-8). 병합은 후보 순서대로 여전히 한 번에 하나씩 적용됩니다.",
         "dreamRecheckDays": "판정이 확정되지 않은 쌍(해석 불가능한 응답, 'unclear', 병합 기준보다 낮은 'same')을 다시 심사하기까지의 일수입니다. 0이면 실행할 때마다 다시 심사합니다.",
         "dreamNameGate": "이름 신호가 임베딩상 가까운 후보를 어떻게 유도하는지입니다. 'prioritize'는 이름이 토큰을 공유하거나 서로 포함하는 쌍을 먼저 심사하고, 나머지는 거리순으로 심사합니다. 'require'는 그런 쌍만 심사합니다. 'off'는 거리만으로 정렬합니다. 별칭 쌍은 항상 심사됩니다.",
+        "dreamJudgeEffort": "첫 번째 심사가 답하기 전에 얼마나 추론하는지입니다. '메모리 모델의 설정'은 메모리 모델의 설정을 그대로 둡니다. 다른 값은 이 심사에만 적용되며, 조사하는 심사나 다른 드림 패스에는 적용되지 않습니다. 추론을 줄이면 더 빠르지만 모델에 따라 답이 달라질 수 있으므로, 이 인스턴스의 실제 쌍으로 확인하세요. 값을 바꿔도 확정된 쌍은 다시 심사하지 않습니다.",
         "dreamAlwaysOnBudget": "모든 프롬프트에 고정되는 '상시' 지침의 토큰 예산입니다. Dream이 피드백(태도/관행)의 우선순위를 매기고 모순을 제거한 뒤, 우선순위가 가장 높은 항목을 이 예산에 맞춰 담습니다. 0이면 고정을 비활성화합니다."
       },
       "crossEncoderModelPlaceholder": "모델 ID (예: BAAI/bge-reranker-base)",

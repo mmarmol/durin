@@ -280,6 +280,7 @@ def run_refine_pass(
     auto_resolve: bool = True,
     resolve_threshold: int = 85,
     auto_rename: bool = True,
+    judge_reasoning_effort: str | None = None,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -300,7 +301,9 @@ def run_refine_pass(
     :func:`run_refine`), and ``semantic_name_gate`` how the name signal
     orders or filters embedding-near candidates. ``auto_resolve`` /
     ``resolve_threshold`` / ``auto_rename`` govern the non-merge resolutions
-    the judges propose (see :func:`run_refine`).
+    the judges propose (see :func:`run_refine`). ``judge_reasoning_effort``
+    (``memory.dream.auto_absorb.judge_reasoning_effort``) sets the thinking
+    effort of the first judge alone; None uses the memory model's own.
     """
     import time
     t0 = time.perf_counter()
@@ -325,7 +328,8 @@ def run_refine_pass(
                      semantic_name_gate=semantic_name_gate,
                      auto_resolve=auto_resolve,
                      resolve_threshold=resolve_threshold,
-                     auto_rename=auto_rename)
+                     auto_rename=auto_rename,
+                     judge_reasoning_effort=judge_reasoning_effort)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
@@ -333,7 +337,9 @@ def run_refine_pass(
           candidates=out.get("candidates", 0),
           judged=out.get("judged", 0), yielded=bool(out.get("yielded")),
           stop_reason=out.get("stop_reason"),
-          duration_ms=out["duration_ms"])
+          duration_ms=out["duration_ms"],
+          **({"judge_reasoning_effort": judge_reasoning_effort}
+             if judge_reasoning_effort is not None else {}))
     return out
 
 

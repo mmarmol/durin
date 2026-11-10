@@ -490,6 +490,11 @@ class AutoAbsorbConfig(Base):
         validation_alias=AliasChoices("judgeConcurrency", "judge_concurrency"),
         description="Judge calls in flight at once during the refine pass; merges are applied one at a time, in candidate order",
     )
+    judge_reasoning_effort: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("judgeReasoningEffort", "judge_reasoning_effort"),
+        description="LLM thinking effort (low/medium/high/adaptive/none) for the refine pass's first judge only; None uses the memory model's own setting. Less reasoning is faster and can change the answers depending on the model, so check it on this instance's own pairs. Changing it does not re-judge settled pairs; the investigating judge and every other dream pass keep the memory model's setting",
+    )
     recheck_days: int = Field(
         default=7,
         ge=0,

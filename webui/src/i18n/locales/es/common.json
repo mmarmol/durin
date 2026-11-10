@@ -524,6 +524,7 @@
         "dreamJudgeConcurrency": "Cuántas llamadas al juez corren a la vez durante la pasada de refine (1-8). Las fusiones siguen aplicándose de a una, en orden de candidatos.",
         "dreamRecheckDays": "Días antes de volver a juzgar un par sin veredicto asentado (respuesta no parseable, un 'unclear', un 'same' bajo el listón de fusión). 0 lo re-juzga en cada corrida.",
         "dreamNameGate": "Cómo la señal de nombre ordena los candidatos cercanos por embedding: 'prioritize' juzga primero los pares cuyos nombres comparten un token o se contienen, luego el resto por distancia; 'require' juzga solo esos; 'off' ordena solo por distancia. Los pares por alias se juzgan siempre.",
+        "dreamJudgeEffort": "Esfuerzo de razonamiento del primer juez",
         "dreamAlwaysOnBudget": "Presupuesto de tokens para la guía 'always-on' que se pinea en cada prompt. El dream rankea el feedback (stance/practice), descarta contradicciones y mete los de mayor prioridad en este presupuesto. 0 desactiva el pin."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
@@ -531,6 +532,14 @@
         "prioritize": "Priorizar",
         "require": "Exigir",
         "off": "Apagado"
+      },
+      "judgeEffort": {
+        "inherit": "Ajuste del modelo de memoria",
+        "low": "Bajo",
+        "medium": "Medio",
+        "high": "Alto",
+        "adaptive": "Adaptativo",
+        "none": "Ninguno"
       },
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
@@ -550,6 +559,7 @@
         "dreamJudgeConcurrency": "Llamadas al juez en paralelo",
         "dreamRecheckDays": "Re-juzgar pares sin veredicto tras (días)",
         "dreamNameGate": "Señal de nombre en candidatos semánticos",
+        "dreamJudgeEffort": "Cuánto razona el primer juez antes de responder. 'Ajuste del modelo de memoria' lo deja como lo tiene el modelo de memoria; los demás valores lo fijan solo para este juez, no para el juez investigador ni para ningún otro paso del dream. Razonar menos es más rápido y, según el modelo, puede cambiar las respuestas: conviene comprobarlo con los pares de esta instancia. Cambiarlo no vuelve a juzgar los pares ya resueltos.",
         "dreamAlwaysOnBudget": "Presupuesto always-on (tokens)"
       },
       "saveError": "No se pudo guardar {{path}}.",

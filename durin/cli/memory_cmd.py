@@ -247,7 +247,8 @@ def cmd_dream(
                          semantic_name_gate=_absorb.semantic_name_gate,
                          auto_resolve=_absorb.auto_resolve,
                          resolve_threshold=_absorb.resolve_threshold,
-                         auto_rename=_absorb.auto_rename)
+                         auto_rename=_absorb.auto_rename,
+                         judge_reasoning_effort=_absorb.judge_reasoning_effort)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)

@@ -548,6 +548,14 @@
         "require": "Bắt buộc",
         "off": "Tắt"
       },
+      "judgeEffort": {
+        "inherit": "Thiết lập của mô hình bộ nhớ",
+        "low": "Thấp",
+        "medium": "Trung bình",
+        "high": "Cao",
+        "adaptive": "Thích ứng",
+        "none": "Không"
+      },
       "rows": {
         "crossEncoderEnabled": "Bộ xếp hạng lại cross-encoder",
         "crossEncoderModel": "Mô hình xếp hạng lại",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "Số lệnh gọi giám định đồng thời",
         "dreamRecheckDays": "Giám định lại cặp chưa ngã ngũ sau (ngày)",
         "dreamNameGate": "Tín hiệu tên trên ứng viên ngữ nghĩa",
+        "dreamJudgeEffort": "Mức suy luận của bộ giám định đầu tiên",
         "dreamAlwaysOnBudget": "Ngân sách luôn bật (token)"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "Số lệnh gọi giám định chạy đồng thời trong lượt tinh chỉnh (1-8). Việc gộp vẫn được áp dụng từng cái một, theo thứ tự ứng viên.",
         "dreamRecheckDays": "Số ngày trước khi một cặp chưa có phán quyết ổn định (phản hồi không phân tích được, một 'unclear', một 'same' dưới ngưỡng gộp) được giám định lại. 0 nghĩa là giám định lại ở mỗi lượt chạy.",
         "dreamNameGate": "Tín hiệu tên định hướng các ứng viên gần nhau theo embedding như thế nào: 'prioritize' giám định trước các cặp có tên chung một token hoặc chứa lẫn nhau, sau đó phần còn lại theo khoảng cách; 'require' chỉ giám định những cặp đó; 'off' chỉ sắp xếp theo khoảng cách. Các cặp bí danh luôn được giám định.",
+        "dreamJudgeEffort": "Bộ giám định đầu tiên suy luận nhiều đến đâu trước khi trả lời. 'Thiết lập của mô hình bộ nhớ' giữ nguyên như mô hình bộ nhớ đang có; các giá trị khác chỉ áp dụng cho bộ giám định này, không áp dụng cho bộ giám định điều tra hay bất kỳ lượt dream nào khác. Suy luận ít hơn thì nhanh hơn và, tùy mô hình, có thể làm đổi câu trả lời, nên hãy kiểm tra trên chính các cặp của phiên bản này. Đổi giá trị không làm giám định lại các cặp đã ngã ngũ.",
         "dreamAlwaysOnBudget": "Ngân sách token cho hướng dẫn 'luôn bật' được ghim vào mọi prompt. Dream xếp hạng phản hồi (quan điểm/thực hành), loại bỏ mâu thuẫn, và đưa các mục ưu tiên cao nhất vào ngân sách này. 0 để tắt việc ghim."
       },
       "crossEncoderModelPlaceholder": "id mô hình (vd. BAAI/bge-reranker-base)",

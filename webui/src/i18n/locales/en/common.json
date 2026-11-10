@@ -548,6 +548,14 @@
         "require": "Require",
         "off": "Off"
       },
+      "judgeEffort": {
+        "inherit": "Memory model's setting",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "adaptive": "Adaptive",
+        "none": "None"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder reranker",
         "crossEncoderModel": "Reranker model",
@@ -566,6 +574,7 @@
         "dreamJudgeConcurrency": "Judge calls in flight",
         "dreamRecheckDays": "Re-judge unsettled pairs after (days)",
         "dreamNameGate": "Name signal on semantic candidates",
+        "dreamJudgeEffort": "First judge's reasoning effort",
         "dreamAlwaysOnBudget": "Always-on budget (tokens)"
       },
       "help": {
@@ -586,6 +595,7 @@
         "dreamJudgeConcurrency": "How many judge calls run at the same time during the refine pass (1-8). Merges are still applied one at a time, in candidate order.",
         "dreamRecheckDays": "Days before a pair without a settled verdict (an unparseable reply, an 'unclear', a 'same' below the merge bar) is judged again. 0 re-judges it every run.",
         "dreamNameGate": "How the name signal steers embedding-near candidates: 'prioritize' judges pairs whose names share a token or contain each other first, then the rest by distance; 'require' judges only those; 'off' orders by distance alone. Alias pairs are always judged.",
+        "dreamJudgeEffort": "How much the first judge reasons before answering. 'Memory model's setting' leaves it as the memory model has it; the other values set it for this judge alone, not for the investigating judge or any other dream pass. Less reasoning is faster and can change the answers depending on the model, so check it on this instance's own pairs. Changing it does not re-judge settled pairs.",
         "dreamAlwaysOnBudget": "Token budget for the 'always-on' guidance pinned into every prompt. The dream ranks feedback (stance/practice), drops contradictions, and fits the highest-priority items into this budget. 0 disables the pin."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",

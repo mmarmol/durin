@@ -161,3 +161,130 @@ def test_default_model_is_reported_when_model_arg_is_none(tmp_path):
     finally:
         reset_telemetry(token)
     assert _events(log_path)[0]["data"]["model"] == "stub-model"
+
+
+# --- reasoning / answer size -------------------------------------------------
+
+
+def _call_data(response: LLMResponse, tmp_path, *, stream=False) -> dict:
+    """Run ``response`` through the real retry wrapper and return the event data."""
+    p = _StubProvider(response)
+    p.provider_key = "zai_coding_plan"
+    log_path = tmp_path / "t.jsonl"
+    token = bind_telemetry(TelemetryLogger(log_path, session_key="s1"))
+    try:
+        call = p.chat_stream_with_retry if stream else p.chat_with_retry
+        asyncio.run(call(messages=[{"role": "user", "content": "hi"}], model="m"))
+    finally:
+        reset_telemetry(token)
+    calls = [e for e in _events(log_path) if e["type"] == "provider.call"]
+    assert len(calls) == 1
+    return calls[0]["data"]
+
+
+def _anthropic_response(blocks) -> LLMResponse:
+    from types import SimpleNamespace
+
+    from durin.providers.anthropic_provider import AnthropicProvider
+
+    sdk = SimpleNamespace(
+        content=blocks, stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=3, output_tokens=9),
+    )
+    return AnthropicProvider._parse_response(sdk)
+
+
+def _bedrock_response(content_blocks) -> LLMResponse:
+    from durin.providers.bedrock_provider import BedrockProvider
+
+    return BedrockProvider._parse_response({
+        "output": {"message": {"content": content_blocks}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 3, "outputTokens": 9},
+    })
+
+
+def test_reasoning_and_answer_lengths_are_exact(tmp_path):
+    data = _call_data(
+        LLMResponse(content="the answer", reasoning_content="think think think"), tmp_path
+    )
+    assert data["output_chars"] == len("the answer")
+    assert data["reasoning_chars"] == len("think think think")
+
+
+def test_a_call_that_did_not_think_records_zero_reasoning(tmp_path):
+    data = _call_data(LLMResponse(content="plain"), tmp_path)
+    assert data["output_chars"] == 5
+    assert data["reasoning_chars"] == 0
+
+
+def test_no_visible_answer_records_zero_output_without_error(tmp_path):
+    from durin.providers.base import ToolCallRequest
+
+    only_tools = LLMResponse(
+        content=None, finish_reason="tool_calls",
+        tool_calls=[ToolCallRequest(id="c1", name="t", arguments={"q": "x" * 500})],
+        reasoning_content="why",
+    )
+    data = _call_data(only_tools, tmp_path)
+    assert data["output_chars"] == 0
+    assert data["reasoning_chars"] == 3  # tool arguments count in neither number
+
+
+def test_anthropic_thinking_blocks_are_counted(tmp_path):
+    from types import SimpleNamespace
+
+    resp = _anthropic_response([
+        SimpleNamespace(type="thinking", thinking="abcde", signature="sig"),
+        SimpleNamespace(type="redacted_thinking", data="opaque"),
+        SimpleNamespace(type="thinking", thinking="fg", signature="sig2"),
+        SimpleNamespace(type="text", text="done"),
+    ])
+    assert resp.reasoning_content is None and resp.thinking_blocks
+    data = _call_data(resp, tmp_path)
+    assert data["reasoning_chars"] == 7
+    assert data["output_chars"] == 4
+
+
+def test_bedrock_reasoning_exposed_twice_is_counted_once(tmp_path):
+    resp = _bedrock_response([
+        {"reasoningContent": {"reasoningText": {"text": "hmmmm", "signature": "s"}}},
+        {"text": "ok"},
+    ])
+    assert resp.reasoning_content == "hmmmm"
+    assert resp.thinking_blocks[0]["thinking"] == "hmmmm"
+    data = _call_data(resp, tmp_path)
+    assert data["reasoning_chars"] == 5
+    assert data["output_chars"] == 2
+
+
+def test_redacted_thinking_alone_contributes_no_chars(tmp_path):
+    resp = _bedrock_response([
+        {"reasoningContent": {"redactedContent": b"\x00\x01"}},
+        {"text": "ok"},
+    ])
+    assert resp.thinking_blocks
+    assert _call_data(resp, tmp_path)["reasoning_chars"] == 0
+
+
+def test_existing_fields_are_unchanged(tmp_path):
+    plain = LLMResponse(content="ok", usage={"prompt_tokens": 100, "cached_tokens": 40,
+                                             "completion_tokens": 7})
+    thinking = LLMResponse(content="ok", usage=plain.usage, reasoning_content="r" * 50)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a = _call_data(plain, tmp_path / "a")
+    b = _call_data(thinking, tmp_path / "b")
+    for key in ("provider", "model", "prompt_tokens", "cached_tokens",
+                "completion_tokens", "finish_reason", "purpose"):
+        assert a[key] == b[key]
+    assert (a["prompt_tokens"], a["cached_tokens"], a["completion_tokens"]) == (100, 40, 7)
+
+
+def test_streaming_and_non_streaming_paths_both_carry_the_fields(tmp_path):
+    resp = LLMResponse(content="abc", reasoning_content="12345")
+    for name, stream in (("plain", False), ("stream", True)):
+        d = tmp_path / name
+        d.mkdir()
+        data = _call_data(resp, d, stream=stream)
+        assert (data["output_chars"], data["reasoning_chars"]) == (3, 5)

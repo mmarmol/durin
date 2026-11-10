@@ -336,7 +336,15 @@ class ProviderCallEvent(TypedDict):
     and ``input_budget_tokens`` (the window minus the capped output
     reservation and safety buffer, or ``context_block_limit`` when set);
     calls outside a run (memory, judge, compaction, the aux bridges) carry
-    neither."""
+    neither.
+
+    ``output_chars`` and ``reasoning_chars`` are the sizes, in characters of
+    text (not tokens), of the visible answer and of the reasoning text the
+    response carried; tool-call arguments count in neither. They are always
+    present: 0 means the response had no answer text (a tool-call-only reply)
+    or no reasoning text. A provider that does not return its reasoning shows
+    0 even if the model reasoned. Reasoning exposed under two response fields
+    is counted once. Only lengths are recorded, never the text."""
     provider: str
     model: str
     prompt_tokens: int
@@ -345,6 +353,8 @@ class ProviderCallEvent(TypedDict):
     duration_ms: float
     finish_reason: str
     purpose: str
+    output_chars: int
+    reasoning_chars: int
     max_tokens: NotRequired[int]
     context_window_tokens: NotRequired[int]
     input_budget_tokens: NotRequired[int]
@@ -974,7 +984,8 @@ class MemoryDreamEndEvent(TypedDict):
     and its coverage: ``pieces`` / ``span_chars`` / ``sent_chars`` — the
     pieces of user and assistant text the session cursors moved past, their characters,
     and how many of those characters the stage prompts carried;
-    the refine pass sets ``merged`` / ``kept`` / ``candidates``; the
+    the refine pass sets ``merged`` / ``kept`` / ``candidates`` (and
+    ``judge_reasoning_effort`` when the first judge has its own setting); the
     derived_from and session-summary passes set ``sessions`` / ``yielded`` /
     ``errors``, the derived_from pass adds ``links`` and the session-summary
     pass adds ``written`` / ``skipped``.
@@ -983,6 +994,7 @@ class MemoryDreamEndEvent(TypedDict):
     kind: str
     judged: NotRequired[int]  # refine: pairs the judge answered this run
     stop_reason: NotRequired[str | None]  # refine: "max_seconds" | "judge_unavailable" when yielded
+    judge_reasoning_effort: NotRequired[str]  # refine: the first judge's thinking effort, present only when auto_absorb.judge_reasoning_effort is set
     duration_ms: int
     entities_consolidated: NotRequired[int]
     entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted

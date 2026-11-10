@@ -514,7 +514,7 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 run_started_at, vector_index=None, escalate_floor=0, tier2_confidence_threshold=None,
 semantic_distance_threshold=0.30, max_seconds=0, judge_concurrency=1, recheck_days=7,
 semantic_name_gate="prioritize", auto_resolve=True, resolve_threshold=85,
-auto_rename=True)` is the graph-hygiene pass,
+auto_rename=True, judge_reasoning_effort=None)` is the graph-hygiene pass,
 gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
 default**). When disabled it short-circuits — **no judge, no merge** — and logs
 the manual path (`durin memory absorb-suggest` to surface, `durin memory absorb`
@@ -631,6 +631,24 @@ threaded through; it is `None` when the vector index is unavailable.
    verdict cache for the recheck cooldown like any other unsettled pair, so a
    pair the investigating judge cannot settle is not re-judged and re-escalated
    on every run.
+
+**Judge effort.** Most of what a judgment costs is the model's hidden reasoning,
+and how much the answers change with less of it depends on the model.
+`auto_absorb.judge_reasoning_effort` (wired to `run_refine_pass` by the dream
+orchestrator and by `durin memory dream`) sets the thinking effort of the first
+judge alone. Unset, the judge runs on the memory preset exactly as every other
+pass does. Set, `run_refine` binds it onto `default_llm_invoke`, which resolves
+the memory preset as usual and replaces only its `reasoning_effort` (provider,
+model and the rest stay as resolved), the same way a per-call model override
+works. An injected `llm_invoke` is used as given. The investigating judge and
+every other dream pass call the invoke unbound, so they keep the memory model's
+setting. Less reasoning is faster and can change the answers depending on the
+model, so an operator should check it on the instance's own pairs. Each
+remembered verdict records the setting it was given under as `effort` (absent
+when unset); it is not part of the cache key or the judge identity, so
+changing the setting never re-judges a settled pair, and an entry without the
+field stays valid. The refine pass's `memory.dream.end` carries
+`judge_reasoning_effort` when the setting is in force.
 
 **Bounds.** The pass is budgeted like every other dream pass: `max_seconds`
 (wired from `memory.dream.max_seconds_per_run`) runs from the start of the pass,
@@ -1045,6 +1063,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.resolve_threshold` | `85` | Confidence floor (0–100) for applying a non-merge resolution the Tier 1 judge proposed; the investigating sub-agent's are applied whatever its confidence. |
 | `memory.dream.auto_absorb.auto_rename` | `true` | Allow automatic resolutions and merges to change a key; off, the rest is applied and keys stay. |
 | `memory.dream.auto_absorb.judge_concurrency` | `3` | Judge calls in flight at once during the refine pass; merges are still applied one at a time, in candidate order. |
+| `memory.dream.auto_absorb.judge_reasoning_effort` | unset | Thinking effort of the first judge alone; unset uses the memory model's own setting. See the refine pass's judge-effort paragraph. |
 | `memory.dream.auto_absorb.recheck_days` | `7` | Days before a pair without a settled verdict is judged again. `0` re-judges it every run. |
 | `memory.dream.auto_absorb.semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize`, `require` or `off`. |
 
