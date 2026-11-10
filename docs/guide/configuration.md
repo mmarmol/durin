@@ -782,6 +782,9 @@ Supported providers (all use `ProviderConfig` unless noted):
 `aihubmix`, `xiaomi_mimo`, `longcat`, `vllm`, `ollama`, `lm_studio`,
 `atomic_chat`, `ovms`, `custom` (any OpenAI-compatible endpoint).
 
+`openai_codex` and `github_copilot` sign in with `durin oauth login` and are
+never written to the config file.
+
 AWS Bedrock (`bedrock`) adds:
 
 | Key | Default | Meaning |

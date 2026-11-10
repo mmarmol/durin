@@ -32,8 +32,16 @@ Every work node (`"kind": "work"`, the default) has:
   exclusive — pick one.
 - **A tool set.** `tools: "none"` (the default) runs the node with no
   tools — it just reasons over its input and replies. `tools: "default"`
-  gives it your normal tool set (file read/write, shell, web, etc.) so it
-  can actually do work.
+  gives it the background tool set (file read/write, shell, web, memory
+  search, etc.) so it can actually do work. The interactive tools are left
+  out: a node cannot ask you a question, send a channel message, spawn a
+  sub-agent or run another workflow.
+- **A turn budget.** `max_turns` caps how many rounds of tool use the node
+  gets in one visit; when it runs out the node is asked to write its answer
+  from what it has gathered. `max_reentries` (needs `max_turns`) lets it ask
+  for that many fresh budgets first when essential work is still missing,
+  and `reentry_prompt` (needs `max_reentries`) is your steer for those extra
+  rounds.
 - **Skills and MCP servers.** A node can name `skills` (skill docs injected
   into its own prompt) and `mcps` (a subset of your already-configured MCP
   servers) — scoped per node, so a node only sees what its job needs.
@@ -206,7 +214,8 @@ the run on pass or loops back to re-assemble on fail.
 ## Nested workflows (subflows)
 
 Instead of a work node, you can have a node that runs another workflow as a
-nested run. A subworkflow node runs in the **same working folder as the
+nested run: `{"id": "draft", "kind": "subworkflow", "workflow": "<name>",
+"next": ...}`. A subworkflow node runs in the **same working folder as the
 parent** — it reads and extends the same set of files that earlier nodes
 created, so the nested workflow's steps collaborate on the parent's
 evolving fileset just as if they were sequential steps in the parent workflow.
@@ -331,7 +340,10 @@ outputs into the next node's input:
   and `list_from` names the node whose output is that list (e.g. one search
   worker per query the plan step produced). The list is a JSON array (or
   newline-separated text as a fallback) of at most 50 items; any beyond that
-  are dropped.
+  are dropped. Each worker receives its item and nothing else — not the
+  run's task, not the workflow's input/output descriptions — so keep items
+  short (an id or a file name) and put the instructions in the worker's
+  prompt.
 - **Runtime-selected** — `branches_from` names a node whose output lists which
   declared work or script nodes to run this pass (a JSON array, or
   comma-separated ids on its last line); an optional `branches` list declares
@@ -466,7 +478,8 @@ exists, a small link under the tray takes you there. The same stranded runs,
 with their resume and Cancel controls, also show on the dashboard's
 **Pending** page, next to everything else that waits on you.
 
-Each workflow also has a self-improvement mode (`manual` by default): a
+Each workflow also has a self-improvement mode (`"improvement_mode"`,
+`manual` by default, or `auto`): a
 background pass looks at recurring trouble (a node that keeps looping, a
 gate that keeps failing, a script node that keeps crashing) and proposes one
 scoped edit — a prompt rewrite, a fix to a script node's command, or a fix to

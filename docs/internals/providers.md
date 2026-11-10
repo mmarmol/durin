@@ -27,7 +27,8 @@ once: an explicit model prefix wins first (`anthropic/claude-opus-4-5` → `anth
 then keyword match (`deepseek` in the model name → `deepseek`), then local-provider
 detect-by-base-keyword, then any gateway or provider with a configured API key, in
 registry order. First match wins. OAuth providers (GitHub Copilot, OpenAI Codex) are
-skipped unless the provider is named explicitly.
+never picked by that last-resort walk; the provider setting, a model prefix or a
+keyword selects them.
 
 **Capability resolution uses four tiers with a provenance field.** `get_model_capabilities`
 tries: (1) a user-declared `model_capabilities` override, (2) the vendored consensus
@@ -126,9 +127,11 @@ flowchart TD
 | Local | `vllm`, `ollama`, `lm_studio`, `atomic_chat`, `ovms` |
 | Auxiliary | `nvidia`, `groq`, `qianfan` |
 
-Gateways appear early in the registry but have no model-name keywords, so they only
-match via key-prefix detection (`detect_by_key_prefix`) or explicit provider setting —
-not by accident during keyword walk.
+Gateways sit early in the registry so that the last-resort walk, which takes the
+first provider with an API key, reaches a configured gateway before the standard
+providers. Their keywords are their own names (`openrouter`, `aihubmix`, …), so the
+keyword walk picks one only when the model name spells it out. `detect_by_key_prefix`
+is registry metadata that matching does not read.
 
 ---
 
@@ -268,7 +271,9 @@ in `FallbackProvider` (`durin/providers/fallback_provider.py`). On each request,
 `FallbackProvider` calls the primary; if the response has `finish_reason="error"` and
 the error is classified as transient (rate limit, timeout, server error, quota — not
 auth or content filter errors), it tries each fallback preset in order. Failover is
-skipped when content has already started streaming. A circuit breaker trips the primary
+skipped when the caller consumes content deltas and some were already delivered; a
+call without a delta consumer has nothing to duplicate, so a mid-stream failure still
+fails over. A circuit breaker trips the primary
 after three consecutive failures and gates it for 60 seconds before retrying.
 
 Each fallback preset carries its own model's limits (§4.1), and the run's window is
@@ -390,14 +395,17 @@ For purpose `"memory"`:
 
 1. If `agents.aux_models.memory` is set — try the `preset` reference first, then the
    inline `model` field.
-2. If `memory.dream.model_override` is set — use that model with the default preset's
-   provider.
+2. If `memory.dream.model_override` is set — place that model name on the configured
+   provider its name identifies; when none does, the default preset is used.
 3. Otherwise — return the default preset unchanged.
 
 It returns a `ModelPresetConfig` for every purpose except `automations` (and legacy
 `loops`), which returns `None` when no override resolves, so the call rides the agent's
-live model. Bridge tools and dream passes build their provider from this preset using
-the same factory path as the primary model.
+live model. Dream passes, the skill judge and automations build their provider from
+this preset using the same factory path as the primary model. The vision and audio
+bridges do not go through `resolve_aux_preset`: `build_aux_providers`
+(`durin/agent/aux_bridges.py`) builds one provider per configured `aux_models` entry
+with `make_provider`, and an unset entry builds none.
 
 ### 4.9 Per-turn provider snapshot
 
@@ -545,7 +553,7 @@ Provider rules the serialization honors:
 | `model_capabilities.json` | `durin/providers/data/model_capabilities.json` | Vendored consensus snapshot (LiteLLM + OpenRouter + models.dev); keyed by bare lowercased model name |
 | `ProviderSnapshot` | `durin/providers/factory.py` | Immutable result: `provider`, `model`, `context_window_tokens`, `signature`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` (`None` = the preset sets none, and the `agents.defaults` value applies), `compaction_defaults` (the `agents.defaults` ratio and cap it was built with; the signature covers all four, so an edit re-applies the snapshot), `selection` (on a snapshot of what the config selects: that preset's name and its settings as configured, before its window and output limit are resolved against the model catalog, which a running loop compares to notice a new choice, so a catalog refresh is none; `None` on a snapshot of a preset asked for by name) |
 | `build_provider_snapshot` | `durin/providers/factory.py` | Primary factory: resolve preset → match provider → instantiate backend → wrap in FallbackProvider |
-| `make_provider` | `durin/providers/factory.py` | Lower-level factory returning bare `LLMProvider` (used by fallback chain internally) |
+| `make_provider` | `durin/providers/factory.py` | Resolve the preset, build the backend (`_build_provider`) and wrap it in `FallbackProvider` when `fallback_models` is set; used by the aux bridges and the dream and judge invokes |
 | `ProviderConfig` | `durin/config/schema.py` | Per-provider user config: `api_key`, `api_base`, `extra_headers`, `extra_body`, `models` dict |
 | `ProvidersConfig` | `durin/config/schema.py` | Container with one `ProviderConfig` field per provider name |
 | `ModelPresetConfig` | `durin/config/schema.py` | Named preset: `model`, `provider`, `max_tokens`, `context_window_tokens` (both `None` = the model's own limits), `temperature`, `reasoning_effort`, `request_timeout_s`, `top_p`, `top_k`, `repeat_penalty`, `preemptive_compact_ratio`, `preemptive_compact_max_tokens` |
@@ -613,8 +621,8 @@ Per-model entries (`ModelEntry`) hold `max_tokens`, `context_window_tokens`,
 `top_p` / `top_k` / `repeat_penalty` — each `null` inherits the catalog value,
 then `agents.defaults`. The entry's `max_tokens` / `context_window_tokens` serve
 every preset on that model that leaves its own unset, and a value above the
-catalog's is capped to it (see §4.1). `request_timeout_s` overrides the per-request LLM timeout
-for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`, 300s); raise it for slow
+catalog's is capped to it (see §4.1). `request_timeout_s` sets the HTTP client timeout of an OpenAI-compatible provider
+for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`, 120s; the other backends ignore it); raise it for slow
 local models (a large-context ollama/LM Studio model can take minutes to first
 token). `top_p` is a standard param; `top_k` and `repeat_penalty` are non-standard
 and ride in the request `extra_body` (ollama / LM Studio read them there), under
@@ -667,10 +675,12 @@ agents:
 
 ### Provider-selection surfaces
 
-- **TUI / CLI `/model` command**: switches `agents.defaults.model` and `agents.defaults.provider`
-  at runtime; the loop builds a fresh `ProviderSnapshot` when the signature changes.
-- **Settings webui**: provider-first model picker writes `(provider, model)` pair to
-  config; the provider field is `"auto"` unless the user selects a specific override.
+- **TUI / CLI `/model` command**: `/model <preset>` or `/model <provider> <model>`
+  switches the running loop's active preset in memory; the config file is not
+  written. The loop applies the new `ProviderSnapshot` to later turns.
+- **Settings webui**: provider-first model picker writes the chosen `(provider, model)`
+  pair to `agents.defaults`; the provider must be a configured registry provider, so
+  the picker never writes `"auto"`.
 - **`durin status`**: shows each configured provider, its credential status, and the
   active model with the context window the chat runs with — the active preset's
   model's (§4.1), capped by the fallback models' windows, the value the agent loop's
@@ -680,10 +690,14 @@ agents:
   `context_window_tokens` (the same `preset_context_window`); `max_input_tokens` there
   is the model's own limit. The pickers and the Providers catalog list each model's
   own limit to choose from.
-- **`durin doctor`**: validates that the active provider has an API key and that the
-  capability snapshot loaded.
-- **API `PATCH /api/v1/config`**: updates config fields; a preset switch takes effect
-  on the next turn.
+- **`durin doctor`**: checks that at least one provider is usable (an API key, an
+  OAuth token, or a local `api_base`), that the active preset resolves to a model,
+  that every specific-model knob resolves to a configured provider, and every
+  configured window and output cap against the model's real limits (§4.1). `--ping`
+  requests the active provider's `api_base`; `--ping-model` makes a real call to the
+  default model.
+- **API `POST /api/v1/config`**: sets one dotted config key; a preset switch takes
+  effect on the next turn.
 
 ### OAuth credential surfaces
 

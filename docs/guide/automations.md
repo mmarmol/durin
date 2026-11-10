@@ -14,7 +14,9 @@ An automation has four parts:
   the automation layer never judges the content of a run itself. Whatever counts as
   "done" or "worth escalating" is decided *inside* the workflow graph (a routing
   node's verdict, a script node's exit code, an approval gate) — see
-  [Workflows](workflows.md).
+  [Workflows](workflows.md). The workflow must already exist: the name is not
+  checked when the automation is saved, and a run that names a missing workflow
+  ends `failed`.
 - **Delivery and help** — where it speaks (below).
 - **An optional life condition** — when it stops (below).
 
@@ -31,21 +33,38 @@ run. With none at all, it fires only when you tell it to.
   field, all exact matches; `subject_contains` — email only — and the other
   `*_contains` keys are substring matches instead) and, optionally, a
   `semantic` condition judged by the model
-  ("this looks like a customer complaint", not just a keyword). By default
+  ("this looks like a customer complaint", not just a keyword). The condition is
+  judged only for messages that already pass `filters`, and each judgement is a
+  model call, so keep `filters` tight; with no model set under
+  `agents.aux_models.automations` it uses the model the agent is running on. By default
   (`match: "wake_or_new"`), a matching message on a thread where a run is already
   **paused** resumes that run instead of starting a new one; set
   `match: "always_new"` to always start fresh instead.
 - **Webhook** — a `POST` to `/api/v1/hooks/{hook}` from an external service (a CI
   pipeline, a monitoring tool, anything that can send JSON). Get the shared secret
   from `GET /api/v1/automations/hooks-secret`, and send it as the
-  `X-Durin-Hook-Secret` header on every call. The run's task is the body's `text`,
-  or the whole JSON body when it has none, capped at 4000 characters.
+  `X-Durin-Hook-Secret` header on every call. The body must be a JSON object. The
+  run's task is the body's `text`,
+  or the whole JSON body when it has none, capped at 4000 characters. durin answers
+  `202` when an automation took the call and `404` when no enabled automation
+  accepted it.
 - **Chain** — another automation's outcome (`achieved`, `completed`, `failed`, or
   `any` of those three) triggers this one; the chained run's task is the upstream
   run's final output (its outcome summary when there is none). Chain a few
   automations together to build a pipeline of standing work that reacts to itself,
   not only to the outside world. durin refuses to save a chain that would loop back
   on itself, naming the cycle.
+
+The `filters` keys every channel understands are `sender`, `sender_name`,
+`sender_kind` (`human` or `bot`; email and WhatsApp do not report it, so a
+`sender_kind` filter never matches there), `chat`, `chat_name` and `is_dm` (exact,
+case-insensitive), plus `from_contains`, `sender_contains` and `text_contains`
+(substring). Each channel adds its own: `subject_contains` on email; `app_id`,
+`bot_id` and `surface` on Slack; `forum_topic` on Telegram; `guild` and `thread_id`
+on Discord; `is_group` on WhatsApp. Every value is a string (`"is_dm": "true"`),
+and every key you set must hold. A key the channel
+does not provide never matches, and the save does not refuse it — durin only logs
+a warning — so a trigger that stays silent is usually a misspelled key.
 
 A **`correlate`** pattern (channel or webhook triggers) is worth calling out on its
 own: a one-capture-group regex that pulls an id out of the message — a ticket
@@ -65,7 +84,9 @@ chain firing waits its turn — dropped if it is still waiting after
 Two separate channels, because they answer different questions:
 
 - **Delivery** (`delivery.channel`/`to`/`notify`) is the routine report: did the run
-  succeed, and is that worth telling someone. `notify` controls how chatty it is —
+  succeed, and is that worth telling someone. `channel` names one of your connected
+  channels and `to` the chat, room or address on it to write to (the same holds for
+  `help`). `notify` controls how chatty it is —
   `always` (default), `failures_only`, `when_notable` (skip a completed run that
   *ended* on a silent route label — `NOTHING_TO_REPORT` by default; set
   `silent_labels` to change the list), or `never`.
@@ -85,7 +106,11 @@ the *other party* rather than the operator — its `needs_input` text starts wit
 literal tag `[TO:counterpart]` (no shipped workflow uses it; add it to your own) —
 the question goes out, without the tag, on the same channel thread the triggering
 message arrived on, not to `help`. A reply on that thread resumes the run. A run
-with no triggering thread (a schedule or manual fire) asks in `help` instead.
+with no triggering thread (a schedule or manual fire, or a webhook call whose
+trigger has no `correlate` match) asks in `help` instead. A webhook call that did
+match a `correlate` pattern has nowhere to post: its question waits on the paused
+run in the dashboard, and the next call to the same hook carrying the same id
+resumes the run with that call's text as the answer.
 
 ## When it stops
 
@@ -113,9 +138,11 @@ That's what a **life** condition is for.
 }
 ```
 
-Every weekday morning this fires a reminder; any reply on the matching email thread
-(matched by the `INV-4471`/`INV-(\d+)` correlation, so it works even from a fresh
-reply, not just the original thread) resumes the same standing case. `life.intent`
+Every weekday morning this fires a reminder; any email with `INV-4471` in its
+subject starts a run for the same case, in the same working folder (the
+`INV-(\d+)` capture keys it, so a fresh email works as well as a reply on the
+original thread) — and if an earlier email-triggered run is paused on a question to
+that sender, the email resumes that run instead. `life.intent`
 is a plain-language label for what "done" means; `life.achieved_when` is what
 actually decides it: `any_completed` (the default) or `label:<LABEL>` — the route
 label the run ended on, matched exactly. Here the `chase-invoice` workflow itself
@@ -145,14 +172,19 @@ itself) for a reply:
   run automatically — no separate action needed. For an approval, replying
   "approve", "reject", or free text describing what to change all work; free text
   that isn't a clear approve/reject is treated as a revision request back to the
-  workflow.
+  workflow. This works where durin's message opens a thread it can recognise a
+  reply in: a `help` destination on Slack or email, and a counterpart question on
+  the thread it was asked in. A `help` message sent to Telegram, Discord or
+  WhatsApp only announces the pause; answer that one from the dashboard.
+- **Answer from the dashboard.** The "Needs you" tray (below) resolves any paused
+  run, whatever channel announced it.
 - **Answer a question through the chat agent.** The agent's `automations` tool
   (`action="answer"`) resumes a run paused on a question with the answer you give
   it. It refuses a run paused for an approval: approving, revising or rejecting is
   your decision, never the agent's, so you make it with a channel reply or from
   the dashboard.
 
-Either path resumes the exact paused run — same workflow state, same working
+Every path resumes the exact paused run — same workflow state, same working
 folder — not a new one.
 
 ## Managing automations
@@ -198,7 +230,10 @@ Beyond the dashboard, an automation can also be defined and driven through:
   surface would use.
 - **The HTTP API directly** — `GET`/`PUT`/`DELETE /api/v1/automations/{name}`,
   `.../fire`, `.../runs/{run_id}/answer`, `.../runs/{run_id}/stop`, and `.../runs`
-  for a script or an external integration. There's no partial-update route: `PUT` always replaces the named
+  for a script or an external integration, with an API token that carries the
+  `automations:read` scope (to read) or `automations:write` (to change, fire,
+  answer or stop). `PUT` takes `{"definition": {...}}`, the same JSON shape as the
+  example above. There's no partial-update route: `PUT` always replaces the named
   automation's definition wholesale (versioned as an edit, so the previous
   definition stays recoverable).
 

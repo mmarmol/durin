@@ -158,7 +158,7 @@ flowchart TB
     BUSOUT --> WEB
     BUSOUT --> CH
 
-    CRON -.injects turns.-> BUSIN
+    CRON -.runs turns.-> LOOP
     DREAM -.reads.-> SESS
     DREAM -.writes.-> MEM
     CRON -.per-run sessions.-> SESS

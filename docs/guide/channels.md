@@ -12,11 +12,16 @@ or with `durin config edit`, which opens the whole config. On disk the section
 lives in `config.json.d/channels.json` in the durin home; `config.json` itself
 only marks that layout, so edits made there are not read.
 
+A setting changed from the dashboard reaches a running channel right away.
+One changed with `durin config set`, `durin config edit` or by hand is read
+when the channel starts: restart the gateway (`durin gateway restart`) to
+apply it.
+
 > **Quick start.** Run `durin onboard channels` to get an interactive wizard
 > that toggles channels on and off and asks for a channel's token when its
 > config has one (e.g. Telegram's `token`, Slack's `bot_token`). Set every other
-> credential (email's server and password, …) in the dashboard or with
-> `durin config set`.
+> credential (Slack's `app_token`, email's server and password, …) in the
+> dashboard or with `durin config set`.
 
 ---
 
@@ -55,7 +60,9 @@ durin config set channels.telegram.token '${secret:TELEGRAM_BOT_TOKEN}'
 
 The reference format is `${secret:NAME}` where `NAME` must match
 `[A-Z][A-Z0-9_]*`. Secrets are resolved at gateway startup, so the plaintext
-never lives in the shared config object.
+never lives in the shared config object. A reference to a secret that does
+not exist disables that one channel at startup: the gateway logs which
+reference is missing and starts the others.
 
 ---
 
@@ -91,6 +98,13 @@ dashboard chat, the TUI, or an account listed in `allow_from`:
 ```
 
 Approved senders persist in `~/.durin/pairing.json` across restarts.
+
+When the agent needs your approval for a privileged action (installing a
+skill, changing an MCP server, a gated shell command), a chat channel receives
+the request as a message. Answer with a single word, `approve` or `reject`
+(`yes` / `no` also work). Any other reply is treated as an ordinary message
+and leaves the request undecided; see [Approvals](cli.md#approvals) for where
+it waits.
 
 ---
 
@@ -147,6 +161,8 @@ When set, store it as a durin secret and reference it with `${secret:…}`.
 | `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `channels.websocket` object, the gateway creates one for the dashboard with this set to `false`; whenever no token is required, a connection without one is then accepted only from this machine (a browser page must be served as `localhost`, `127.0.0.1` or `[::1]`), whether or not `token_issue_secret` is set. A set `token` always requires a valid token, whatever this says |
 | `streaming` | `true` | Send incremental text deltas while the model is generating |
 | `max_message_bytes` | `37748736` | Largest message a client may send, in bytes (36 MiB): a WebSocket frame, or the body of a `POST /api/v1/sessions/{key}/messages` |
+| `ping_interval_s` | `20.0` | Seconds between keepalive pings to a connected client |
+| `ping_timeout_s` | `20.0` | Seconds to wait for a ping reply before closing the connection |
 | `ssl_certfile` / `ssl_keyfile` | _(empty)_ | Paths to TLS certificate and key for direct TLS |
 | `allow_from` | `["*"]` | Client IDs that may connect |
 
@@ -159,9 +175,10 @@ after starting the gateway.
 
 Telegram uses **long polling** — no public IP or webhook is required.
 
-The bot token is **always stored as a durin secret**, never as plaintext in
-the config. Both the guided and manual setup paths write a `${secret:…}`
-reference into the config automatically.
+Store the bot token as a durin secret, never as plaintext in the config. The
+guided setup saves it to the secret store and writes the `${secret:…}`
+reference for you; in the manual setup you store the secret and write the
+reference yourself.
 
 ### Guided setup (recommended)
 
@@ -228,7 +245,7 @@ pairing, or leave it empty to require pairing for every new user.
 
 | Key | Default | Notes |
 |---|---|---|
-| `token` | _(required)_ | Bot API token from BotFather; always stored as a durin secret |
+| `token` | _(required)_ | Bot API token from BotFather; store it as a durin secret |
 | `allow_from` | `[]` | Numeric user IDs (`"123456"`) or usernames, with or without the `@`; `["*"]` allows anyone; empty = pairing mode for DMs. Approvals from pairing are kept in `pairing.json`, not here. A numeric ID is permanent; a username stops matching if the user renames their account. |
 | `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned or when a message replies to the bot) |
 | `proxy` | _(none)_ | HTTP proxy URL for outbound connections |
@@ -236,6 +253,8 @@ pairing, or leave it empty to require pairing for every new user.
 | `react_emoji` | `"👀"` | Reaction added while processing |
 | `streaming` | `true` | Edit the message in-place as the model streams |
 | `stream_edit_interval` | `0.6` | Min seconds between streaming edits |
+| `connection_pool_size` | `32` | HTTP connections kept for outbound Bot API calls; raise it if sends time out under load |
+| `pool_timeout` | `5.0` | Seconds to wait for a free connection from that pool |
 | `inline_keyboards` | `false` | Render choice buttons as inline keyboards |
 | `drop_pending_updates` | `true` | Drop messages queued while the bot was offline. Set to `false` to replay them on (re)start. |
 
@@ -279,6 +298,7 @@ Both modes write the same config keys.
 1. Fetch the app manifest from a running gateway
    (`GET /api/v1/channels/slack/manifest`) or build the app by hand at
    [api.slack.com/apps](https://api.slack.com/apps): enable **Socket Mode**,
+   turn on **Interactivity & Shortcuts** (button clicks arrive through it),
    subscribe to the `app_mention` and `message.*` bot events, grant the
    bot scopes the channel uses (`app_mentions:read`, `chat:write`,
    `im:history`, `im:read`, `im:write`, `files:read`, `files:write`,
@@ -319,7 +339,7 @@ Both modes write the same config keys.
 | `thread_context_limit` | `20` | Max messages of thread context to include |
 | `streaming` | `true` | Stream replies by editing the message in place as the model writes |
 | `stream_edit_interval` | `1.2` | Min seconds between streaming edits (chat.update is rate-limited) |
-| `thread_auto_follow` | `true` | After a mention in a channel thread, answer follow-ups there without a re-mention |
+| `thread_auto_follow` | `true` | After a mention in a channel thread, answer follow-ups there without a re-mention (followed threads are remembered across restarts) |
 
 Sender authorization is enforced at durin's central inbound gate, the same as
 every other channel: approve a sender by adding their Slack user ID to
@@ -348,9 +368,10 @@ Discord connects with a **bot application** you create in the Discord Developer
 Portal. durin derives its gateway intents from the events it handles — there is
 no raw bitfield to configure by hand.
 
-The bot token is **always stored as a durin secret**, never as plaintext in
-the config. Both the guided and manual setup paths write a `${secret:…}`
-reference into the config automatically.
+Store the bot token as a durin secret, never as plaintext in the config. The
+guided setup saves it to the secret store and writes the `${secret:…}`
+reference for you; in the manual setup you store the secret and write the
+reference yourself.
 
 ### Guided setup (recommended)
 
@@ -416,7 +437,7 @@ logs a restart note if it was missing.
 
 | Key | Default | Notes |
 |---|---|---|
-| `token` | _(required)_ | Bot token from the Developer Portal; always stored as a durin secret |
+| `token` | _(required)_ | Bot token from the Developer Portal; store it as a durin secret |
 | `allow_from` | `[]` | Discord user IDs allowed to talk to durin, in DMs and server channels; `["*"]` allows anyone. Empty = pairing mode for DMs |
 | `allow_channels` | `[]` | Routing, not auth: empty = every channel the bot can see; a non-empty list is a closed allowlist of channel IDs, DM channels included |
 | `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned or when a message replies to the bot) |
@@ -478,7 +499,8 @@ The first run downloads the bridge binary for your platform, verifies it
 against durin's bundled checksum, and prints a QR code in the terminal. Scan
 it from your phone: **WhatsApp → Linked devices → Link a device**. The paired
 session persists under `<durin_home>/whatsapp-auth/`, so this is a one-time
-step — starting (or restarting) the gateway reconnects automatically.
+step — starting (or restarting) the gateway reconnects automatically. The
+bridge is available for macOS and Linux on x86-64 and ARM64.
 
 If the linked session is revoked from the phone, or you want to switch to a
 different number, re-pair with:
@@ -556,7 +578,7 @@ durin secret set EMAIL_SMTP_PASSWORD --service channel:email
 | `smtp_host` / `smtp_port` | _(required)_ | SMTP server and port (default 587) |
 | `smtp_username` / `smtp_password` | _(required)_ | SMTP credentials; password stored as a durin secret |
 | `smtp_use_tls` | `true` | Use STARTTLS |
-| `smtp_use_ssl` | `false` | Use direct SSL (mutually exclusive with `smtp_use_tls`) |
+| `smtp_use_ssl` | `false` | Connect with implicit SSL instead of STARTTLS; when `true`, `smtp_use_tls` is ignored |
 | `from_address` | _(empty)_ | `From:` on replies; empty uses `smtp_username` (then `imap_username`) |
 | `subject_prefix` | `"Re: "` | Prefix added to a reply's subject, unless the subject already starts with `Re:` |
 | `auto_reply_enabled` | `true` | Send the agent's reply to incoming mail; `false` stops those replies (an automation's reply to its counterpart still goes out) |

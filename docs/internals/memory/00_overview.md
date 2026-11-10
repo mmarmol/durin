@@ -50,7 +50,7 @@ rendered once per session and reused verbatim until the next session boundary, s
 does not rebuild the cached prefix (`memory.eager_surface.freeze`).
 
 **Cold-path dream consolidation.** The extract pass reads every session with unprocessed
-turns (tracked by a per-session cursor in `session.meta.json`) and discovers or enriches
+turns (tracked by a per-session `extract_cursor` in the session's `<key>.meta.json` sidecar) and discovers or enriches
 entity pages. The refine pass finds alias-overlap pairs and, when auto-absorb is enabled,
 merges duplicates. The always_on pass curates which guidance entities are pinned into every
 prompt within a token budget. All dream writes go through `memory_writer.write_entity`,
@@ -69,7 +69,7 @@ flowchart TD
         MD_FRAGS["memory/episodic/ stable/ corpus/\npending/ session_summary/\nRaw fragments"]
         LIBRARY["memory/references/&lt;slug&gt;.md\n(+ .chunks.jsonl / .outline.json)\nIngested Library documents"]
         SESSIONS["sessions/&lt;key&gt;.jsonl\nRaw session transcripts"]
-        INGESTED["ingested/&lt;id&gt;/\nSource document chunks"]
+        INGESTED["ingested/&lt;id&gt;/\nVerbatim originals + markdown rendering"]
         ARCHIVE["memory/archive/&lt;class&gt;/&lt;id&gt;.md\nAbsorbed entities (recoverable)"]
     end
 
@@ -92,7 +92,7 @@ flowchart TD
     subgraph WRITE["Write pipeline — cold path"]
         AGENT_WRITE["Agent: memory_upsert_entity\nor /remember"]
         MW["memory_writer.write_entity\ndulwich CAS · FieldPatch precedence\nuser > dream > agent"]
-        UPSERT["VectorIndex.upsert\nFTSIndex.reindex_one_file"]
+        UPSERT["File watcher\nindexer.reindex_one_file + vector re-embed"]
     end
 
     subgraph DREAM["Dream — cold-path passes, cron + reactive"]
@@ -108,14 +108,14 @@ flowchart TD
 
     AGENT_WRITE --> MW
     MW --> MD_ENTITIES
-    MW --> UPSERT
+    MD_ENTITIES --> UPSERT
     UPSERT --> LANCE
     UPSERT --> FTS
 
     MD_ENTITIES --> LANCE
     MD_FRAGS --> LANCE
     SESSIONS --> FTS
-    INGESTED --> MD_FRAGS
+    INGESTED --> LIBRARY
     LIBRARY --> D_DOCS
 
     LANCE --> VEC
@@ -153,17 +153,17 @@ flowchart TD
 
 ### Storage workspace layout
 
-Everything lives under a single workspace directory (default `~/.durin/`):
+Everything lives under a single workspace directory (default `<durin home>/workspace`, where the durin home is `$DURIN_HOME` or `~/.durin`):
 
 ```
 <workspace>/
 ├── sessions/               raw session transcripts (.jsonl per session)
-├── ingested/<id>/          source document chunks and metadata
+├── ingested/<id>/          verbatim original, its markdown rendering, ingest metadata
 ├── memory/
 │   ├── entities/<type>/    typed entity pages (one .md per entity)
 │   ├── episodic/           atomic observations
 │   ├── stable/             durable notes and stable facts
-│   ├── corpus/             chunks extracted from ingested documents
+│   ├── corpus/             legacy ingested chunks (read-only class; ingest writes references)
 │   ├── references/         ingested Library documents (+ .chunks.jsonl / .outline.json)
 │   ├── session_summary/    one .md per session (first-class indexed class)
 │   ├── pending/            intake buffer — never indexed
@@ -225,7 +225,7 @@ automatic rebuild on startup.
    top-50 and blends its score into their order; it drops nothing — the downstream
    sectioning, per-source cap and `limit` do the trimming. Disabled by default
    because the model download must not happen implicitly in CI environments; the
-   onboarding wizard recommends enabling it for production deployments.
+   onboarding wizard offers it as an opt-in, pre-selected off.
 
 6. **Sectioning** (`sectioned_output.py`): group results into SKILL (matching
    procedures), CANONICAL (entity pages), FRAGMENT (episodic + stable), SESSION
@@ -314,8 +314,8 @@ See [05_dream_cold_path.md](05_dream_cold_path.md) for every pass in order.
 | `EntityAbsorption` | `durin/memory/absorption.py` | Detects merge candidates (shared aliases) and absorbs: canonical receives merged content, loser moved to `memory/archive/entities/<type>/<slug>.md` with `archived_into` frontmatter. |
 | `memory_writer.write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read at HEAD → apply `FieldPatch` objects by precedence → dulwich plumbing commit → CAS via `refs.set_if_equals` → retry on conflict → fast-forward working tree. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass persisted at `<workspace>/.durin/index/meta.json`. Tracks `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Schema mismatch triggers auto-rebuild. |
-| `SectionedHit` | `durin/memory/sectioned_output.py` | Result wrapper carrying `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `entities`. Grouped into CANONICAL / FRAGMENT / SESSION / INGESTED sections by the renderer. |
-| `run_extract_for_session` | `durin/memory/extract_runner.py` | Per-session extract orchestrator: loads session JSONL, reads `extract_cursor` from `session.meta.json`, processes new turns, calls `extract_entity` + `discover_entities`, advances cursor. |
+| `SectionedHit` | `durin/memory/sectioned_output.py` | Result wrapper carrying `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `entities`. Grouped into SKILL / CANONICAL / FRAGMENT / SESSION / INGESTED sections by the renderer. |
+| `run_extract_for_session` | `durin/memory/extract_runner.py` | Per-session extract orchestrator: loads session JSONL, reads `extract_cursor` from the session's `<key>.meta.json` sidecar, processes new turns, calls `extract_entity` + `discover_entities`, advances cursor. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for reactive extract triggers. `try_begin` is non-blocking; returns skip reason (`"locked"` / `"throttled"`) or empty string when the caller may proceed. |
 
 For deeper coverage of individual subsystems, see the sibling docs:
@@ -375,7 +375,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Detect skill corrections and gaps in session turns during extract (feeds daily curation). |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive triggers; 0 disables. |
-| `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; 0 = unbounded. |
+| `memory.dream.max_seconds_per_run` | `3600` | Wall-clock cap in seconds for each of the extract, refine and skill-review passes; a pass yields at the cap and resumes on the next run; 0 = unbounded. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for always-on pinned guidance; 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). Use `durin memory absorb-suggest` and `durin memory absorb` for manual control. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for auto-merge. |
@@ -389,15 +389,15 @@ resolves to `person:anonymous`.
 ### CLI surfaces
 
 ```
-durin memory dream [entity] [--dry-run]   run the dream consolidation manually
+durin memory dream                  run the dream consolidation manually
 durin memory reindex                rebuild all indices from markdown
 durin memory absorb-suggest         show alias-overlap candidates for manual review
-durin memory absorb <ref> <into>    manually merge two entity pages
+durin memory absorb <canonical> <absorbed>   manually merge two entity pages (the first survives)
 durin memory rename <ref> <slug>    give an entity a clearer key; redirects every reference
 durin memory rereview               re-judge Inbox pairs and kept-separate pairs with resolutions
 durin memory history <entity-ref>   show git history for an entity page
 durin memory revert <sha>           revert an entity write via git revert
-durin memory stats                  show index sizes and entry counts
+durin memory stats                  aggregate memory telemetry and on-disk entry counts
 durin memory expand <entity-ref>    drill down: sources, related entities, archived absorptions
 durin memory forget <uri>           archive one entry and drop its index rows
 ```
@@ -441,13 +441,16 @@ query names rank newest-first in that entity's match list.
 
 **A sequence of passes, not one monolithic consolidation.** Each dream pass has a bounded,
 independent scope. Extract is idempotent (per-session cursors). Derived_from is a
-catch-and-repair pass that runs after extract. Skill-extract is the only agentic pass
-(spins its own runner). Refine is opt-in and conservative. Always_on only flips flags.
+catch-and-repair pass that runs after extract. Skill-extract runs as an agentic sub-agent
+(spins its own runner), and refine escalates unsettled pairs to a bounded investigating
+sub-agent. Refine merges by default, only on a judge verdict above the confidence
+threshold, and a merge is recoverable from git. Always_on only flips flags.
 This separation means a failure in one pass does not abort the others, and each pass can
 be triggered independently or inspected in isolation.
 
-**Per-field authorship precedence.** Entity attributes carry an author tag
-(`user_authored` or `agent_created`). A field authored by a human is never
-overwritten by a dream pass — only agent-created or untagged fields are updated.
+**Per-field authorship precedence.** Each attribute records who set it (`user`,
+`dream` or `agent`). A patch replaces a value only when its author ranks at least as
+high (`user` > `dream` > `agent`; at equal rank the newer wins), so a dream pass does not
+overwrite a value whose provenance names the user. A field with no recorded provenance is replaced.
 This prevents dream consolidation from silently overriding corrections the user made
 by hand.

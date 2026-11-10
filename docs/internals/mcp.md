@@ -93,7 +93,7 @@ Each stdio server's stderr goes to its own file, `~/.durin/logs/mcp-stderr-<serv
 
 ### Capability registration
 
-`_register_capabilities` calls `session.list_tools()`, `session.list_resources()`, and `session.list_prompts()` on the live session. Each item is wrapped in an `MCPToolWrapper`, `MCPResourceWrapper`, or `MCPPromptWrapper` and registered in the `ToolRegistry` under the name `mcp_<server>_<tool>` (sanitized: characters outside `[a-zA-Z0-9_-]` become underscores — hyphens and underscores are preserved — and runs of underscores collapse). The `enabled_tools` allowlist filters which tools are registered; `["*"]` (the default) registers all.
+`_register_capabilities` calls `session.list_tools()`, `session.list_resources()`, and `session.list_prompts()` on the live session. Each item is wrapped in an `MCPToolWrapper`, `MCPResourceWrapper`, or `MCPPromptWrapper` and registered in the `ToolRegistry` under the name `mcp_<server>_<tool>`, `mcp_<server>_resource_<name>` or `mcp_<server>_prompt_<name>` (sanitized: characters outside `[a-zA-Z0-9_-]` become underscores — hyphens and underscores are preserved — and runs of underscores collapse). The `enabled_tools` allowlist filters which tools are registered; `["*"]` (the default) registers all and an empty list registers none. It applies to tools only: a server's resources and prompts are always registered.
 
 Input schemas are normalized for model API compatibility: array `type` fields with `null` members become nullable scalars; `anyOf`/`oneOf` patterns with a null branch are unwrapped; `$defs` rewrites `definitions` references. Output schema validation is disabled wholesale — durin passes `structuredContent` to the model as a JSON appendix and never validates its shape.
 
@@ -106,11 +106,13 @@ When the agent calls a registered MCP tool, `MCPToolWrapper.execute` passes the 
 1. **Breaker precheck.** If the breaker is `OPEN`, a `_ConnDown` sentinel is returned immediately with an explicit guidance message and cooldown estimate.
 2. **Session resolve.** `_resolve_session()` returns the current live session. If `None`, the error count is bumped and a `_ConnDown` is returned.
 3. **RPC lock.** `_rpc_lock` serializes concurrent calls on the same connection (preventing interleaved MCP request IDs).
-4. **SDK call with idle timeout.** `_raw_call_tool` wraps `session.call_tool` in an idle-timeout loop: the timeout resets on each progress callback; if no progress arrives within `tool_timeout` seconds, the call is cancelled.
+4. **SDK call with idle timeout.** `_raw_call_tool` wraps `session.call_tool` in an idle-timeout loop: the timeout resets on each progress callback; if no progress arrives within `tool_timeout` seconds, the call is cancelled, the model is told the tool timed out, and the timeout counts as an error for the circuit breaker.
 5. **Transient retry.** On `ClosedResourceError`, `BrokenPipeError`, session-expired markers, and similar transient errors, `_recover_and_retry_tool` requests a reconnect, waits up to 15 seconds for a fresh session (identity-based: waits for `session` to become a new non-None object), and retries once.
 6. **Auth errors.** A 401 or `OAuthFlowError` on a tool call is not retried; a `_ConnDown` asking the user to re-authenticate is returned immediately. The SDK reports a 401 on a streamable-HTTP request as a generic JSON-RPC error with no status, so the connection's HTTP client records the status of each response in a hook. A failure that follows a 401 counts as an auth failure: it is not retried at connect, does not fall back to SSE, and asks for re-authentication on a tool call.
 
 The wrapper converts a `_ConnDown` sentinel to its `.message` string, renders `is_error` results as `(MCP tool error) ...`, and renders successful `CallToolResult` content — text, images, audio, embedded resources, resource links — into a string or list of content blocks.
+
+A workflow node that names a server in its `mcps` list gets that server's tools by reference from the gateway's registry (`AgentNodeRunner._add_mcp_tools`), each wrapped in `_CrossLoopTool`, which runs the call on the gateway's event loop where the session lives. Nodes open no connection of their own: every node that selected a server, including nodes running in parallel, shares its one session and `_rpc_lock`, so their calls to that server run one at a time and act on the same server-side state.
 
 ### Reconnect and circuit breaker
 
@@ -176,8 +178,8 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 | `_ConnDown` | `durin/agent/tools/mcp_connection.py` | Sentinel returned when a call cannot be serviced (breaker open, not connected, auth required). Its `.message` is the model-facing text. |
 | `McpRuntime` | `durin/agent/mcp_runtime.py` | Thin read-only handle passed to the service layer; snapshots live per-server status (`RawConnState`) and drives runtime connect/disconnect via the agent loop. |
 | `RawConnState` | `durin/agent/mcp_runtime.py` | Snapshot of one connection: `breaker_state`, `error`, list of `(tool_name, description)` tuples. |
-| `MCPServerConfig` | `durin/config/schema.py` | Full server config dataclass: transport, command/url, timeouts, OAuth, spawn egress policy, sampling governance, version pin, registry ref. |
-| `MCPSamplingConfig` | `durin/config/schema.py` | Per-server sampling governance: `enabled` (default `False`), `max_tokens_cap`, `requests_per_minute`, `allowed_models`, `allow_tools`, `max_tool_rounds`. |
+| `MCPServerConfig` | `durin/config/schema.py` | Full server config model: transport, command/url, timeouts, OAuth, spawn egress policy, sampling governance, version pin, registry ref. |
+| `MCPSamplingConfig` | `durin/config/schema.py` | Per-server sampling governance: `enabled` (default `False`), `model`, `max_tokens_cap`, `requests_per_minute`, `allowed_models`, `allow_tools`, `max_tool_rounds`. |
 | `mcp_catalog_store` (module) | `durin/agent/mcp_catalog_store.py` | Loads vendored floor + optional cache overlay; searches by substring and fuzzy matching; ranks verified tier first then by stars. |
 | `McpServerHit` / `McpServerDetail` | `durin/agent/mcp_registry.py` | Search result and full install metadata. `McpServerDetail` carries `PackageSpec` (stdio launchers) and `RemoteSpec` (HTTP endpoints). |
 | `McpRegistry` (Protocol) | `durin/agent/mcp_registry.py` | Adapter contract: `search(query, limit)` and `describe(ref)`. |
@@ -220,7 +222,7 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 | `catalog_timeout` | `float` | `1.5` | `tools/list` timeout at connect; prevents a hung server from stalling startup |
 | `keepalive_interval` | `float` | `180.0` | Seconds between idle keepalive heartbeats |
 | `enabled_tools` | `list[str]` | `["*"]` | Tool allowlist; accepts raw MCP names or `mcp_<server>_<tool>` wrapped names; `["*"]` = all |
-| `oauth` | `bool \| MCPOAuthConfig \| None` | `None` | Mark server as OAuth-requiring; `True` = DCR defaults |
+| `oauth` | `bool \| MCPOAuthConfig \| None` | `None` | Mark server as OAuth-requiring; `True` = DCR defaults. The object form carries `scope`, a static `client_id` / `client_secret` (skips DCR), and `callback_port` for `durin mcp login` |
 | `allow_private_url` | `bool` | `False` | Opt this server out of the SSRF private-IP block |
 | `spawn_egress_policy` | `"warn" \| "refuse" \| "off"` | `"warn"` | Action when a stdio spawn command matches shell-interpreter + network-egress shape |
 | `malware_check` | `bool` | `True` | Query OSV for `MAL-*` advisories before spawning; fail-open on network error |

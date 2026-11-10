@@ -50,7 +50,8 @@ curate-topics → skill-extract → refine → consolidate-relations → always_
 each reading sessions, reference documents, or entity pages and applying
 structured updates.
 They are reached three ways: the **daily cron** runs the full sequence (and then
-a workflow-improve pass and skill curation); the two **reactive hooks**
+a workflow-improve pass, the vector-index compaction, skill curation and the
+manual-skill suggestions); the two **reactive hooks**
 (post-compaction / session-close) run the extract pass only, throttled; the
 **manual** `durin memory dream` runs a smaller core — extract → derived_from →
 skill-extract → refine → always_on.
@@ -168,7 +169,10 @@ be traced to a transcript.
 ### Pass 1 — extract: sessions to entity attributes
 
 `run_extract_pass(workspace, *, llm_invoke, model, max_seconds, discover,
-skill_signals)` iterates every `sessions/*.jsonl` and calls
+skill_signals, learnings, confidence_threshold, semantic_distance_threshold,
+vector_index)` iterates `sessions/*.jsonl` — skipping workflow-run sessions
+(`workflow_` stems, `is_workflow_session_file`), as the derived-from and
+skill-extract passes also do — and calls
 `run_extract_for_session` (`durin/memory/extract_runner.py`) per session:
 
 1. Load the session jsonl into `(metadata, messages)`; `messages[i]` is turn
@@ -220,7 +224,7 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    a new page, deferring disambiguation to the refine pass. Only refs that own a
    page count as candidates: the alias index also carries the raw `entities:`
    refs of session summaries and other entries — display-name spellings such as
-   `person:Kojiro Kubo` next to the page `person:kojiro-kubo` — and resolving a
+   `person:Ada Lovelace` next to the page `person:ada-lovelace` — and resolving a
    proposal to one of those left nothing to update, failing the whole session's
    extract on every run. When lexical matching
    yields **no** match, discovery additionally queries the vector index —
@@ -454,8 +458,10 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at, vector_index=None, escalate_floor=0, tier2_confidence_threshold=None, max_seconds=0,
-judge_concurrency=1, recheck_days=7, semantic_name_gate="prioritize")` is the graph-hygiene pass,
+run_started_at, vector_index=None, escalate_floor=0, tier2_confidence_threshold=None,
+semantic_distance_threshold=0.30, max_seconds=0, judge_concurrency=1, recheck_days=7,
+semantic_name_gate="prioritize", auto_resolve=True, resolve_threshold=85,
+auto_rename=True)` is the graph-hygiene pass,
 gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
 default**). When disabled it short-circuits — **no judge, no merge** — and logs
 the manual path (`durin memory absorb-suggest` to surface, `durin memory absorb`
@@ -609,7 +615,7 @@ computes, from the pages it already parsed, whether the two names show
 structural overlap — a shared token across slug, name and aliases (each reduced
 by `slugify_name`, so accents, scripts and punctuation do not hide it; an
 acronym counts), or one compact form contained in the other (`email-flow` /
-`emailflow`, `auto-filling` / `mxhero-autofilling-system`, `hp` / `hp-inc`) — and
+`emailflow`, `auto-filling` / `acme-autofilling-system`, `xy` / `xy-inc`) — and
 `auto_absorb.semantic_name_gate` decides what to do with it: `prioritize` (the
 default) judges overlapping pairs first and the rest after, by distance, so a
 budgeted run spends its calls on the likelier duplicates without ever excluding
@@ -930,7 +936,16 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
-| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap per extract, refine and skill-review pass; the pass yields (extract after the current session, refine after the current chunk, the skill review after the current batch) and resumes on the next run. 0 = run to completion. |
+| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap applied to each pass separately, not to the run: extract, derived_from, session summaries, the document passes, refine, relations and the skill review (curation and suggestions) each get the full budget; the pass yields (extract after the current session, refine after the current chunk, the skill review after the current batch) and resumes on the next run. The skill-extract, always_on and workflow-improve passes take no budget. 0 = run to completion. |
+| `memory.dream.session_summaries_enabled` | `true` | Run the session-summary pass (Pass 2e). |
+| `memory.dream.session_summary_idle_hours` | `6` | Hours a conversation must have been idle before Pass 2e summarizes it. |
+| `memory.dream.distill_references_enabled` | `true` | Run the outline pass (Pass 2b). |
+| `memory.dream.seed_entities_from_docs_enabled` | `true` | Run the document entity-seeding pass (Pass 2c). |
+| `memory.dream.curate_topics_enabled` | `true` | Run the topic-index pass (Pass 2d). |
+| `memory.dream.consolidate_relations_enabled` | `true` | Run the relation-vocabulary pass (Pass 4b). |
+| `memory.dream.skill_suggestions_enabled` | `true` | After the run, propose curation actions for `mode=manual` skills on the Pending page. |
+| `memory.dream.max_rss_mb` | `0` | RSS cap for the worker's process tree; the supervisor's watchdog terminates the tree above it. 0 = a fraction of total RAM. |
+| `memory.dream.min_available_mb` | `1024` | Skip spawning a reactive dream while available system memory is below this. 0 disables the gate. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
@@ -940,6 +955,9 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.auto_resolve` | `true` | The dream applies confident non-merge resolutions itself; off, every proposal waits on the Pending page. |
 | `memory.dream.auto_absorb.resolve_threshold` | `85` | Confidence floor (0–100) for applying a non-merge resolution the Tier 1 judge proposed; the investigating sub-agent's are applied whatever its confidence. |
 | `memory.dream.auto_absorb.auto_rename` | `true` | Allow automatic resolutions and merges to change a key; off, the rest is applied and keys stay. |
+| `memory.dream.auto_absorb.judge_concurrency` | `3` | Judge calls in flight at once during the refine pass; merges are still applied one at a time, in candidate order. |
+| `memory.dream.auto_absorb.recheck_days` | `7` | Days before a pair without a settled verdict is judged again. `0` re-judges it every run. |
+| `memory.dream.auto_absorb.semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize`, `require` or `off`. |
 
 The (provider, model) preset every pass uses is resolved by
 `resolve_aux_preset(config, purpose="memory")` (`durin/memory/model_resolve.py`):
@@ -952,12 +970,16 @@ on the default provider (see `docs/internals/providers.md`).
 **Surfaces.**
 
 - **Cron** — the daily run is registered as the system job `memory_dream`
-  (`durin/cli/commands.py`), which runs all the passes in order (each offloaded
-  to a thread so the cron loop stays responsive), plus a workflow-improve pass,
-  then the skill-curation step. A failure logs and never crashes the cron loop.
+  (`durin/cli/commands.py`). Its handler spawns the dream worker in `full` mode
+  and supervises it from a dedicated thread, so the cron loop stays responsive;
+  the worker runs all the passes in order, plus a workflow-improve pass and the
+  index compaction, then the skill-curation step. A worker that exits because
+  another dream holds the lock is logged as skipped; any other non-zero exit
+  is recorded as a failed job and never crashes the cron loop.
 - **Reactive hooks** — `agent.consolidator.on_post_compaction` and
-  `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure that
-  runs the **extract pass only** through the shared `ReactiveDreamGate`.
+  `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure
+  that, past the memory gate and the shared `ReactiveDreamGate`, spawns the
+  worker in `reactive` mode — the **extract pass only**.
   Separately, the consolidator itself runs a **compaction backstop**
   (`Consolidator.extract_learnings`) immediately before firing the hook: it calls
   the LLM over the archived span to distil durable user learnings (preferences,
@@ -1053,8 +1075,12 @@ distinct write target — sessions to attributes, entities to source documents,
 sessions to skills, pages to merges, feedback to flags. Folding them into one
 prompt would blur those concerns, make failures all-or-nothing, and make each
 pass harder to gate and tune independently. As separate passes they can run at
-different cadences (extract is reactive; the rest are daily), be enabled or
-disabled in isolation, and fail independently without aborting the run.
+different cadences (extract is reactive; the rest are daily) and be enabled or
+disabled in isolation, and a session, document or pair that fails is skipped
+without aborting its pass. An exception that escapes a pass ends the
+consolidation sequence for that run — the skill review still runs, the run is
+recorded, and the worker exits non-zero — and the next run resumes from the
+cursors and memos.
 
 **Why the extract pass is the only reactive one.** The signal that changes after
 a session is the new conversation turns, and extract is the pass that consumes

@@ -40,7 +40,7 @@ command and approves or declines it.
 ## 2 Mental model
 
 **Secrets as lazy-resolved references.** Plaintext credentials never enter the
-`DurinConfig` object. Config fields hold a `${secret:NAME}` reference string.
+`Config` object. Config fields hold a `${secret:NAME}` reference string.
 Every consumer that needs the value calls `resolve_secret()` at the point of use.
 A second mechanism, *scoped auto-injection*, pushes matching secrets into
 subprocess environments automatically — the scope field on each entry controls
@@ -234,7 +234,11 @@ includes the agent itself, through exec: the internal-URL guard only matches
 URL patterns, so a command that builds the URL another way gets past it. A
 script the agent writes can likewise rewrite a record under `.approvals/`.
 Configuring a setup secret keeps other local processes from minting a
-session; running exec in a sandbox is what closes the gap for the agent.
+session. An exec sandbox narrows what a command can reach but does not close
+this gap by itself: the `bwrap` backend hides the workspace's parent directory
+(durin's config, secret and token stores) behind an empty tmpfs, but it does
+not unshare the network and it mounts the workspace read-write, `.approvals/`
+included.
 
 **Layered skill gates.** Importing a skill passes two independent scan stages.
 The first is deterministic: a regex and AST pass that always runs. The second is
@@ -328,9 +332,10 @@ method, so a caller cannot persist a snapshot outside the lock and clobber a
 concurrent writer's changes; every write to disk goes through one of the locked
 mutators.
 
-All user-facing writes funnel through `SecretsService.store_entry`
-(`durin/service/secrets.py`) — the CLI, the webui panel, the TUI prompt, and the
-websocket `secret_store` frame share its contract: create-or-update with full
+Writes that name a secret directly — `durin secret set`, the webui Secrets
+panel, the TUI prompt, and the websocket `secret_store` frame — funnel through
+`SecretsService.store_entry` (`durin/service/secrets.py`) and share its
+contract: create-or-update with full
 metadata, an empty value as a metadata-only edit of an existing entry, and
 `rotate=True` as the mirror case — a value-only replacement that preserves
 service, account, description, scope, and origin, and never creates. Rotation is
@@ -338,6 +343,10 @@ what the agent's `request_secret` tool triggers with `update=true`: the agent
 declares the intent in a structural flag (an existing secret is never touched
 without it), the channel prompts the user, and the user supplies the new value
 through the same secure paths — the value still never reaches the model.
+Provider and connection setup (the onboard wizard, the dashboard's provider
+settings, the GitHub connect flow) store through `store_secret`
+(`durin/security/secrets.py`) instead, which returns the `${secret:NAME}`
+reference to write into config.
 
 Once the write lands, the agent is told the credential exists so it can resume.
 That note is built by `secret_stored_notice` from the `SecretItem` the write
@@ -403,8 +412,9 @@ only surfaces later as an auth error from the channel or provider.
 
 `save_config` (`durin/config/loader.py`) is the single choke point for every config
 write (CLI, service routes, wizard), and it refuses the write when
-`find_redacted_credentials` reports a credential-shaped key holding a marker,
-raising `RedactedValueError` before anything is written. The check is scoped by
+`find_redacted_credentials` reports a credential-shaped key holding a marker
+(a tool-result redaction marker, or the `***` mask the config API serves to
+the dashboard), raising `RedactedValueError` before anything is written. The check is scoped by
 `CREDENTIAL_KEY_RE` — the same key pattern `mask_secrets` uses — so free-form config
 such as a persona description may still contain the word.
 
@@ -458,8 +468,8 @@ errors). The result is a `ScanReport` whose `verdict` property maps the maximum
 severity finding to `safe`, `caution`, or `dangerous`.
 
 **LLM semantic judge** (`durin/security/skill_judge.py`, `judge_skill()`): runs
-only when configured (`trigger = uncertain|always`). It receives the skill body
-and script files (up to 12,000 characters), prompts the model to identify concrete
+only when configured (`trigger = uncertain|always`). It receives the full
+`SKILL.md` (frontmatter and body) and the files under `scripts/` (up to 12,000 characters), prompts the model to identify concrete
 problems with exact evidence, and parses the structured response. The judge's
 severity is capped at the configured `max_severity` (default `caution`). This
 means the judge can force a confirmation step but can never produce a `dangerous`
@@ -473,8 +483,9 @@ never a `manual` skill's edit (the owner's consent is not a safety question),
 never dependency installs, MCP changes or exec. It runs on the exact tree (a
 throwaway copy of the post-edit tree for an edit) and may clear only what it
 read: every file must be `SKILL.md` or under `scripts/`, every finding must point
-at one of them, no install specs may be declared (the frontmatter is outside its
-view), and the content must fit its character budget. A `safe` verdict that
+at one of them, no install specs may be declared (a declared install command
+runs outside anything the judge inspects), and the content must fit its
+character budget. A `safe` verdict that
 still lists a finding above `info` does not clear. An unavailable or failing
 judge falls through to a person. A cleared request is recorded with
 `decided_by: judge` (`durin/agent/approval_kinds_skills.py`).
@@ -487,7 +498,9 @@ Installation is governed by a `decide_action` gate in `durin/agent/skills_import
 (`install_gate` computes it exactly as the install enforces it): `allow` for a
 safe, allowlisted skill without code; `confirm` for caution, code-carrying, or
 out-of-allowlist skills; `block` for `dangerous`. `allow` installs directly from
-any context. Anything else is a `skill_install` approval request the model cannot
+any context, unless the install replaces an existing skill or brings back a
+retired one: those two always go to a person, and neither `install_policy:
+auto` nor the judge applies to them. Anything else is a `skill_install` approval request the model cannot
 resolve — `skill_import` has no `confirm` or `override` argument. It is decided,
 in order, by:
 
@@ -599,11 +612,13 @@ same detail shown for add/update, and applies that exact snapshot rather than
 whatever the disk says when it runs. The request's hash covers the server's
 current config entry, so a request whose server changed after it was filed is
 stale and does not run. A request never holds a credential:
-`secret_safe_config` replaces an env, header or OAuth value that equals a
-stored secret with its `${secret:NAME}` reference (only `env`/`headers` are
-ever resolved back from a reference), and refuses any other credential outright
-— by key name, or by the shapes the redactor recognizes — telling the model to
-call `request_secret` instead. A missing local runtime for a stdio install runs
+`secret_safe_config` scans every field that can carry one. In `env` and
+`headers` — the only sections the connection layer resolves a reference from —
+a value that equals a stored secret is replaced with its `${secret:NAME}`
+reference, and any other credential is refused (by key name, or by the shapes
+the redactor recognizes), telling the model to call `request_secret` instead.
+Everywhere else a credential is refused outright, since a reference there is
+never resolved. A missing local runtime for a stdio install runs
 through the exec tool's own non-asking entry point (the same one
 `skill_install_deps` uses), so it never opens a second approval nested inside
 the one already being carried out. An approval decided outside the running
@@ -684,7 +699,7 @@ callers that only want the text) wraps it.
 
 - *Hard floor* (`_HARD_FLOOR_PATTERNS`): recursive `rm` of `/`, `/*`, `~` or
   `$HOME`; `mkfs` and `diskpart`; `dd` or a redirect onto a whole-disk device;
-  a fork bomb; `shutdown`, `reboot`, `poweroff` and `init 0` in command
+  a fork bomb; `shutdown`, `reboot`, `poweroff`, `halt` and `init 0` in command
   position; and `durin approvals approve`/`reject` itself (so the model cannot
   approve its own pending request through a shell — the CLI's own TTY
   requirement behind it is a second, independent layer). These never run: not
@@ -718,7 +733,7 @@ callers that only want the text) wraps it.
   workflow and sub-agent runs nobody is asked and the refusal stands.
 
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
-  `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect
+  `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, `truncate`, and redirect
   operators are blocked entirely. This preserves FTS and vector index consistency —
   memory modifications must go through `memory_upsert_entity`/`memory_forget` tools.
 
@@ -740,7 +755,14 @@ parent-process environment variables are not inherited unless explicitly listed 
 `allowed_env_keys`. Scoped secrets from `collect_for("exec")` are added last.
 
 After the guard pipeline, the command is optionally wrapped by a sandbox
-(`bwrap`, `docker`, or `testbed`; empty for none) before spawning.
+backend before spawning. `bwrap` is the isolation backend: it mounts the
+workspace read-write and the media directory read-only, and hides the
+workspace's parent directory behind an empty tmpfs. `docker` and `testbed` are
+wrappers for benchmark harnesses — `docker` runs in a container the harness
+registered for the workspace, `testbed` only prepends a registered shell
+prefix — and isolate nothing by themselves. An unknown backend name is an
+error. On Windows no backend applies: the command runs unsandboxed with a
+warning.
 
 ### Workflow script nodes
 
@@ -779,11 +801,14 @@ executes with the same local trust as one placed on disk by hand.
 
 ### SSRF network guard
 
-All outbound HTTP fetches from durin's internal tools use `ssrf_safe_async_client()`
+Fetches whose target comes from the model or from fetched content —
+`web_fetch` and the skill resolve, import and registry downloads — use `ssrf_safe_async_client()`
 (`durin/security/network.py`), which builds an `httpx.AsyncClient` with
 `SSRFGuardTransport` as the transport layer. MCP transports use
 `ssrf_safe_httpx2_client()`, the same guard built on `httpx2` (the httpx fork the
 MCP SDK requires); both transports pin requests through the same function.
+The guard is skipped when a proxy is configured (the proxy owns egress) and
+for an MCP server that sets `allow_private_url`.
 
 `resolve_and_validate(host)` resolves the hostname to IP addresses, normalizes
 IPv4-mapped IPv6 addresses, and rejects any address in `_BLOCKED_NETWORKS` (which
@@ -814,9 +839,8 @@ Because `resolve()` runs on every authenticated HTTP request, hits are served
 from a per-process cache keyed by the *hash* of the presented token (the
 plaintext is never held), validated against the store file's `(mtime_ns, size)`
 on every request — so a revoke or issue from any process invalidates it by the
-very next request. `last_used_at` is informational and persisted at most once
-per minute per token; the old behavior rewrote the whole store with fsync on
-every request.
+very next request. `last_used_at` is informational: it is written only when a
+lookup misses the cache, and then at most once per minute per token.
 
 `Principal` (`durin/service/principal.py`) is an immutable dataclass carrying
 `subject` (token id or `"local"`), `scopes` (a `frozenset[str]` of scope string
@@ -927,7 +951,7 @@ only callers with system-write authority can manage other tokens.
 | `tools.exec.allowed_env_keys` | `[]` | Ambient `os.environ` keys to forward to the subprocess; all others are excluded |
 | `tools.exec.allow_patterns` | `[]` | Regex patterns; when non-empty, become an allowlist (commands not matching any pattern are blocked, or put to the person in a chat). They never exempt the hard floor |
 | `tools.exec.deny_patterns` | `[]` | Regex patterns appended to the hardcoded deny list |
-| `tools.exec.path_append` | `""` | Directory prepended to `PATH` inside the subprocess |
+| `tools.exec.path_append` | `""` | Directories appended to `PATH` inside the subprocess |
 | `tools.restrict_to_workspace` | `false` | When true, absolute paths in exec commands and the `working_dir` parameter are blocked outside the configured workspace root |
 | `tools.ssrf_whitelist` | `[]` | CIDR ranges (e.g. `100.64.0.0/10` for Tailscale) to exempt from the SSRF private-address block |
 | `tools.mcp_discovery.install_policy` | `"approve"` | `mcp_manage` add/update/install/enable: `never` refuses, `approve` needs a person's approval (asked in chat, else a pending request for the Pending page or `durin approvals`), `auto` runs |
@@ -944,12 +968,12 @@ only callers with system-write authority can manage other tokens.
 ```
 durin secret set NAME --service SVC   # store a secret (value from a hidden prompt)
 durin secret set NAME                 # rotate an existing secret's value (metadata preserved)
-durin secret list                     # list stored secret names (no values)
+durin secret list                     # list stored secrets (metadata; values masked)
 durin secret show NAME                # metadata for one secret (value masked by default)
 durin secret rm NAME                  # remove a secret from the store
 durin secret grant NAME --to CONSUMER # add a consumer tag to a secret's scope
 durin secret revoke NAME --from CONSUMER # remove a consumer tag from a secret's scope
-durin secret migrate                  # move legacy config-embedded credentials into the store
+durin secret migrate                  # move plaintext provider API keys from config into the store
 durin approvals                       # list pending approval records (--all for resolved too)
 durin approvals approve|reject ID     # decide one; needs a terminal (TTY), refused through exec
 durin approvals discard ID            # delete a record without deciding it
@@ -974,7 +998,7 @@ The web dashboard exposes secret management under **Settings → Secrets** (view
 names, set/delete entries, manage scopes). The **Pending** page lists approval
 requests with everything else that waits on the person and decides them
 through the decision route above. Skill security configuration is
-available under **Settings → Skills → Security** (allowlist patterns, LLM judge
+available under **Settings → Skills security** (allowlist patterns, LLM judge
 trigger). The dashboard has no API-token screen: tokens are managed with
 `durin auth token issue|list|revoke` or the `/api/v1/auth/tokens` routes above.
 
@@ -1024,5 +1048,6 @@ needed.
 **Why salted SHA-256 for API tokens?** The salt prevents rainbow-table attacks
 against the stored hashes. Each token gets a fresh 16-byte random salt, so
 identical tokens would still produce different stored hashes. Plaintext is returned
-once at issuance and never persisted, so a compromise of the token file alone is
-not sufficient to authenticate.
+once at issuance and never persisted, so the token file alone does not yield a
+usable API token. The same file also stores, unhashed, the webhook ingress
+secret and the media-URL signing secret.

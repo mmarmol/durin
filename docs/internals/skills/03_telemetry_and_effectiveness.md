@@ -289,7 +289,7 @@ ran and found nothing to do" from "curation didn't run at all."
 ### `skill.suggestion_resolved` — user resolution of a manual-skill suggestion
 
 Emitted from `SkillsService.accept_suggestion` / `.reject_suggestion`
-(`durin/service/skills.py`) — the webui Inbox actions for a
+(`durin/service/skills.py`) — the webui Pending-page actions for a
 `suggest_manual_skills`-produced suggestion (see
 `02_lifecycle_and_curation.md` §4). `{skill, action, resolution}`: `action` is
 the suggestion's original type (`evolve` / `retire`), and `resolution` is
@@ -324,9 +324,11 @@ and a zero-result run is not feed-worthy noise.
 
 **`memory.dream.skill_signals`** (`MemoryDreamSkillSignalsEvent`) is emitted
 once per `discover_skill_signals` call with `{proposed, logged, skills}`:
-`proposed` is what the LLM returned before parsing/dedup, `logged` is what
-`log_observation` actually wrote (a difference between the two indicates
-parse failures or a signal below the log threshold). This is the aggregate
+`proposed` is how many well-formed signals the LLM's answer parsed into
+(malformed items are dropped before the count), `logged` is how many of those
+`log_observation` accepted — a new record, a dedup bump or a reopen (a
+difference between the two means `log_observation` refused a signal, for
+example an invalid skill reference). This is the aggregate
 counterpart to the per-observation `skill.observation_logged` events the same
 call produces — `skill.observation_logged` tells you *which* skill and
 whether it was a dedup bump; `memory.dream.skill_signals` tells you the
@@ -338,7 +340,11 @@ hindsight pass's overall proposal-to-logged yield for one session.
 had_skill_candidate}`. `had_skill_candidate=true` distinguishes a real silent
 miss — skills exist on disk but the search surfaced none of them, worth
 investigating as a ranking or indexing problem — from the expected case of an
-empty catalog. This is a retrieval-health signal, not a loop-production
+empty catalog. Every search's `memory.recall` row also carries
+`skill_result_count` — how many of the returned hits were skills — and
+`prefetch: true` when the automatic per-turn prefetch ran it, so the rows
+count how often a skill reached the model without being asked for. They carry
+no skill names. This is a retrieval-health signal, not a loop-production
 signal; see `../memory/03_search_pipeline.md` and
 `../memory/07_telemetry_and_observability.md` for the broader search
 telemetry it belongs to.
@@ -376,7 +382,8 @@ them — there is no separate skills-specific telemetry sink.
   and offers manual resolution via
   `POST /api/v1/skills/observations/{id}/resolve` — `applied` marks the issue
   handled, `declined` keeps the record as the curation judge's memory against
-  re-proposing it.
+  re-proposing it, and `upstream` (offered on builtin skills) records that the
+  fix is owed by durin itself.
 - **`last_used_ms` is a disclosed approximation.** Session sidecars carry only
   an aggregated `derived.skill_calls` list, not a per-call timestamp, so the
   sidecar file's own mtime is the closest available signal for "when was this

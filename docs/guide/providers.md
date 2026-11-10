@@ -2,8 +2,9 @@
 
 durin uses a **provider-first model picker**: every chat session runs on a
 `(provider, model)` pair. The provider holds your credentials and endpoint;
-the model is the name you send to that provider. You choose both explicitly —
-there is no silent auto-routing based on model name alone.
+the model is the name you send to that provider. The pickers always commit
+both; a config that leaves `provider` on `"auto"` lets durin pick the provider
+from the model name (see below).
 
 ## Quick start with the wizard
 
@@ -153,9 +154,12 @@ via OpenRouter's OAuth PKCE flow instead of copy-pasting: run
 `durin oauth login openrouter`, or click "Connect with OpenRouter" in the
 dashboard's provider row. Approving in the browser hands durin a
 user-controlled API key, stored exactly like a manual paste (secret store +
-`${secret:}` reference in `providers.openrouter.api_key`). The flow is
-loopback-only — the browser and the gateway must be on the same host; on a
-remote gateway, paste a key manually instead.
+`${secret:}` reference in `providers.openrouter.api_key`). From the dashboard
+the redirect comes back through the gateway itself, so the connect also works
+on a remote gateway (set `gateway.public_url` when the dashboard is reached
+through a proxy). `durin oauth login openrouter` uses a loopback callback, so
+the browser and the command must be on the same host; otherwise paste a key
+manually.
 
 ## Model presets
 
@@ -249,9 +253,10 @@ string, not an `AuxModelConfig`. It pairs with its own
 the provider from the model name among your configured providers); leave `model`
 empty to fall back to the default.
 
-None of the aux-model fields hardcode a specific provider or model. Resolution
-always falls back to the user's configured default, so leaving them unset
-simply uses the same model as regular chat.
+None of the aux-model fields hardcode a specific provider or model. Left
+unset, `memory` and the skill judge use the default preset, `subagents`
+inherit the parent session's model, `automations` run on the agent's live
+model, and `vision` / `audio` leave their bridge off.
 
 ## Common provider setups
 
@@ -339,8 +344,10 @@ Default base: `https://generativelanguage.googleapis.com/v1beta/openai/`.
 
 ### Ollama (local)
 
-Ollama needs no API key. Set `api_base` to your running instance if it is not
-on `http://localhost:11434/v1`:
+Ollama needs no API key. Set `api_base` even when the server is on the default
+`http://localhost:11434/v1`: a local provider counts as configured (in
+`durin status`, `durin doctor`, the model picker and `"auto"` matching) only
+once its `api_base` is set:
 
 ```json
 "providers": {

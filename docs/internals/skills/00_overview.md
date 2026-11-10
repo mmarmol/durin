@@ -82,8 +82,9 @@ true`) injects the full SKILL.md body into the stable system prompt every turn �
 high cost, maximum incentive. The hot-tier lists names and descriptions for the
 usage-ranked working set, letting the agent pull full bodies on demand with the
 `skill_view` tool. The
-searchable tier indexes every skill as a memory class (FTS and vector) reachable
-via `memory_search(kind=skill)` — zero marginal cost until queried.
+searchable tier indexes every workspace skill as a memory class (FTS and vector) reachable
+via `memory_search(kind=skill)` — zero marginal cost until queried. Builtins are
+not indexed; they reach the agent through the catalog listing only.
 
 ---
 
@@ -199,7 +200,9 @@ runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
 any logged `new:*` gap observations. When the sub-agent finds a recurring
 multi-step procedure it calls `skill_write` — the same tool and the same quick
 ramp the in-loop agent uses. The pass returns early without an LLM call when
-there are no sessions and no gap observations.
+there are no sessions and no gap observations. It keeps no cursor: the newest
+sessions are read again on every run, whether or not they changed since the
+last one.
 
 **`skill_edit`** (bounded update to an already-active skill) is a separate,
 narrower path — see Evolve below and `02_lifecycle_and_curation.md`. It forks a
@@ -410,8 +413,9 @@ observation. A hindsight pass during the dream extract
 (`discover_skill_signals` in `durin/agent/skill_signals.py`) scans the
 **tail** of post-cursor session turns (tail-windowed, not head, so corrections
 at the end of long sessions are not missed). Observations accumulate with
-dedup-by-count; `count >= 2` is the recurrence signal that licenses curation
-action. See `02_lifecycle_and_curation.md` for the full observation lifecycle
+dedup-by-count; `count >= 2` is the recurrence signal the curation judge is
+told to act on (a `new:*` gap is offered to the skill-extract pass at any
+count). See `02_lifecycle_and_curation.md` for the full observation lifecycle
 (OPEN/APPLIED/DECLINED, paraphrase-tolerant dedup, archival) and
 `03_telemetry_and_effectiveness.md` for how usage and observation counts reach
 the webui Skills panel.
@@ -459,12 +463,17 @@ chat command (`/skills remove <name>`).
 
 2. **Hot-tier.** `durin/agent/skill_usage.py::compute_working_set` aggregates
    `skill_calls` from session sidecars — view events (`skill_view`), read
-   events (`read_file` on a `SKILL.md`), and edit events (`skill_edit`) — to produce a usage-ranked set
+   events (`read_file` on a `SKILL.md`), edit events (`skill_edit`), and run
+   events (an `exec` of a bundled script) — to produce a usage-ranked set
    of names. The set is split into a `frequent` slice (top N by call count over
    a 7-day window) and a `recent` slice (top N over 24 hours), deduped and
-   filled with remaining candidates. Sizes are controlled by
-   `agents.defaults.skills_hot_tier`. The hot tier injects names + descriptions
-   into `templates/agent/skills_section.md`; the agent loads full bodies on
+   filled with remaining candidates up to `frequent + recent` names: used
+   skills first, then unused ones in catalog order (workspace skills before
+   builtins). A catalog no larger than that sum is therefore listed whole, and
+   past it the unused builtins are the first to drop out. Sizes are controlled by
+   `agents.defaults.skills_hot_tier`. The hot tier injects one row per skill —
+   name, full description and the absolute `SKILL.md` path — under the fixed
+   guidance of `templates/agent/skills_section.md`; the agent loads full bodies on
    demand with the `skill_view` tool (`durin/agent/tools/skill_view.py`), which
    also returns the skill's bundled-file map and a readiness check, or a raw
    `read_file`. The computed set is memoized in `ContextBuilder` keyed on the
@@ -475,8 +484,20 @@ chat command (`/skills remove <name>`).
 3. **Searchable.** `durin/memory/skill_page.py::SkillPage` is the memory class
    for skills: it wraps the SKILL.md frontmatter and body for FTS and vector
    indexing. When `memory.index_skills` is on (default), every workspace skill
-   is reachable via `memory_search(kind=skill)`. `disable_model_invocation`
+   is reachable via `memory_search(kind=skill)`. Builtins are not indexed. The
+   automatic per-turn memory prefetch searches the same index with the user
+   message, so a workspace skill can also arrive fenced into the message as a
+   `kind="skill"` hit, competing with memory hits for the prefetch's slots
+   (`memory.recall` reports it as `skill_result_count`). `disable_model_invocation`
    skills are indexed but excluded from searchable results the model sees.
+
+**Subagents and workflow nodes see skills differently.** A subagent's prompt
+(`SubagentManager._build_subagent_prompt`, `templates/agent/subagent_system.md`)
+lists the whole catalog — no hot tier, no always tier — and the subagent
+reads a `SKILL.md` with `read_file`; `skill_view` is a core-scope tool it does
+not have. A workflow work node gets no catalog: the skills named in its
+`skills` field are injected in full into its prompt
+(`durin/workflow/node_runner.py`, `_load_skills`).
 
 **Frontmatter reads are cached.** A prompt build reads each skill's
 frontmatter several times (the platform filter, the catalog line, the
@@ -612,6 +633,8 @@ there is no session left to credit.
 |---|---|
 | `durin skill list` | List available and quarantined skills with verdict and availability. |
 | `durin skill search <query>` | Search configured registries; returns ranked hits with ref and source. |
+| `durin skill audit <target>` | Run the format lint and the static security scan on a skill; prints the verdict and findings. |
+| `durin skill quarantine` | List the skills waiting in the import quarantine. |
 | `durin skill remove <name>` | Remove or revert-to-builtin (admin action; not an agent tool). |
 | `durin memory dream` | Run the core dream passes manually (extract → derived_from → skill_extract → refine → always_on). `curate_catalog`, the document/relation passes, and workflow-improve run only in the gateway cron job, not by this command. |
 
@@ -625,7 +648,8 @@ there is no session left to credit.
 | `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed as a pending request for the Pending page or `durin approvals`. |
 | `skill_search` | Search registries; returns hits and refs. Never installs. |
 | `skill_import` | Import from a source through the gate; a flagged install is approved by policy, the judge (never for dangerous) or the user. |
-| `skill_audit` | Run the static scan on an installed skill. |
+| `skill_view` | Load a skill by name: its instructions, a map of its bundled files, and readiness; with `file_path`, one bundled file. Read-only; recorded as a `view` in `skill_calls`. |
+| `skill_audit` | Run the format lint and the static scan on a skill; optionally the LLM judge on top. |
 | `skills_list` | List available and quarantined skills. |
 | `skill_install_deps` | Install a skill's declared dependencies: the user approves the exact commands (`approve`), `auto` runs them, `never` only reports; executes via ExecTool. |
 | `skill_observe` | Log live skill feedback to the observation queue. Logs only — no skill is mutated in-session. |
@@ -644,8 +668,8 @@ verdict, review overrides) to the web panel and CLI. Web routes:
 `POST .../review` (user override for a flagged active skill),
 `DELETE .../review` (reopen review), `GET .../observations` (the OPEN
 observation backlog behind the panel's count badge, filterable by skill),
-`POST .../observations/{id}/resolve` (manual resolution: `applied` or
-`declined`). Removal routes trigger `remove_skill` or revert-to-builtin.
+`POST .../observations/{id}/resolve` (manual resolution: `applied`,
+`declined` or `upstream`). Removal routes trigger `remove_skill` or revert-to-builtin.
 
 ---
 

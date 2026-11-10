@@ -28,8 +28,10 @@ channel adapter runs its own async listener loop and pushes `InboundMessage`
 objects onto `bus.inbound`; the agent loop consumes them and pushes
 `OutboundMessage` objects onto `bus.outbound`. The outbound dispatcher
 (`ChannelManager._dispatch_outbound`) consumes from `bus.outbound` and calls
-the appropriate channel's `send` / `send_delta` methods. Neither side blocks
-the other; the queues absorb timing differences.
+the appropriate channel's `send` / `send_delta` methods. The queues absorb
+timing differences. Both are bounded (`DURIN_BUS_MAXSIZE`; zero or less
+removes the bound), so a publisher waits when its queue is full rather than
+growing memory without limit.
 
 **Plugin discovery with built-in priority, imports only when enabled.**
 `available_channel_names()` in `durin/channels/registry.py` lists the
@@ -184,7 +186,8 @@ only. For each enabled channel it imports just that adapter
 load, is logged as "channel not available" with the reason, and the other
 channels still start. It then resolves `${secret:}` credential references with
 `_resolve_section_secrets` (so plaintext never lives in the shared config
-object), constructs the channel, injects the shared `TranscriptionService`
+object; a reference that names no stored secret is logged as an error naming
+the channel, which is skipped while the others start), constructs the channel, injects the shared `TranscriptionService`
 (built once from `config.transcription`), and copies the global boolean
 overrides (`send_progress`, `send_tool_hints`, `show_reasoning`). Per-channel
 values in config can override the global defaults. A section enabled for a
@@ -210,7 +213,7 @@ logs a warning rather than hanging the process on a task that does not stop.
 channel at once, so a gateway stop spends the time of the slowest channel
 rather than the sum of all of them. Each `channel.stop()` gets at most
 `_CHANNEL_STOP_TIMEOUT_S`; the bound sits above the longest stop a channel
-takes on purpose (the WhatsApp bridge gives its Node process ten seconds to
+takes on purpose (stopping the WhatsApp channel gives its bridge process ten seconds to
 exit) and only catches a stop that hangs, which is logged by channel name and
 cancelled. The wait uses `asyncio.wait` with a timeout, so `stop_all` returns
 at the bound even when a `stop()` ignores its cancellation, and the rest of
@@ -349,9 +352,13 @@ flag, since nothing is waiting on a streamed reply.
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
 `is_allowed`/pairing in its handlers. **Telegram, Slack, Discord, and
-WhatsApp are the reference implementations of this contract.** Several other
-channels pre-filter with their own `is_allowed` check and early-`return`, so
-those messages never reach the gate. New channels should follow the
+WhatsApp are the reference implementations of this contract.** Email and the
+WebSocket endpoint pre-filter instead: Email drops mail from an unlisted
+sender while polling, and the WebSocket endpoint refuses a handshake whose
+`client_id` is not allowed, so neither reaches the gate and neither issues a
+pairing code.
+Discord's slash commands also answer an unapproved sender with a refusal
+instead of publishing. New channels should follow the
 Telegram/Slack/Discord/WhatsApp model.
 
 Pure transport applies to *sender authorization* only — the gate owns who is
@@ -434,21 +441,21 @@ layer a content fingerprint (hashing sender+text) on top of the id: that
 would drop a message a user legitimately sends twice in a row within the TTL
 — a short "ok" retyped after a typo, for instance.
 
-**Explicit non-adoptions.** Telegram, Discord, Email, and WebSocket don't
-use the shared helper because their transport already guarantees
-no-redelivery at a lower level:
+**Explicit non-adoptions.** Telegram, Email, and WebSocket don't use the
+shared helper because their transport does not redeliver; Discord keeps its
+own equivalent:
 
 - **Telegram** acks `getUpdates` with an offset; the offset itself tells
   Telegram's servers which updates were consumed, so there is nothing left
   to redeliver.
-- **Discord** already carries its own local replay guard tied to the
-  gateway's sequence number and RESUME handshake (see "Inbound path"
-  above) — that reconnect replay is a property of Discord's own protocol,
-  not a pattern shared with the other transports, so it was left as-is
-  rather than migrated.
-- **Email** stamps `\Seen` on a message immediately after processing it;
-  the next IMAP poll simply won't refetch a `\Seen` message, a stronger,
-  protocol-level guarantee than a local id cache could add.
+- **Discord** replays recent events when the gateway connection resumes.
+  The adapter guards against that with its own TTL'd, size-capped cache of
+  message ids (see "Inbound path" above), the same idea as the shared
+  helper, kept local to the adapter.
+- **Email** stamps `\Seen` on a message once it is processed (`mark_seen`,
+  on by default), so the next IMAP poll does not refetch it. With
+  `mark_seen` off, an in-memory set of processed UIDs keeps a message from
+  being handled twice within one gateway run.
 - **WebSocket** (the webui) is a direct, local connection with no upstream
   platform relaying or retrying events on durin's behalf, so there is no
   redelivery to guard against.
@@ -464,10 +471,10 @@ consumes these and applies a layered gating and transformation pipeline:
    is true, and only channels that override `send_reasoning_delta` /
    `send_reasoning_end` render them (the default is a no-op).
 
-2. **Progress gating** — `_progress` messages are passed through only when
-   `channel.send_progress` is true. `_progress` messages with `_tool_hint=True`
-   also check `send_tool_hints` (unless the channel renders structured tool
-   payloads natively, in which case the gate is bypassed).
+2. **Progress gating** — a `_progress` message passes only when
+   `channel.send_progress` is true; one flagged `_tool_hint=True` is gated by
+   `send_tool_hints` instead (and always passes on a channel that renders
+   structured tool payloads natively).
 
 3. **Retry-wait gating** — `_retry_wait` messages are only delivered on the
    `websocket` channel (the webui shows a visible indicator; CLI/TUI users rely
@@ -543,20 +550,22 @@ surfaces a receipt to its caller (nothing currently reads the value
 
 ### Streaming edit budgets
 
-Channels that stream by editing a message in place (Telegram, Slack) live under
+Channels that stream by editing a message in place (Telegram, Slack, Discord) live under
 **two** platform limits, and they are not always the same number: what a *new*
 message may contain, and what an *edit* may contain. Slack is the extreme case —
 `chat.postMessage` accepts about 40 000 characters while `chat.update` rejects
 anything past 4 000 with `msg_too_long`. Telegram caps both at 4 096.
 
-Each adapter therefore keeps a separate edit budget (`SLACK_UPDATE_MAX_LEN`,
-`TELEGRAM_MAX_MESSAGE_LEN`) sized under the platform's *edit* limit, and applies
+Slack and Telegram therefore each keep a separate edit budget (`SLACK_UPDATE_MAX_LEN`,
+`TELEGRAM_MAX_MESSAGE_LEN`) sized under the platform's *edit* limit, and apply
 it to every edit — the throttled mid-stream previews and the final render alike.
 When the buffer outgrows that budget the adapter does not keep editing: it
 freezes the current message at the budget, posts the intervening chunks as
 standalone messages, and opens a new message for the tail so the stream keeps
 flowing. A long answer therefore arrives as several messages, which is the only
-shape an edit-based stream can take once it exceeds the edit limit.
+shape an edit-based stream can take once it exceeds the edit limit. Discord
+edits its streaming message at a fixed interval with the first chunk of the
+buffer.
 
 Getting this wrong loses the whole answer rather than degrading it. A rejected
 edit propagates out of `send_delta`, `_send_with_retry` burns its attempts on an
@@ -619,10 +628,12 @@ surface. Every other Slack error still propagates untouched, so a real fault
 warning is the operational signal that the constant needs revisiting; the
 adaptive path only buys the time to do it without losing answers meanwhile.
 
-`is_allowed(sender_id)` is a policy method called by the central gate — NOT by
-the channel itself. It checks: `"*"` in `allow_from`, exact match in
-`allow_from`, and `is_approved(channel, sender_id)` from the pairing store.
-Channels MUST NOT call `is_allowed` in their own handlers.
+`is_allowed(sender_id)` is the policy method the central gate calls. It
+checks: `"*"` in `allow_from`, exact match in `allow_from`, and
+`is_approved(channel, sender_id)` from the pairing store. A channel must not
+use it to drop a message; it may consult it to skip work for a sender the
+gate is about to deny (reactions, file downloads, thread-context fetches), as
+Slack and Discord do, and must still publish.
 
 A channel registers its default configuration via the class method
 `default_config()` which the onboarding flow uses to seed `config.json`.
@@ -698,9 +709,11 @@ two families are:
 `WhatsAppChannel.send` awaits the matching `ack` (with a timeout) before
 returning, so the channel manager's retry-on-failure policy applies the same
 way it does for every other channel's `send`. On the bridge side, inbound
-whatsmeow events are handed off to a buffered outbound queue consumed by a
-dedicated goroutine that writes to the WS connection, so a slow or stalled
-Python client can never block whatsmeow's own event dispatch.
+WhatsApp messages are handed to a buffered queue consumed by a dedicated
+goroutine that writes to the WS connection, so a slow or stalled Python client
+cannot block whatsmeow's event dispatch; when the buffer is full the message
+is dropped and logged to the bridge's stderr. Status and error frames are
+written directly.
 
 **Quoted replies and LID identities.** A WhatsApp quote's `ContextInfo.Participant`
 must be the replied-to message's sender JID, never the chat JID — for a group
@@ -814,7 +827,7 @@ not implemented.
 **Thread store** (`durin/channels/email_threads.py::ThreadStore`): a single
 JSON file at `~/.durin/email/threads.json`, with the gateway's email channel
 instance as its only writer, written atomically (temp file + rename). It is
-pruned both at load and once a day: entries idle beyond the configured
+pruned both at load and once a day: entries idle beyond the store's
 max age are dropped, and if the store still exceeds the entry cap the
 oldest-by-last-seen entries are evicted. A corrupt or unreadable file is
 treated as an empty store rather than raised — replies degrade to unstitched
@@ -829,8 +842,9 @@ outbound mail and, when replying within a known thread, records it via
 `record_outbound` as the thread's new last link. When a thread entry
 exists, the outbound `References` header is the stored chain with the
 resolved `In-Reply-To` value appended if it isn't already the last entry —
-`References` always ends with `In-Reply-To`. `Thread-Index` and
-`Thread-Topic` are re-emitted verbatim when the store carries them, so
+`References` always ends with `In-Reply-To`. When the store carries them,
+`Thread-Topic` is re-emitted verbatim and `Thread-Index` as the conversation
+prefix alone (the per-reply child blocks are not kept), so
 Outlook/Exchange clients keep grouping the conversation. The reply body is
 sent as `multipart/alternative`: the raw markdown as `text/plain`, plus HTML
 rendered from it; a render failure logs a warning and falls back to
@@ -865,8 +879,8 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `BaseChannel` | `durin/channels/base.py` | Abstract adapter base. Owns `_handle_message` (publishes to bus; no auth), `is_allowed` (policy called by the gate, not the channel), `supports_streaming`, `send`, `send_delta`, `send_reasoning_delta`, `send_reasoning_end`, `transcribe_audio`. |
 | `ChannelManager` | `durin/channels/manager.py` | Lifecycle and dispatch coordinator. `_init_channels` discovers and instantiates. `_dispatch_outbound` applies gating, coalescing, dedup, and retry. `start_all` / `stop_all` manage the asyncio task tree. `send(msg)` bypasses the queue to return the channel's `SendReceipt` directly. |
 | `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue` objects (`inbound`, `outbound`). `publish_inbound` runs the installed inbound-authorizer gate before enqueuing; `set_inbound_authorizer` wires the gate. |
-| `InboundMessage` | `durin/bus/events.py` | Channel-to-loop event: `channel`, `sender_id`, `chat_id`, `content`, `media`, `metadata`, `session_key_override`. `session_key` property returns override or `"channel:chat_id"`. |
-| `MessageDeduplicator` | `durin/channels/dedup.py` | Shared TTL + size-capped id cache guarding against transport redelivery. In-memory by default; an optional `persist_path` backs it with an atomically-written JSON file for transports whose redelivery window can span a restart. See "Inbound deduplication" above. |
+| `InboundMessage` | `durin/bus/events.py` | Channel-to-loop event: `channel`, `sender_id`, `chat_id`, `content`, `media`, `metadata`, `session_key_override`, `is_dm`, `trigger_only`. `session_key` property returns override or `"channel:chat_id"`. |
+| `MessageDeduplicator` | `durin/channels/dedup.py` | Shared TTL + size-capped id cache guarding against transport redelivery. In-memory only: it does not survive a gateway restart. See "Inbound deduplication" above. |
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
 | `SendReceipt` | `durin/bus/events.py` | Frozen dataclass returned by `send`: `thread_key: str | None` naming the thread a send landed in, in the inbound matcher's per-channel key vocabulary. See "Send receipts" above. |
 | `available_channel_names` | `durin/channels/registry.py` | Names of built-in (pkgutil scan) and external (entry_points) channels, with nothing imported or loaded. Built-ins shadow plugins of the same name. What gateway startup walks. |
@@ -912,8 +926,8 @@ keys accepted by most adapters:
 
 Channel-specific extensions:
 
-- **Telegram**: no additional permission fields beyond `allow_from`, which
-  takes numeric user IDs or usernames (a leading `@` is ignored).
+- **Telegram**: `group_policy` (`open`/`mention`); `allow_from` takes numeric
+  user IDs or usernames (a leading `@` is ignored).
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
   trigger the bot (empty means all; a thread also matches its parent channel,
   so allowing a forum covers its posts). `group_policy` (`mention`/`open`),
@@ -1062,7 +1076,7 @@ session's `channel` is not `"websocket"`.
 
 The converter itself is a pure function (no I/O): media signing reuses the
 channel's existing `_augment_transcript_user_media` callback, which HMAC-signs
-file paths using the same per-process `_media_secret` as websocket sessions.
+file paths using the same `_media_secret` as websocket sessions.
 Its result is cached in-process in `durin/api/asgi.py`, keyed by
 `(session key, session file mtime_ns, session file size)`, so repeated reads of
 an unchanged session skip the conversion; a new turn changes the file's mtime

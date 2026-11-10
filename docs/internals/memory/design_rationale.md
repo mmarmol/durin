@@ -71,7 +71,7 @@ Multilingual cross-encoder models add several hundred milliseconds of latency on
 
 `memory_ingest` accepts only local file paths. URL and inline content variants were proposed and removed.
 
-URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Persisting text the agent already has in context (an inline-content variant) has no agent-facing write path either — only `/remember` and the Dream write freeform `corpus`/`episodic` entries. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
+URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Persisting text the agent already has in context (an inline-content variant) has no agent-facing write path either — only `/remember` writes freeform entries; the Dream writes entity pages and session summaries, never freeform ones. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
 
 The composition rule:
 
@@ -193,7 +193,7 @@ durin already runs a dense + sparse hybrid: multilingual-E5 dense vectors fused 
 
 ### Versioning as a separate agent tool
 
-A dedicated `memory_history` MCP tool for git log queries was not implemented. Git history is available to Dream internally (its prompt includes recent commit history) and to the operator via any git CLI. The LLM agent accesses entity history by issuing reads against the entity page — no dedicated agent-facing tool needed.
+A general `memory_history` tool for arbitrary git log queries was not implemented. What exists is narrower: `memory_entity_lineage` returns one entity page's commit history (who changed it, when and why, merges included), read-only, to the agent and to the Dream's investigating judge. Anything beyond a single page's history stays with the operator, through `durin memory history` or any git CLI.
 
 ### Active forgetting policies
 
@@ -213,7 +213,7 @@ Structuring the agent's own tool-call history as a queryable memory layer was co
 
 A periodic walk flagging inconsistencies between entity pages — relation reciprocity gaps, attribute conflicts, temporal contradictions — was proposed and decided against.
 
-Duplicates (the dominant inconsistency class) are already handled by absorb-judge. Relation reciprocity is not a system invariant: "Marcelo knows X" does not imply "X knows Marcelo." Other inconsistencies surface at LLM read time, where they matter — the agent that notices a conflict reads `git log` on the affected entity. A scheduled scan that emits warnings produces output nobody reads. The implementation cost is 300–500 LOC for an output the operator can already produce on demand by asking the LLM.
+Duplicates (the dominant inconsistency class) are already handled by absorb-judge. Relation reciprocity is not a system invariant: "Ada knows X" does not imply "X knows Ada." Other inconsistencies surface at LLM read time, where they matter — the agent that notices a conflict reads `git log` on the affected entity. A scheduled scan that emits warnings produces output nobody reads. The implementation cost is 300–500 LOC for an output the operator can already produce on demand by asking the LLM.
 
 ---
 
@@ -242,7 +242,7 @@ We surveyed mem0, Letta/MemGPT, Zep, Graphiti, Cognee, Hermes-Agent, OpenClaude,
 |---|---|---|---|
 | Cross-encoder default | Mostly opt-in OFF | Opt-in OFF | Agreed with mainstream — latency cost unjustified by default. |
 | MMR | Rarely implemented | Not in MVP | Agreed — the two-track split (fragments never folded into entity pages) eliminates the primary duplication source. |
-| Versioning as a tool | Not standard | git history via Dream prompt + CLI | Reuse what exists; no dedicated agent-facing tool. |
+| Versioning as a tool | Not standard | per-entity lineage tool (`memory_entity_lineage`) + CLI | Reuse git history; no general history-query tool. |
 | LLM in hot path | Most avoid; cognee uses LLM classifier | Strictly avoided | Cost and latency. |
 | Multi-vector per facet | Rare (some research) | Single vector per doc | Simplicity. |
 | Closed attribute catalog | mem0 has implicit catalog via LLM tendencies | Open, with drift control via existing\_schema | Generalist use cases. |
@@ -341,10 +341,12 @@ keeping them separate is about provenance and ownership, not about recall.
 Merging two entity pages is a potentially high-blast-radius operation: it
 deletes one page (to archive) and rewrites another. However, every merge is
 reversible — `git revert` of the absorb commit restores both pages, and a
-tombstone entry prevents the same pair from being re-proposed. With the
-confidence threshold set at 95 and quarantine logic preventing the pass from
-merging its own freshly-created output, the judge is conservative enough that
-auto-merge is safe as the default. The refine pass therefore ships with
+tombstone entry prevents the same pair from being re-proposed. With the first
+judge's merge floor set at 95, a borderline pair merged only after an
+investigating judge has read both pages and their sources (at its own, lower
+floor), and quarantine logic preventing the pass from merging its own
+freshly-created output, the judge is conservative enough that auto-merge is
+safe as the default. The refine pass therefore ships with
 `auto_absorb.enabled = true`; operators who want explicit control can set it
 to `false` and use `durin memory absorb-suggest` / `durin memory absorb`
 instead.

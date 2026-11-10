@@ -18,7 +18,7 @@ Markdown files are the source of truth. Indices (LanceDB vector + SQLite FTS5) a
 
 **Open-vocabulary typed references.** Every entity is identified by a `<type>:<value>` reference where `type` is lowercase `[a-z][a-z0-9_]*` and the vocabulary of types is deliberately open — only the shape is enforced, not the set of allowed types.
 
-**Authorship gates auto-management.** Every file carries an `author` field (`user_authored` or `agent_created`). The dream passes and auto-absorb logic never modify pages authored by a human. Field-level writes respect a three-tier precedence: user > dream > agent.
+**Authorship gates auto-management.** Every file carries an `author` field (`user_authored` or `agent_created`). The page-level flag gates merging: the refine pass and pair re-review skip any pair that includes a `user_authored` page. Any page written through `write_entity` is stamped `agent_created`; what protects an individual value is its per-field provenance, which respects a three-tier precedence: user > dream > agent.
 
 **Workspace layout is self-contained.** One `<workspace>/` directory holds all sessions, ingested documents, and the entire `memory/` subtree. Copying the directory is a complete backup.
 
@@ -73,7 +73,7 @@ flowchart TD
 ├── ingested/
 │   └── <ingest_id>/
 │       ├── source.<ext>             original file (PDF, HTML, TXT, …)
-│       └── meta.json                origin, ingest_time, mime_type
+│       └── meta.json                id + derived: ingested_at, source_path, size_bytes, ocr_stub
 │
 └── memory/
     ├── episodic/<id>.md             raw atomic observations
@@ -94,17 +94,17 @@ flowchart TD
     └── archive/<class>/<id>.md      retired entries (excluded from search)
 ```
 
-`sessions/` and `ingested/` are immutable evidence — never modified after writing. `memory/` is mutable synthesis — written by the agent, the dream passes, or the user directly.
+`sessions/` and `ingested/` are evidence — memory never edits their content. The live session file is rewritten on save and bounded: older messages move to `sessions/archive/`. `memory/` is mutable synthesis — written by the agent, the dream passes, or the user directly.
 
 ### Data classes
 
 | Class | Path | Track | Indexed? | Mutability |
 |---|---|---|---|---|
-| Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Append-only during session |
+| Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Rewritten on save; older messages move to `sessions/archive/` |
 | Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | The key's compaction summary, replayed as archived context on its own key (whole when it fits beside the turn's message and history, otherwise cut to a quarter of what the system prompt, the tool definitions and the message leave of the turn's input budget, oldest blocks first), and as the previous-session block of a fresh session on a single-user channel. Appended per consolidation span, or by the nightly session-summary pass for a conversation that went idle without one (bounded; oldest blocks evicted, their path trailers carried forward). Carries the `entities` and `topics` the archive prompt returns with each span's bullets, merged across spans as a recency-bounded union — the most recently (re)confirmed tags kept, the rest dropped once the cap is reached — so the summary stays reachable by a name or subject its prose never spells out. `source_refs` names the entry's own key as `session:<key>` (un-sanitized), which is how a fresh session on the same channel finds it as its previous session. `/new` deletes it after folding its text into the closed-conversation record below |
 | Closed conversation | `memory/session_summary/<key>_closed_<timestamp>.md` (record key is `<sanitized key, first 40 chars>_closed_<timestamp>`) | 2 — raw | Vector + FTS5 | Written once when `/new` closes a conversation: the prior compaction summary plus the archive of the still-unconsolidated tail, tagged with the union of both texts' entities and topics, and `source_refs: session:<key>` naming the conversation's original (un-sanitized) key rather than this record's own closed-record id. Searchable and, on single-user channels, may be shown once as the previous-session block of a fresh session (never replayed as the key's own archived context). |
 | Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via references | Write-once |
-| Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (idempotent by content hash) |
+| Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (keyed by the source file name) |
 | Corpus (legacy) | `memory/corpus/<id>.md` | 2 — raw | Vector + FTS5 | No longer written by memory_ingest; historical entries are still indexed |
 | Episodic | `memory/episodic/<id>.md` | 2 — raw | Vector + FTS5 | Append-only |
 | Stable | `memory/stable/<id>.md` | 2 — raw | Vector + FTS5 | Semi-mutable (user-editable) |
@@ -186,11 +186,11 @@ All references have the form `<type>:<value>`:
 ENTITY_REF_PATTERN = re.compile(r"^[a-z][a-z0-9_]*:[^\s].*$")
 ```
 
-Validation policy: the `store_memory` write path (`/remember`, Dream) is strict (invalid ref → error returned to the caller); the `consolidator_tags` read path is lenient (invalid refs dropped with a log warning, entry survives).
+Validation policy: the `store_memory` write path (`/remember`) is strict (invalid ref → error returned to the caller); the `consolidator_tags` read path is lenient (invalid refs dropped with a log warning, entry survives).
 
 ### Slug normalization
 
-A slug is derived from an entity's `name` by `slugify_name()` in `entities.py`:
+A page's slug is the value part of the ref its writer supplies (`<type>:<slug>` → `memory/entities/<type>/<slug>.md`), used verbatim. `slugify_name()` in `entities.py` normalises a name for comparison during dedup:
 
 1. Unicode NFC normalize.
 2. Transliterate non-Latin scripts to ASCII via `unidecode` (e.g., 马塞洛 → `ma_sai_luo`).
@@ -201,20 +201,20 @@ A slug is derived from an entity's `name` by `slugify_name()` in `entities.py`:
 
 Returns `"unnamed"` if the pipeline yields an empty string.
 
-Collision resolution: when `memory/entities/<type>/<slug>.md` already exists, `resolve_slug_collision()` appends a numeric suffix (`_2`, `_3`, …). It checks both live and archived paths to avoid reviving a stale identity. Real dedup of distinct entities that share a name is handled by the dream refine pass.
+A write to a ref whose page already exists merges into that page. Dedup of distinct entities that share a name is handled by the dream refine pass.
 
 ### Authorship and precedence
 
-Every memory write must declare its author via `author_scope()`. The mechanism is a Python `ContextVar` that propagates across `await` and `asyncio.create_task` boundaries within a logical request, isolated between concurrent tasks.
+`store_memory` and `write_entity` read the ambient author when the caller passes none, and raise outside an `author_scope()`. Dream passes pass their author explicitly. The mechanism is a Python `ContextVar` that propagates across `await` and `asyncio.create_task` boundaries within a logical request, isolated between concurrent tasks.
 
 ```python
 from durin.memory.provenance import author_scope
 
 with author_scope("agent_created"):
-    write_entity(...)       # dream / agent tool paths
+    write_entity(...)       # memory_upsert_entity
 
 with author_scope("user_authored"):
-    write_entity(...)       # /remember, manual UI surface
+    store_memory(...)       # /remember
 ```
 
 Calling `current_author()` outside an active scope raises `MissingAuthorScopeError` — there is no implicit default.
@@ -223,14 +223,14 @@ Calling `current_author()` outside an active scope raises `MissingAuthorScopeErr
 
 | Value | Who uses it | Effect |
 |---|---|---|
-| `user_authored` | `/remember`, hand-edited `.md`, user UI surfaces | Dream and auto-absorb never modify or archive this entry |
+| `user_authored` | `/remember`, hand-edited `.md`, user UI surfaces | Refine and pair re-review never merge or archive this page |
 | `agent_created` | Agent tools, dream passes | Dreams may extend, merge, or archive |
 
 **Field-level precedence** (orthogonal to the page-level flag): when `write_entity` applies a `FieldPatch`, each field resolves its author as one of `user`, `dream`, or `agent`. The precedence rule is **user > dream > agent** — a value written at a higher tier is never overwritten by a lower-tier patch.
 
-**Entity name** is an exception: the discovered entity name from the dream extract Stage 2 is last-writer-wins. Precedence applies to attributes and relations, not to `name`. An explicit user or agent correction simply overwrites a dream-discovered name guess.
+**Entity name** is an exception: the discovered entity name from the dream extract Stage 2 is last-writer-wins. Precedence decides attribute values, `derived_from` provenance and whole-body replacement (a losing replace is appended instead); relations and aliases are add-only. It does not apply to `name`. An explicit user or agent correction simply overwrites a dream-discovered name guess.
 
-**Page-level `author` field**: `EntityPage.author` defaults to `user_authored` when absent — hand-written pages without the field are treated as user content (safe default). Pages written by the dream or absorption carry `author: agent_created` explicitly.
+**Page-level `author` field**: `EntityPage.author` defaults to `user_authored` when absent — hand-written pages without the field are treated as user content (safe default). Every page written through `write_entity` (agent tool, dream passes) or absorption carries `author: agent_created` explicitly.
 
 ### Entity write path
 
@@ -249,7 +249,7 @@ Before any system write touches git, `_commit_dirty_as_user()` commits any uncom
 
 ### Archive
 
-When a fragment is retired (`memory_forget` / webui) or when the refine dream merges one entity into another, the file is moved to `memory/archive/<class>/<id>.md`. The archived file gains `archived_at` and `archived_into` frontmatter fields. Reference files at `memory/references/<slug>.md` are replaced in-place on re-ingest (idempotent by content hash) — the `memory/.git/` history preserves prior versions. An ingested document is retired the same way (`memory_forget("reference:<slug>")`, the Documents-shelf trash button, or `DELETE /api/v1/memory/documents/{slug}`): `forget_reference` archives it to `memory/archive/references/<slug>.md` with a delete tombstone (dream won't re-distill) and drops both index units the ingest wrote — the whole-doc FTS row (`reference:<slug>`) and every per-chunk vector row (`reference:<slug>#<idx>`). The tombstone alone only stops re-distillation; it does not filter search, which is why the index rows are removed explicitly. Legacy corpus entries were deleted (not archived) on re-ingest under the old model.
+When a fragment is retired (`memory_forget` / webui) or when the refine dream merges one entity into another, the file is moved to `memory/archive/<class>/<id>.md`. An absorbed entity's archived file gains `archived_into`, `archived_at` and `archived_reason` frontmatter fields; a forgotten entry gains `archived_at` and `archived_reason`. Reference files at `memory/references/<slug>.md` are replaced in-place on re-ingest of a same-named file — the `memory/.git/` history preserves prior versions. An ingested document is retired the same way (`memory_forget("reference:<slug>")`, the Documents-shelf trash button, or `DELETE /api/v1/memory/documents/{slug}`): `forget_reference` archives it to `memory/archive/references/<slug>.md` with a delete tombstone (dream won't re-distill) and drops both index units the ingest wrote — the whole-doc FTS row (`reference:<slug>`) and every per-chunk vector row (`reference:<slug>#<idx>`). The tombstone alone only stops re-distillation; it does not filter search, which is why the index rows are removed explicitly. Legacy corpus entries were deleted (not archived) on re-ingest under the old model.
 
 Archive is excluded from all default search paths: the vector index, FTS5, the grep fallback, and all workspace walkers. Access requires explicit opt-in.
 
@@ -275,7 +275,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `build_entity_manifest` | `durin/memory/entity_manifest.py` | Compact existing-entity list that seeds the discover/learnings extraction prompts. Type-enumerate mode walks small canonical sets (feedback/stance/practice) exhaustively; search-retrieve mode calls the search pipeline for large sets (person/place/topic). |
 | `save_entry` | `durin/memory/storage.py` | Writes a `MemoryEntry` as markdown + YAML frontmatter (wikilink-wraps `source_refs`/`related` at the storage boundary). |
 | `load_entry` | `durin/memory/storage.py` | Reads and parses a `MemoryEntry`; strips wikilink wrappers back to plain URIs. |
-| `split_frontmatter` | `durin/memory/storage.py` | Low-level `---`-block splitter used by both `load_entry` and `EntityPage.from_text`. |
+| `split_frontmatter` | `durin/memory/storage.py` | Low-level `---`-block splitter used by `load_entry`; `EntityPage` parses with its own private splitter. |
 
 ---
 
@@ -283,7 +283,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 
 | Config key | Default | Effect |
 |---|---|---|
-| `memory.enabled` | `true` | Master switch for all memory I/O. |
+| `memory.enabled` | `true` | Enables vector retrieval; when false the tools still work over the markdown files and the lexical index. |
 | `memory.owner` | `null` | Owner person ref that `resolve_principal()` resolves the principal from; unset resolves to `person:anonymous`. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-embed when the user edits a `.md` file directly. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When off, suggestions are logged for manual review. |
@@ -293,11 +293,11 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 **CLI surfaces:**
 
 - `durin memory reindex` — wipe `.durin/index/` and rebuild from all `.md` files.
-- `durin memory absorb <ref1> <ref2>` — manually merge two entity pages via the absorb-judge.
+- `durin memory absorb <canonical> <absorbed>` — manually merge two entity pages; the first survives. No judge runs.
 - `durin memory expand <ref>` — render a canonical entity page plus its archived predecessors.
 - `durin memory dream` — run the core dream consolidation passes manually.
 
-**Agent tool surfaces:** `memory_upsert_entity` writes entity pages; `memory_ingest` writes reference documents; `memory_forget` archives a fragment or entity page. Fragments come from `/remember` and the Dream, not from an agent-invoked write tool.
+**Agent tool surfaces:** `memory_upsert_entity` writes entity pages; `memory_ingest` writes reference documents; `memory_forget` archives a fragment or an ingested document and refuses entity pages. Fragments come from `/remember` and the Dream, not from an agent-invoked write tool.
 
 ---
 

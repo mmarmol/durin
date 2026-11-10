@@ -29,7 +29,7 @@ Temporal decay is intentionally not applied: the LLM receives `valid_from` on ev
 
 ```mermaid
 flowchart TD
-    Q["query + keywords?"] --> QA["Step 1: Query analysis\nquery_router.decide_lexical_route\n• NFC normalize + whitespace collapse\n• CJK count → lexical route\n• auto-keyword detection\n• entity refs via alias index"]
+    Q["query + keywords?"] --> QA["Step 1: Query analysis\nquery_router.decide_lexical_route\n• NFC normalize + whitespace collapse\n• CJK count → lexical route\n• auto-keyword detection"]
 
     QA --> VS["Step 2a: Vector search\nvector_index.search top-50\nLanceDB L2 distance"]
     QA --> LS["Step 2b: Lexical search\nlexical_search.lexical_search top-50\nFTS5 route: UNICODE61 / TRIGRAM / LIKE"]
@@ -64,18 +64,17 @@ flowchart TD
    `MAX_QUERY_CHARS` / `MAX_QUERY_TOKENS` (keeping the head; `truncated` is set on the
    decision). The bound is a hard invariant for every downstream step: quoting each
    token of an unbounded text into one FTS5 MATCH makes sqlite allocate memory
-   proportional to the term count (~800MB for a 380KB transcript passed as a query in
-   the 2026-07-18 incident) while matching nothing. A caller holding a long text wants
+   proportional to the term count (hundreds of MB for a whole transcript passed as a
+   query) while matching nothing. A caller holding a long text wants
    retrieval *about* it, not *of* it; callers that know which window matters (e.g. the
    dream's discovery pass passes the most recent turns) slice before calling.
 2. Counts CJK characters (Hiragana, Katakana, Hangul, CJK Unified and Extension blocks) to pick the FTS5 path:
    - No CJK → `UNICODE61` (`memory_fts`, BM25-ranked).
    - CJK ≥ 3 and all non-operator tokens ≥ 3 chars → `TRIGRAM` (`memory_fts_trigram`).
    - Any shorter CJK → `LIKE_SUBSTRING` (raw LIKE scan over `memory_fts`; no scoring).
-3. Detects auto-keywords: URLs, file paths, UUIDs, and email addresses in the query are extracted verbatim and trigger the same lexical weight boost as an explicit `keywords` parameter.
-4. Resolves entity refs by N-gram lookup against the shared alias index (see Step 4).
+3. Detects auto-keywords: the first URL, file path, UUID, or email address in the query is extracted verbatim. It triggers the same lexical weight boost as an explicit `keywords` parameter and, like `keywords`, becomes a required term of the lexical expression (Step 2b).
 
-The output is a frozen `RoutingDecision` dataclass.
+The output is a frozen `RoutingDecision` dataclass. The router is pure — no I/O; entity refs are resolved later, against the shared alias index, in Step 4.
 
 ### Step 2a — Vector search
 
@@ -95,7 +94,7 @@ An entity page's row also carries the slug half of each `derived_from` ref (see 
 
 ### Step 2c — Grep fallback
 
-`search_memory(workspace, query, scope="all", level="warm", coverage=…)` walks `memory/`, `sessions/`, and `ingested/` for literal matches. This is the only path for raw ingested artifacts (not in LanceDB or FTS5 by design) and the recovery path for files the FTS index has not caught up with. The pipeline hands the walk an `IndexCoverage` (`durin/memory/search.py`) built from `FTSIndex.indexed_paths()` — every indexed file with the mtime recorded when its newest row went in — and the walk reads only files with no row or newer on disk than their row: a fresh write the watcher has not drained, a session with turns since its last indexing, an edited page. Everything the index holds unchanged is skipped (the lexical leg already covers it); ingested artifacts are always read. Without `coverage` (the CLI's literal search) every file is read. The walk reports `grep_scanned` / `grep_skipped` on the pipeline result and the `memory.recall` row; on a workspace with thousands of entity pages the full walk cost seconds per search, the covered walk milliseconds. One consequence the full walk used to hide: an FTS row holds only uri, path and type, while headline, summary and body length ride on the vector row — so a memory entry only the lexical leg surfaced (no embedding model, no vector row yet, a row outside the vector top-k) carried nothing to render. The pipeline now reads those display fields from the entry on disk for such hits (`_entry_meta_from_disk`, the same summary rule the vector upsert materialises), one file per hit, bounded by the fused list.
+`search_memory(workspace, query, scope="all", level="warm", coverage=…)` walks `memory/`, `sessions/`, and `ingested/` for literal matches: the whole normalized query, lowercased, must occur as one substring of the file's searchable text, so a multi-word query matches only a file that contains that exact wording. This is the only path for raw ingested artifacts (not in LanceDB or FTS5 by design) and the recovery path for files the FTS index has not caught up with. The pipeline hands the walk an `IndexCoverage` (`durin/memory/search.py`) built from `FTSIndex.indexed_paths()` — every indexed file with the mtime recorded when its newest row went in — and the walk reads only files with no row or newer on disk than their row: a fresh write the watcher has not drained, a session with turns since its last indexing, an edited page. Everything the index holds unchanged is skipped (the lexical leg already covers it); ingested artifacts are always read. Without `coverage` (the CLI's literal search) every file is read. The walk reports `grep_scanned` / `grep_skipped` on the pipeline result and the `memory.recall` row; on a workspace with thousands of entity pages the full walk cost seconds per search, the covered walk milliseconds. An FTS row holds only uri, path and type, while headline, summary and body length ride on the vector row — so a memory entry only the lexical leg surfaced (no embedding model, no vector row yet, a row outside the vector top-k) would carry nothing to render. The pipeline reads those display fields from the entry on disk for such hits (`_entry_meta_from_disk`, the same summary rule the vector upsert materialises), one file per hit, bounded by the fused list.
 
 `search_memory` addresses a canonical page by its display path (`memory/entity_page/<ref>`) — the shape drill-down and the webui expect — so `_safe_grep_fallback` rewrites it to the bare ref before fusion and carries the display path in `path`.
 
@@ -121,7 +120,7 @@ The FTS indexer's `_payload_for` is the reference shape; the vector normaliser a
 RRF_score(uri) = Σ over sources:  w_source / (k + rank_in_source(uri))
 ```
 
-Weights: `w_vector = 1.0`, `w_lexical = 0.7` (boosted to `2.5` when `keywords` or auto-keyword fires), `w_grep = 0.3`. Constant `k = 60` (Cormack/Clarke/Buettcher 2009). A URI appearing in multiple sources accumulates contributions; deduplication is implicit.
+Weights: `w_vector = 1.0`, `w_lexical = 0.7` (boosted to `2.5` when `keywords` or auto-keyword fires), `w_grep = 0.3`. Constant `k = 60` (Cormack/Clarke/Buettcher 2009). A URI appearing in multiple sources accumulates contributions; deduplication is implicit. URIs the caller passes in `exclude_uris` are dropped from the fused list right after fusion, so the hits behind them move up into the caller's `limit` (the per-turn prefetch excludes the session's own summary this way).
 
 After fusion, two adjustments run in order:
 
@@ -135,7 +134,7 @@ After fusion, two adjustments run in order:
 - **Entity-page sub-list:** canonical pages whose ID is in the query entity set.
 - **Tagged-entry sub-list:** memory entries whose `entities` field overlaps with the query entities, sorted by `valid_from` descending.
 
-The combined RRF of the vector list and this entity-match list produces `RankedCandidate` objects with an `adjusted_score`. The entity-match list is typically much shorter (3–5 items) than the vector list (50 items), so the entity signal is a nudge, not a veto.
+A second RRF over the fused order (every fused hit, ranked by its score so far) and this entity-match list produces `RankedCandidate` objects with an `adjusted_score`: `1 / (k + rank in the fused order)` plus, for a hit on the entity-match list, `1 / (k + rank in that list)`, with ranks counted from zero.
 
 When no entities are resolved (query mentions no known alias), this step is a no-op.
 
@@ -173,10 +172,10 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 
 | Symbol | File | Role |
 |--------|------|------|
-| `run_search_pipeline` | `durin/memory/search_pipeline.py` | Pipeline orchestrator. Takes `workspace`, `query`, optional `keywords`, `vector_index`, `cross_encoder`, `scope`. Returns `SearchPipelineResult`. Each step wrapped in try/except for graceful degradation. |
-| `SearchPipelineResult` | `durin/memory/search_pipeline.py` | Frozen dataclass: `hits: list[SectionedHit]`, `vector_count`, `lexical_count`, `recovered_from`, `recovery_duration_ms`. |
+| `run_search_pipeline` | `durin/memory/search_pipeline.py` | Pipeline orchestrator. Takes `workspace`, `query`, optional `keywords`, `vector_index`, `limit`, `cross_encoder`, `max_per_source`, `scope`, `exclude_uris`. Returns `SearchPipelineResult`. Each step wrapped in try/except for graceful degradation. |
+| `SearchPipelineResult` | `durin/memory/search_pipeline.py` | Frozen dataclass: `hits: list[SectionedHit]`, `vector_count`, `lexical_count`, `recovered_from`, `recovery_duration_ms`, `grep_scanned`, `grep_skipped`. |
 | `decide_lexical_route` | `durin/memory/query_router.py` | Pure function: NFC-normalize, CJK-count, pick FTS5 route, detect auto-keywords. Returns `RoutingDecision`. No I/O. |
-| `RoutingDecision` | `durin/memory/query_router.py` | Frozen dataclass: `normalized_query`, `route` (`UNICODE61` / `TRIGRAM` / `LIKE_SUBSTRING`), `cjk_chars`, `keywords`, `auto_keywords`. |
+| `RoutingDecision` | `durin/memory/query_router.py` | Frozen dataclass: `normalized_query`, `route` (`UNICODE61` / `TRIGRAM` / `LIKE_SUBSTRING`), `cjk_chars`, `keywords`, `auto_keywords`, `truncated`. |
 | `LexicalRoute` | `durin/memory/query_router.py` | Enum of three FTS5 paths: `UNICODE61`, `TRIGRAM`, `LIKE_SUBSTRING`. |
 | `lexical_search` | `durin/memory/lexical_search.py` | Executes the routing decision against `FTSIndex`. BM25-ranked for FTS paths; insertion-order for LIKE. Returns `list[FTSHit]`. |
 | `fuse_rrf` | `durin/memory/rrf_fusion.py` | Merges three ranked URI lists by RRF. `k=60`, `w_vector=1.0`, `w_lexical=0.7→2.5`, `w_grep=0.3`. Returns `list[FusedHit]`. |
@@ -185,7 +184,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `extract_query_entities` | `durin/memory/entity_ranker.py` | N-gram alias lookup against `AliasIndex`. Returns deduplicated list of entity refs mentioned in the query. |
 | `get_shared_alias_index` | `durin/memory/aliases_cache.py` | The process-wide `AliasIndex` for a workspace. Returns the cached index at once, stale or not; builds it (or waits for the build in flight) only when none exists. |
 | `refresh_alias_index_in_background` | `durin/memory/aliases_cache.py` | Rebuilds a workspace's shared index from disk on a daemon thread and swaps the new map in atomically. Called by the gateway at startup and after each dream worker exits. |
-| `rank_with_entities` | `durin/memory/entity_ranker.py` | RRF over vector ranking + entity-match sub-list. Returns `list[RankedCandidate]`. |
+| `rank_with_entities` | `durin/memory/entity_ranker.py` | RRF over the candidates' base order (the fused order, in the pipeline) + entity-match sub-list. Returns `list[RankedCandidate]`. |
 | `RankedCandidate` | `durin/memory/entity_ranker.py` | Dataclass: `record`, `base_score`, `adjusted_score`, `signals`. |
 | `CrossEncoderReranker` | `durin/memory/cross_encoder.py` | Wraps `sentence_transformers.CrossEncoder` with lazy load, batching, retry-after-failure, and graceful degradation. `score(query, docs) -> list[float] | None`. |
 | `DEFAULT_MODEL` | `durin/memory/cross_encoder.py` | `"BAAI/bge-reranker-base"` — MIT, ~100M params, multilingual. |

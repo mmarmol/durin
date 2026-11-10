@@ -137,8 +137,11 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
    Starlette matches in list order; the first match wins.
 
 2. **Auth.** `resolve_principal_from_headers()` extracts the `Authorization:
-   Bearer` token and calls `auth.resolve(token)`. This re-hashes the candidate
-   against every stored salt+hash pair using `hmac.compare_digest` (timing-safe).
+   Bearer` token and calls `auth.resolve(token)`. On a cache miss this re-hashes
+   the candidate against the stored salt+hash pairs with `hmac.compare_digest`
+   (timing-safe) until one matches; a hit is cached against the store file's
+   mtime and size, so any issue or revoke — from this process or the CLI —
+   invalidates it.
    On a match it returns a `Principal` with the stored scope grants:
    `Principal.webui(subject, scopes)` for the dashboard session token
    `/webui/bootstrap` mints (stored with `kind: "webui"`), and
@@ -151,7 +154,7 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
 3. **Input construction.** For GET routes, the handler merges query-string
    parameters (multi-value via `request.query_params.multi_items()`) with URL path parameters, path params
    winning on collision, and constructs the `request_model`. For
-   POST/DELETE/PATCH routes, the JSON body (absent or empty body treated as `{}`)
+   every other verb (POST, PUT, PATCH, DELETE), the JSON body (absent or empty body treated as `{}`)
    is merged with path params the same way. A Pydantic `ValidationError` during
    model construction returns a 422 problem+json immediately.
 
@@ -176,9 +179,11 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
 
 The `GET /api/v1/sessions/{key}/messages` and
 `GET /api/v1/sessions/{key}/webui-thread` routes are registered ahead of the
-generic `/api/v1` routes because they need the channel's per-process
+generic `/api/v1` routes because they need the channel's
 `_media_secret` to sign media URLs — an adapter concern the generic handler
-cannot fulfill. Both routes call the service first (scope check, data fetch), then
+cannot fulfill. Both routes call the service first — `messages` for the scope
+check and the session data, `webui_thread` for the scope check alone (it
+returns an empty sentinel) — then
 call `channel._augment_media_urls()` or `build_webui_thread_response()` to
 rewrite raw on-disk paths to HMAC-signed `/api/media/{sig}/{payload}` URLs. The
 service never touches media URLs.
@@ -271,8 +276,8 @@ delivers the message before returning the response, so a client that leaves at
 once loses the stream, never the message. It ends after the `turn_end` that
 answers the message: the one whose `client_msg_id` matches, or the first after
 a `queued_consumed` that lists it (a message queued behind a running turn), or
-the next one for a `steer`. Commands are refused in this form (`422`): they
-answer inline and open no turn. An answer to a blocked `ask_user_question` is
+the next one for a `steer`. A message that starts with `/` is refused in this
+form (`422`): commands answer inline and open no turn. An answer to a blocked `ask_user_question` is
 acknowledged with `queued_consumed` (`AgentLoop._answer_pending_question`) for
 the same reason.
 
@@ -325,8 +330,9 @@ which never cancels) leaves the turn to finish and be saved to its session. A
 turn abandoned before it acquired the session lock is cancelled (`_abandon`),
 so client retries do not pile up duplicate turns. A done-callback always
 retrieves the task's outcome and logs a failure that happened after its request
-ended. An empty final response is retried once before falling back to
-`EMPTY_FINAL_RESPONSE_MESSAGE`. The turn gets a no-op `on_progress`: the OpenAI
+ended. In the non-streaming form, an empty final response is retried once (a
+second turn on the same session) before falling back to
+`EMPTY_FINAL_RESPONSE_MESSAGE`; a stream is never retried. The turn gets a no-op `on_progress`: the OpenAI
 format has no place for progress, and without a callback the loop would
 publish it for the nonexistent `api` channel.
 
@@ -383,9 +389,14 @@ and hooks — they are outside the generated OpenAPI contract.
 
 ### WebSocket chat
 
-The WebSocket route calls `chat_ws_endpoint`, which authenticates via
-`channel._ws_auth_ok(query)` and rejects with code 1008 before calling
-`websocket.accept()`. An accepted connection is wrapped in
+The WebSocket route calls `chat_ws_endpoint`, which authenticates the
+handshake with `channel._ws_auth(query, headers)` and checks the `client_id`
+against `allow_from` (`channel.is_allowed`); either refusal closes with code
+1008 before `websocket.accept()`. `_ws_auth` also reports which credential
+opened the socket — a token `/webui/bootstrap` minted, the static token, or
+none — and only a socket opened with a bootstrap token gets
+`answers_approvals`, so only the dashboard session's Approve / Reject decides
+an approval. An accepted connection is wrapped in
 `StarletteConnectionAdapter` — a thin adapter satisfying the same
 `ConnectionAdapter` interface as the raw `websockets`-backed channel — and handed
 to `channel._run_connection()`. The chat path is read from
@@ -436,7 +447,8 @@ whether a setup secret is configured — `token_issue_secret`, or the static
   re-authorize through it and the browser never stores the secret.
 
 The response includes `{token, ws_path, expires_in, model_name, model_preset,
-requires_secret}`. The token is stored as a salted SHA-256 hash; the plaintext
+max_message_bytes, requires_secret}` (`max_message_bytes` is the frame cap the
+webui checks a message against before sending). The token is stored as a salted SHA-256 hash; the plaintext
 is shown once and never persisted. It is stored with `kind: "webui"`: it is the
 dashboard session, the one credential a route that needs a person (deciding an
 approval) accepts. Only this path sets that kind — the token routes and
@@ -483,7 +495,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `channels.websocket.token` | Plaintext static bearer token; accepted by the WS handshake and by `resolve_principal_from_headers` as a fallback when no stored token matches |
 | `channels.websocket.token_issue_secret` | Setup secret for `/webui/bootstrap` (`Authorization: Bearer` or `X-Durin-Auth`). When set — or when the static `token` is set and this is empty — every bootstrap, localhost included, needs the secret or a valid `durin_session` cookie; enables reverse-proxy deployments |
 | `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed — and, whether or not a setup secret is configured, only from this machine (a loopback `Host`, and a loopback `Origin` host when one is sent). A set static `token` always requires a valid token. The gateway sets it false when it creates the websocket section at runtime for the dashboard |
-| `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
+| `tools.mcp_servers` | Map of MCP server configs keyed by server name; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
 | App host/port | `channels.websocket.host` / `channels.websocket.port`; uvicorn runs in the agent event loop and serves WS, HTTP and the SPA on that one address. `gateway.port` (and `--port`) only bind the `/health` endpoint |
 | `gateway.api_request_timeout` | How long (seconds) a non-streaming `/v1/chat/completions` request waits for its turn; an overrun answers 504 and the turn still completes |
 | `gateway.api_turn_timeout` | Hard ceiling (seconds) on any `/v1/chat/completions` turn, counted from when the turn gets its session; `0` disables; a hit answers 504 or ends the stream with an error frame and no `[DONE]` |
@@ -497,6 +509,8 @@ carries no `@route` decorator on any method). Its configuration
 The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
 commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
+channel setup and runtime (`/api/v1/channels`: pairing, connection tests,
+start/stop of a running channel),
 personas/souls (`/api/v1/souls`, `/api/v1/personas`), workflows
 (`/api/v1/workflows`), automations (`/api/v1/automations`), background tasks
 (`/api/v1/tasks`), everything waiting on a person (`/api/v1/pending`), and
@@ -505,12 +519,19 @@ for partial updates (e.g. `McpService.update`, `CronService`), PUT for saving a
 whole named resource (e.g. an automation or a workflow script). The generated
 contract lists the verb of every operation.
 
+**`DELETE /api/v1/sessions/{key}`** (scope `sessions:write`,
+`SessionsService.delete`) removes a session through
+`SessionManager.delete_session` — the session file, its metadata sidecar, the
+rendered transcript and that transcript's full-text rows — and then the webui
+thread files (`delete_webui_thread`). It answers 200 with `{deleted}`, `false`
+when no session file existed.
+
 **`GET /api/v1/tasks?session=<key>`** (scope `sessions:read`) returns the
 per-chat list of background tasks associated with a session. The response merges
-two sources: in-flight sub-agent statuses from the in-process status manager
-(with finished ones reconstructed durably from session lineage via
-`children_of`) and workflow run manifests whose `root_session_key` matches the
-session. Each task entry includes an optional `nodes` array (the workflow node
+sub-agents (in-flight statuses from the in-process status manager, with
+finished ones reconstructed durably from session lineage via `children_of`),
+workflow run manifests whose `root_session_key` matches the session, and
+long-running jobs from the job registry (`kind: "job"`). Each task entry includes an optional `nodes` array (the workflow node
 list for workflow-kind tasks) used by the work panel to render per-node and
 per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
@@ -590,9 +611,11 @@ never gets a stable folder to reuse against.
 `cancelled` with no engine call — see `workflow.md`'s cancelling section for
 what it preserves and records. It answers **200** with `{run_id, status}`
 whether the run was just cancelled or already was: cancelling twice is
-idempotent, not a 409. The only rejections are **404** for an unknown run and
-**422** for one that is not currently `needs_input` (a running run has its
-own stop; a finished run is already terminal).
+idempotent, not a 409. The rejections are **404** for an unknown run and
+**422** for a run that is not currently `needs_input` (a running run has its
+own stop; a finished run is already terminal) or that an automation started
+(its `root_session_key` begins `automation:`) — that one is stopped from the
+automation's own run.
 
 **`POST /api/v1/channels/post`** (scope `channels:write`,
 `ChannelPostService`) posts a message through a running channel *and records it
@@ -631,13 +654,17 @@ enabled/running state (config overlaid with the live `ChannelManager`), and
 the cron scheduler summary. Surfaces wired without a channel manager or cron
 scheduler degrade to config-only data.
 
-All mutations are POST/DELETE/PATCH with a JSON body; there are no
+All mutations are POST, PUT, PATCH or DELETE with a JSON body; there are no
 GET-with-query mutations. Responses use snake_case field names
 (`model_dump()` without alias); inputs accept both camelCase and snake_case
 (`populate_by_name=True`).
 
-Every error response is RFC 9457 `application/problem+json` with
-`type: urn:durin:error:<code>`.
+Every `DomainError` and request-validation failure on a registry route is
+answered as RFC 9457 `application/problem+json` with
+`type: urn:durin:error:<code>`. The hand-mounted webhook ingress and MCP OAuth
+callback answer in their own shape: the ingress answers 400 with a plain JSON
+`{error}` for a body that is not a JSON object, and the callback answers 400
+in plain text.
 
 ### Special routes outside `/api/v1`
 
@@ -646,7 +673,7 @@ Every error response is RFC 9457 `application/problem+json` with
 | `GET /webui/bootstrap` | Mints an admin-scoped dashboard-session token (`kind: "webui"`); loopback-only without a setup secret, otherwise gated by the secret header or the `durin_session` cookie |
 | `POST /webui/signout` | Revokes the webui session token and clears the `durin_session` cookie |
 | `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
-| `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
+| `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the media secret the token store persists |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for automations; gated by `X-Durin-Hook-Secret`, not a bearer token |
 | `POST /v1/chat/completions` | OpenAI-compatible chat; bearer token with the `chat:write` scope (see below) |
 | `GET /v1/models` | Reports the model the agent runs now; same `chat:write` gate |
@@ -690,7 +717,7 @@ distinction between a missing resource and a permission error is always a raised
 `DomainError` subclass, not a caller-inspected flag.
 
 Media URL signing is intentionally excluded from service methods. The media HMAC
-secret is per-process and lives in the `WebSocketChannel`; if the service signed
+secret is held by the `WebSocketChannel` (loaded from the token store, so signed URLs survive a restart); if the service signed
 URLs, it would need a reference to the channel, inverting the dependency
 direction. Instead, the two session-read routes in `build_gateway_http_app` call
 the service for the scope check and data fetch, then hand the result to the
