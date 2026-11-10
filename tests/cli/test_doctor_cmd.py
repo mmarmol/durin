@@ -82,9 +82,9 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     - ``check_embedding_model`` reads fastembed's catalog, and without the
       ``[memory]`` extra installs it (``install.auto_install_extras`` is on in
       a fresh test home): an install into the environment running the suite.
-    - ``check_embedding_model_loads`` does a real model load+embed: with the
-      ``[memory]`` extra installed it loads the ~0.45 GB model, downloading
-      it first on a machine that does not have it yet.
+    - ``check_embedding_model_loads`` does a real model load+embed when the
+      ``[memory]`` extra is installed and the ~0.45 GB model's files are on
+      disk, which depends on the machine (``FASTEMBED_CACHE_PATH``).
     - ``check_durin_on_path`` warns when more than one ``durin`` executable is
       on PATH (a dev box with e.g. a pipx + venv install).
     - ``check_gateway_version`` probes the websocket port over HTTP. On a dev

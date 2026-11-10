@@ -366,8 +366,16 @@ Check categories and representative checks:
   error.
 - **extras** — optional extras (`fastembed`, `lancedb`, `mcp`, etc.) importable;
   cross-encoder available when enabled; STT packages and model cache.
-- **state** — embedding model in catalog; embedding model actually loads and
-  embeds a probe vector; cross-encoder loads and scores a pair; memory store
+- **state** — embedding model in catalog; embedding model's files on disk in
+  the directory it is loaded from (`<durin home>/models/embed`, or the one
+  `FASTEMBED_CACHE_PATH` names): a `warn` with the fix when vector memory is on
+  and they are absent or the snapshot is links to missing content, read from
+  the disk alone; embedding model actually loads and embeds a probe vector —
+  with the files on disk through the configured provider, and with them
+  missing only by asking a running embed server (`isolation: service`), so
+  doctor does not download a model that is not on disk: when no server
+  answers the row says the load was not attempted and points at the files
+  row; cross-encoder loads and scores a pair; memory store
   document counts; `~/.cache/durin` byte count (warn at > 10 GB). With vector
   memory on and the `[memory]` extra missing, the embedding-model check
   installs the extra as doctor's own step (`ensure_extra`, gated by

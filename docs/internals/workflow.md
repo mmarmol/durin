@@ -211,7 +211,8 @@ echoes a credential cannot persist it into sessions, manifests, or memory. **cwd
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
 at `workflow.script_output_max_chars`, truncated with a
-notice past the cap) becomes the edge text to the next node; **stderr** is
+notice past the cap, and flagged as cut on the response) becomes the edge text to the next
+node — except that a fan-out refuses a cut list (see the parallel node below); **stderr** is
 diagnostic-only — never part of the edge text, though a failing binary gate folds a
 tail of it into the loop-back feedback (below). Output is decoded with
 `errors="replace"` so non-UTF-8 bytes degrade rather than crashing the runner. A script
@@ -421,9 +422,16 @@ A **parallel** node runs branches concurrently and merges their text outputs int
 node's input. It has three shapes — **static** (a fixed `branches` list of work- or script-node ids, each
 with its own prompt, all seeing the same input), **dynamic** (a `worker` template node +
 `list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
-per item, each getting its own list item as input; the list is emitted by the upstream node as
-a JSON array, with a newline-split fallback, and is cut to a fixed number of items
-(`WorkflowEngine._parse_subtasks`); the item is the worker's whole input — it is handed over as
+per item, each getting its own list item as input; the list is cut to a fixed number of items,
+and how it is read depends on the kind of the node that produced it. An **agent** (work) node's
+list is read tolerantly — a JSON array, found even inside prose or a code fence, with a
+newline-split fallback (`WorkflowEngine._parse_subtasks`) — because a model wraps its lists in
+wording. A **script** node's list is data: its whole stdout must be one JSON array
+(`WorkflowEngine._script_subtasks`). A script list source that printed anything else, or whose
+stdout exceeded the output cap (the script runner reports the cut on its response as
+`output_truncated`, carried on the node's `NodeRun`; the engine never looks for the notice in
+the text), aborts the run at the parallel node with a message naming both nodes, before any
+worker starts — a cut or malformed list is never split into items. The item is the worker's whole input — it is handed over as
 both the task and the upstream text, so the run's task and its input/output framing do not reach
 a worker, and the item must carry or point at everything the worker needs), and **runtime-selected** (`branches_from` names
 the node — typically a routing script — whose output lists which DECLARED work- or script-node ids run
@@ -908,9 +916,12 @@ passes `background=false` only when it needs the result in the same turn. When
 the walk finishes, its result (or a `needs_input` status carrying the gate's
 questions) is injected back into the calling session via `session_key_override`,
 using the same announce path as a completing sub-agent, so the calling agent can
-act on the outcome without polling. The injected summary is capped (with a
-pointer to `tasks(action='status')` for the rest) so an unbounded final output
-cannot drown the delivery turn, and the delivery turn announces itself with a
+act on the outcome without polling. The injected summary is sized for one
+readable message, so an unbounded final output or a long trace cannot drown the
+delivery turn: the formatter is given the delivery limit and the summary's node
+list is what gives way to it (see the summary's shape under §7), while the final
+output has its own limit of the same size with a pointer to
+`tasks(action='status')` for the rest. The delivery turn announces itself with a
 progress breadcrumb ("Processing background workflow result…") so the chat's
 stop button has visible context while the agent digests the result. The `background` flag applies only to
 `run_workflow` invocations from inside an agent turn; the HTTP
@@ -1365,8 +1376,9 @@ End-to-end for a single `run_workflow` call:
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace, including each node's `session_key`). The engine finalizes the run
    manifest before returning; neither the tool nor the service writes an additional
-   record. The tool formats the result into a short summary (each node's session key is
-   included for agent and routing nodes). The node sessions persist on disk, so the
+   record. The tool formats the result into a short summary (`_format_result`, shared
+   by the foreground return and the background delivery; its shape is described with
+   the tool under §7). The node sessions persist on disk, so the
    run's work is navigable, searchable, and visible to the dream memory passes — the
    same way subagent and cron per-run sessions are (see [cron.md](cron.md),
    [memory/00_overview.md](memory/00_overview.md)). See §4 for how to navigate the run
@@ -1440,6 +1452,28 @@ End-to-end for a single `run_workflow` call:
   user's tools config (§2); `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
+- **The run summary** (`_format_result` in `durin/agent/tools/run_workflow.py`) is the text
+  the calling agent reads, the same for a foreground return and a background delivery. Top
+  to bottom: the status line and the count of node runs that succeeded and failed (a failed
+  run is a `node_failed` record), with the guidance for a paused, aborted or exhausted run;
+  the failures, one line per distinct error text with the node ids it hit and how many runs
+  it failed (bounded, below); the final output (or the questions, the proposal, or the closest result); the
+  missing-artifact warning and the working folder with its files; and last the node list in
+  walk order, where the workers of one fan-out pass fold into a single line (how many ran,
+  how many failed) and a failed node is marked. The order is what makes a size limit safe:
+  given a limit (the background delivery passes one), the formatter shortens the node list
+  to the room the rest leaves and ends it with a note pointing at `tasks(action='status')`;
+  the final output is bounded separately, at the same size, with its own pointer (an
+  exhausted run's last failing check output is bounded the same way). The failures section
+  has fixed limits of its own, applied to a foreground return too, because errors that
+  differ by an id, a timestamp or a traceback do not fold: each error text is shown up to
+  `_MAX_FAILURE_ERROR_CHARS` and cut with a mark saying how much is missing, and at most
+  `_MAX_FAILURE_LINES` distinct errors are listed, in the order they first occurred (so the
+  first failure is always shown), followed by one line counting the remaining distinct
+  errors and the failed runs they cover, with the same `tasks(action='status')` pointer.
+  The two limits keep the section under half the delivery size. The status line, the
+  counts and the files are never cut, so a delivered summary can exceed the limit, but only
+  by those bounded parts. A foreground return is otherwise formatted without a limit.
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
   control global defaults, and every run honours them: the `run_workflow` tool, an HTTP or
   editor launch, an automation, and a nested sub-workflow. `max_node_visits` caps how many times

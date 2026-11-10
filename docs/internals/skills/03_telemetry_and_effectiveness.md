@@ -59,7 +59,7 @@ apply unilaterally.
 two dream-side production stages — new skills authored by the dream, and
 observations logged in hindsight — and feed the webui Dream digest.
 `memory.skill_miss` instruments retrieval failure — a
-`memory_search(kind=skill)` query that found nothing — a
+`memory_search(kinds="skill")` query that found nothing — a
 different kind of signal from the rest: absence of a match, not a completed
 action.
 
@@ -107,7 +107,7 @@ flowchart TD
     ACCEPT -->|per resolution| SUGRES["skill.suggestion_resolved"]
 
     subgraph Retrieval["Search"]
-        MSEARCH["memory_search(kind=skill)"]
+        MSEARCH["memory_search(kinds=skill)"]
     end
     MSEARCH -->|zero results| SKILLMISS["memory.skill_miss"]
 

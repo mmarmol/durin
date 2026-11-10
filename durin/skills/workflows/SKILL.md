@@ -59,7 +59,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   it needs in `secrets: ["NAME"]` — injected as env vars when each allows the `exec` scope,
   with output redacted, so an authenticated `curl` stays a zero-token script step instead
   of becoming an agent turn); `parallel` (concurrent branches — a *static* `branches` list;
-  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from`; or
+  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from` —
+  a `script` list source must print one JSON array within the script output cap, or the run
+  aborts before any worker starts; or
   *runtime-selected*: `branches_from` names the node — typically a routing script — whose
   output lists which declared work-node ids run this pass, as a JSON array or a
   comma-separated last line, so "run only the branches that apply" is ONE parallel node
@@ -148,8 +150,14 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   missing file or two files with the same name abort with a clear message, and a workflow
   that declares `input: {"file": true}` given no files pauses immediately asking for them.
   **By default the run goes to the background:** the call returns immediately with a run id,
-  and the result — a per-node trace plus the final text output — is **delivered to you
-  automatically as a follow-up message** when it finishes. Do NOT wait for it with
+  and the result is **delivered to you automatically as a follow-up message** when it
+  finishes. That summary reads top to bottom: the run's status and how many node runs
+  succeeded and failed; the failures (node and error, an identical error listed once with
+  its count; a long error is cut and a long list of different errors ends with a count of
+  the rest); the final output; the files; and last the node list, a fan-out's workers
+  folded into one line. **`completed` does not mean every worker succeeded** — a fan-out
+  completes as long as one worker does, so read the failed count and the failures before
+  you use or report the output. Do NOT wait for it with
   sleep+status polling: tell the user the workflow is running and **end your turn** — the
   follow-up wakes you, and the user watches live per-node progress in the Work panel.
   Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or

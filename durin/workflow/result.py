@@ -36,6 +36,10 @@ class NodeRun:
     command: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    # Script nodes only: True when ``output`` is a cut copy of what the script
+    # printed (its stdout exceeded the output cap). A fan-out that reads its list
+    # from this record refuses a cut list instead of parsing it.
+    output_truncated: bool = False
     # Producer identity for this pass: the resolved model/provider (agent nodes
     # only; None for script nodes or an unresolvable model) and the hash of the
     # node's reuse-relevant definition fields (WorkNode only, via provenance.

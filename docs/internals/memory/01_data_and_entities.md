@@ -18,7 +18,7 @@ Markdown files are the source of truth. Indices (LanceDB vector + SQLite FTS5) a
 
 **Open-vocabulary typed references.** Every entity is identified by a `<type>:<value>` reference where `type` is lowercase `[a-z][a-z0-9_]*` and the vocabulary of types is deliberately open — only the shape is enforced, not the set of allowed types.
 
-**Authorship gates auto-management.** Every file carries an `author` field (`user_authored` or `agent_created`). The page-level flag gates merging: the refine pass and pair re-review skip any pair that includes a `user_authored` page. Any page written through `write_entity` is stamped `agent_created`; what protects an individual value is its per-field provenance, which respects a three-tier precedence: user > dream > agent.
+**Authorship gates auto-management.** Every file carries an `author` field (`user_authored` or `agent_created`). The page-level flag gates merging: the refine pass and pair re-review skip any pair that includes a `user_authored` page. Any page whose content is written through `write_entity` is stamped `agent_created`; what protects an individual value is its per-field provenance, which respects a three-tier precedence: user > dream > agent.
 
 **Workspace layout is self-contained.** One `<workspace>/` directory holds all sessions, ingested documents, and the entire `memory/` subtree. Copying the directory is a complete backup.
 
@@ -230,7 +230,7 @@ Calling `current_author()` outside an active scope raises `MissingAuthorScopeErr
 
 **Entity name** is an exception: the discovered entity name from the dream extract Stage 2 is last-writer-wins. Precedence decides attribute values, `derived_from` provenance and whole-body replacement (a losing replace is appended instead); relations and aliases are add-only. It does not apply to `name`. An explicit user or agent correction simply overwrites a dream-discovered name guess.
 
-**Page-level `author` field**: `EntityPage.author` defaults to `user_authored` when absent — hand-written pages without the field are treated as user content (safe default). Every page written through `write_entity` (agent tool, dream passes) or absorption carries `author: agent_created` explicitly.
+**Page-level `author` field**: `EntityPage.author` defaults to `user_authored` when absent — hand-written pages without the field are treated as user content (safe default). Every page written through `write_entity` (agent tool, dream passes) or absorption carries `author: agent_created` explicitly. The one exception is a curation write (`write_entity(..., curation=True)`, used for the `always_on` pin flag): it records where a page is shown, not what it says, so on an existing page it leaves both `author` and `updated_at` as they are.
 
 ### Entity write path
 
@@ -238,7 +238,7 @@ All entity mutations go through `write_entity()` in `memory_writer.py`:
 
 1. Read the entity page blob at HEAD via dulwich plumbing.
 2. Apply `FieldPatch`es in order, under per-field authorship precedence.
-3. Serialize back to markdown (`to_markdown()`).
+3. Stamp `updated_at` (skipped by a curation write to an existing page) and serialize back to markdown (`to_markdown()`).
 4. Build a commit via dulwich plumbing (no working-tree mutation).
 5. Install with `refs.set_if_equals` CAS; retry up to 30 times on conflict.
 6. Fast-forward the working tree to HEAD (so Obsidian and file watchers see the latest).

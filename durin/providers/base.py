@@ -231,6 +231,28 @@ class LLMProvider(ABC):
         "out of quota",
         "exceeded your current quota",
     )
+    # Z.AI business codes for an account or plan state that a retry cannot
+    # change. The endpoint sends all of them as HTTP 429, like a rate limit.
+    _ACCOUNT_STATE_ERROR_CODES = frozenset({
+        # Usage window exhausted (the 5-hour, weekly and monthly plan limits,
+        # with or without paid extra usage); the error names the reset time,
+        # which is hours away.
+        "1308",
+        "1310",
+        "1316",
+        "1317",
+        "1318",
+        "1319",
+        "1320",
+        "1321",
+        # Plan expired.
+        "1309",
+        "1314",
+        # Plan does not include the requested model.
+        "1311",
+        # API key belongs to another package.
+        "1315",
+    })
     _RETRYABLE_429_TEXT_MARKERS = (
         "rate limit",
         "rate_limit",
@@ -450,6 +472,9 @@ class LLMProvider(ABC):
     @classmethod
     def _is_transient_response(cls, response: LLMResponse) -> bool:
         """Prefer structured error metadata, fallback to text markers for legacy providers."""
+        if cls._is_account_state_response(response):
+            return False
+
         if response.error_should_retry is not None:
             return bool(response.error_should_retry)
 
@@ -534,6 +559,20 @@ class LLMProvider(ABC):
             return True
         content = (response.content or "").lower()
         return "temporarily overloaded" in content or "is overloaded" in content
+
+    @classmethod
+    def _is_account_state_response(cls, response: LLMResponse) -> bool:
+        """Return True when the error reports an account or plan state.
+
+        An exhausted usage window, an expired plan, a plan without the requested
+        model, a key for another package: sending the request again, in any
+        shape, only repeats the same answer. Checked ahead of every other retry
+        signal, because the endpoint reports these with a rate-limit status, and
+        the caller needs the error (with the reset time, when there is one) at
+        once.
+        """
+        code = cls._normalize_error_token(response.error_code)
+        return code in cls._ACCOUNT_STATE_ERROR_CODES
 
     def _recover_request_for_error(
         self, kw: dict[str, Any], response: LLMResponse,
@@ -983,6 +1022,10 @@ class LLMProvider(ABC):
                 identical_error_count = 1 if error_key else 0
 
             if not self._is_transient_response(response):
+                if self._is_account_state_response(response):
+                    # No other request shape can succeed either: skip the
+                    # image-free and recovered-request second attempts.
+                    return response
                 stripped = self._strip_image_content(original_messages)
                 if stripped is not None and stripped != kw["messages"]:
                     logger.warning(

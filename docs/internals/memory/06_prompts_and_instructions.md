@@ -168,7 +168,7 @@ flowchart TD
 
 ### 5.2 Tool descriptions
 
-Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Both the `function.description` field and the `function.parameters.description` field carry the same string so there is no divergence between them.
+Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. The schema root is only where the text is stored: `Tool.to_schema()` leaves a root `description` that repeats the tool's description out of the emitted `function.parameters`, so the model receives the text once.
 
 The sync test (`tests/memory/test_tool_description_sync.py`) asserts that each tool's `.description` property equals the fenced block under its heading in this section.
 
@@ -199,7 +199,7 @@ The discover prompt is seeded with an `EXISTING ENTITIES` block (built by `build
 
 **Derived-from pass** (`build_link_prompt` in `derived_from_dream.py`): Per-session pass that identifies entities lacking a `derived_from` link and reasons over the session's ingested references to build those links. Applies the result as `derived_from` FieldPatches with `author="dream"`.
 
-**Always-on pass** (`_RANK_PROMPT` in `always_on_dream.py`): Takes the candidate set of `stance`/`practice`/`feedback` entity pages, each rendered via `_render_pinned_block`. Asks the LLM to return refs in priority order (most load-bearing first), one per line, dropping items that contradict a higher-priority item. Output parsed line-by-line; only recognized refs are kept. When no LLM is configured or only one candidate exists, the pass falls back to `user_authored` first, then recency.
+**Always-on pass** (`_RANK_PROMPT` in `always_on_dream.py`): Takes the candidate set of `stance`/`practice`/`feedback` entity pages, each rendered via `_render_pinned_block`. Asks the LLM to return refs in priority order (most load-bearing first), one per line, dropping items that contradict a higher-priority item. Output parsed line-by-line; only recognized refs are kept. The prompt is sent only when the caller supplies a model call, and the nightly run and `durin memory dream` supply none: without one, or with a single candidate, the order is `user_authored` first, then recency.
 
 **Skill-extract pass** (`_SKILL_EXTRACT_PROMPT` in `dream_passes.py`): A system prompt for an agentic sub-agent that spins up an `AgentRunner` with `ReadFileTool`, `EditFileTool`, `SkillWriteTool` (composition gate in `hard` mode), `SkillSearchTool`, `SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`. The sub-agent receives recent sessions as the user turn, optionally including logged gap observations. It decides whether to call `skill_write` based on whether the conversation reveals a genuinely reusable procedure. It may call `skill_search` first to acquire an existing published skill rather than authoring from scratch. The prompt embeds the composition doctrine (loaded verbatim from the builtin `skill-creator` skill via `durin/agent/skills_doctrine.py`) and the workspace's workflow catalog, so an orchestration an existing workflow automates is delegated — or a missing workflow authored with `workflow_write` — instead of narrated as prose steps. All skills must be authored in English regardless of conversation language.
 

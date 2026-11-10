@@ -1713,13 +1713,16 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
 
     ``selected`` items are kept always_on (fit the token budget); ``pruned``
     were ranked but didn't fit; ``dropped`` were removed by the contradiction
-    judge; ``tokens`` is the budget consumed by the selected set.
+    judge; ``tokens`` is the budget consumed by the selected set; ``changed``
+    is the number of pages whose flag the run set or cleared — zero when
+    no page's content changed since the run before.
     """
 
     selected: int
     pruned: int
     dropped: int
     tokens: int
+    changed: int
     duration_ms: int
 
 

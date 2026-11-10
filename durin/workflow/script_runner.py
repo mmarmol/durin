@@ -253,11 +253,17 @@ class ScriptNodeRunner:
             "stderr": self._cap_log(stderr),
         }
 
+        # Whether the edge text below is a cut copy of what the script printed. A
+        # consumer that parses the output as data (a fan-out reading its list) must
+        # know this from the response, not by recognising the notice in the text.
+        truncated = len(stdout) > self._max_output_chars
+
         is_binary_gate = node.cases is None and (node.on_pass is not None or node.on_fail is not None)
         if is_binary_gate:
             if rc == 0:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
-                                       route_label="PASS", exit_code=rc, **logs)
+                                       route_label="PASS", exit_code=rc,
+                                       output_truncated=truncated, **logs)
             # A non-zero exit's output is what the check printed plus its stderr
             # tail and exit code. Into a step that leads back to this gate on a
             # route of its own (req.fail_loops_back), it is loop-back feedback and
@@ -272,7 +278,8 @@ class ScriptNodeRunner:
                 exit_note,
             ) if p]
             return NodeRunResponse(output="\n\n".join(parts), session_key=None,
-                                   route_label="FAIL", exit_code=rc, **logs)
+                                   route_label="FAIL", exit_code=rc,
+                                   output_truncated=truncated, **logs)
 
         if rc != 0:
             # Linear or multi-way node: a non-zero exit is an error, not a verdict —
@@ -283,4 +290,5 @@ class ScriptNodeRunner:
 
         label = parse_label(stdout, node.cases) if node.cases is not None else None
         return NodeRunResponse(output=self._cap(stdout), session_key=None,
-                               route_label=label, exit_code=rc, **logs)
+                               route_label=label, exit_code=rc,
+                               output_truncated=truncated, **logs)

@@ -34,22 +34,27 @@ than guessing.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from durin.agent.tools._telemetry import emit_tool_event
+from durin.config.home import durin_home
 from durin.extras import ensure_or_note
 
 __all__ = [
     "EmbeddingProvider",
     "FastembedProvider",
+    "embedding_cache_dir",
+    "embedding_model_on_disk",
     "list_supported_models",
     "model_dimensions",
     "provider_from_config",
@@ -211,6 +216,55 @@ def list_supported_models(*, install: bool = True) -> dict[str, dict[str, Any]]:
         _register_custom_models()
         _CATALOG_CACHE = {m["model"]: m for m in TextEmbedding.list_supported_models()}
         return _CATALOG_CACHE
+
+
+def embedding_cache_dir() -> Path:
+    """Where the embedding model's files live: ``<durin home>/models/embed``,
+    or the directory ``FASTEMBED_CACHE_PATH`` names when that is set.
+
+    The durin home, not fastembed's own default (a ``fastembed_cache`` folder
+    in the system temp directory), because the operating system empties its
+    temp directory on its own schedule: a model cached there has to be
+    downloaded again by the next process that loads it, and that process
+    gets no model at all while offline. The stt and ocr models are kept
+    under the same ``models/`` parent. ``FASTEMBED_CACHE_PATH`` is fastembed's
+    own way to choose the directory, so a value set there still decides; an
+    empty one does not.
+
+    Every fastembed model durin builds is given this directory, and whoever
+    asks whether the files are on disk looks here.
+    """
+    chosen = os.environ.get("FASTEMBED_CACHE_PATH")
+    if chosen:
+        return Path(chosen)
+    return durin_home() / "models" / "embed"
+
+
+def embedding_model_on_disk(model_name: str) -> bool:
+    """Whether ``model_name``'s files are in :func:`embedding_cache_dir`.
+
+    Reads the disk only: nothing is loaded, downloaded or created. fastembed
+    stores a model the way the Hugging Face hub does, as
+    ``models--<org>--<repository>/snapshots/<revision>/`` whose entries are
+    links into a sibling ``blobs/`` folder, the repository being the
+    catalog's source for the model rather than the model id. The model is
+    on disk when one snapshot holds its weights file and every additional
+    file the catalog lists, each resolving to a real file — so a snapshot
+    whose links point at blobs that are gone is missing.
+
+    Raises ``RuntimeError`` when fastembed is not installed and ``KeyError``
+    when the model is not in its catalog.
+    """
+    entry = list_supported_models(install=False)[model_name]
+    files = [entry["model_file"], *entry["additional_files"]]
+    repository = "models--" + entry["sources"]["hf"].replace("/", "--")
+    snapshots = embedding_cache_dir() / repository / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(
+        all((snapshot / name).is_file() for name in files)
+        for snapshot in snapshots.iterdir()
+    )
 
 
 # E5-family model prefixes (per `intfloat/multilingual-e5-*` model
@@ -378,7 +432,8 @@ class FastembedProvider(EmbeddingProvider):
         ``isolation="process"`` keeps the model out of the parent.
 
         The loaded model is discarded — this is a side-effect call to
-        populate the on-disk model cache. The next FastembedProvider
+        populate the model's directory (:func:`embedding_cache_dir`).
+        The next FastembedProvider
         instance will reload from disk in ~230 ms.
         """
         provider = cls(model=model)
@@ -570,7 +625,9 @@ class FastembedProvider(EmbeddingProvider):
                 message=r".*uses mean pooling instead of CLS embedding.*",
                 category=UserWarning,
             )
-            self._model = TextEmbedding(model_name=self._model_name)
+            self._model = TextEmbedding(
+                model_name=self._model_name, cache_dir=str(embedding_cache_dir()),
+            )
         emit_tool_event(
             "memory.embedding.load",
             {
