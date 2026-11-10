@@ -371,7 +371,7 @@ job. Each entry under `personas` is keyed by persona name and is a `PersonaConfi
 ### `agent_modes`
 
 User-defined agent modes, registered into the mode registry at startup alongside
-the built-ins (`build` / `plan` / `explore`, which cannot be overridden here). Each
+the built-ins (`build` / `plan` / `explore` / `read`, which cannot be overridden here). Each
 entry under `agent_modes` is keyed by mode name and is a `ModeConfig`:
 
 | Key | Default | Meaning |

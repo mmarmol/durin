@@ -63,10 +63,10 @@ token that holds `system:write`. The new token can carry only scopes the
 issuing token holds itself (an `admin` token can grant any scope), and if the
 issuing token expires, the new one must expire no later: give a `ttl_s`
 within the issuing token's remaining lifetime. A `ttl_s` is a finite number of
-seconds greater than zero, or omitted for a token that does not expire. Asking for more scopes or a
-longer lifetime is refused with 403 (the lifetime refusal reports the issuing
-token's remaining lifetime as `remaining_s`); an empty or unknown scope list
-with 422.
+seconds greater than zero, or omitted for a token that does not expire. Asking
+for more scopes or a longer lifetime is refused with 403 (the lifetime refusal
+reports the issuing token's remaining lifetime as `remaining_s`); an empty or
+unknown scope list, or a `ttl_s` that is not valid, with 422.
 
 `DELETE /api/v1/auth/tokens` with `{"token_id": "<id>"}` revokes a token. It
 needs `system:write`, and the calling token must hold every scope of the

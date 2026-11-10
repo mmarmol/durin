@@ -311,6 +311,12 @@ After the package upgrade, durin replays the config migration pass
 and re-injects any newly added schema defaults — same merge that `durin
 onboard` (no-wizard) performs.
 
+With vector memory on, the first start after an upgrade downloads the
+embedding model once (~450 MB for the default) when `<durin_home>/models/embed/`
+holds no model files yet, as happens when the model was cached elsewhere before.
+Restart the gateway while online; see [Sanity checks](#sanity-checks) for what
+`durin doctor` reports until the files are there.
+
 ---
 
 ## Uninstall
