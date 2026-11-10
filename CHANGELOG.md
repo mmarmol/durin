@@ -5,6 +5,116 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.13.0 — 2026-11-10
+
+A review of every subsystem against two running instances, and what it turned up.
+
+### Highlights
+
+- **A tool reached indirectly obeys the active mode like a direct call.** A mode
+  that refused a tool could still run it through a deferred MCP tool, through a
+  script run by `execute_code`, or inside a workflow node, because only the
+  outer call was checked. Every one of those paths now gets the same decision,
+  the same argument validation and the same refusal as a direct call. (#731,
+  #732)
+- **An API token cannot create or remove something more powerful than itself.**
+  A token with `system:write` could issue an `admin` token, issue one that
+  outlived it, and revoke any other token. Issuing is now limited to the
+  scopes and the remaining lifetime of the issuing token, and revoking to
+  tokens whose scopes the caller holds. (#731, #732)
+- **The nightly dream reads the whole conversation.** The extract pass sent the
+  first part of each unread stretch and marked all of it as read, so long
+  conversations were mostly never seen. It now reads the whole stretch in
+  pieces, and a provider failure leaves the rest for the next night. It reads
+  what you and the assistant said, not tool output. (#728)
+- **The embedding model lives in the instance home.** It was kept in the
+  system's temporary directory, where the system deletes it; vector search
+  then fell back to keyword search until the next download. It is now stored
+  under `models/embed` in the durin home. **The first start after upgrading
+  downloads it once (roughly half a gigabyte).** (#727)
+- **Less work repeated every night.** The skill-extract pass skips when nothing
+  it reads has changed, the pinned rules stop changing from one night to the
+  next, and a provider answer that no retry can fix (plan or account limits)
+  is no longer retried. (#727, #731)
+
+### Security
+
+- With many MCP tools connected, `mcp_invoke` and `mcp_find_tools` apply the
+  active mode to the tool they reach: a refused tool is not listed and cannot
+  be run. An allowlist mode that names an MCP tool still reaches it when tool
+  definitions are deferred. (#731, #732)
+- A script run by `execute_code` can call only the tools the active mode
+  allows; a refused call fails inside the script and counts against its call
+  cap. (#732)
+- A workflow node's run is gated by the node's mode, including the calls a
+  script makes inside it. A refusal inside a node names the tools the step has
+  and does not ask for a person. (#732)
+- A refusal by the active mode now starts with `Error:`. (#731)
+- `POST /api/v1/auth/tokens` refuses scopes the issuing token does not hold,
+  and a lifetime beyond the issuing token's own (it is refused, not
+  shortened). A dashboard session can therefore issue API tokens only within
+  its own remaining lifetime; `durin auth token issue` on the machine is
+  unchanged. (#731, #732)
+- `DELETE /api/v1/auth/tokens` requires the caller to hold every scope of the
+  token it revokes. (#732)
+- An empty or unknown scope list, and a lifetime that is not a finite number of
+  seconds greater than zero, are rejected as invalid input by the API and the
+  CLI. (#731, #732)
+
+### Memory
+
+- The extract pass advances per piece, so an interrupted night resumes where
+  it stopped; its end event reports pieces read and characters sent. (#728)
+- Marking a page as a pinned rule no longer counts as an edit, and pages seeded
+  from documents are not candidates, so the pinned set is stable. (#727)
+- `durin doctor` reports whether the embedding model's files are on disk and
+  does not download them. (#727)
+- New setting `memory.dream.auto_absorb.judge_reasoning_effort`: the reasoning
+  effort of the dedup pass's first judge alone, in the dashboard next to the
+  other dedup settings. Unset, it uses the memory model's own. Less reasoning
+  is faster and changes the answers on some models, so check it on your own
+  pairs before lowering it. Changing it does not re-judge settled pairs. (#730)
+- The skill-extract event tells a skipped run from one that found nothing, and
+  is recorded when the run fails. (#731)
+
+### Workflows
+
+- **A routing node with no `mode` runs in `read` instead of `explore`.** The
+  `explore` framing could stop a gate from giving its verdict. A node that sets
+  `mode` is unaffected. (#731)
+- A script node's list for a fan-out must be a JSON array within the output
+  cap; a cut-off list is refused instead of becoming bogus workers. (#727)
+- The run summary given to the agent leads with counts, the failed nodes and
+  the result, and fits its size limit without cutting the result off. (#727)
+
+### Tools
+
+- A tool's description is sent once per request instead of twice, which
+  removes several thousand tokens from every model call. (#727)
+- `web_search` reports a query with no hits as an answer rather than an error,
+  retries a transport failure once, and in the list form reports a failed
+  query on its own item. (#731)
+- The guard against repeating the same lookup counts `urls=[…]` and
+  `queries=[…]` as well as the single forms. (#731)
+- Two subagents started in different minutes share their prompt prefix, so the
+  second one is served from the provider's cache. (#731)
+
+### Providers
+
+- `reasoning_effort: none` turns thinking off on the Z.ai Coding Plan. (#729)
+
+### Telemetry
+
+- Every `provider.call` row carries `output_chars` and `reasoning_chars`: the
+  size of the visible answer and of the reasoning text. (#730)
+- Provider retries (`provider.rate_limit`, `provider.rate_limit_exhausted`) are
+  recorded wherever the call itself is — chat, workflow nodes, the dream — with
+  provider, model, purpose and error class. (#731)
+
+### Docs
+
+- Every subsystem's documentation was checked against the code. (#726)
+
 ## 0.12.2 — 2026-11-04
 
 ### Highlights

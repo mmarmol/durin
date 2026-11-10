@@ -175,7 +175,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns running at once across all sessions (env `DURIN_MAX_CONCURRENT_REQUESTS` overrides at runtime) |
 | `concurrency_ceiling` | `12` | Global ceiling on total in-flight turns + subagents across all lanes; keep `>=` the interactive cap |
 | `max_tool_result_chars` | unset | Largest tool result kept whole in the model's context; a larger one is saved to a file the agent reads in pages (`read_file` and `grep` size their pages under this cap). Unset, it follows the model's context window: `16000` below 100k tokens, `32000` from 100k, `64000` from 200k, never more than 30% of the input budget (the window minus what is held for the answer). A number here applies to every model |
-| `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
+| `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy. In either mode, an answer that reports a plan or account state no retry can change (an exhausted usage window, an expired plan, a model outside the plan) is returned after one request |
 | `fallback_models` | `[]` | Ordered list of preset names or inline model specs (`{model, provider, max_tokens?, context_window_tokens?, temperature?, reasoning_effort?}`) to try on provider failure. Each fallback runs with its own model's limits (see [model limits](#model-limits)), and the run's window is the smallest of the primary's and every fallback's known window, so a failover fits the same prompt. A fallback the catalog does not know (a local or custom model) lowers it only once its window is declared (its `context_window_tokens` or its model's entry); `durin status` and `durin doctor` name the fallback that caps the window |
 | `timezone` | `UTC` | IANA timezone for date-aware tools (e.g. `America/New_York`) |
 | `bot_name` | `durin` | Display name shown in CLI prompts |
@@ -371,7 +371,7 @@ job. Each entry under `personas` is keyed by persona name and is a `PersonaConfi
 ### `agent_modes`
 
 User-defined agent modes, registered into the mode registry at startup alongside
-the built-ins (`build` / `plan` / `explore`, which cannot be overridden here). Each
+the built-ins (`build` / `plan` / `explore` / `read`, which cannot be overridden here). Each
 entry under `agent_modes` is keyed by mode name and is a `ModeConfig`:
 
 | Key | Default | Meaning |
