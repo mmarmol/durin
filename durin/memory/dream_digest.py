@@ -122,8 +122,8 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
     if event_type == "memory.dream.skill_extract":
         touched = data.get("skills_touched", 0)
         if not touched:
-            return []  # the skill-extract pass runs every dream; only surface
-            #            it when it actually created a skill (avoids per-run noise)
+            return []  # the skill-extract pass reports every dream (run or
+            #            skip); only surface it when it actually created a skill
         # skill-extract authors NEW skills (skill_write is create-only); the
         # curation pass is what improves existing skills. Label accordingly so
         # the feed matches the "skills nuevas" / "skills mejoradas" split.

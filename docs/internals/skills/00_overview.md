@@ -201,8 +201,9 @@ any logged `new:*` gap observations. When the sub-agent finds a recurring
 multi-step procedure it calls `skill_write` — the same tool and the same quick
 ramp the in-loop agent uses. The pass returns early without an LLM call when
 there are no sessions and no gap observations. It keeps no cursor: the newest
-sessions are read again on every run, whether or not they changed since the
-last one.
+sessions are selected again on every run. Instead it fingerprints the whole
+request it would send and makes no model call when that matches the last
+completed run's (`02_lifecycle_and_curation.md`).
 
 **`skill_edit`** (bounded update to an already-active skill) is a separate,
 narrower path — see Evolve below and `02_lifecycle_and_curation.md`. It forks a

@@ -508,6 +508,22 @@ it — the signal pass sees the catalog, a gap named after an existing skill is
 logged as an improvement on that skill, and curation makes that change. It
 is a sync wrapper over the async runner so the cron can call it in a thread.
 
+The session selection has no cursor (the newest sessions by modification time),
+so on a quiet night the pass would send its model the same request as the night
+before. Before starting the sub-agent it hashes that whole request — the
+assembled messages (system prompt with doctrine, workflow catalog, authoring
+reference, existing and retired skills and principles; the gaps, their evidence
+and the session text), the tool schemas and the model — and compares it with
+the fingerprint in `memory/.skill_extract_input.json`. On a match it makes no
+model call and its `memory.dream.skill_extract` event carries
+`skipped: "unchanged"`. The fingerprint is replaced (atomic write) only after a
+run whose sub-agent reached its answer (`stop_reason: "completed"`); a provider
+error, an exception or the iteration budget leaves the previous one, so the
+next run tries again. What the sub-agent would fetch through its tools during a
+run (a registry search, a file read) is not part of the request and does not
+re-open it. The manual `durin memory dream` command runs the same pass, so the
+same check applies there.
+
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,

@@ -175,6 +175,27 @@ pass. The count of gaps closed this way travels on the pass's own telemetry
 event as
 `gaps_closed` (`03_telemetry_and_effectiveness.md`), alongside `skills_touched`.
 
+**Unchanged input is not re-run.** Because the selection has no cursor and the
+gaps stay OPEN until they close, a quiet night would send the model the same
+request as the previous one. Just before starting the sub-agent, the pass
+hashes the whole request it is about to send — the assembled messages (system
+prompt with the doctrine, workflow catalog, authoring reference, existing and
+retired skill names and active principles; the gaps with their counts and
+evidence; the rendered sessions), the tool schemas and the model id — and
+compares it with the fingerprint stored in `memory/.skill_extract_input.json`.
+A match means no model call and no sub-agent: the pass returns at once and its
+event carries `skipped: "unchanged"`, with `skills_touched` and `gaps_closed`
+at 0. Any input reaching the prompt that changes (an edited session, a newer
+session entering the selection, a gap opened, closed or seen again, a new
+skill, retirement, principle or workflow, a different model or tool set)
+re-runs the pass. The fingerprint is replaced, with an atomic write, only when
+the sub-agent reached its answer (`stop_reason: "completed"`); a provider
+error, an exception, an empty reply or the iteration budget leaves the stored
+one in place, so the next night tries again. A productive run changes its own
+input (a new skill, a closed gap), so the night after it runs once more.
+There is no separate skill-extract command: `durin memory dream` runs the same
+pass with the same check.
+
 `run_skill_extract_pass` is a sync wrapper (`asyncio.run`) over the async
 `AgentRunner` flow so the cron loop, which calls dream passes from a thread,
 can invoke it without an event loop of its own.

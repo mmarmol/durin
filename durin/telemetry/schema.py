@@ -1607,11 +1607,21 @@ class MemoryHotLayerFailureEvent(TypedDict):
 
 
 class MemoryDreamSkillExtractEvent(TypedDict):
-    """The extract dream's skill pass wrote/updated procedural skills."""
+    """One skill-extract pass of the dream: what it wrote, or why it did not run.
+
+    ``skipped: "unchanged"`` marks a pass that made no model call because its
+    whole request (messages, tool schemas, model) matched the last completed
+    run's. On a pass that did run, ``stop_reason`` is the agent runner's stop
+    reason (``"completed"`` for an answer, ``"error"`` for a provider failure,
+    ``"max_iterations"`` for a budget stop, among the runner's others), or
+    ``"exception"`` when the run raised — so a failed night reads apart from
+    one that found nothing."""
 
     skills_touched: int
     gaps_closed: NotRequired[int]
     duration_ms: NotRequired[int]
+    stop_reason: NotRequired[str]
+    skipped: NotRequired[str]  # "unchanged"
 
 
 class MemoryDreamSkillSignalsEvent(TypedDict):
