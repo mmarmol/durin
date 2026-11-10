@@ -83,12 +83,16 @@ registered custom mode — that sets the node's posture (a prompt suffix) and fi
 tool registry to what the mode allows, so a read-only node literally cannot write
 regardless of what the model attempts. The node's runs are also gated by that mode the
 way a chat turn is gated by the session's (`mode_provider` on the run spec): a call the
-mode refuses is refused with the same text, descriptions that name other tools list only
-allowed ones, and an `execute_code` script's calls answer to the mode too. A node's MCP
-tools are registered under their own names (a node registry never defers them), so the
-gate decides each by name. The tools the engine adds after filtering (`route`, `deliver`,
-`deliver_file`) are admitted into that mode (`admit_tools()`), so no mode removes them,
-whatever it denies. The interactive `plan`/`explore` modes also exist
+mode refuses is refused, descriptions that name other tools list only allowed ones, and
+an `execute_code` script's calls answer to the mode too. A node's MCP tools are
+registered under their own names (a node registry never defers them), so the gate
+decides each by name. The gate mode is built by `node_gate_mode()`: the tools the engine
+adds after filtering (`route`, `deliver`, `deliver_file`) are allowed whatever the mode
+denies, an allowlist is narrowed to the tools the node actually has, and the mode is
+unattended, so a refusal tells the step which tools it has and to finish with them
+rather than asking for a person or a mode switch. Apart from that wording, a `build` or
+`read` node sends the provider the same messages and tool definitions it would with no
+mode on the run. The interactive `plan`/`explore` modes also exist
 but carry conversation/sub-agent framing (exit_plan_mode, "the parent should /build",
 fail-fast-if-modification) that derails a workflow node — e.g. a `verify` gate told it is
 a read-only sub-agent that should bail stops emitting its verdict; nodes use the neutral

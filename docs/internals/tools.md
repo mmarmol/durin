@@ -373,7 +373,10 @@ For each tool call, `_run_tool()` applies checks in this order:
    `agent_mode.py`) applies `is_tool_allowed` and, on a refusal, records
    `agent_mode.tool_denied` and returns an informative `Error: Tool '…' is not
    available in mode '…'` text. This fires only when the model uses a cached
-   schema after a mode switch. A tool that runs another tool by name gets the
+   schema after a mode switch. An unattended mode (a workflow node's) gets
+   wording without a person to ask: the tool is not available to this step,
+   the step's tools are listed when the mode is an allowlist, and the model is
+   told to finish with them. A tool that runs another tool by name gets the
    same gate: the runner binds the mode it applied around each `execute`
    (`bind_tool_call_mode()` / `current_tool_call_mode()`), and `mcp_invoke`
    passes the inner tool name through `refuse_tool_call` and then through

@@ -14,6 +14,7 @@ answers as a model would and records what each request offered.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import sys
 import threading
@@ -21,7 +22,13 @@ from typing import Any
 
 import pytest
 
-from durin.agent.agent_mode import _REGISTRY, AgentMode, register_mode
+from durin.agent.agent_mode import (
+    _REGISTRY,
+    AgentMode,
+    node_gate_mode,
+    refuse_tool_call,
+    register_mode,
+)
 from durin.agent.runner import AgentRunner
 from durin.agent.tools.base import Tool
 from durin.agent.tools.filesystem import WriteFileTool
@@ -164,11 +171,18 @@ def test_a_scripts_write_is_refused_by_the_nodes_mode_and_its_verdict_still_work
     assert writes == [], "the write tool must never run in this node"
     assert not list(tmp_path.rglob("out.txt")) and not list(tmp_path.rglob("direct.txt"))
     results = _tool_results(model.loop[-1][1])
-    assert "Tool 'write_file' is not available in mode 'script-read'" in results[0]
+    refusal = (
+        "Error: Tool 'write_file' is not available to this step in mode 'script-read'. "
+        "Tools available to this step: execute_code, read_file, route. "
+        "Do not retry it — finish the step with the tools you have."
+    )
+    # Both paths read the unattended wording: nobody is there to switch modes.
+    assert results[0].startswith(refusal)
     script = json.loads(results[1])
     assert script["status"] == "success", script
-    assert "REFUSED: Error: Tool 'write_file' is not available in mode 'script-read'" in (
-        script["output"])
+    assert f"REFUSED: {refusal}\n" in script["output"]
+    for text in (results[0], script["output"]):
+        assert "/build" not in text and "user" not in text.lower()
     assert "AFTER data-contents" in script["output"]
     # The verdict tool the engine adds is not something the mode can remove.
     assert resp.route_label == "PASS"
@@ -221,9 +235,13 @@ def test_a_read_routing_node_keeps_its_reads_and_verdict(tmp_path, writes):
     assert resp.route_label == "FAIL"
     results = _tool_results(model.loop[-1][1])
     assert "data-contents" in results[0]
-    # The registry never held write_file; the mode gate answers first, with
-    # the text a chat turn gets for a tool its mode refuses.
-    assert results[1].startswith("Error: Tool 'write_file' is not available in mode 'read'")
+    # The registry never held write_file; the mode gate answers first, naming
+    # what the step does have.
+    assert results[1].startswith(
+        "Error: Tool 'write_file' is not available to this step in mode 'read'. "
+        "Tools available to this step: ")
+    assert "read_file" in results[1] and "route" in results[1]
+    assert "/build" not in results[1] and "user" not in results[1].lower()
     assert writes == []
     offered = _names(model.loop[0][0])
     assert {"read_file", "route"} <= offered
@@ -321,5 +339,85 @@ def test_a_node_reaches_only_the_mcp_tools_its_mode_names(tmp_path):
     assert _names(model.loop[0][0]) == {CREATE}
     assert calls == [CREATE]
     results = _tool_results(model.loop[-1][1])
-    assert f"Tool '{LIST}' is not available in mode 'tracker-create'" in results[1]
-    assert "Tool 'mcp_invoke' is not available in mode 'tracker-create'" in results[2]
+    available = f"Tools available to this step: {CREATE}."
+    assert results[1].startswith(
+        f"Error: Tool '{LIST}' is not available to this step in mode 'tracker-create'. "
+        + available)
+    assert results[2].startswith(
+        "Error: Tool 'mcp_invoke' is not available to this step in mode 'tracker-create'. "
+        + available)
+
+
+def test_a_conversation_refusal_keeps_its_wording():
+    """Modes applied to a conversation are attended: the refusal is worded
+    exactly as it always was."""
+    mode = AgentMode(name="script-read", description="", allowed=frozenset({"read_file"}))
+
+    assert refuse_tool_call(mode, "write_file") == (
+        "Error: Tool 'write_file' is not available in mode 'script-read'. "
+        "The user must run `/build` (or the active mode must change) before this "
+        "tool can be called. Do not retry — adjust your approach."
+    )
+
+
+def test_an_unattended_denylist_refusal_names_no_tool_list():
+    mode = node_gate_mode(DENY_ROUTE, kept=["read_file"], engine_tools=["route"])
+
+    assert refuse_tool_call(mode, "write_file") == (
+        "Error: Tool 'write_file' is not available to this step in mode 'no-route'. "
+        "Do not retry it — finish the step with the tools you have."
+    )
+
+
+# --- The first request a node sends is what it was before nodes got a mode ---
+
+
+def _without_mode(monkeypatch):
+    """Reproduce the node runner before it put the node's mode on its run
+    specs: the runner sees no mode, for its runs and for the tool list the
+    forced calls send."""
+    run = AgentRunner.run
+    definitions = AgentRunner._active_tool_definitions
+
+    async def run_without_mode(self, spec):
+        return await run(self, dataclasses.replace(spec, mode_provider=None))
+
+    monkeypatch.setattr(AgentRunner, "run", run_without_mode)
+    monkeypatch.setattr(AgentRunner, "_active_tool_definitions", staticmethod(
+        lambda spec: definitions(dataclasses.replace(spec, mode_provider=None))))
+
+
+def _requests(model: _Scripted) -> list[tuple[list[dict], list[dict] | None]]:
+    """Every request's tool list and messages. A message's ``timestamp`` is the
+    wall-clock time it was stored, which no provider sends and which differs
+    between any two runs; every other field is compared."""
+    loop = [
+        (tools, [{k: v for k, v in m.items() if k != "timestamp"} for m in messages])
+        for tools, messages in model.loop
+    ]
+    return [*loop, *((tools, None) for tools in model.forced)]
+
+
+@pytest.mark.parametrize("routing", [True, False], ids=["routing", "plain"])
+@pytest.mark.parametrize("mode", ["build", "read"])
+def test_a_build_or_read_node_sends_what_it_sent_before(tmp_path, monkeypatch, mode, routing):
+    def node() -> WorkNode:
+        if routing:
+            return _routing_node(mode)
+        return WorkNode(id="g", tools="default", mode=mode, prompt="look into it", next=None)
+
+    def model() -> _Scripted:
+        return _Scripted(
+            [[ToolCallRequest(id="r1", name="read_file", arguments={"path": "data.txt"})]],
+            final="PASS", forced_args={"route": {"label": "PASS"}},
+        )
+
+    current = model()
+    _run(tmp_path, node(), current)
+    _without_mode(monkeypatch)
+    before = model()
+    _run(tmp_path, node(), before)
+
+    assert len(current.loop) == len(before.loop) == 2
+    assert len(current.forced) == len(before.forced) == (1 if routing else 0)
+    assert _requests(current) == _requests(before)

@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from durin.agent.agent_mode import AgentMode, admit_tools
+from durin.agent.agent_mode import AgentMode, node_gate_mode
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.runner import AgentRunner, AgentRunSpec, input_budget_tokens, provider_max_output
 from durin.agent.tools.base import Tool
@@ -1100,9 +1100,11 @@ class AgentNodeRunner:
         # execute_code script runs its calls through tool instances of its own,
         # outside this registry. A node's MCP tools are registered under their
         # own names, so the gate decides each by name. The engine's own tools
-        # stay allowed, as the registry holds them whatever the mode.
-        node_mode = admit_tools(
+        # stay allowed, as the registry holds them whatever the mode, and a
+        # refusal is worded for a step nobody is attending.
+        node_mode = node_gate_mode(
             get_mode(getattr(req.node, "mode", "build")),
+            mode_filtered,
             [name for name in tools_registry.tool_names if name not in mode_filtered],
         )
 

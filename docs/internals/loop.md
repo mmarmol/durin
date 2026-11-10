@@ -929,7 +929,8 @@ rows have no `operating_floor` entry.
 Modes ([`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py)) are pure
 data: a `name`, an optional `allowed` allowlist, a `denied` set, and a
 `prompt_suffix`, plus an optional `icon` and a `builtin` flag carried for the
-UI. The loop has no `if plan_mode` branches. Instead the runner
+UI, and an `attended` flag (true for every registered mode; false for the mode
+a workflow node is gated by) that only changes how a refusal is worded. The loop has no `if plan_mode` branches. Instead the runner
 calls a `mode_provider` callback each iteration to read the active mode (from
 `session.metadata["agent_mode"]`) and filters the tool definitions sent to the
 LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effect
