@@ -1,6 +1,15 @@
 ---
 name: automations
-description: How durin's automations work and — above all — when an automation earns its place over a cron job, a workflow run, or just doing the task now. Load before reaching for the `automations` tool, before creating an automation for a user, or when a request smells like standing work ("every time a mail like X arrives…", "keep chasing Y until it's paid", "watch this and escalate if…"). Covers the anatomy (triggers, delivery, help, an optional life condition), the single-case doctrine, how a run pauses for a reply and resumes, chaining one automation's outcome into another, and the value test — an automation is for work that STANDS: the clock or an event re-activates it, not this conversation.
+description: >-
+  How durin's automations work and — above all — when an automation earns its place over
+  a cron job, a workflow run, or just doing the task now. Load before reaching for the
+  `automations` tool, before creating an automation for a user, or when a request smells
+  like standing work ("every time a mail like X arrives…", "keep chasing Y until it's
+  paid", "watch this and escalate if…"). Covers the anatomy (triggers, delivery, help,
+  an optional life condition), the single-case doctrine, how a run pauses for a reply
+  and resumes, chaining one automation's outcome into another, and the value test — an
+  automation is for work that STANDS: the clock or an event re-activates it, not this
+  conversation.
 ---
 
 # Automations — standing triggers that run a workflow and deliver the result
