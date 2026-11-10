@@ -150,8 +150,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   missing file or two files with the same name abort with a clear message, and a workflow
   that declares `input: {"file": true}` given no files pauses immediately asking for them.
   **By default the run goes to the background:** the call returns immediately with a run id,
-  and the result — a per-node trace plus the final text output — is **delivered to you
-  automatically as a follow-up message** when it finishes. Do NOT wait for it with
+  and the result is **delivered to you automatically as a follow-up message** when it
+  finishes. That summary reads top to bottom: the run's status and how many node runs
+  succeeded and failed; the failures (node and error, an identical error listed once with
+  its count); the final output; the files; and last the node list, a fan-out's workers
+  folded into one line. **`completed` does not mean every worker succeeded** — a fan-out
+  completes as long as one worker does, so read the failed count and the failures before
+  you use or report the output. Do NOT wait for it with
   sleep+status polling: tell the user the workflow is running and **end your turn** — the
   follow-up wakes you, and the user watches live per-node progress in the Work panel.
   Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or

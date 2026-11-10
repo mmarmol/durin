@@ -916,9 +916,12 @@ passes `background=false` only when it needs the result in the same turn. When
 the walk finishes, its result (or a `needs_input` status carrying the gate's
 questions) is injected back into the calling session via `session_key_override`,
 using the same announce path as a completing sub-agent, so the calling agent can
-act on the outcome without polling. The injected summary is capped (with a
-pointer to `tasks(action='status')` for the rest) so an unbounded final output
-cannot drown the delivery turn, and the delivery turn announces itself with a
+act on the outcome without polling. The injected summary is sized for one
+readable message, so an unbounded final output or a long trace cannot drown the
+delivery turn: the formatter is given the delivery limit and the summary's node
+list is what gives way to it (see the summary's shape under §7), while the final
+output has its own limit of the same size with a pointer to
+`tasks(action='status')` for the rest. The delivery turn announces itself with a
 progress breadcrumb ("Processing background workflow result…") so the chat's
 stop button has visible context while the agent digests the result. The `background` flag applies only to
 `run_workflow` invocations from inside an agent turn; the HTTP
@@ -1373,8 +1376,9 @@ End-to-end for a single `run_workflow` call:
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace, including each node's `session_key`). The engine finalizes the run
    manifest before returning; neither the tool nor the service writes an additional
-   record. The tool formats the result into a short summary (each node's session key is
-   included for agent and routing nodes). The node sessions persist on disk, so the
+   record. The tool formats the result into a short summary (`_format_result`, shared
+   by the foreground return and the background delivery; its shape is described with
+   the tool under §7). The node sessions persist on disk, so the
    run's work is navigable, searchable, and visible to the dream memory passes — the
    same way subagent and cron per-run sessions are (see [cron.md](cron.md),
    [memory/00_overview.md](memory/00_overview.md)). See §4 for how to navigate the run
@@ -1448,6 +1452,20 @@ End-to-end for a single `run_workflow` call:
   user's tools config (§2); `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
+- **The run summary** (`_format_result` in `durin/agent/tools/run_workflow.py`) is the text
+  the calling agent reads, the same for a foreground return and a background delivery. Top
+  to bottom: the status line and the count of node runs that succeeded and failed (a failed
+  run is a `node_failed` record), with the guidance for a paused, aborted or exhausted run;
+  the failures, one line per distinct error text with the node ids it hit and how many runs
+  it failed; the final output (or the questions, the proposal, or the closest result); the
+  missing-artifact warning and the working folder with its files; and last the node list in
+  walk order, where the workers of one fan-out pass fold into a single line (how many ran,
+  how many failed) and a failed node is marked. The order is what makes a size limit safe:
+  given a limit (the background delivery passes one), the formatter shortens the node list
+  to the room the rest leaves and ends it with a note pointing at `tasks(action='status')`;
+  the final output is bounded separately, at the same size, with its own pointer; the
+  status, counts, failures and files are never cut, so a delivered summary can exceed the
+  limit by their size. A foreground return is formatted without a limit.
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
   control global defaults, and every run honours them: the `run_workflow` tool, an HTTP or
   editor launch, an automation, and a nested sub-workflow. `max_node_visits` caps how many times

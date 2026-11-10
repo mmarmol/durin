@@ -57,9 +57,10 @@ def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
         payload["detail"] = str(result.final_output)[:500]
     return payload
 
-# Cap for the summary injected back when a background run finishes. Big
-# enough for any real answer; small enough that the delivery turn never
-# spills into truncated-tool-output archaeology.
+# Size the summary injected back when a background run finishes aims for, and
+# the limit on the final output inside it. Big enough for any real answer; small
+# enough that the delivery turn never spills into truncated-tool-output
+# archaeology. The summary's node list is what is shortened to meet it.
 _MAX_INJECT_SUMMARY_CHARS = 8000
 
 _PARAMETERS = {
@@ -159,14 +160,114 @@ def _approval_refusal(name: str, run_id: str, node: str | None) -> str:
     )
 
 
-def _format_result(result: Any, output_files: bool = False, *, human_reachable: bool = True) -> str:
-    """The run summary the agent reads.
+def _failure_lines(runs: list) -> list[str]:
+    """The failed node runs, one line per distinct error text: the node ids it
+    hit, how many runs it failed, and the text itself. A fan-out whose workers
+    all die on the same provider error is one line, not one per worker."""
+    by_error: dict[str, dict] = {}
+    for r in runs:
+        if r.status != "node_failed":
+            continue
+        entry = by_error.setdefault(r.error or "(no error text)", {"count": 0, "nodes": []})
+        entry["count"] += 1
+        if r.node_id not in entry["nodes"]:
+            entry["nodes"].append(r.node_id)
+    return [
+        f"  - [{', '.join(e['nodes'])}]" + (f" ×{e['count']}" if e["count"] > 1 else "") + f": {error}"
+        for error, e in by_error.items()
+    ]
+
+
+def _node_lines(runs: list) -> list[str]:
+    """The node list, in walk order: one line per node record, except that the
+    workers of one fan-out pass fold into a single line (how many ran, how many
+    failed) where the first of them stood."""
+    workers: dict[tuple[str, int], list[int]] = {}
+    for r in runs:
+        if r.worker_index is not None:
+            tally = workers.setdefault((r.node_id, r.iteration), [0, 0])
+            tally[0] += 1
+            tally[1] += r.status == "node_failed"
+
+    lines: list[str] = []
+    folded: set[tuple[str, int]] = set()
+    for r in runs:
+        tag = f"  [{r.node_id}#{r.iteration}]"
+        if r.worker_index is not None:
+            key = (r.node_id, r.iteration)
+            if key not in folded:
+                folded.add(key)
+                ran, failed = workers[key]
+                lines.append(f"{tag} {ran} workers: {ran - failed} succeeded, {failed} failed")
+        elif r.status == "node_failed":
+            lines.append(f"{tag} failed -> {r.session_key or '(no session)'}")
+        elif r.passed is not None:
+            # A routing/decision node: surface its verdict and, when it ran as an agent
+            # turn (so the verdict is auditable), the session key. A command gate has no
+            # session and renders the verdict alone.
+            line = f"{tag} decision: {'pass' if r.passed else 'fail'}"
+            if r.session_key:
+                line += f" -> {r.session_key}"
+            lines.append(line)
+        else:
+            lines.append(f"{tag} -> {r.session_key or '(no session)'}")
+    return lines
+
+
+def _fit_node_lines(lines: list[str], budget: int, run_id: str) -> list[str]:
+    """As many leading node lines as fit in ``budget`` characters, followed by a
+    line saying how many were left out and where the whole list is. The list is
+    returned unchanged when it fits, or when it is no longer than the line that
+    would replace it."""
+    def note(dropped: int) -> str:
+        return (f"  … {dropped} more not shown — tasks(action='status', id='{run_id}') "
+                "lists the run's nodes.")
+
+    note_room = len(note(len(lines))) + 1
+    if sum(len(line) + 1 for line in lines) <= max(budget, note_room):
+        return lines
+
+    budget -= note_room
+    kept: list[str] = []
+    for line in lines:
+        budget -= len(line) + 1
+        if budget < 0:
+            break
+        kept.append(line)
+    return kept + [note(len(lines) - len(kept))]
+
+
+def _format_result(result: Any, output_files: bool = False, *, human_reachable: bool = True,
+                   max_chars: int | None = None) -> str:
+    """The run summary the agent reads, most important first: the status and how
+    many node runs succeeded and failed (with what to do about a run that did not
+    finish), the failures, the final output, the files, and last the node list.
 
     ``human_reachable`` says whether a person can be asked in the calling
     context. Without one, a question pause must not send the agent to ask the
     user, since nobody would ever answer.
+
+    ``max_chars`` is the size the summary aims for when it is delivered as a
+    message (None = unlimited). The node list is what gives way: it gets the
+    room the rest leaves and is cut short with a note. The final output has its
+    own limit of ``max_chars`` and a pointer to the rest. The status, counts,
+    failures and files are never cut, so a summary can exceed ``max_chars`` by
+    their size.
     """
+    def bounded(text: str) -> str:
+        if max_chars is None or len(text) <= max_chars:
+            return text
+        return text[:max_chars].rstrip() + (
+            f"\n[Output truncated — this is the first {max_chars} characters. "
+            f"The full output: tasks(action='status', id='{result.run_id}').]"
+        )
+
     lines = [f"Workflow run {result.run_id}: {result.status}"]
+    if result.runs:
+        failed = sum(1 for r in result.runs if r.status == "node_failed")
+        lines.append(f"Node runs: {len(result.runs) - failed} succeeded, {failed} failed.")
+    # The result text for this status, placed after the failures below.
+    outcome: list[str] = []
 
     if result.status == "needs_input" and getattr(result, "ask_kind", None) == "approval":
         lines.append(
@@ -176,7 +277,7 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
             "this tool refuses to. Tell the user it is waiting for them."
         )
         if result.final_output:
-            lines.append(f"\nProposal awaiting approval:\n{result.final_output}")
+            outcome.append(f"\nProposal awaiting approval:\n{bounded(result.final_output)}")
     elif result.status == "needs_input":
         if human_reachable:
             lines.append(
@@ -192,11 +293,11 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
                 "with those answers; otherwise stop and report that the run is waiting for input."
             )
         if result.final_output:
-            lines.append(f"\nNeeds clarification:\n{result.final_output}")
+            outcome.append(f"\nNeeds clarification:\n{bounded(result.final_output)}")
         # A needs_input result without a needs_input_node has no manifest to resume from
         # (e.g. an engine pre-flight check) — only offer resume when one is set.
         if result.needs_input_node:
-            lines.append(
+            outcome.append(
                 f"\nTo continue, call run_workflow again with "
                 f"resume_run_id='{result.run_id}' and the answers as the task."
             )
@@ -220,27 +321,23 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
                 default=None,
             )
             if last_fail is not None:
-                lines.append(f"Last failure reason:\n{last_fail.output}")
+                outcome.append(f"\nLast failure reason:\n{bounded(last_fail.output)}")
         else:
             lines.append(f"The workflow did not complete (status: {result.status}).")
 
         if result.final_output:
-            lines.append(f"Closest result:\n{result.final_output}")
+            outcome.append(f"\nClosest result:\n{bounded(result.final_output)}")
+    elif result.final_output:
+        outcome.append(f"\nFinal output:\n{bounded(result.final_output)}")
 
-    for r in result.runs:
-        if r.passed is not None:
-            # A routing/decision node: surface its verdict and, when it ran as an agent
-            # turn (so the verdict is auditable), the session key. A command gate has no
-            # session and renders the verdict alone.
-            line = f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}"
-            if r.session_key:
-                line += f" -> {r.session_key}"
-            lines.append(line)
-        else:
-            lines.append(f"  [{r.node_id}#{r.iteration}] -> {r.session_key or '(no session)'}")
+    # Failures ahead of the result: a run can end "completed" with most of a
+    # fan-out's workers failed, and the caller must read that before the output.
+    failures = _failure_lines(result.runs)
+    if failures:
+        lines.append("\nFailed node runs:")
+        lines.extend(failures)
 
-    if result.status == "completed" and result.final_output:
-        lines.append(f"\nFinal output:\n{result.final_output}")
+    lines.extend(outcome)
 
     # The declared file contract: name every promised artifact the completed run
     # did not produce, so the caller (or the next stage) acts on the gap now
@@ -262,6 +359,17 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
             lines.append(f"  … and {overflow} more")
         lines.append("Copy out any deliverable you need to keep: this folder is pruned "
                      "after newer runs accumulate.")
+
+    # The node list goes last and is the one part a size limit shortens: it is
+    # the audit trail, and everything above it is what the caller acts on.
+    node_lines = _node_lines(result.runs)
+    if node_lines:
+        heading = "\nNodes:"
+        if max_chars is not None:
+            used = len("\n".join(lines)) + len(heading) + 2
+            node_lines = _fit_node_lines(node_lines, max_chars - used, result.run_id)
+        lines.append(heading)
+        lines.extend(node_lines)
 
     return "\n".join(lines)
 
@@ -351,7 +459,7 @@ class RunWorkflowTool(Tool, ContextAware):
         )
 
     async def _inject_result(
-        self, summary: str, *, name: str, run_id: str, inject_target: dict,
+        self, summary: str, *, name: str, inject_target: dict,
     ) -> None:
         """Inject a finished background-workflow result back to the agent.
 
@@ -360,10 +468,10 @@ class RunWorkflowTool(Tool, ContextAware):
         the agent picks it up mid-turn (or as its next turn) and acts on it —
         including a needs_input result, which carries its own ask-and-re-run guidance.
 
-        The summary is capped: an unbounded final_output turns the delivery
-        turn into minutes of the agent re-reading its own spilled tool output.
-        The cap keeps the delivery one readable message; the pointer names the
-        structured path to the rest.
+        The summary arrives already sized for one readable message (the caller
+        formats it with the delivery limit), so it is delivered whole: cutting
+        it here would drop whatever came last, and the result and its files
+        come before the node list for exactly that reason.
         """
         if self._bus is None:
             return
@@ -371,13 +479,6 @@ class RunWorkflowTool(Tool, ContextAware):
         channel = inject_target.get("channel") or "websocket"
         chat_id = inject_target.get("chat_id") or ""
         override = inject_target.get("session_key") or f"{channel}:{chat_id}"
-        if len(summary) > _MAX_INJECT_SUMMARY_CHARS:
-            summary = summary[:_MAX_INJECT_SUMMARY_CHARS].rstrip() + (
-                f"\n\n[Result truncated — this is the first "
-                f"{_MAX_INJECT_SUMMARY_CHARS} characters. The full output: "
-                f"tasks(action='status', id='{run_id}'); file-producing runs "
-                "also list their output folder above.]"
-            )
         content = (
             f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
             "Summarize the outcome for the user, and follow what the summary says about "
@@ -583,6 +684,7 @@ class RunWorkflowTool(Tool, ContextAware):
                     summary = _format_result(
                         result, output_files=output_files,
                         human_reachable=is_interactive(root_session_key),
+                        max_chars=_MAX_INJECT_SUMMARY_CHARS,
                     )
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
@@ -593,7 +695,7 @@ class RunWorkflowTool(Tool, ContextAware):
                     # Drop the cancel flag now the run is over (whether or not it was set).
                     _clear_cancel(run_id)
                 await self._inject_result(
-                    summary, name=name, run_id=run_id, inject_target=inject_target,
+                    summary, name=name, inject_target=inject_target,
                 )
 
             task_handle = asyncio.create_task(_run_and_inject())

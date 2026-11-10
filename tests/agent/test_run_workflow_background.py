@@ -32,7 +32,7 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
     t = _tool(bus)
     await t._inject_result(
         "Workflow run r1: completed\nFinal output:\n42",
-        name="qa", run_id="r1",
+        name="qa",
         inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
     )
     assert len(bus.inbound) == 1
@@ -48,44 +48,8 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
 async def test_inject_result_is_best_effort_when_bus_missing():
     t = RunWorkflowTool(workspace="/tmp/x", sessions=object(), app_config=object(), bus=None)
     # Must not raise even though there is no bus.
-    await t._inject_result("x", name="qa", run_id="r1",
+    await t._inject_result("x", name="qa",
                            inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": None})
-
-
-@pytest.mark.asyncio
-async def test_inject_result_caps_oversized_summaries():
-    """An unbounded final_output must not ride the injection whole — the
-    delivery turn drowns re-reading its own spilled output. The cap keeps one
-    readable message and points at tasks(action='status') for the rest."""
-    from durin.agent.tools.run_workflow import _MAX_INJECT_SUMMARY_CHARS
-
-    bus = _FakeBus()
-    t = _tool(bus)
-    huge = "Workflow run r9: completed\nFinal output:\n" + ("x" * 100_000)
-    await t._inject_result(
-        huge,
-        name="qa", run_id="r9deadbeef",
-        inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
-    )
-    msg = bus.inbound[0]
-    # Bounded: cap + framing/pointer text, nowhere near the raw 100k.
-    assert len(msg.content) < _MAX_INJECT_SUMMARY_CHARS + 1000
-    assert "tasks(action='status', id='r9deadbeef')" in msg.content
-    # Still delivers guidance and the head of the result.
-    assert "[Background workflow 'qa' finished]" in msg.content
-    assert "Workflow run r9: completed" in msg.content
-
-
-@pytest.mark.asyncio
-async def test_inject_result_short_summary_untouched():
-    bus = _FakeBus()
-    t = _tool(bus)
-    await t._inject_result(
-        "Workflow run r1: completed\nFinal output:\n42",
-        name="qa", run_id="r1",
-        inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
-    )
-    assert "truncated" not in bus.inbound[0].content.lower()
 
 
 @pytest.mark.asyncio

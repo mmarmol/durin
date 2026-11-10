@@ -383,12 +383,15 @@ def test_completed_run_format_unchanged():
     )
     text = _format_result(result)
     assert "did not complete" not in text.lower()
-    # byte-exact regression guard: a routing node now also surfaces its session key
+    # byte-exact guard on the summary's shape: status and counts, then the
+    # result, then the node list (a routing node surfaces its session key)
     assert text == (
         "Workflow run run-xyz: completed\n"
+        "Node runs: 2 succeeded, 0 failed.\n"
+        "\nFinal output:\nthe final answer\n"
+        "\nNodes:\n"
         "  [make#1] -> ws:s1\n"
-        "  [review#1] decision: pass -> ws:s2\n"
-        "\nFinal output:\nthe final answer"
+        "  [review#1] decision: pass -> ws:s2"
     )
 
 
@@ -650,3 +653,214 @@ async def test_a_question_pause_in_a_cron_session_is_not_sent_to_the_user(tmp_pa
 
     assert "No person can be asked" in out
     assert "ask_user_question" not in out
+
+
+# ---------------------------------------------------------------------------
+# The run summary: failures and the result come before the node list, and the
+# node list is the only part a size limit shortens
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBus:
+    def __init__(self):
+        self.inbound = []
+
+    async def publish_inbound(self, msg):
+        self.inbound.append(msg)
+
+
+def _print_cmd(text):
+    import shlex
+    return f"printf %s {shlex.quote(text)}"
+
+
+async def _run_summary(tmp_path, definition, agent_turn, *, background, workflow_config=None):
+    """Run ``definition`` through the tool with the real engine and script runner
+    (only the agent turn is faked) and return the summary the calling agent
+    receives: the tool's return value in the foreground, the message delivered
+    to the calling session in the background."""
+    import asyncio
+
+    _write_workflow(tmp_path, definition["name"], definition)
+    bus = _RecordingBus()
+    sessions = SessionManager(workspace=tmp_path)
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(),
+                                 workflow=workflow_config or WorkflowConfig())
+    tool = RunWorkflowTool.create(SimpleNamespace(
+        workspace=str(tmp_path), sessions=sessions, app_config=app_config, bus=bus))
+    provider, _ = _fake_node_llm("unused")
+    with patch("durin.providers.factory.make_provider", return_value=provider), \
+         patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=agent_turn)):
+        out = await tool.execute(name=definition["name"], task="go", background=background)
+        if not background:
+            return out
+        async with asyncio.timeout(120):
+            await asyncio.gather(*tool._bg_tasks)
+    assert len(bus.inbound) == 1
+    return bus.inbound[0].content
+
+
+def _turn(output):
+    return AgentRunResult(final_content=output, messages=[{"role": "assistant", "content": output}])
+
+
+def _fan_out_definition(items):
+    return {
+        "name": "batch", "start": "list", "output": {"file": True},
+        "nodes": [
+            {"id": "list", "kind": "script", "command": _print_cmd(json.dumps(items)),
+             "next": "fan"},
+            {"id": "fan", "kind": "parallel", "worker": "research", "list_from": "list",
+             "max_concurrency": 4, "next": "report"},
+            {"id": "research", "kind": "work", "prompt": "research the item"},
+            {"id": "report", "kind": "script",
+             "command": "echo notes > report.md; echo 'the report is written'", "next": None},
+        ],
+    }
+
+
+def _quota_after(successes):
+    """An agent turn that succeeds ``successes`` times, then fails every later
+    call with the same provider error."""
+    import threading
+
+    lock = threading.Lock()
+    state = {"calls": 0}
+
+    async def turn(_spec):
+        with lock:
+            state["calls"] += 1
+            n = state["calls"]
+        if n > successes:
+            raise RuntimeError("Usage limit reached for this plan. It resets at 18:00.")
+        return _turn(f"finding {n}")
+
+    return turn
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+async def test_summary_of_a_run_with_failed_workers_states_the_failures_once(tmp_path, background):
+    items = [f"topic-{i}" for i in range(12)]
+    text = await _run_summary(tmp_path, _fan_out_definition(items), _quota_after(2),
+                              background=background)
+
+    assert "completed" in text
+    # the failed count, and the error: one line for ten identical failures
+    assert "10 failed" in text
+    assert text.count("Usage limit reached for this plan. It resets at 18:00.") == 1
+    failure_line = next(line for line in text.splitlines() if "Usage limit reached" in line)
+    assert "research" in failure_line and "10" in failure_line
+    # the workers fold into one node line; the other nodes are still named
+    assert sum(1 for line in text.splitlines() if line.lstrip().startswith("[research#")) == 1
+    worker_line = next(line for line in text.splitlines() if line.lstrip().startswith("[research#"))
+    assert "12" in worker_line and "10 failed" in worker_line
+    for node_id in ("list", "fan", "report"):
+        assert f"[{node_id}#1]" in text
+    # failures come before the result, the result before the node list
+    assert (text.index("Usage limit reached") < text.index("the report is written")
+            < text.index("output files are in") < text.index("[list#1]"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+async def test_summary_of_a_small_successful_run_names_each_node(tmp_path, background):
+    definition = {
+        "name": "pair", "start": "draft",
+        "nodes": [{"id": "draft", "kind": "work", "prompt": "p", "next": "polish"},
+                  {"id": "polish", "kind": "work", "prompt": "p", "next": None}],
+    }
+
+    async def turn(_spec):
+        return _turn("the polished answer")
+
+    text = await _run_summary(tmp_path, definition, turn, background=background)
+    assert "completed" in text
+    assert "2 succeeded, 0 failed" in text
+    assert "[draft#1]" in text and "[polish#1]" in text
+    assert "the polished answer" in text
+    assert "truncated" not in text.lower() and "not shown" not in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_background_summary_of_a_long_run_keeps_the_result_and_the_folder(tmp_path):
+    """A run with far more node records than the delivery limit has room for:
+    the node list is what gets shortened, never the result or where its files are."""
+    from durin.agent.tools.run_workflow import _MAX_INJECT_SUMMARY_CHARS
+
+    passes = 130
+    # A check that says "no" until the draft has been redone enough times.
+    gate = (f'n=$(cat passes 2>/dev/null || echo 0); n=$((n+1)); echo $n > passes; '
+            f'[ $n -ge {passes} ]')
+    definition = {
+        "name": "long", "start": "draft", "max_visits": passes + 5, "output": {"file": True},
+        "nodes": [{"id": "draft", "kind": "work", "prompt": "p", "next": "check"},
+                  {"id": "check", "kind": "script", "command": gate,
+                   "on_pass": None, "on_fail": "draft"}],
+    }
+
+    async def turn(_spec):
+        return _turn("the finished draft")
+
+    text = await _run_summary(tmp_path, definition, turn, background=True,
+                              workflow_config=WorkflowConfig(max_node_visits=passes + 5))
+
+    assert "completed" in text
+    assert f"{2 * passes} succeeded, 0 failed" in text
+    assert "Final output:\nthe finished draft" in text
+    work_dir = next(line for line in text.splitlines() if "output files are in" in line)
+    assert str(tmp_path) in work_dir
+    assert "passes" in text                                  # the folder's file is listed
+    # the node list starts, is cut short, and says so
+    assert "[draft#1]" in text and f"[check#{passes}]" not in text
+    assert "not shown" in text
+    assert len(text) < _MAX_INJECT_SUMMARY_CHARS + 1000
+
+
+@pytest.mark.asyncio
+async def test_background_summary_bounds_a_huge_final_output_and_keeps_the_folder(tmp_path):
+    from durin.agent.tools.run_workflow import _MAX_INJECT_SUMMARY_CHARS
+
+    definition = {
+        "name": "wordy", "start": "dump", "output": {"file": True},
+        "nodes": [{"id": "dump", "kind": "script",
+                   "command": "echo notes > report.md; head -c 15000 /dev/zero | tr '\\0' x",
+                   "next": None}],
+    }
+
+    async def turn(_spec):   # no agent node in this workflow
+        raise AssertionError("unexpected agent turn")
+
+    text = await _run_summary(tmp_path, definition, turn, background=True)
+
+    assert "[Background workflow 'wordy' finished]" in text
+    run_id = text.split("Workflow run ", 1)[1].split(":", 1)[0]
+    assert "x" * 1000 in text                                 # the head of the output
+    assert "x" * (_MAX_INJECT_SUMMARY_CHARS + 1) not in text  # but not all of it
+    assert f"tasks(action='status', id='{run_id}')" in text   # where the rest is
+    assert "output files are in" in text and "report.md" in text
+    assert "[dump#1]" in text
+    assert len(text) < _MAX_INJECT_SUMMARY_CHARS + 1000
+
+
+def test_summary_lists_one_failure_line_per_distinct_error():
+    result = WorkflowResult(
+        status="completed", run_id="r1", final_output="merged",
+        runs=[
+            NodeRun(node_id="fetch", iteration=1, output="", worker_index=0,
+                    status="node_failed", error="connection reset"),
+            NodeRun(node_id="fetch", iteration=1, output="", worker_index=1,
+                    status="node_failed", error="connection reset"),
+            NodeRun(node_id="fetch", iteration=1, output="", worker_index=2,
+                    status="node_failed", error="not found: item 7"),
+            NodeRun(node_id="fetch", iteration=1, output="ok", worker_index=3,
+                    session_key="workflow:r1:fetch:1:3"),
+            NodeRun(node_id="fan", iteration=1, output="merged"),
+        ],
+    )
+    text = _format_result(result)
+    assert "2 succeeded, 3 failed" in text
+    assert text.count("connection reset") == 1
+    assert text.count("not found: item 7") == 1
+    reset_line = next(line for line in text.splitlines() if "connection reset" in line)
+    assert "2" in reset_line and "fetch" in reset_line
