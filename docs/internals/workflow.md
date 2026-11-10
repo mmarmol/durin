@@ -211,7 +211,8 @@ echoes a credential cannot persist it into sessions, manifests, or memory. **cwd
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
 at `workflow.script_output_max_chars`, truncated with a
-notice past the cap) becomes the edge text to the next node; **stderr** is
+notice past the cap, and flagged as cut on the response) becomes the edge text to the next
+node — except that a fan-out refuses a cut list (see the parallel node below); **stderr** is
 diagnostic-only — never part of the edge text, though a failing binary gate folds a
 tail of it into the loop-back feedback (below). Output is decoded with
 `errors="replace"` so non-UTF-8 bytes degrade rather than crashing the runner. A script
@@ -421,9 +422,16 @@ A **parallel** node runs branches concurrently and merges their text outputs int
 node's input. It has three shapes — **static** (a fixed `branches` list of work- or script-node ids, each
 with its own prompt, all seeing the same input), **dynamic** (a `worker` template node +
 `list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
-per item, each getting its own list item as input; the list is emitted by the upstream node as
-a JSON array, with a newline-split fallback, and is cut to a fixed number of items
-(`WorkflowEngine._parse_subtasks`); the item is the worker's whole input — it is handed over as
+per item, each getting its own list item as input; the list is cut to a fixed number of items,
+and how it is read depends on the kind of the node that produced it. An **agent** (work) node's
+list is read tolerantly — a JSON array, found even inside prose or a code fence, with a
+newline-split fallback (`WorkflowEngine._parse_subtasks`) — because a model wraps its lists in
+wording. A **script** node's list is data: its whole stdout must be one JSON array
+(`WorkflowEngine._script_subtasks`). A script list source that printed anything else, or whose
+stdout exceeded the output cap (the script runner reports the cut on its response as
+`output_truncated`, carried on the node's `NodeRun`; the engine never looks for the notice in
+the text), aborts the run at the parallel node with a message naming both nodes, before any
+worker starts — a cut or malformed list is never split into items. The item is the worker's whole input — it is handed over as
 both the task and the upstream text, so the run's task and its input/output framing do not reach
 a worker, and the item must carry or point at everything the worker needs), and **runtime-selected** (`branches_from` names
 the node — typically a routing script — whose output lists which DECLARED work- or script-node ids run

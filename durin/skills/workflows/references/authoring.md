@@ -160,8 +160,13 @@ shapes:
 
 - **Static:** a fixed `branches` list of `work`-node ids, all seeing the same input.
 - **Dynamic fan-out:** a `worker` (a `work`-node template) mapped over a runtime list named
-  by `list_from` (an upstream node whose output is a JSON array, newline-split as fallback);
-  one worker per item.
+  by `list_from` (an upstream node whose output is the list); one worker per item. A `work`
+  node's list is a JSON array, newline-split as fallback. A `script` node's list is strict:
+  its whole stdout must be ONE JSON array (`[]` when empty) that fits under the script
+  output cap (`workflow.script_output_max_chars`). Anything else — one item per line, an
+  object, extra output around the array, or a list larger than the cap — aborts the run at
+  the parallel node before any worker starts. Emit short items (ids or file paths) and
+  keep each item's payload in a file in the working folder.
 - **Runtime-selected:** `branches_from` names the node — typically a routing script — whose
   output lists which DECLARED `work`-node ids run this pass (a JSON array like
   `["search-history", "analyze-images"]`, or a comma-separated LAST stdout line like
@@ -175,7 +180,7 @@ shapes:
 | `kind` | `"parallel"` | — | Required to select this node type. |
 | `branches` | array of strings | `()` | **Static only.** Non-empty list of branch node ids. Each must be a `work` or `script` node — a deterministic script (fetch, convert, check) may run BESIDE agent branches; its stdin is the parallel's input, its stdout is its branch output, and a non-zero exit fails only that branch. |
 | `worker` | string \| null | none | **Dynamic only.** Id of the `work` node used as the per-item template. |
-| `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. |
+| `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. A `script` source must print one JSON array within the script output cap. |
 | `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. Declare `branches` alongside as the candidate POOL (recommended; REQUIRED if any node in the workflow declares `reuse` — with no pool every node is runtime-selectable, so a reuse-declaring node anywhere is a parse-time error): resolved ids are validated against it, and the editor draws the candidates connected instead of as floating nodes. |
 | `max_concurrency` | int ≥ 1 | unset | Unset (recommended): the GLOBAL per-kind caps govern — LLM branches (work/subworkflow) default 2, script branches default 4, both configurable in Settings → Concurrency (`workflow.parallel_llm_concurrency` / `parallel_script_concurrency`). Script branches never queue behind LLM branches. An explicit int is a uniform override for every branch kind. |
 | `reconcile` | `"read"` \| `"choose"` \| `"union"` | `"read"` | How **static** branch *file writes* merge: `read` = no writes applied; `choose` = each branch writes a private copy, a judge picks one; `union` = apply all, abort on a same-path content conflict. Writing branches fork the run's shared working folder (and only it — never the surrounding durin workspace) — a branch starts from the folder's current files and its writes reconcile back into it. (Dynamic workers and `read` branches are handed the shared folder directly; `reconcile` has no effect on dynamic fan-out.) |

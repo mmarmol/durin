@@ -82,7 +82,8 @@ The I/O contract is plain Unix:
   framing for agent steps and never reach a script.
 - **stdout** becomes the edge text for the next node — capped
   (`workflow.script_output_max_chars`, default 16000 characters; excess is
-  truncated with a notice).
+  truncated with a notice). A script that feeds a dynamic fan-out its list
+  must print a JSON array that fits under this cap (see Parallel nodes below).
 - **stderr** is for diagnostics only — it never becomes the edge text, though a
   failing gate folds a tail of it into the loop-back feedback so whoever
   re-runs sees why it failed.
@@ -338,9 +339,14 @@ outputs into the next node's input:
   performance / readability" as three parallel reviewers).
 - **Dynamic** — `worker` names a single work node mapped over a runtime list,
   and `list_from` names the node whose output is that list (e.g. one search
-  worker per query the plan step produced). The list is a JSON array (or
-  newline-separated text as a fallback) of at most 50 items; any beyond that
-  are dropped. Each worker receives its item and nothing else — not the
+  worker per query the plan step produced). The list holds at most 50 items;
+  any beyond that are dropped. When a work node produces it, the list is a
+  JSON array (prose or a code fence around it is fine), or newline-separated
+  text as a fallback. When a script node produces it, the script's whole
+  stdout must be one JSON array (`[]` for an empty list) and must fit under
+  the script output cap: a script that prints anything else, or a list larger
+  than the cap, stops the run at the parallel node with an error naming both
+  nodes, and no worker starts. Each worker receives its item and nothing else — not the
   run's task, not the workflow's input/output descriptions — so keep items
   short (an id or a file name) and put the instructions in the worker's
   prompt.

@@ -468,3 +468,93 @@ def test_start_subworkflow_gets_the_raw_task_so_it_frames_once(tmp_path):
                          subworkflow_runner=sub_runner, workspace=str(tmp_path))
     eng.run(wf, "env=prd")
     assert seen == ["env=prd"]
+
+
+# ---------------------------------------------------------------------------
+# A fan-out's list source: a script's list is a JSON array or the run stops
+# ---------------------------------------------------------------------------
+
+
+def _fan_out_over(tmp_path, list_node, *, max_output_chars=16000):
+    """Run ``list_node`` -> fan-out with the real script runner and a worker that
+    records each item it is handed. Returns (result, items the workers received)."""
+    from durin.workflow.engine import NodeRunResponse
+
+    items = []
+
+    def agent(req):
+        if req.node.id == "w":
+            items.append(req.task)
+            return NodeRunResponse(output=f"did {req.task}")
+        return NodeRunResponse(output=list_node.get("says", ""))
+
+    wf = parse_workflow({"name": "t", "start": "lst", "nodes": [
+        {k: v for k, v in list_node.items() if k != "says"} | {"id": "lst", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "worker": "w", "list_from": "lst", "next": None},
+        {"id": "w", "prompt": "work one item"},
+    ]})
+    eng = WorkflowEngine(
+        node_runner=agent,
+        script_runner=ScriptNodeRunner(str(tmp_path), max_output_chars=max_output_chars),
+        workspace=str(tmp_path),
+    )
+    return eng.run(wf, "task"), items
+
+
+def _print_cmd(text):
+    import shlex
+    return f"printf %s {shlex.quote(text)}"
+
+
+def test_script_list_larger_than_the_output_cap_stops_the_run_before_any_worker(tmp_path):
+    big_list = json.dumps([{"id": i, "title": "an item with a long payload"} for i in range(40)])
+    result, items = _fan_out_over(
+        tmp_path, {"kind": "script", "command": _print_cmd(big_list)}, max_output_chars=200)
+    assert result.status == "aborted"
+    assert items == []                                  # no worker ran on a cut list
+    assert not any(r.node_id == "w" for r in result.runs)
+    assert "'fan'" in result.final_output and "'lst'" in result.final_output
+    assert "output cap" in result.final_output          # says why, and what to change
+    assert "shorter items" in result.final_output
+
+
+@pytest.mark.parametrize("stdout", [
+    "alpha\nbeta\ngamma\n",                 # one item per line
+    '{"items": ["a", "b"]}',                # JSON, but an object holding an array
+    'found 2 files\n["a", "b"]\n',          # an array buried in other output
+    "",                                     # nothing at all
+])
+def test_script_list_that_is_not_a_json_array_stops_the_run_before_any_worker(tmp_path, stdout):
+    result, items = _fan_out_over(tmp_path, {"kind": "script", "command": _print_cmd(stdout)})
+    assert result.status == "aborted"
+    assert items == []
+    assert not any(r.node_id == "w" for r in result.runs)
+    assert "'fan'" in result.final_output and "'lst'" in result.final_output
+    assert "JSON array" in result.final_output
+
+
+def test_script_list_that_is_a_json_array_runs_one_worker_per_item(tmp_path):
+    result, items = _fan_out_over(
+        tmp_path, {"kind": "script", "command": _print_cmd('["x", "y", "z"]\n')})
+    assert result.status == "completed"
+    assert sorted(items) == ["x", "y", "z"]
+
+
+def test_script_list_under_the_cap_is_not_reported_as_cut(tmp_path):
+    result, items = _fan_out_over(
+        tmp_path, {"kind": "script", "command": _print_cmd('["x", "y"]')}, max_output_chars=10)
+    assert result.status == "completed"
+    assert sorted(items) == ["x", "y"]
+
+
+@pytest.mark.parametrize("says, expected", [
+    # A model wraps its list in prose and a fence: the array inside is the list.
+    ("There are two seams.\n1. slug\n2. cut\n" + "`" * 3 + 'json\n["slug", "cut"]\n' + "`" * 3,
+     ["cut", "slug"]),
+    # A model that writes one item per line is still read as a list.
+    ("alpha\nbeta\n\ngamma", ["alpha", "beta", "gamma"]),
+])
+def test_agent_list_keeps_its_tolerant_parsing(tmp_path, says, expected):
+    result, items = _fan_out_over(tmp_path, {"kind": "work", "says": says})
+    assert result.status == "completed"
+    assert sorted(items) == expected

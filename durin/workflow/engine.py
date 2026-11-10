@@ -148,6 +148,9 @@ class NodeRunResponse:
     command: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    # A script node whose stdout exceeded the output cap: ``output`` is a cut copy.
+    # Always False for agent nodes.
+    output_truncated: bool = False
     # The model actually resolved for this node's LLM calls (persona override, the
     # node's explicit model, or the runner's default). None for script nodes and
     # for anything that ran with no resolvable model. Threaded through to run-folder
@@ -1158,6 +1161,7 @@ class WorkflowEngine:
                                     command=getattr(resp, "command", None),
                                     stdout=getattr(resp, "stdout", None),
                                     stderr=getattr(resp, "stderr", None),
+                                    output_truncated=getattr(resp, "output_truncated", False),
                                     model=getattr(resp, "model", None),
                                     provider=getattr(resp, "provider", None),
                                     node_hash=node_reuse_hash,
@@ -1700,6 +1704,37 @@ class WorkflowEngine:
         items = [line.strip() for line in candidate.splitlines() if line.strip()]
         return items[:50]
 
+    @staticmethod
+    def _script_subtasks(node, text: str, truncated: bool) -> tuple[list[str], str | None]:
+        """The fan-out list printed by a script list source: ``(items, abort_message)``.
+
+        The script's whole stdout must be one JSON array. Output that exceeded the
+        output cap is refused without being parsed — what is left is a fragment of
+        the list. Anything else that is not an array (lines of text, an object, an
+        array buried in other output, nothing) is refused too. Items are capped at
+        the same count as an agent's list.
+        """
+        import json
+        where = f"parallel node {node.id!r}: its list source {node.list_from!r} is a script node"
+        if truncated:
+            return [], (
+                f"{where} and printed a list larger than the script output cap "
+                "(workflow.script_output_max_chars), so the list was cut and no worker "
+                "was started. Make the script emit shorter items (ids or file paths) "
+                "and keep the payload in files in the working folder."
+            )
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if not isinstance(parsed, list):
+            return [], (
+                f"{where}, so its output must be a JSON array and nothing else (print "
+                "[] for an empty list); it printed something that is not one, and no "
+                "worker was started."
+            )
+        return [str(x) for x in parsed][:50], None
+
     def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None):
         """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
 
@@ -1710,14 +1745,25 @@ class WorkflowEngine:
         # list_from node (it may not be the immediate predecessor); fall back to
         # upstream_output for the common case where it is.
         list_text: str | None = None
+        list_truncated = False
         for recorded in reversed(runs):
             if recorded.node_id == node.list_from:
                 list_text = recorded.output
+                list_truncated = recorded.output_truncated
                 break
         if list_text is None:
             list_text = upstream or ""
 
-        subtasks = self._parse_subtasks(list_text)
+        if isinstance(workflow.nodes.get(node.list_from), ScriptNode):
+            # A script's list is data, not prose: it is a JSON array or the run
+            # stops here. The tolerant parsing below exists for a model's wording;
+            # applied to a script it would turn a broken or cut array into workers
+            # running on fragments of it.
+            subtasks, abort = self._script_subtasks(node, list_text, list_truncated)
+            if abort is not None:
+                return "", abort
+        else:
+            subtasks = self._parse_subtasks(list_text)
         if not subtasks:
             return "", None
 

@@ -95,7 +95,11 @@ first-run "no" is recorded as a failed gate and self-improvement treats it as tr
 
 A linear script node transforms the edge (stdin → stdout); a non-zero exit aborts the run
 (in a linear step it is an error, not a verdict). A script as the `list_from` source makes
-the fan-out list deterministic — no more malformed JSON from a model. Use `script` (a file
+the fan-out list deterministic — no more malformed JSON from a model. Its whole stdout must
+be ONE JSON array (`[]` when empty) that fits under the script output cap
+(`workflow.script_output_max_chars`): the run aborts at the fan-out, before any worker
+starts, when the script prints anything else or a list larger than the cap — so emit ids or
+file paths and leave each item's payload in a file in the working folder. Use `script` (a file
 under `<workspace>/workflows/scripts/`) instead of `command` when the logic outgrows one line.
 
 An **authenticated** script step declares the stored secrets it needs — they arrive as env

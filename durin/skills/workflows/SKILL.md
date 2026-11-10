@@ -59,7 +59,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   it needs in `secrets: ["NAME"]` — injected as env vars when each allows the `exec` scope,
   with output redacted, so an authenticated `curl` stays a zero-token script step instead
   of becoming an agent turn); `parallel` (concurrent branches — a *static* `branches` list;
-  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from`; or
+  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from` —
+  a `script` list source must print one JSON array within the script output cap, or the run
+  aborts before any worker starts; or
   *runtime-selected*: `branches_from` names the node — typically a routing script — whose
   output lists which declared work-node ids run this pass, as a JSON array or a
   comma-separated last line, so "run only the branches that apply" is ONE parallel node
