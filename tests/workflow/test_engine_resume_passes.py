@@ -116,3 +116,44 @@ def test_the_pass_note_follows_completed_passes_not_attempts():
     assert "Pass 2 of 3" in AgentNodeRunner._pass_note(second)
     last = SimpleNamespace(budget=3, iteration=5, pass_number=3)
     assert "FINAL PASS (3 of 3)" in AgentNodeRunner._pass_note(last)
+
+
+def _rows(tmp_path):
+    rec = _manifest(tmp_path)
+    return rec.get("history", []) + rec["runs"]
+
+
+def test_a_retried_row_records_its_attempt_and_its_pass(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "max_visits": 1, "next": None}]})
+    runner = _Runner(fail={"a": 1})
+    _engine(tmp_path, runner).run(wf, "t")
+    _resume(tmp_path, wf, runner)
+    retried = [r for r in _rows(tmp_path) if r["node_id"] == "a" and r["iteration"] == 2]
+    assert len(retried) == 1
+    assert retried[0]["pass_number"] == 1 and retried[0]["budget"] == 1
+
+
+def test_a_loops_last_attempt_is_recorded_as_its_final_pass(tmp_path):
+    wf = _loop()
+    runner = _Runner(fail={"b": 1, "c": 1}, outputs={"c": "needs work\nFAIL"})
+    _engine(tmp_path, runner).run(wf, "t")
+    _resume(tmp_path, wf, runner)
+    _resume(tmp_path, wf, runner)
+    last = [r for r in _rows(tmp_path) if r["node_id"] == "b" and r["iteration"] == 4]
+    assert len(last) == 1
+    assert last[0]["pass_number"] == 3 and last[0]["budget"] == 3
+
+
+def test_progress_frames_of_a_retried_step_carry_its_pass(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "max_visits": 1, "next": None}]})
+    runner = _Runner(fail={"a": 1})
+    _engine(tmp_path, runner).run(wf, "t")
+    frames: list[dict] = []
+    eng = WorkflowEngine(node_runner=runner, run_id_factory=lambda: "r1",
+                         workspace=str(tmp_path), progress_emit=frames.append)
+    assert eng.run(wf, "t", resume=build_resume_state(_manifest(tmp_path), "")).status == "completed"
+    seen = [n for f in frames for n in f["nodes"] if n["id"] == "a"]
+    assert {n["status"] for n in seen} == {"running", "done"}
+    assert all(n["iteration"] == 2 and n["pass_number"] == 1 and n["budget"] == 1 for n in seen)

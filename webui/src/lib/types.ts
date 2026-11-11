@@ -133,6 +133,10 @@ export interface ToolProgressEvent {
     route_label?: string | null;
     iteration?: number | null;
     budget?: number | null;
+    /** Which of its `budget` passes this is; `iteration` is the attempt number,
+     *  which runs ahead of it once a failed attempt was retried. Absent on frames
+     *  sent before this field existed. */
+    pass_number?: number | null;
     /** Epoch seconds this node began; the clock is derived from it, not counted. */
     started_at?: number | null;
     /** Seconds the node took, once finished. */
@@ -181,6 +185,9 @@ export interface WorkNode {
   iteration?: number;
   /** The node's effective visit budget (undefined when not applicable, e.g. parallel units). */
   budget?: number;
+  /** Which of its `budget` passes this is — what a pass chip shows. Undefined on a
+   *  frame that does not carry it; `iteration` then stands in for it. */
+  passNumber?: number;
   /** Epoch seconds this node began; the clock is derived from it, not counted. */
   startedAt?: number;
   /** Seconds the node took, once finished. */

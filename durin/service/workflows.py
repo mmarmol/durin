@@ -183,7 +183,7 @@ class WorkflowRunResult(Result):
     final_output: str
     final_output_node: str = ""       # which node's output became final_output
     run_id: str                       # the run's manifest id — the key for the read routes below
-    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/command/stdout/stderr/model/provider/node_hash/origin_run_id/output
+    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/pass_number/status/route_label/exit_code/command/stdout/stderr/model/provider/node_hash/origin_run_id/output
     output_dir: str = ""
     exhausted_node: str = ""
     needs_input_node: str = ""        # set when status=="needs_input": the node that asked
@@ -668,6 +668,7 @@ class WorkflowsService:
                 {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
                  "session_key": r.session_key, "worker_index": r.worker_index,
                  "branch_id": r.branch_id, "budget": r.budget,
+                 "pass_number": getattr(r, "pass_number", None),
                  "status": r.status, "route_label": r.route_label,
                  "exit_code": getattr(r, "exit_code", None),
                  # Script nodes: the same record the manifest keeps, so a run

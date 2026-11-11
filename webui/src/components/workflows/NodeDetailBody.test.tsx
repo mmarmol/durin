@@ -90,6 +90,25 @@ describe("NodeDetailBody", () => {
     expect(screen.getByTestId("node-round")).toHaveTextContent("3");
   });
 
+  it("shows the pass number of a retried pass, and the iteration when the row has none", () => {
+    const { rerender } = render(
+      <NodeDetailBody row={row({ iteration: 4, pass_number: 3, budget: 3 })}
+        transcript={null} transcriptState="idle" />,
+    );
+    expect(screen.getByText("pass 3 of 3")).toBeInTheDocument();
+
+    rerender(
+      <NodeDetailBody row={row({ iteration: 3, pass_number: 2, budget: 3 })}
+        transcript={null} transcriptState="idle" />,
+    );
+    expect(screen.getByText("pass 2 of 3")).toBeInTheDocument();
+
+    rerender(
+      <NodeDetailBody row={row({ iteration: 2, budget: 3 })} transcript={null} transcriptState="idle" />,
+    );
+    expect(screen.getByText("pass 2 of 3")).toBeInTheDocument();
+  });
+
   it("degrades to the header when the node kept no detail", () => {
     // A sub-workflow or parallel aggregate row: no session, no script streams.
     render(<NodeDetailBody row={row()} transcript={null} transcriptState="idle" />);

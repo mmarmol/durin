@@ -110,6 +110,7 @@ def _node_records(result) -> list[dict]:
             "worker_index": r.worker_index,
             "branch_id": r.branch_id,
             "budget": getattr(r, "budget", None),
+            "pass_number": getattr(r, "pass_number", None),
             "status": r.status,
             "route_label": r.route_label,
             "exit_code": getattr(r, "exit_code", None),

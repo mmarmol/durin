@@ -17,13 +17,15 @@ function NodeStatusIcon({ status }: { status: WorkNode["status"] }) {
 }
 
 // "pass N of budget" chip for a looping node, shown only once it has entered a
-// second (or later) pass — a first pass carries no useful loop information.
-function PassChip({ iteration, budget }: { iteration?: number; budget?: number }) {
+// second (or later) pass — a first pass carries no useful loop information. N is
+// the pass number: a retry of a failed attempt is the same pass again. A frame
+// without one predates it, and its iteration is the pass.
+function PassChip({ pass, budget }: { pass?: number; budget?: number }) {
   const { t } = useTranslation();
-  if (budget == null || iteration == null || iteration <= 1) return null;
+  if (budget == null || pass == null || pass <= 1) return null;
   return (
     <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
-      {t("workflows.passOf", { iteration, budget })}
+      {t("workflows.passOf", { iteration: pass, budget })}
     </span>
   );
 }
@@ -218,7 +220,7 @@ export function WorkItemCard({
                         {node.label ?? node.id}
                       </span>
                     )}
-                    <PassChip iteration={node.iteration} budget={node.budget} />
+                    <PassChip pass={node.passNumber ?? node.iteration} budget={node.budget} />
                     {elapsed != null && (
                       <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
                         {elapsed}

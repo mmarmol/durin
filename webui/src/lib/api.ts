@@ -423,6 +423,10 @@ export type WorkflowRunNode = {
   // The node's effective visit budget at this pass (null for parallel branches/workers,
   // which are not loop targets).
   budget?: number | null;
+  // Which of its `budget` passes this row is. `iteration` is the attempt number, which
+  // runs ahead of it once a failed attempt was retried; absent on a row recorded
+  // before this field existed, where `iteration` is the pass.
+  pass_number?: number | null;
   status: string;
   route_label: string | null;
   // Seconds this node took, once finished; absent/null for a row recorded before

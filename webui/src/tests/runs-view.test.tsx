@@ -900,4 +900,38 @@ describe("RunNodeRow", () => {
     expect(screen.getByText(/6:01/)).toBeInTheDocument();     // 361.5 s elapsed
     expect(screen.getByText(/context\.json/)).toBeInTheDocument();
   });
+
+  function passRow(extra: Partial<api.WorkflowRunNode>) {
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <RunNodeRow
+          continuesSession={false}
+          run={{
+            node_id: "draft", iteration: 1, passed: null,
+            session_key: null, worker_index: null, branch_id: null,
+            budget: 3, status: "ok", route_label: null,
+            ...extra,
+          }}
+        />
+      </I18nextProvider>,
+    );
+  }
+
+  it("labels a retried last pass by its pass number and marks it final", () => {
+    passRow({ iteration: 4, pass_number: 3 });
+    expect(screen.getByText("draft · pass 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("final pass")).toBeInTheDocument();
+  });
+
+  it("does not mark an earlier pass final even when its attempt number reaches the budget", () => {
+    passRow({ iteration: 3, pass_number: 2 });
+    expect(screen.getByText("draft · pass 2 of 3")).toBeInTheDocument();
+    expect(screen.queryByText("final pass")).not.toBeInTheDocument();
+  });
+
+  it("reads the iteration as the pass on a row recorded without a pass number", () => {
+    passRow({ iteration: 3 });
+    expect(screen.getByText("draft · pass 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("final pass")).toBeInTheDocument();
+  });
 });

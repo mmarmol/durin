@@ -222,6 +222,24 @@ describe("WorkItemCard", () => {
     expect(screen.getByText("pass 2 of 3")).toBeInTheDocument();
   });
 
+  it("renders the pass number, not the attempt number, on the pass chip", () => {
+    const card = (node: WorkItem["nodes"] extends (infer N)[] | undefined ? N : never) => (
+      <WorkItemCard
+        item={{
+          kind: "workflow", id: "r7", label: "retried-wf", status: "running",
+          nodes: [node], startedAt: 0, endedAt: null,
+        }}
+      />
+    );
+    const { rerender } = render(card({ id: "draft", status: "running", iteration: 4, passNumber: 3, budget: 3 }));
+    expect(screen.getByText("pass 3 of 3")).toBeInTheDocument();
+    expect(screen.queryByText("pass 4 of 3")).not.toBeInTheDocument();
+
+    // A retry of a failed first pass is still the first pass: no chip.
+    rerender(card({ id: "draft", status: "running", iteration: 2, passNumber: 1, budget: 3 }));
+    expect(screen.queryByText(/^pass \d of 3$/)).not.toBeInTheDocument();
+  });
+
   it("renders needs_input hand-off hint in workflow card", () => {
     render(
       <WorkItemCard

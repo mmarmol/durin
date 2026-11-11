@@ -1019,6 +1019,7 @@ class WorkflowEngine:
                 started.append(running_frame(
                     node, iteration=iteration,
                     budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
+                    pass_number=pass_number if isinstance(node, (WorkNode, ScriptNode)) else None,
                     started_at=node_started_at,
                 ))
                 started.extend(pending_frames(workflow, node.id,
@@ -1032,11 +1033,12 @@ class WorkflowEngine:
             # turn. The node hands over raw state ({"round", "activity", "max_rounds"})
             # and the engine re-emits a whole frame set, because only the engine knows
             # the other nodes — a bare fragment could not be merged into a node list.
-            # `_node`, `_iter`, `_budget`, `_started` and `_activity` are pinned as
-            # default arguments so this closure keeps this visit's values rather than
-            # the enclosing loop's — `node`, `iteration`, `budget`, `node_started_at`
-            # and `node_activity` are all rebound on the next visit. That rebinding
-            # would be able to corrupt an in-flight closure if this callback could
+            # `_node`, `_iter`, `_budget`, `_pass`, `_started` and `_activity` are
+            # pinned as default arguments so this closure keeps this visit's values
+            # rather than the enclosing loop's — `node`, `iteration`, `budget`,
+            # `pass_number`, `node_started_at` and `node_activity` are all rebound on
+            # the next visit. That rebinding would be able to corrupt an in-flight
+            # closure if this callback could
             # still be invoked once the loop has moved on, but it can't: it is only
             # ever called synchronously on this walk thread, inside the `runner(req)`
             # call below, and must stay synchronous and never await there or the node
@@ -1045,7 +1047,7 @@ class WorkflowEngine:
             node_activity: dict = {"round": None, "activity": None, "max_rounds": None}
 
             def _node_progress(update: dict, _node=node, _iter=iteration,
-                               _budget=budget, _started=node_started_at,
+                               _budget=budget, _pass=pass_number, _started=node_started_at,
                                _activity=node_activity) -> None:
                 _activity.update(update)
                 if self._progress_emit is None:
@@ -1056,6 +1058,7 @@ class WorkflowEngine:
                 frames.append(running_frame(
                     _node, iteration=_iter,
                     budget=_budget if isinstance(_node, (WorkNode, ScriptNode)) else None,
+                    pass_number=_pass if isinstance(_node, (WorkNode, ScriptNode)) else None,
                     started_at=_started,
                     activity=_activity["activity"],
                     round_=_activity["round"],
@@ -1175,7 +1178,7 @@ class WorkflowEngine:
                         exc.resume_upstream = upstream_output
                         runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                             output="", session_key=exc.session_key,
-                                            budget=budget,
+                                            budget=budget, pass_number=pass_number,
                                             status="node_failed", error=str(exc.cause),
                                             exit_code=getattr(exc, "exit_code", None),
                                             command=getattr(exc, "command", None),
@@ -1206,7 +1209,7 @@ class WorkflowEngine:
                 )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
-                                    passed=passed, budget=budget,
+                                    passed=passed, budget=budget, pass_number=pass_number,
                                     status=("reused" if reuse_hit is not None else
                                             "persist_failed" if resp.persist_failed else "ok"),
                                     exit_code=getattr(resp, "exit_code", None),

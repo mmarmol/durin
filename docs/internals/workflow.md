@@ -503,7 +503,9 @@ and a gate's definitive-verdict check (the `on_fail` target's completed passes a
 its budget) all read passes. Within one walk the two rise together, because a failed
 attempt ends the walk. They part across a resume: an attempt that failed keeps its
 `node_failed` row and its conversation but uses no pass, so a node that failed on its
-last allowed pass is still retried, as that same pass under a new attempt number.
+last allowed pass is still retried, as that same pass under a new attempt number. Rows
+and progress frames carry both numbers (`iteration` and `pass_number`), and the
+dashboard labels a pass by `pass_number`.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
 within a single node execution. When set on a `WorkNode`, the node runner (1) appends a
@@ -622,6 +624,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
+| `pass_number` | which of its `budget` passes this row is: one more than the node's passes that completed before it. It differs from `iteration` once a failed attempt was retried; the dashboard shows it ("pass N of budget", and the final-pass marker when it equals `budget`). Set wherever `budget` is (`null` otherwise); a row recorded before the field existed lacks it, and the dashboard then reads `iteration` as the pass |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
 | `command` | a script node's command as a reader would recognize it — the inline command, or the workspace-relative script path — captured at run time, since definitions are versioned per run and a later reader consulting today's definition would show a past run the wrong command. Redacted like the streams: a command line carries credentials as readily as output does (`null` for agent nodes) |
 | `stdout` | a script node's captured stdout, redacted and capped at `workflow.script_log_max_chars` (`null` for agent nodes, whose record is their persisted conversation) |
@@ -1213,10 +1216,12 @@ path, which builds one explicitly from the finished `WorkflowResult` — so a
 read the run's manifest (§4a) or the global feed (§4f) to learn how it
 actually ended.
 
-Every node entry carries `iteration` (the attempt number, which equals the pass
-number unless an attempt failed and was retried) and `budget`
-(effective visit limit, `null` where not applicable) so the panels can render
-loop progress live, not just after the run completes; `label` (see **Node
+Every node entry carries `iteration` (the attempt number), `pass_number` (which
+of its allowed passes it is; it trails `iteration` once a failed attempt was
+retried) and `budget` (effective visit limit; `pass_number` and `budget` are
+`null` where not applicable) so the panels can render loop progress live, not
+just after the run completes, as "pass `pass_number` of `budget`" (reading
+`iteration` as the pass on a frame that carries no `pass_number`); `label` (see **Node
 labels** below) and `description` (the node's role-prompt first sentence, for
 hover text — empty for a node type with no prompt). The running node's own
 frame additionally carries `started_at` (wall-clock epoch seconds): surfaces

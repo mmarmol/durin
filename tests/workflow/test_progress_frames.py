@@ -62,7 +62,8 @@ def test_running_frame_marks_the_node_running():
     frame = running_frame(node, iteration=2, budget=5)
     assert frame == {
         "id": "judge", "label": "Judge", "description": "", "status": "running",
-        "route_label": None, "iteration": 2, "budget": 5, "started_at": None,
+        "route_label": None, "iteration": 2, "budget": 5, "pass_number": None,
+        "started_at": None,
         "activity": None, "round": None, "max_rounds": None,
     }
 

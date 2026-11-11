@@ -164,7 +164,10 @@ export function RunNodeRow({
         : run.passed === false
           ? "✗"
           : null;
-  const isFinalPass = run.budget != null && run.iteration === run.budget;
+  // The pass this row is; a row recorded before pass numbers existed carries only
+  // its iteration, which then is the pass.
+  const pass = run.pass_number ?? run.iteration;
+  const isFinalPass = run.budget != null && pass === run.budget;
 
   // "took"/"typical" combined into one line rather than two separate elements:
   // an actual duration can format to the same m:ss as its typical counterpart,
@@ -190,13 +193,13 @@ export function RunNodeRow({
             className="rounded font-mono text-[11.5px] font-medium underline-offset-2 hover:underline"
           >
             {run.budget != null
-              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: pass, budget: run.budget })}`
               : `${run.node_id}#${run.iteration}`}
           </button>
         ) : (
           <span className="font-mono text-[11.5px] font-medium">
             {run.budget != null
-              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: pass, budget: run.budget })}`
               : `${run.node_id}#${run.iteration}`}
           </span>
         )}
