@@ -1609,23 +1609,9 @@ class WorkflowEngine:
                 resp = self._run_one_branch(
                     node, task, upstream, run_id, iteration, root_key,
                     None, out_dir=work_dir, raw_task=raw_task)
-                return NodeRun(
-                    node_id=node.id, iteration=iteration, output=resp.output,
-                    session_key=resp.session_key,
-                    status="persist_failed" if resp.persist_failed else "ok",
-                    exit_code=getattr(resp, "exit_code", None),
-                    duration_s=round(time.monotonic() - t0, 3))
-            except NodeExecutionError as exc:
-                return NodeRun(
-                    node_id=node.id, iteration=iteration, output="",
-                    session_key=exc.session_key, status="node_failed",
-                    error=str(exc.cause), exit_code=getattr(exc, "exit_code", None),
-                    duration_s=round(time.monotonic() - t0, 3))
+                return self._unit_run(node.id, iteration, t0, node=node, resp=resp)
             except Exception as exc:  # noqa: BLE001 - a detached failure is a record, not an abort
-                return NodeRun(
-                    node_id=node.id, iteration=iteration, output="",
-                    status="node_failed", error=str(exc),
-                    duration_s=round(time.monotonic() - t0, 3))
+                return self._unit_run(node.id, iteration, t0, node=node, exc=exc)
 
         tracker.launch(_execute)
 
@@ -1651,20 +1637,47 @@ class WorkflowEngine:
         ))
 
     @staticmethod
-    def _record_branches(runs, results, iteration):
-        """Append a per-branch NodeRun (carrying its session_key, branch_id and failure
-        status) for each ``(branch_id, output, session_key, error, persist_failed,
-        duration, exit_code)`` tuple — so static-parallel branch sessions stay
-        attributable in the run trace, mirroring the dynamic fan-out worker records.
-        ``error`` is None for a branch that completed; ``persist_failed`` marks a branch
-        that ran but whose session save raised; ``exit_code`` is set for script branches
-        (None for agent branches), matching the linear script contract."""
-        for bid, out, session_key, error, persist_failed, duration, exit_code in results:
-            runs.append(NodeRun(node_id=bid, iteration=iteration, output=out,
-                                session_key=session_key, branch_id=bid,
-                                status=("node_failed" if error else
-                                        "persist_failed" if persist_failed else "ok"),
-                                error=error, duration_s=duration, exit_code=exit_code))
+    def _unit_run(node_id, iteration, t0, *, node=None, resp=None, exc=None,
+                  branch_id=None, worker_index=None) -> NodeRun:
+        """The trace row of a node that ran beside the walk — a static branch, a
+        fan-out worker or a detached node — built from its runner's response, or
+        from the exception it raised when ``resp`` is None.
+
+        It is the same node and the same runner as on the linear walk, so the row
+        records the same evidence: a script's exit code, command and captured
+        streams whether it finished or died, and for a pass that finished, whether
+        its output was cut, the model and provider that produced it, and the hash
+        of the node's definition. A failed agent pass names no model — the failure
+        carries none. ``t0`` is the unit's own start: concurrent units cannot share
+        a walk-level clock."""
+        source = resp if resp is not None else exc
+        failed = resp is None
+        return NodeRun(
+            node_id=node_id, iteration=iteration,
+            output="" if failed else resp.output,
+            session_key=getattr(source, "session_key", None),
+            branch_id=branch_id, worker_index=worker_index,
+            status=("node_failed" if failed else
+                    "persist_failed" if resp.persist_failed else "ok"),
+            error=(str(exc.cause if isinstance(exc, NodeExecutionError) else exc)
+                   if failed else None),
+            exit_code=getattr(source, "exit_code", None),
+            command=getattr(source, "command", None),
+            stdout=getattr(source, "stdout", None),
+            stderr=getattr(source, "stderr", None),
+            output_truncated=getattr(resp, "output_truncated", False),
+            model=getattr(resp, "model", None),
+            provider=getattr(resp, "provider", None),
+            node_hash=(provenance.reuse_hash(node.raw)
+                       if not failed and isinstance(node, WorkNode) and node.raw else None),
+            duration_s=round(time.monotonic() - t0, 3))
+
+    @staticmethod
+    def _is_cancel(exc: BaseException) -> bool:
+        """True when a unit's failure is the run's cancel reaching it, not a failure
+        on its own merits."""
+        return (isinstance(exc, NodeExecutionError)
+                and isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)))
 
     @staticmethod
     def _parse_subtasks(text: str) -> list[str]:
@@ -1798,32 +1811,28 @@ class WorkflowEngine:
                     # Fan-out workers are agent turns: a force-stop aborts them too.
                     cancel_check=self._hard_cancel_check,
                 ))
-                return idx, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
-            except NodeExecutionError as exc:
-                if isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)):
-                    cancelled_workers.add(idx)
-                return idx, "", exc.session_key, str(exc.cause), False, round(time.monotonic() - t0, 3)
+                return self._unit_run(node.worker, iteration, t0, node=worker_node,
+                                      resp=resp, worker_index=idx)
             except Exception as exc:  # noqa: BLE001 - isolate a single worker's failure
-                return idx, "", None, str(exc), False, round(time.monotonic() - t0, 3)
+                if self._is_cancel(exc):
+                    cancelled_workers.add(idx)
+                return self._unit_run(node.worker, iteration, t0, node=worker_node,
+                                      exc=exc, worker_index=idx)
 
+        # One row per worker, in list order (the pool's map keeps the input order).
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-            results = sorted(ex.map(_run_worker, enumerate(subtasks)))
+            results = list(ex.map(_run_worker, enumerate(subtasks)))
+        runs.extend(results)
 
-        for idx, out, session_key, error, persist_failed, duration in results:
-            runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out,
-                                session_key=session_key, worker_index=idx,
-                                status=("node_failed" if error else
-                                        "persist_failed" if persist_failed else "ok"),
-                                error=error, duration_s=duration))
-
-        if all(error for _idx, _out, _key, error, _pf, _d in results):
+        if all(r.status == "node_failed" for r in results):
             text = f"parallel node {node.id!r}: every worker failed"
             return "", (_CancelledAbort(text)
                         if len(cancelled_workers) == len(results) else text)
 
         merged = "\n\n".join(
-            f"[{idx}] {out}" if error is None else f"[{idx}] FAILED: {error}"
-            for idx, out, _key, error, _pf, _d in results
+            f"[{r.worker_index}] FAILED: {r.error}" if r.status == "node_failed"
+            else f"[{r.worker_index}] {r.output}"
+            for r in results
         )
         return merged, None
 
@@ -2004,31 +2013,27 @@ class WorkflowEngine:
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
-                    return (bid, resp.output, resp.session_key, None, resp.persist_failed,
-                            round(time.monotonic() - t0, 3), getattr(resp, "exit_code", None))
-                except NodeExecutionError as exc:
-                    with _branch_lock:
-                        branch_status[bid] = "failed"
-                        if isinstance(exc.cause, (ScriptCancelledError, WorkInterruptedError)):
-                            cancelled_branches.add(bid)
-                    _emit_branches()
-                    return (bid, "", exc.session_key, str(exc.cause), False,
-                            round(time.monotonic() - t0, 3), getattr(exc, "exit_code", None))
+                    return self._unit_run(bid, iteration, t0, node=workflow.nodes[bid],
+                                          resp=resp, branch_id=bid)
                 except Exception as exc:  # noqa: BLE001 - isolate a single branch's failure
                     with _branch_lock:
                         branch_status[bid] = "failed"
+                        if self._is_cancel(exc):
+                            cancelled_branches.add(bid)
                     _emit_branches()
-                    return bid, "", None, str(exc), False, round(time.monotonic() - t0, 3), None
+                    return self._unit_run(bid, iteration, t0, node=workflow.nodes.get(bid),
+                                          exc=exc, branch_id=bid)
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(lambda bid: _gated(bid, _run), branches))
-            self._record_branches(runs, results, iteration)
-            if all(error for _bid, _out, _key, error, _pf, _d, _ec in results):
+            runs.extend(results)
+            if all(r.status == "node_failed" for r in results):
                 text = f"parallel node {node.id!r}: every branch failed"
                 return "", (_CancelledAbort(text)
                             if len(cancelled_branches) == len(results) else text)
             return "\n\n".join(
-                f"[{bid}]\n{out}" if error is None else f"[{bid}] FAILED: {error}"
-                for bid, out, _key, error, _pf, _d, _ec in results), None
+                f"[{r.node_id}] FAILED: {r.error}" if r.status == "node_failed"
+                else f"[{r.node_id}]\n{r.output}"
+                for r in results), None
 
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
@@ -2036,12 +2041,17 @@ class WorkflowEngine:
 
         base = workspace_fork.snapshot(fork_root)
         forks: list = []
+        # Each branch's trace row, filled as the branch ends. A failing branch aborts
+        # the node by raising, so the rows are kept here rather than in the pool's
+        # results: the branches that ran stay on record either way.
+        rows: dict[str, NodeRun] = {}
 
         def _run(bid):
             # Each branch gets a private copy of the working folder: its file tools
             # anchor there (workspace override) and its writes diff against the base.
             fork_dir = workspace_fork.fork(fork_root)
             forks.append(fork_dir)
+            t0 = time.monotonic()
             try:
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
@@ -2049,36 +2059,41 @@ class WorkflowEngine:
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()
-                return (bid, resp.output, resp.session_key,
-                        getattr(resp, "exit_code", None), workspace_fork.diff(base, fork_dir))
-            except Exception:
+                changes = workspace_fork.diff(base, fork_dir)
+                rows[bid] = self._unit_run(bid, iteration, t0, node=workflow.nodes[bid],
+                                           resp=resp, branch_id=bid)
+                return rows[bid], changes
+            except Exception as exc:
                 with _branch_lock:
                     branch_status[bid] = "failed"
                 _emit_branches()
+                rows[bid] = self._unit_run(bid, iteration, t0, node=workflow.nodes.get(bid),
+                                           exc=exc, branch_id=bid)
                 raise
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(lambda bid: _gated(bid, _run), branches))
-            self._record_branches(
-                runs, [(bid, out, key, None, False, None, ec) for bid, out, key, ec, _ in results],
-                iteration)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                    results = list(ex.map(lambda bid: _gated(bid, _run), branches))
+            finally:
+                # The pool has joined: every branch that started has its row.
+                runs.extend(rows[bid] for bid in branches if bid in rows)
             if node.reconcile == "choose":
                 if self._pick_runner is None:
                     return "", f"parallel node {node.id!r}: 'choose' needs a pick_runner"
-                idx = self._pick_runner(node.criteria, [out for _, out, _, _, _ in results], node.judge_model)
+                idx = self._pick_runner(node.criteria, [row.output for row, _ in results], node.judge_model)
                 idx = idx if isinstance(idx, int) and 0 <= idx < len(results) else 0
-                bid, out, _key, _ec, cs = results[idx]
+                row, cs = results[idx]
                 workspace_fork.apply(cs, fork_root)
-                return f"[chosen: {bid}]\n{out}", None
+                return f"[chosen: {row.node_id}]\n{row.output}", None
             # union: apply every branch unless two touched the same path
-            changesets = [cs for _, _, _, _, cs in results]
+            changesets = [cs for _, cs in results]
             conflict = workspace_fork.conflicts(changesets)
             if conflict:
                 return "", f"parallel node {node.id!r}: union conflict on {sorted(conflict)}"
             for cs in changesets:
                 workspace_fork.apply(cs, fork_root)
-            return "\n\n".join(f"[{bid}]\n{out}" for bid, out, _, _, _ in results), None
+            return "\n\n".join(f"[{row.node_id}]\n{row.output}" for row, _ in results), None
         finally:
             for fork_dir in forks:
                 workspace_fork.cleanup(fork_dir)
