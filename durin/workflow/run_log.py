@@ -157,6 +157,41 @@ def _write_json(path: Path, data: dict) -> None:
     atomic_write_text(path, json.dumps(data))
 
 
+# Most rows of earlier walks a resumed run's record keeps in ``history``; the
+# oldest are dropped first. The per-step pass counts in ``passes`` are carried
+# separately, so they stay exact however many rows were dropped.
+HISTORY_MAX_ROWS = 500
+
+
+def pass_counts(record: dict) -> dict[str, dict[str, int]]:
+    """Per-step pass counts of a run: ``{node_id: {"reached", "completed"}}``.
+    ``reached`` is the highest pass number any row of the step carries;
+    ``completed`` is how many distinct pass numbers of the step have at least one
+    row that did not fail. Counts carried in ``passes`` (earlier walks) are added
+    to those of ``runs`` (the current walk), so they never depend on ``history``."""
+    counts = {
+        node: {"reached": int(c.get("reached", 0)), "completed": int(c.get("completed", 0))}
+        for node, c in (record.get("passes") or {}).items()
+    }
+    reached: dict[str, int] = {}
+    done: dict[str, set[int]] = {}
+    for row in record.get("runs") or []:
+        node = row.get("node_id")
+        if not node:
+            continue
+        it = int(row.get("iteration") or 0)
+        reached[node] = max(reached.get(node, 0), it)
+        if row.get("status") != "node_failed":
+            done.setdefault(node, set()).add(it)
+        else:
+            done.setdefault(node, set())
+    for node, top in reached.items():
+        entry = counts.setdefault(node, {"reached": 0, "completed": 0})
+        entry["reached"] = max(entry["reached"], top)
+        entry["completed"] += len(done[node])
+    return counts
+
+
 def start_run(
     workspace: str | Path, name: str, run_id: str, *,
     root_session_key: str | None, started_at: float,
@@ -184,7 +219,8 @@ def start_run(
     them (e.g. a caller with no workflow object). ``resumed`` marks a walk that
     re-enters an existing run (a failure-resume or a paused run's reply): its
     ``runs`` start empty here, so they never hold the earlier attempts' rows; the
-    node ids those attempts walked are kept in ``earlier_nodes`` instead."""
+    node ids those attempts walked are kept in ``earlier_nodes`` and their rows in
+    ``history`` (bounded), with per-step pass counts in ``passes``."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -228,6 +264,14 @@ def start_run(
         # all its resumes and carried forward on every rewrite, so the run's route
         # is on record even though ``runs`` holds only the last walk.
         "earlier_nodes": earlier_nodes,
+        # The rows of the earlier walks, oldest first and bounded, and the per-step
+        # pass counts they add up to. The counts are computed from the full prior
+        # record, so dropping old history rows never changes them.
+        "history": (
+            (list(prior.get("history") or []) + list(prior.get("runs") or []))[-HISTORY_MAX_ROWS:]
+            if resumed else []
+        ),
+        "passes": pass_counts(prior) if resumed else {},
         # The source outputs the earlier attempts stored, carried forward the same
         # way: this walk's own trace cannot supply them if it stops again.
         "resume_inputs": (prior.get("resume_inputs") or None) if resumed else None,
@@ -264,6 +308,8 @@ def update_run(
         "durin_version": base.get("durin_version"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
+        "history": base.get("history") or [],
+        "passes": base.get("passes") or {},
         "resume_inputs": base.get("resume_inputs"),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
@@ -339,6 +385,8 @@ def finalize_run(
         "durin_version": prior.get("durin_version"),
         "resumed": prior.get("resumed", False),
         "earlier_nodes": prior.get("earlier_nodes") or [],
+        "history": prior.get("history") or [],
+        "passes": prior.get("passes") or {},
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

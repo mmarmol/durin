@@ -589,7 +589,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -640,6 +640,15 @@ attempts'; the flag is carried forward on every rewrite; and `earlier_nodes` —
 ids of every node the earlier attempts of a resumed run walked, gathered across all
 its resumes (`[]` on a run that never resumed), so the run's route stays on record
 even though its `runs` do not; carried forward on every rewrite.
+`history` — the rows of the earlier walks, oldest first (`[]` on a run that never
+resumed). `runs` still covers the last walk only; on a resume the previous `runs`
+are appended to `history`, which keeps at most a fixed number of rows and drops the
+oldest first. `passes` — `{node_id: {reached, completed}}` for the earlier walks:
+`reached` is the highest pass number any row of the step carries, `completed` the
+number of distinct passes with at least one row that did not fail. The counts are
+taken from the whole prior record, so they do not depend on `history` being
+complete. Both are carried forward on every rewrite; a record written before they
+existed simply lacks them.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
