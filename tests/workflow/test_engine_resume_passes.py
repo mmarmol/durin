@@ -206,3 +206,24 @@ def test_a_run_resumed_before_the_counts_existed_keeps_its_bound_over_two_more_r
     # a completed attempts 1 and 2 before the upgrade: one pass is left.
     assert [(it, p) for n, it, p, _b in runner.calls if n == "a"] == [(3, 3)]
     assert [(it, p) for n, it, p, _b in runner.calls if n == "c"] == [(3, 2), (4, 2), (5, 3)]
+
+
+def test_a_resumed_run_does_not_list_an_earlier_file_that_is_gone(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a",
+                         "output": {"artifacts": [{"path": "a.txt"}, {"path": "b.txt"}]},
+                         "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": "b"},
+                                   {"id": "b", "kind": "work", "tools": "default", "next": None}]})
+
+    class Writing(_Runner):
+        def __call__(self, req):
+            resp = super().__call__(req)
+            Path(req.output_dir, f"{req.node.id}.txt").write_text("x")
+            return resp
+
+    runner = Writing(fail={"b": 1})
+    assert _engine(tmp_path, runner).run(wf, "t").status == "aborted"
+    Path(_manifest(tmp_path)["work_dir"], "a.txt").unlink()     # the folder was pruned meanwhile
+    done = _resume(tmp_path, wf, runner)
+    assert done.status == "completed"
+    assert done.output_files == ["b.txt"]
+    assert done.missing_artifacts == ["a.txt"]

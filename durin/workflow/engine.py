@@ -1654,8 +1654,17 @@ class WorkflowEngine:
 
         # A resumed run also credits the rows of its earlier walks (the walk's own
         # ``runs`` starts empty), so a step that ran before the stop still counts.
+        # Only the files still in the working folder: a stopped run's folder can
+        # be pruned or edited before it is resumed, and a file listed from an
+        # old row alone would be reported as produced when it is gone.
+        def _on_disk(paths: list[str]) -> list[str]:
+            if terminal_output_dir is None:
+                return []
+            return [p for p in paths if (Path(terminal_output_dir) / p).is_file()]
+
         for row in earlier_rows or []:
-            _credit(row.get("node_id", ""), row.get("status", ""), row.get("artifacts") or [])
+            _credit(row.get("node_id", ""), row.get("status", ""),
+                    _on_disk(row.get("artifacts") or []))
         for r in runs:
             _credit(r.node_id, r.status, r.artifacts)
         output_files = sorted(produced)
