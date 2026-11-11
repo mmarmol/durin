@@ -882,6 +882,12 @@ describe("RunDetail", () => {
     expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
   });
 
+  it("leaves a sub-workflow's aborted run to the run that called it", async () => {
+    renderAborted({ failed_node: "build", parent_run_id: "caller-1" }, () => {});
+    await screen.findByText("Run aborted");
+    expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
+  });
+
   it("disables the retry while a resume is in flight", async () => {
     renderAborted({ failed_node: "build" }, () => {}, true);
     expect(await screen.findByRole("button", { name: "Retry the failed step" })).toBeDisabled();

@@ -228,7 +228,14 @@ def manifest_completed_passes(manifest: dict) -> dict[str, int]:
 
 
 def resume_refusal(manifest: dict) -> str | None:
-    """Why an aborted run that names a failed node still cannot be resumed, or None.
+    """Why a run whose status could be resumed (``needs_input`` with a
+    ``needs_input_node``, or ``aborted`` with a ``failed_node``) still cannot be,
+    or None. Every resume surface asks this before it touches the record.
+
+    A sub-workflow step's run (a record with a ``parent_run_id``) is never resumed
+    on its own, paused or failed: it would run its step in its own folder instead
+    of the caller's, end ``completed`` and leave the caller stopped. Resuming the
+    caller re-runs the sub-workflow step, in the caller's folder.
 
     A resume re-enters the walk at the failed node, so that node must be one the
     walk itself dispatched: it has a failed row that belongs to no parallel node.
@@ -236,8 +243,15 @@ def resume_refusal(manifest: dict) -> str | None:
     input for it. Re-entering there would run that one unit as if it were a step
     of the walk — without its input, without reconciling its siblings, without
     anything that follows the parallel node — and report the run completed."""
-    failed = manifest.get("failed_node")
-    if manifest.get("status") != "aborted" or not failed:
+    paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
+    failed = manifest.get("failed_node") if manifest.get("status") == "aborted" else None
+    if not paused and not failed:
+        return None
+    parent = manifest.get("parent_run_id")
+    if parent:
+        return (f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
+                f"run {parent!r} instead: it runs the sub-workflow step again.")
+    if not failed:
         return None
     for r in manifest.get("runs") or []:
         if (r.get("node_id") == failed and r.get("status") == "node_failed"

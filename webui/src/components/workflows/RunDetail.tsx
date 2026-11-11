@@ -357,6 +357,9 @@ export function RunDetail({
   // end it (same origin check the Pending page's workflow-run source uses to
   // leave such a run to the Automations inbox instead of listing it twice).
   const isAutomationOrigin = !!result.root_session_key?.startsWith("automation:");
+  // A sub-workflow step's run is resumed through the run that called it: the
+  // server refuses it on its own, so no Retry is offered for it.
+  const isChildRun = !!result.parent_run_id;
 
   return (
     <div className="flex flex-col gap-3">
@@ -391,7 +394,7 @@ export function RunDetail({
             <span className="font-medium">{t("workflows.abortedTitle")}</span>
           </div>
           {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
-          {onRetry && result.failed_node && !isAutomationOrigin && (
+          {onRetry && result.failed_node && !isAutomationOrigin && !isChildRun && (
             <Button
               type="button"
               size="sm"

@@ -483,6 +483,10 @@ export type WorkflowRunResult = {
   // interactive session, same source as WorkflowGlobalRun's `origin` below.
   // Absent on a manifest written before this field existed.
   root_session_key?: string | null;
+  // Set on a sub-workflow step's run: the run that called it. Such a run is
+  // resumed through that caller, never on its own. Present on a stored manifest
+  // only; the synchronous run response never carries it.
+  parent_run_id?: string | null;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.
