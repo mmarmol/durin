@@ -289,6 +289,29 @@ async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_response_of_an_aborted_run_names_its_failed_node(tmp_path):
+    # The editor's test-run panel offers its retry from this response alone.
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None, work_key=None):
+        return WorkflowResult(
+            status="aborted", run_id="r1", final_output="node 'a' failed: boom",
+            failed_node="a", runs=[NodeRun(node_id="a", iteration=1, output="",
+                                           status="node_failed")],
+        )
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        result = await svc.run(WorkflowRunCommand(name="wf", task="go"), p)
+
+    assert result.failed_node == "a"
+
+
+@pytest.mark.asyncio
 async def test_run_response_carries_producer_fields(tmp_path):
     """The synchronous run() response's per-node dict must carry the same
     producer-identity fields (model/provider/node_hash/origin_run_id) the

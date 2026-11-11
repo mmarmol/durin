@@ -6386,6 +6386,11 @@ export interface components {
              * @default
              */
             exhausted_node: string;
+            /**
+             * Failed Node
+             * @default
+             */
+            failed_node: string;
             /** Final Output */
             final_output: string;
             /**

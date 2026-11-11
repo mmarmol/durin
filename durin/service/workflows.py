@@ -187,6 +187,7 @@ class WorkflowRunResult(Result):
     output_dir: str = ""
     exhausted_node: str = ""
     needs_input_node: str = ""        # set when status=="needs_input": the node that asked
+    failed_node: str = ""             # set when status=="aborted" because a step failed: the step a retry runs again
     output_files: list[str] = []      # relative paths in output_dir (completed runs)
 
 
@@ -691,6 +692,7 @@ class WorkflowsService:
             output_dir=result.output_dir or "",
             exhausted_node=result.exhausted_node or "",
             needs_input_node=result.needs_input_node or "",
+            failed_node=result.failed_node or "",
             output_files=list(result.output_files or []),
         )
 

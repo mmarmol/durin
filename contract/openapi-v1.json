@@ -8002,6 +8002,11 @@
             "title": "Exhausted Node",
             "type": "string"
           },
+          "failed_node": {
+            "default": "",
+            "title": "Failed Node",
+            "type": "string"
+          },
           "final_output": {
             "title": "Final Output",
             "type": "string"
