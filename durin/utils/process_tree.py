@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import os
 import subprocess
+import uuid
 
 __all__ = [
+    "BOOT_ID",
     "available_memory_mb",
     "memory_snapshot",
     "process_alive",
@@ -61,6 +63,16 @@ def memory_snapshot() -> dict:
     }
 
 
+# One random value per start of the program. A process that replaces its own
+# image (os.execv) keeps its pid and its start time but re-imports this module,
+# so this is what tells the restarted process from the one it replaced.
+BOOT_ID = uuid.uuid4().hex
+
+
+def _own_pid() -> int:
+    return os.getpid()
+
+
 def _lstart(pid: int) -> str | None:
     """The process' start-time string from ps, or None when it doesn't exist.
 
@@ -80,26 +92,33 @@ def _lstart(pid: int) -> str | None:
 
 
 def process_identity(pid: int | None = None) -> dict:
-    """A durable identity for a live process: ``{"pid", "started"}``.
+    """A durable identity for a live process: ``{"pid", "started", "boot"}``.
 
     Persisted by run manifests so a later process can tell "this run's owner
-    is still alive" from "the pid was reused by something else".
+    is still alive" from "the pid was reused by something else" or "the same
+    process restarted in place". ``boot`` is this start of the program.
     """
-    pid = pid if pid is not None else os.getpid()
-    return {"pid": pid, "started": _lstart(pid)}
+    pid = pid if pid is not None else _own_pid()
+    return {"pid": pid, "started": _lstart(pid), "boot": BOOT_ID}
 
 
 def process_alive(owner: object) -> bool:
     """True when the process recorded in *owner* is still the same, live
     process. A missing/invalid pid is dead; a live pid with a DIFFERENT
     start time is dead (pid reuse); an owner recorded without a start time
-    falls back to pid-liveness alone.
+    falls back to pid-liveness alone. This process's own pid recorded with a
+    different ``boot`` is an earlier start of this program (a restart in
+    place keeps pid and start time), so it is dead; an owner without a
+    ``boot`` is judged as before.
     """
     if not isinstance(owner, dict):
         return False
     try:
         pid = int(owner.get("pid"))
     except (TypeError, ValueError):
+        return False
+    boot = owner.get("boot")
+    if pid == _own_pid() and boot is not None and boot != BOOT_ID:
         return False
     current = _lstart(pid)
     if current is None:

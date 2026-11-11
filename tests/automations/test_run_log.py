@@ -263,6 +263,18 @@ def test_find_orphans_reports_dead_owner_regardless_of_age(tmp_path):
     assert rl.read_run(tmp_path, "a", "ghost")["status"] == "running"
 
 
+def test_find_orphans_reports_a_run_left_by_an_earlier_start_of_this_process(tmp_path):
+    from durin.utils.process_tree import process_identity
+
+    rl.start_run(tmp_path, "a", "restarted", cause=_cause())
+    rl.update_run(
+        tmp_path, "a", "restarted",
+        owner={**process_identity(), "boot": "an-earlier-start"})
+
+    orphans = rl.find_orphans(tmp_path, now=_time.time())
+    assert [o["run_id"] for o in orphans] == ["restarted"]
+
+
 def test_find_orphans_never_reports_a_live_owner(tmp_path):
     rl.start_run(tmp_path, "a", "mine", cause=_cause())
     rl.update_run(tmp_path, "a", "mine", started_at=0.0)  # ancient but owned

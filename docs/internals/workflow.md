@@ -744,8 +744,11 @@ manifests written before this field existed).
 workflow; callers that need only terminal runs should skip records whose `status` is
 `"running"` or `"crashed"`.
 
-**Crash reconciliation.** A gateway stop or restart does not wait for a run still executing: the process ends once everything is flushed, so the run is reconciled like any other crash. Every manifest records its **owner** — the pid plus the
-process start-time string of the process executing the run — and the sweep
+**Crash reconciliation.** A gateway stop or restart does not wait for a run still executing: the process ends once everything is flushed, so the run is reconciled like any other crash. Every manifest records its **owner** — the pid, the
+process start-time string, and a random boot id made once per start of the program,
+so an owner is one start of a process. A restart in place (`execv`) keeps the pid and
+start time but gets a new boot id, so the restarted process sees the runs its earlier
+start left behind as dead and the sweep finds them. The sweep
 (`reconcile_running`) rewrites any `running` record whose owner is no longer alive to
 `"crashed"` (preserving its partial trace). Ownership makes the sweep both immediate
 and safe in a multi-process workspace: a gateway that crashes and restarts within

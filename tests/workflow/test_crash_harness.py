@@ -35,3 +35,11 @@ def test_a_process_that_replaced_its_own_image_keeps_its_pid(tmp_path):
     dead = run_until_killed(tmp_path, CHAIN, stop_in="b", how="exec")
     assert dead.record["owner"]["pid"] > 0
     os.kill(dead.record["owner"]["pid"], 0)          # still a live process: no exception
+
+
+def test_a_run_left_by_a_restart_in_place_is_swept(tmp_path, monkeypatch):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b", how="exec")
+    owner = dead.record["owner"]
+    # The sweep runs in the process that now has that pid: the restarted one.
+    monkeypatch.setattr("durin.utils.process_tree._own_pid", lambda: owner["pid"])
+    assert run_log.reconcile_one(dead.workspace, "w", "r1") is True

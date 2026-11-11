@@ -467,6 +467,7 @@ it), so a full-file atomic rewrite is enough — the same reasoning as
 workflow run logs. That single-writer assumption breaks across a gateway
 restart mid-run: `find_orphans` (`durin/automations/run_log.py`) reports a
 `running` manifest as orphaned once its owner process is confirmed dead
+(an owner is a process and one start of it, so a restart in place counts)
 (falling back to a `started_at` age cutoff — six hours by default — only for
 an ownerless legacy manifest), and the gateway's periodic
 `AutomationsRuntime.sweep_orphans()` task (started right after
