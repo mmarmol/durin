@@ -55,7 +55,7 @@ follows `next` or **routes** on a verdict.
 | `context` | `"own"` \| `"shared"` | `"own"` | `own` = sees only the upstream edge output. `shared` = also sees a running buffer of preceding `shared` nodes' turns. **A routing node may not be `shared`.** |
 | `session` | `"fresh"` \| `"persistent"` | `"fresh"` | `persistent` = when a loop returns to this node it **resumes its own conversation** (one session across passes; the revisit turn carries only what is new — loop feedback and the pass counter). Use it on looping producers that do incremental work. **Requires `context: "own"`; rejected on parallel branches/workers.** |
 | `skills` | array of strings | `[]` | Named skills injected into this node's prompt only. |
-| `mcps` | array of strings | `[]` | MCP servers (a subset of already-configured ones) whose tools this node may use. |
+| `mcps` | array of strings | `[]` | MCP servers (a subset of already-configured ones) whose tools this node may use. They exist only in a run the agent starts from a chat: a run started by an automation, the API or the dashboard runs the node without them. |
 | `next` | string \| null | none | Next node id; `null` ends the run. **Mutually exclusive with routing.** |
 | `on_pass` / `on_fail` | string \| null | none | **Binary routing.** Setting either makes the node emit a `PASS`/`FAIL` verdict; the engine follows the matching edge. A `null` target ends the run. |
 | `cases` | object | none | **Multi-way routing.** `{ "LABEL": "target-node-id-or-null", ... }`. The node ends with one label; the engine follows that edge. |

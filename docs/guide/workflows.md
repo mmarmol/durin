@@ -414,7 +414,10 @@ folder — even when it failed on its last allowed pass, because a step that
 stopped with an error used up no pass. When what failed was one branch of a parallel step that merges or
 picks between its branches' files, the whole parallel step re-runs. A resume that can't get going — a script the workflow names has gone
 missing, say — leaves the run paused as it was, so you can answer it again
-once that's fixed.
+once that's fixed. A sub-workflow step's own run is never resumed on its own,
+paused or failed: resume the run that called it, which runs the sub-workflow
+step again in its own folder. A resume of the sub-workflow's run is refused
+with the id of that caller.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
@@ -435,8 +438,9 @@ resumed, so the dashboard asks you to confirm before it goes through.
 A run that ended `aborted` because a step failed shows a **Retry the failed step**
 button in its detail, in the Runs pane and in the editor's test-run panel. It
 resumes the run with no new answer, which re-runs the failed step as described
-above. A run an [automation](automations.md) started has no such button: it is
-retried from the automation.
+above. A run an [automation](automations.md) started has no such button: the
+dashboard offers no retry for it, and running the automation again starts a new
+run. A sub-workflow step's own run has none either: retry the run that called it.
 
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
@@ -507,7 +511,8 @@ with their resume and Cancel controls, also show on the dashboard's
 
 Opening an `aborted` run in the Runs pane offers **Retry the failed step**,
 which re-runs the step that failed in the same run. A run an automation started
-is retried from that automation instead.
+has no retry: running the automation again starts a new run. A sub-workflow
+step's own run has no retry either; retry the run that called it.
 
 Each workflow also has a self-improvement mode (`"improvement_mode"`,
 `manual` by default, or `auto`): a

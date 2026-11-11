@@ -46,7 +46,8 @@ additionally declare **`artifacts`** — a list of `{path, description?}` naming
 to the run's working folder) the run promises to produce. Declared paths are validated at parse
 time (relative, no `..`, no duplicates), ride in every agent node's framing as the file contract, and
 after a completed run the engine reports the ones not produced (by any walk of the run, so a
-resumed run counts the files written before it stopped) as `missing_artifacts` on the
+resumed run counts the files written before it stopped that are still in its working
+folder) as `missing_artifacts` on the
 result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
 downstream stage learns immediately which promised file is absent instead of failing confusingly
 later. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
@@ -665,7 +666,14 @@ oldest first. `passes` — `{node_id: {reached, completed}}` for the earlier wal
 `completed` the number of distinct attempts with at least one row that did not fail. The counts are
 taken from the whole prior record, so they do not depend on `history` being
 complete. Both are carried forward on every rewrite; a record written before they
-existed simply lacks them.
+existed lacks them. Such a record that was never resumed is counted from its `runs`
+as above. One that had already been resumed (`resumed` set, no `passes` key) holds
+only its last walk in `runs`, while attempt numbers ran on over every walk, so the
+attempts below a step's rows ran in walks the record no longer holds: every attempt
+of a step from 1 to its `reached` counts as completed unless its rows show it failed
+(an attempt with no row is taken as completed). A step those walks ran but the last
+walk did not has no row and stays uncounted. The first resume after that writes
+`passes`, and every later one counts as above.
 `shared_session` — the session key of the last `context: "shared"` work step that
 finished `ok` on the main walk (a parallel branch or fan-out worker row never counts),
 or `null` when none has. The engine takes it from the walk's rows on every `update_run`
@@ -702,13 +710,18 @@ parses its stdin). The resumed walk is seeded from the whole record — the carr
 its `reached` and its bound reads its `completed`: the retry gets a conversation of its
 own (a persistent-session node, whose key carries no attempt number, continues its one
 conversation), and the failed attempt uses up no pass. A record written before `passes` existed
-is seeded from its `runs` alone. The failed node is always one the walk dispatches,
+is seeded from its `runs` alone, counted as described under `passes` above. The failed node is always one the walk dispatches,
 with a `node_failed` row for the attempt that failed: a sub-workflow node keeps the input its
 child received, and when a `choose`/`union` branch fails the failed node is the
 parallel node, not the branch (see failure isolation below). A record that names a
 unit of a parallel node as its failed node cannot be resumed — the run tool and the
 API refuse it (`resume_refusal`) before anything is rewritten, because re-entering at
-a branch would run that one unit as a step of the walk and report the run completed;
+a branch would run that one unit as a step of the walk and report the run completed.
+`resume_refusal` also refuses every resume of a sub-workflow step's own run (a record
+with a `parent_run_id`), paused or aborted, naming the caller's run id: resumed on its
+own it would run its step in its own folder instead of the caller's, end `completed`
+and leave the caller stopped. Resuming the caller re-runs the sub-workflow step in the
+caller's folder;
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `final_route_label` — the verdict that ended the run:
 a matched `cases` label, binary `"PASS"`/`"FAIL"`, or `null` for every other ending (§4d);
@@ -764,8 +777,11 @@ never writes the run's own manifest releases the claim (`release_resume_claim`):
 cancelled while it waits for a thread, or the engine returning or raising before its
 walk (a preflight rejection such as a missing script file, a busy `work_key`). The
 record comes back exactly as it was — paused or aborted, still resumable, and a
-paused one still cancellable. A failed release is logged and never replaces the
-run's own outcome.
+paused one still cancellable. The `run_workflow` tool's background launch also gives
+the record back when its task is cancelled before it runs a step. A claim is released
+at most once: a later claim of the same record by the same process writes exactly the
+record the first one wrote, so a second release could not tell the two apart. A
+failed release is logged and never replaces the run's own outcome.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the
@@ -1433,7 +1449,14 @@ live-ticking elapsed clock — gated on the run's own status, so a crashed run's
 last in-flight node is not rendered as one still going — and the run header
 sums actual elapsed time (completed nodes plus the active node's running
 delta) alongside the run's recorded `typical_total_s`, so the two read as a
-direct comparison of like quantities.
+direct comparison of like quantities. An `aborted` run that names a `failed_node`
+offers **Retry the failed step** in its status banner: it resumes the run with an
+empty answer through `POST /api/v1/workflows/{name}/run` (`resume_run_id`), which
+re-runs the failed step. The button is left out for a run an automation started
+(`root_session_key` `automation:<name>`) and for a sub-workflow step's own run (a
+`parent_run_id`), which is resumed through its caller. The editor's test-run panel
+shows the same detail, with the same retry, for a run made there: the run route's
+response carries `failed_node`.
 
 **The node detail panel.** A node's identity in that trace — and a node row in
 the chat's work strip — opens a drawer describing that one pass: its status,

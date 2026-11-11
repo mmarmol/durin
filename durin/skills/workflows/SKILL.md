@@ -112,7 +112,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   plus the vision/audio interpretation bridges when aux models are configured; interactive
   and orchestration tools — asking the user, messaging channels, spawning subagents,
   running workflows — are never in it); injected
-  `skills`; a scoped subset of configured `mcps`; and a `session` policy — `"persistent"`
+  `skills`; a scoped subset of configured `mcps` (those tools exist only in a run the agent
+  starts from a chat: a run started by an automation, the API or the dashboard runs the
+  step without them); and a `session` policy — `"persistent"`
   makes a *looping* node resume its own conversation when the flow returns to it (it keeps
   its prior reasoning and only receives what is new), instead of restarting cold each pass.
   Each defaults to the minimum, so a node sees only what its job needs.
