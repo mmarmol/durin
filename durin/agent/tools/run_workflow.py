@@ -573,6 +573,9 @@ class RunWorkflowTool(Tool, ContextAware):
             )
 
         resume = None
+        # The record this call accepted for its resume: the claim below
+        # re-checks the run against it.
+        accepted_record: dict | None = None
         if resume_run_id:
             from durin.workflow import run_log
             from durin.workflow.engine import build_resume_state, resume_refusal
@@ -597,6 +600,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 return _approval_refusal(name, resume_run_id, manifest.get("needs_input_node"))
             resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
+            accepted_record = manifest
 
         # Snapshot the current definitions into the workflow version history (captures
         # any edit since the last run). Best-effort: never blocks the run.
@@ -708,17 +712,45 @@ class RunWorkflowTool(Tool, ContextAware):
             "session_key": root_session_key,
         }
 
+        # Claim a resumed run once nothing is left to build: move it to running
+        # under the per-run lock, so a second resume (from here or from the
+        # workflows service) or a cancel racing in behind this sees it lost and
+        # refuses. When the engine never writes the run's own record — dropped
+        # while waiting for a thread, or rejected before its walk — the claim is
+        # released and the record put back as it was.
+        claim = None
+        walk = engine.run
+        if accepted_record is not None:
+            from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
+            try:
+                claim = ResumeClaim.take(
+                    self._workspace, name, resume_run_id, expected=accepted_record)
+            except ResumeLostError as exc:
+                return f"Error: {exc}"
+            walk = claim.guard(engine.run)
+
+        async def _walk_on_a_thread(paced: bool) -> Any:
+            try:
+                return await run_on_workflow_thread(
+                    run_id, walk, workflow, task,
+                    paced=paced,
+                    root_session_key=root_session_key,
+                    input_files=input_files or None,
+                    output_format=output_format or None,
+                    resume=resume,
+                    work_key=work_key or None,
+                )
+            except BaseException:
+                # Given up on before the walk started (cancelled while it
+                # waited for a thread): give the claimed record back.
+                if claim is not None:
+                    claim.drop()
+                raise
+
         if background:
             async def _run_and_inject() -> None:
                 try:
-                    result = await run_on_workflow_thread(
-                        run_id, engine.run, workflow, task,
-                        root_session_key=root_session_key,
-                        input_files=input_files or None,
-                        output_format=output_format or None,
-                        resume=resume,
-                        work_key=work_key or None,
-                    )
+                    result = await _walk_on_a_thread(paced=False)
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result))
                     summary = _format_result(
@@ -748,15 +780,7 @@ class RunWorkflowTool(Tool, ContextAware):
         # Paced: the calling turn waits on this run, and a chat turn keeps its
         # lane slot (a scheduled turn, its cron job) until the run ends, so the
         # run must not queue behind background runs.
-        engine_future = asyncio.ensure_future(run_on_workflow_thread(
-            run_id, engine.run, workflow, task,
-            paced=True,
-            root_session_key=root_session_key,
-            input_files=input_files or None,
-            output_format=output_format or None,
-            resume=resume,
-            work_key=work_key or None,
-        ))
+        engine_future = asyncio.ensure_future(_walk_on_a_thread(paced=True))
         # Strong reference: if /stop cancels the awaiting turn, the detached
         # engine task must not be garbage-collected while its thread runs out.
         self._bg_tasks.add(engine_future)

@@ -741,18 +741,31 @@ minutes clears its ghosts at the next boot, while a run owned by another live pr
 AND periodically (a background thread wired in the service registry), so an orphan left
 by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
 additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
-A paused run is usually answered after a restart, so its manifest names a process that
-is gone; the workflows service's resume claim (`claim_for_resume`, which moves the
-manifest off `needs_input` under the per-run lock once the resume's engine is built,
-after re-checking that nothing touched the run since the resume first read it)
-therefore re-stamps the owner to the resuming process, so a resume waiting for a free
-workflow-run thread is not swept as crashed. A claimed manifest owned by the live
-gateway is one no sweep or self-heal ever ends, so a resume whose engine never writes
-the run's own manifest releases the claim (`release_resume_claim`): cancelled while it
-waits for a thread, or the engine returning or raising before its walk (a preflight
-rejection such as a missing script file, a busy `work_key`). The paused record comes
-back exactly as it was, still answerable and cancellable. Manifests written before the
-owner field existed fall back to a generous `started_at` age threshold.
+Manifests written before the owner field existed fall back to a generous `started_at`
+age threshold.
+
+**Resume claim.** Every resume claims its run first, on every surface — the
+workflows service (webui, API, automations) and the agent's `run_workflow` tool —
+and for a paused (`needs_input`) run as for an aborted one retried at its
+`failed_node`. The claim (`ResumeClaim` in `workflow/resume_claim.py`, over
+`run_log.claim_for_resume`) is taken once everything the resume needs is built,
+right before the walk is handed to a workflow-run thread: under the per-run lock
+(`run_lock_target`, shared with `cancel_run`) it re-reads the record, refuses unless
+it is still exactly the one the resume accepted, and moves it to `running` owned by
+the resuming process. A second resume or a cancel racing in behind it reads
+`running` under the same lock and refuses, so two resumes of one run can never both
+start; the loser is told the run `cannot be resumed — it was cancelled, or already
+resumed, before this reached it.` (a validation error from the service, an `Error:`
+reply from the tool). A stopped run is usually resumed after a restart, so its
+manifest names a process that is gone; re-stamping the owner keeps a resume waiting
+for a free workflow-run thread from being swept as crashed. A claimed manifest owned
+by the live gateway is one no sweep or self-heal ever ends, so a resume whose engine
+never writes the run's own manifest releases the claim (`release_resume_claim`):
+cancelled while it waits for a thread, or the engine returning or raising before its
+walk (a preflight rejection such as a missing script file, a busy `work_key`). The
+record comes back exactly as it was — paused or aborted, still resumable, and a
+paused one still cancellable. A failed release is logged and never replaces the
+run's own outcome.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the
@@ -1508,6 +1521,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |

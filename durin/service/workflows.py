@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +35,7 @@ from durin.workflow import run_log
 from durin.workflow.artifacts import safe_key
 from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
 from durin.workflow.result import WorkflowResult
+from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
 from durin.workflow.run_threads import run_on_workflow_thread
 from durin.workflow.spec import WorkflowError, parse_workflow
 from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
@@ -792,9 +792,10 @@ class WorkflowsService:
         from durin.workflow.subworkflow import SubworkflowRunner
 
         resume = None
-        # The needs_input record this call resumes, as read under the per-run
-        # lock: the claim below re-checks the run against it.
-        paused_record: dict | None = None
+        # The record this call accepted for its resume (a paused run's as
+        # re-read under the per-run lock, an aborted run's as first read): the
+        # claim below re-checks the run against it.
+        accepted_record: dict | None = None
         if resume_run_id:
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             # A resume that names no root_session_key of its own (the common case
@@ -885,10 +886,11 @@ class WorkflowsService:
                     else:
                         resume = build_resume_state(manifest, task)
                     task = manifest.get("task") or task
-                    paused_record = manifest
+                    accepted_record = manifest
             else:
                 resume = build_resume_state(manifest, task)
                 task = manifest.get("task") or task
+                accepted_record = manifest
 
         app_config = self._live_config()
         preset = app_config.resolve_default_preset()
@@ -978,54 +980,30 @@ class WorkflowsService:
             # runner saved for the last shared step (same session manager).
             shared_context_loader=lambda key: shared_context_from_session(self._sessions, key))
 
-        # Claim a paused run once nothing is left to build: move it off
-        # needs_input under the per-run lock, so a cancel_run, reject or second
+        # Claim a resumed run once nothing is left to build: move it to
+        # running under the per-run lock, so a cancel_run, reject or second
         # resume racing in behind this sees it lost and refuses. The claim
         # stands until the engine writes the run's own manifest. When that never
         # happens — the resume is cancelled while it waits for a workflow-run
         # thread, or the engine returns or raises before its walk (a rejected
         # input or script, a busy work_key) — the claim is released and the
-        # pause put back as it was: nothing else would ever end a running
-        # manifest owned by this live process. Whichever of the run's thread and
-        # a cancelled caller takes `handoff` first decides which one releases.
-        claimed: dict | None = None
-        if paused_record is not None:
-            with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
-                if run_log.read_manifest(self._workspace, name, resume_run_id) != paused_record:
-                    raise ValidationFailedError(
-                        f"run {resume_run_id!r} of workflow {name!r} cannot be "
-                        "resumed — it was cancelled, or already resumed, before "
-                        "this reached it."
-                    )
-                claimed = run_log.claim_for_resume(self._workspace, name, resume_run_id)
-        handoff = threading.Lock()
-        walk_state = {"started": False, "dropped": False}
-
-        def _release_claim() -> None:
+        # record put back as it was: nothing else would ever end a running
+        # manifest owned by this live process.
+        claim: ResumeClaim | None = None
+        walk: Callable[..., WorkflowResult | None] = engine.run
+        if accepted_record is not None:
             try:
-                with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
-                    run_log.release_resume_claim(
-                        self._workspace, name, resume_run_id, prior=paused_record, claimed=claimed)
-            except Exception:  # noqa: BLE001 - never masks the run's own outcome
-                logger.exception("releasing the resume claim on run {} of workflow {!r} failed",
-                                 resume_run_id, name)
-
-        def _walk(*args: Any, **kwargs: Any) -> WorkflowResult | None:
-            with handoff:
-                if walk_state["dropped"]:
-                    return None   # the caller is gone and released the claim
-                walk_state["started"] = True
-            try:
-                return engine.run(*args, **kwargs)
-            finally:
-                if claimed is not None:
-                    _release_claim()
+                claim = ResumeClaim.take(
+                    self._workspace, name, resume_run_id, expected=accepted_record)
+            except ResumeLostError as exc:
+                raise ValidationFailedError(str(exc)) from exc
+            walk = claim.guard(engine.run)
 
         try:
             # A run can last an hour: a workflow-run thread, not one of the
             # event loop's few shared default-executor threads.
             result = await run_on_workflow_thread(
-                rid, _walk, workflow, task,
+                rid, walk, workflow, task,
                 paced=paced,
                 root_session_key=root_session_key,
                 input_files=input_files,
@@ -1034,11 +1012,8 @@ class WorkflowsService:
                 work_key=work_key,
             )
         except BaseException:
-            if claimed is not None:
-                with handoff:
-                    walk_state["dropped"] = not walk_state["started"]
-                if walk_state["dropped"]:
-                    _release_claim()
+            if claim is not None:
+                claim.drop()
             raise
         finally:
             # Idempotent backstop (clear() is a no-op if already absent): covers

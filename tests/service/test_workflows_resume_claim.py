@@ -26,6 +26,7 @@ from durin.service.workflows import WorkflowsService
 from durin.session.manager import SessionManager
 from durin.workflow import run_log
 from durin.workflow.loader import workflows_dir
+from durin.workflow.resume_claim import ResumeClaim
 from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
 
 # A pid far above any real pid_max, so the owner reads as long gone: a pause
@@ -263,3 +264,58 @@ async def test_a_released_pause_can_still_be_cancelled(tmp_path):
     manifest = await svc.cancel_run("wf", "paused1", Principal.local())
 
     assert manifest["status"] == "cancelled"
+
+
+def _aborted_run(tmp_path, node: dict) -> dict:
+    """Run ``failed1`` of workflow ``wf``, aborted at its only node and owned by
+    a dead process; returns the record as it stands."""
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wf.json").write_text(json.dumps(
+        {"name": "wf", "start": "only", "nodes": [{"id": "only", **node, "next": None}]}),
+        encoding="utf-8")
+    run_log.start_run(tmp_path, "wf", "failed1", root_session_key="s", started_at=1.0)
+    f = tmp_path / "workflows-runs" / "wf" / "failed1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(status="aborted", failed_node="only", resume_upstream="", final_output="boom",
+               owner=_DEAD_OWNER,
+               runs=[{"node_id": "only", "iteration": 1, "status": "node_failed"}])
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    return run_log.read_manifest(tmp_path, "wf", "failed1")
+
+
+@pytest.mark.asyncio
+async def test_a_second_resume_landing_while_the_first_builds_its_engine_loses(tmp_path):
+    """Same window the cancel test above covers, for an aborted run: another
+    resume claims the record between this one's first read and its own claim."""
+    before = _aborted_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    svc = _svc(tmp_path)
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        ResumeClaim.take(tmp_path, "wf", "failed1", expected=before)
+        return SimpleNamespace(get_default_model=lambda: "m")
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims):
+        with pytest.raises(ValidationFailedError, match="cancelled, or already resumed"):
+            await svc.execute("wf", "", resume_run_id="failed1")
+    assert run_log.read_manifest(tmp_path, "wf", "failed1")["status"] == "running"  # the other's claim
+
+
+@pytest.mark.asyncio
+async def test_an_aborted_resume_rejected_before_its_walk_leaves_the_run_aborted(tmp_path):
+    before = _aborted_run(tmp_path, {"kind": "script", "script": "gone.sh"})
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="failed1")
+    assert result.status == "aborted" and "script file not found" in (result.final_output or "")
+    assert run_log.read_manifest(tmp_path, "wf", "failed1") == before
+
+
+@pytest.mark.asyncio
+async def test_an_aborted_run_resumed_through_the_service_runs_once(tmp_path):
+    _aborted_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="failed1")
+    assert result.status == "completed"
+    rec = run_log.read_manifest(tmp_path, "wf", "failed1")
+    assert [(r["node_id"], r["iteration"]) for r in rec["runs"]] == [("only", 2)]

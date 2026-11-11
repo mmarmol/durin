@@ -483,38 +483,42 @@ _RUN_CLAIM_LOCK_SUFFIX = ".claim"
 
 def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
     """The cross-process lock target serializing every caller that checks a
-    ``needs_input`` run's status and then acts on it: ``WorkflowsService.cancel_run``
-    finalizing it, ``WorkflowsService.execute``'s resume path claiming it (moving it
-    off ``needs_input`` before actually resuming), and the approval-reject
-    short-circuit inside that same resume path. Each of those is a read-then-write
-    on the SAME manifest; without a lock, two racing callers can both read
-    ``needs_input`` before either writes, so — for example — a resume goes on to run
-    real nodes on a run ``cancel_run`` just finalized. Whichever caller acquires the
-    lock first wins outright: the loser's own re-read, taken only once it acquires
-    the lock in turn, sees the winner's already-written status and refuses instead
-    of acting a second time. Every OTHER manifest write (a running walk's own
-    per-node updates, a terminal ``finalize_run``) stays single-writer with no lock,
-    same as this module's own docstring says — this guards only the ``needs_input``
-    check-then-act window, where an outside caller (not the walk itself) can act on
-    the manifest."""
+    resumable run's status and then acts on it — a ``needs_input`` run, or an
+    ``aborted`` one with a ``failed_node``: ``WorkflowsService.cancel_run``
+    finalizing a paused run, every resume claiming the run (moving it to
+    ``running`` before actually resuming it — ``ResumeClaim``, used by the
+    workflows service and the ``run_workflow`` tool alike), and the
+    approval-reject short-circuit inside the service's resume path. Each of those
+    is a read-then-write on the SAME manifest; without a lock, two racing callers
+    can both read the resumable status before either writes, so — for example —
+    two resumes both run real nodes, or a resume runs them on a run
+    ``cancel_run`` just finalized. Whichever caller acquires the lock first wins
+    outright: the loser's own re-read, taken only once it acquires the lock in
+    turn, sees the winner's already-written status and refuses instead of acting
+    a second time. Every OTHER manifest write (a running walk's own per-node
+    updates, a terminal ``finalize_run``) stays single-writer with no lock, same
+    as this module's own docstring says — this guards only the check-then-act
+    window on a stopped run, where an outside caller (not the walk itself) can
+    act on the manifest."""
     return _wf_dir(workspace, name) / f"{run_id}{_RUN_CLAIM_LOCK_SUFFIX}"
 
 
 def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
-    """Move a ``needs_input`` manifest to ``running`` IN PLACE, owned by this
-    process, preserving every other field — called under ``run_lock_target``'s
-    lock, right before the caller releases it and actually resumes the run, so a
-    ``cancel_run`` (or an approval reject) racing in right behind sees this run is
-    no longer ``needs_input`` and refuses instead of finalizing a run that is, by
+    """Move a resumable manifest (``needs_input``, or ``aborted`` with a
+    ``failed_node``) to ``running`` IN PLACE, owned by this process, preserving
+    every other field — called under ``run_lock_target``'s lock, right before the
+    caller releases it and actually resumes the run, so a second resume or a
+    ``cancel_run`` (or an approval reject) racing in right behind sees this run
+    is no longer resumable and refuses instead of acting on a run that is, by
     then, genuinely resuming. ``WorkflowEngine.run``'s own ``_start_manifest``
-    fully rewrites the manifest once the resume gets a workflow-run thread (a fresh
-    ``started_at``, the resumed walk's own ``runs``) — this claim only needs to
-    survive until that first real write, not to be a lasting record itself. That
-    can take a while when every run thread is busy, and a paused run is usually
-    answered after a restart, so its recorded owner is often a dead process: the
-    claim re-stamps the owner, or the crash sweep would flip the waiting resume to
-    ``crashed``. A resume whose engine never makes that write undoes the claim
-    with ``release_resume_claim``. Returns the claimed record."""
+    fully rewrites the manifest once the resume gets a workflow-run thread (a
+    fresh ``started_at``, the resumed walk's own ``runs``) — this claim only
+    needs to survive until that first real write, not to be a lasting record
+    itself. That can take a while when every run thread is busy, and a stopped
+    run is usually resumed after a restart, so its recorded owner is often a dead
+    process: the claim re-stamps the owner, or the crash sweep would flip the
+    waiting resume to ``crashed``. A resume whose engine never makes that write
+    undoes the claim with ``release_resume_claim``. Returns the claimed record."""
     from durin.utils.process_tree import process_identity
 
     prior = read_manifest(workspace, name, run_id) or {}
@@ -530,13 +534,14 @@ def release_resume_claim(
     workspace: str | Path, name: str, run_id: str, *, prior: dict, claimed: dict,
 ) -> bool:
     """Undo ``claim_for_resume`` for a resume whose engine never wrote the run's
-    own manifest: put back ``prior``, the paused record exactly as it was before
-    the claim (``needs_input``, its original owner), so the run can be answered
-    or cancelled again. A claimed manifest owned by this live process is one
-    that neither the crash sweep nor the ``tasks`` self-heal ever ends, and one
-    ``cancel_run`` and a new resume both refuse. Does nothing — returns False —
-    once the manifest differs from ``claimed``: the engine took the run over.
-    Called under ``run_lock_target``'s lock, like the claim."""
+    own manifest: put back ``prior``, the record exactly as it was before the
+    claim (``needs_input`` or ``aborted``, its original owner), so the run can be
+    resumed — or, when paused, cancelled — again. A claimed manifest owned by
+    this live process is one that neither the crash sweep nor the ``tasks``
+    self-heal ever ends, and one ``cancel_run`` and a new resume both refuse.
+    Does nothing — returns False — once the manifest differs from ``claimed``:
+    the engine took the run over. Called under ``run_lock_target``'s lock, like
+    the claim."""
     if read_manifest(workspace, name, run_id) != claimed:
         return False
     _write_json(_record_path(workspace, name, run_id), prior)
