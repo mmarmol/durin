@@ -282,6 +282,13 @@ A node may declare **named inputs** (`inputs_from`): its input becomes one label
 a resumed run to the manifest's `resume_inputs` seeds — always followed by an `[upstream]`
 block carrying the walk's current edge text, so loop-back feedback and route context are
 never lost and a script chain between producer and consumer needs no courier files.
+`resume_inputs` keeps the last output of every node another node names as a source —
+`inputs_from`, and a parallel node's `list_from` / `branches_from` — because a resumed
+walk starts with an empty trace: a parallel node past the resume point reads its list
+or its branch ids from there when the source ran before it. The stored outputs are
+carried forward from one resume to the next, so a run that stops again after a resume
+still holds the sources of its first attempt. The stored copies are capped. A composed input shows a capped copy as it is; a parallel node whose source
+copy reached the cap aborts instead of parsing a list from a fragment.
 A work node may declare a **structured output** (`output_schema`): the node runner forces a
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
@@ -657,7 +664,13 @@ resumed);
 and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
 `resume_run_id` on such a run retries the failed node with the same input — completed
 nodes never re-run, and no retry framing pollutes the replayed text (a retried script
-parses its stdin);
+parses its stdin). The failed node is always one the walk dispatches, with a
+`node_failed` row for the visit it consumed: a sub-workflow node keeps the input its
+child received, and when a `choose`/`union` branch fails the failed node is the
+parallel node, not the branch (see failure isolation below). A record that names a
+unit of a parallel node as its failed node cannot be resumed — the run tool and the
+API refuse it (`resume_refusal`) before anything is rewritten, because re-entering at
+a branch would run that one unit as a step of the walk and report the run completed;
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `final_route_label` — the verdict that ended the run:
 a matched `cases` label, binary `"PASS"`/`"FAIL"`, or `null` for every other ending (§4d);
@@ -782,7 +795,11 @@ the merged output). The run is only aborted when every unit failed. **`choose` a
 `union` reconcile are deliberately not isolated**: these branches write to private
 workspace forks and a half-failed fork has no coherent state to merge, so a branch
 failure in those modes propagates and aborts the run — after every branch that ran
-has recorded its row, the failed one as `node_failed`.
+has recorded its row, the failed one as `node_failed`. The abort is the parallel
+node's: it gets its own `node_failed` row naming the branch, and the run records the
+parallel node as `failed_node` with the input it received, so a resume re-runs the
+whole node (every branch, on its next visit) and then continues the walk. A branch
+aborted by a cancel still ends the run `cancelled`.
 
 A branch, worker or detached row is built from the same runner response (or
 failure) as a linear row, so it records the same evidence: a script's `exit_code`,

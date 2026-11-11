@@ -136,7 +136,7 @@ def test_union_branch_that_fails_leaves_a_row_for_every_branch(tmp_path):
         {"id": "b", "kind": "script", "command": "echo half; echo broke >&2; exit 4"},
     ]})
     res = _engine(tmp_path).run(wf, "t")
-    assert res.status == "aborted" and res.failed_node == "b"
+    assert res.status == "aborted" and res.failed_node == "fan"   # the node to retry is the parallel node
     b = _row(res, "b")
     assert b.status == "node_failed" and b.exit_code == 4 and b.branch_id == "b"
     assert "exit 4" in b.command and "broke" in b.stderr

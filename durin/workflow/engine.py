@@ -206,6 +206,26 @@ def manifest_visit_counts(manifest: dict) -> dict[str, int]:
     return visits
 
 
+def resume_refusal(manifest: dict) -> str | None:
+    """Why an aborted run that names a failed node still cannot be resumed, or None.
+
+    A resume re-enters the walk at the failed node, so that node must be one the
+    walk itself dispatched: it has a failed row that belongs to no parallel node.
+    A record that names a branch or a fan-out worker has no such row, and kept no
+    input for it. Re-entering there would run that one unit as if it were a step
+    of the walk — without its input, without reconciling its siblings, without
+    anything that follows the parallel node — and report the run completed."""
+    failed = manifest.get("failed_node")
+    if manifest.get("status") != "aborted" or not failed:
+        return None
+    for r in manifest.get("runs") or []:
+        if (r.get("node_id") == failed and r.get("status") == "node_failed"
+                and r.get("branch_id") is None and r.get("worker_index") is None):
+            return None
+    return (f"its failed node {failed!r} ran inside a parallel node, and a unit of a "
+            "parallel node cannot be retried on its own. Start a new run instead.")
+
+
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     """The ResumeState for re-entering a paused or failed run, built from its manifest.
     The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
@@ -1378,6 +1398,9 @@ class WorkflowEngine:
                         status="aborted", final_output=msg, runs=runs, run_id=run_id,
                         failed_node=node.id, failed_iteration=iteration,
                         final_output_node=node.id,
+                        # The input the child received, so a resume retries it with
+                        # the same one instead of falling back to the run's task.
+                        resume_upstream=upstream_output,
                     )
                 upstream_output = output
                 final_output = output
@@ -1397,25 +1420,47 @@ class WorkflowEngine:
                     )
 
             elif isinstance(node, ParallelNode):
-                if node.worker is not None:
-                    merged, abort = self._run_dynamic_parallel(
-                        workflow, node, task, run_id, iteration, root_session_key,
-                        upstream_output, runs, work_dir=work_dir)
-                elif node.branches_from is not None:
-                    resolved, abort = self._resolve_runtime_branches(
-                        workflow, node, runs, upstream_output)
-                    # An empty resolved list is a legitimate "nothing applies" pass:
-                    # record the node with empty output and continue to `next`.
-                    merged = ""
-                    if abort is None and resolved:
-                        merged, abort = self._run_parallel(
+                try:
+                    if node.worker is not None:
+                        merged, abort = self._run_dynamic_parallel(
                             workflow, node, task, run_id, iteration, root_session_key,
                             upstream_output, runs, work_dir=work_dir,
-                            branch_ids=resolved, raw_task=raw_task)
-                else:
-                    merged, abort = self._run_parallel(
-                        workflow, node, task, run_id, iteration, root_session_key,
-                        upstream_output, runs, work_dir=work_dir, raw_task=raw_task)
+                            resume_outputs=resume_outputs)
+                    elif node.branches_from is not None:
+                        resolved, abort = self._resolve_runtime_branches(
+                            workflow, node, runs, upstream_output, resume_outputs)
+                        # An empty resolved list is a legitimate "nothing applies" pass:
+                        # record the node with empty output and continue to `next`.
+                        merged = ""
+                        if abort is None and resolved:
+                            merged, abort = self._run_parallel(
+                                workflow, node, task, run_id, iteration, root_session_key,
+                                upstream_output, runs, work_dir=work_dir,
+                                branch_ids=resolved, raw_task=raw_task)
+                    else:
+                        merged, abort = self._run_parallel(
+                            workflow, node, task, run_id, iteration, root_session_key,
+                            upstream_output, runs, work_dir=work_dir, raw_task=raw_task)
+                except NodeExecutionError as exc:
+                    # A unit's failure that escapes the node (a choose/union branch:
+                    # their private copies are discarded, so there is nothing to merge)
+                    # is THIS node's failure. A unit exists only inside its parallel
+                    # node, so the node to retry is the parallel node, whole: record
+                    # its failed visit and the input it received, and abort under its
+                    # id. A cancel keeps its cause, which is how the run is told apart
+                    # from a failure; otherwise the text names the unit that failed.
+                    detail = f"branch {exc.node_id!r} failed: {exc.cause}"
+                    runs.append(NodeRun(node_id=node.id, iteration=iteration, output="",
+                                        status="node_failed", error=detail))
+                    runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                    _preserve_evidence()
+                    if update_manifest is not None:
+                        update_manifest()
+                    failure = NodeExecutionError(
+                        node.id, iteration, None,
+                        exc.cause if self._is_cancel(exc) else RuntimeError(detail))
+                    failure.resume_upstream = upstream_output
+                    raise failure from exc
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 # Branches/workers run concurrently in their own (possibly forked,
                 # possibly shared) folders, so a per-branch diff here would be racy or
@@ -1598,6 +1643,32 @@ class WorkflowEngine:
         blocks.append(f"[upstream]\n{upstream or ''}")
         return "\n\n".join(blocks)
 
+    @staticmethod
+    def _source_output(runs, source, resume_outputs):
+        """The last output node ``source`` recorded, for a parallel node that reads
+        its list or its branch ids from it: ``(text, cut, stored)``.
+
+        The walk's own trace comes first. A resumed walk starts with an empty trace,
+        so a source that ran before the resume point is read from the outputs the
+        record kept (``stored`` is True). Those copies are capped: one that reaches
+        the cap may be a fragment and is reported as ``cut`` — a list must never be
+        parsed from a fragment. ``text`` is None when the source left no output in
+        either place."""
+        for recorded in reversed(runs):
+            if recorded.node_id == source:
+                return recorded.output, recorded.output_truncated, False
+        stored = (resume_outputs or {}).get(source)
+        if stored is None:
+            return None, False, False
+        return stored, len(stored) >= run_log.RESUME_INPUT_MAX_CHARS, True
+
+    @staticmethod
+    def _stored_source_cut(node, source: str, what: str) -> str:
+        return (f"parallel node {node.id!r}: this run was resumed, and the output of "
+                f"{source!r}, where the node reads its {what}, was too long to be kept "
+                f"whole in the run's record (over {run_log.RESUME_INPUT_MAX_CHARS} "
+                "characters), so nothing was started on a partial copy. Start a new run instead.")
+
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
                          root_key, work_dir, raw_task=None):
         """Submit a detached node to the run's tracker. The callable mirrors branch
@@ -1748,7 +1819,7 @@ class WorkflowEngine:
             )
         return [str(x) for x in parsed][:50], None
 
-    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None):
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, resume_outputs=None):
         """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
 
         Returns ``(merged_output, abort_message)``.  Each worker run is appended to
@@ -1757,13 +1828,9 @@ class WorkflowEngine:
         # Resolve the list source: prefer the most recent recorded output of the
         # list_from node (it may not be the immediate predecessor); fall back to
         # upstream_output for the common case where it is.
-        list_text: str | None = None
-        list_truncated = False
-        for recorded in reversed(runs):
-            if recorded.node_id == node.list_from:
-                list_text = recorded.output
-                list_truncated = recorded.output_truncated
-                break
+        list_text, list_truncated, stored = self._source_output(runs, node.list_from, resume_outputs)
+        if stored and list_truncated:
+            return "", self._stored_source_cut(node, node.list_from, "list")
         if list_text is None:
             list_text = upstream or ""
 
@@ -1870,7 +1937,7 @@ class WorkflowEngine:
         last_line = candidate.splitlines()[-1]
         return [tok.strip().strip("'\"") for tok in last_line.split(",") if tok.strip()][:50]
 
-    def _resolve_runtime_branches(self, workflow, node, runs, upstream):
+    def _resolve_runtime_branches(self, workflow, node, runs, upstream, resume_outputs=None):
         """Resolve a ``branches_from`` parallel node's branch ids for this pass.
 
         Reads the most recent recorded output of the source node (falling back to the
@@ -1880,11 +1947,9 @@ class WorkflowEngine:
         in the emitting node — abort naming it rather than guessing.
         Returns ``(ids, abort_message)``.
         """
-        source_text: str | None = None
-        for recorded in reversed(runs):
-            if recorded.node_id == node.branches_from:
-                source_text = recorded.output
-                break
+        source_text, cut, stored = self._source_output(runs, node.branches_from, resume_outputs)
+        if stored and cut:
+            return [], self._stored_source_cut(node, node.branches_from, "branch ids")
         if source_text is None:
             source_text = upstream or ""
 

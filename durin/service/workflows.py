@@ -785,7 +785,7 @@ class WorkflowsService:
 
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
-        from durin.workflow.engine import WorkflowEngine, build_resume_state
+        from durin.workflow.engine import WorkflowEngine, build_resume_state, resume_refusal
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.node_runner import AgentNodeRunner
         from durin.workflow.subworkflow import SubworkflowRunner
@@ -818,6 +818,10 @@ class WorkflowsService:
                     "only a needs_input run (with the answers as task) or an aborted "
                     "run (retried at its failed node) can."
                 )
+            refusal = resume_refusal(manifest)
+            if refusal:
+                raise ValidationFailedError(
+                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {refusal}")
             if paused:
                 # A needs_input run can also be cancelled (WorkflowsService.cancel_run)
                 # racing this same call, or — for an approval pause — rejected right

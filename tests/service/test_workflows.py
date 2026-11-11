@@ -443,6 +443,29 @@ async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_t
     fake_run.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_run_resume_of_a_record_whose_failed_node_is_a_branch_is_rejected(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    old = WorkflowResult(status="aborted", run_id="r1", final_output="boom", failed_node="b",
+                         runs=[NodeRun(node_id="b", iteration=1, output="", branch_id="b",
+                                       status="node_failed", error="boom")])
+    run_log.finalize_run(
+        tmp_path, "wf", old,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="original task",
+    )
+    record = tmp_path / "workflows-runs" / "wf" / "r1.json"
+    before = record.read_bytes()
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError, match="new run"):
+            await svc.run(WorkflowRunCommand(name="wf", task="", resume_run_id="r1"), p)
+    fake_run.assert_not_called()
+    assert record.read_bytes() == before
+
+
 # --- cancel_run: finalize a needs_input run in place, no engine call --------
 
 

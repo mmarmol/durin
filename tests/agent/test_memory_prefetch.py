@@ -4,6 +4,7 @@ message as the query, fenced into the API copy of the user message."""
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,17 +74,19 @@ class _ThreadEmittingSearch:
     """Mirrors the real `memory_search` tool's shape: its pipeline runs off
     the event loop via `asyncio.to_thread` (`run_search_pipeline` in
     `durin/agent/tools/memory_search.py`), and the `memory.recall*`
-    sub-events are emitted from inside that thread. ``delay`` lets a test
+    sub-events are emitted from inside that thread. ``gate`` lets a test
     hold the thread past the prefetch's `timeout_s`, so `_memory_prefetch`
     abandons it while it is still running — the row it eventually emits
-    must still land tagged as the prefetch's.
+    must still land tagged as the prefetch's. The thread waits for the test
+    to open the gate rather than sleeping a fixed time: how long the rest of
+    the turn takes is not the test's to assume.
     """
 
     name = "memory_search"
 
-    def __init__(self, delay: float = 0.0) -> None:
+    def __init__(self, gate: threading.Event | None = None) -> None:
         self.calls: list[dict] = []
-        self.delay = delay
+        self.gate = gate
 
     async def execute(self, **kwargs):
         self.calls.append(dict(kwargs))
@@ -91,8 +94,8 @@ class _ThreadEmittingSearch:
         return {"total": 1, "strategy": "hybrid", "ranking": "rrf", "sectioned_rendered": _RENDERED}
 
     def _emit(self) -> None:
-        if self.delay:
-            time.sleep(self.delay)
+        if self.gate is not None:
+            self.gate.wait(10.0)   # bounded: a failing test must not leave the thread parked
         from durin.agent.tools._telemetry import emit_tool_event
         emit_tool_event("memory.recall.rrf", {
             "vector_count": 1, "lexical_count": 0, "grep_count": 0,
@@ -407,19 +410,19 @@ async def test_prefetch_flag_survives_an_abandoned_timeout_thread(tmp_path: Path
     rows after the turn has already moved on. Those rows must still carry
     `prefetch: true` — the thread's context copy was made, with the flag
     already set, before `_memory_prefetch`'s `finally` resets it."""
-    slow = _ThreadEmittingSearch(delay=0.5)
+    gate = threading.Event()
+    slow = _ThreadEmittingSearch(gate=gate)
     loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
     loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05)))
 
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
     assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "timeout"
-    # The abandoned thread is still sleeping — its row has not landed yet.
+    # The abandoned thread is still held at the gate — its row has not landed.
     assert [t for t, _d in rec.events if t == "memory.recall.rrf"] == []
 
-    # Wait for the row, not a fixed duration: the abandoned thread's own
-    # time.sleep(delay) plus the emit is not bounded tightly enough for a
-    # fixed sleep to be safe on a machine already busy running the suite.
-    # Bounded so a real regression (the row never landing) still fails.
+    # The turn is over: let the thread go and wait for its row. Bounded so a
+    # real regression (the row never landing) still fails.
+    gate.set()
     deadline = time.monotonic() + 5.0
     while not any(t == "memory.recall.rrf" for t, _d in rec.events) and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
