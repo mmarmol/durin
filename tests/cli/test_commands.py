@@ -2453,9 +2453,13 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
     from durin.command.builtin import cmd_restart
     from durin.command.router import CommandContext
     from durin.utils import restart as restart_mod
+    from durin.workflow import cancellation
 
     monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
     calls: list[str] = []
+    # Whether the process had begun shutting down when intake stopped: every
+    # turn the shutdown cancels after that point is cancelled by a shutdown.
+    shutting_down_at_intake: list[bool] = []
 
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -2505,6 +2509,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
 
         def stop_intake(self) -> None:
             calls.append("agent.stop_intake")
+            shutting_down_at_intake.append(cancellation.shutting_down())
 
         def stop(self) -> None:
             calls.append("agent.stop")
@@ -2591,6 +2596,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert result.exit_code == 0, result.output
+    assert shutting_down_at_intake == [True]
     assert calls == [
         "agent.stop_intake",
         "agent.close_mcp",

@@ -106,7 +106,8 @@ executors refuse new work once the exit begins (each DNS lookup fails, and a
 provider retries it as a connection error). So neither way out waits: a restart
 re-execs, and a stop ends the process as soon as everything is flushed
 (`leave_unfinished_runs`), naming the runs it left (the whole stop sequence is
-in [observability](observability.md)). Either way the run ends
+in [observability](observability.md)). Quitting the TUI or the legacy REPL
+ends the same way. Either way the run ends
 where a crash would, for the startup sweep to mark it `crashed`. Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.

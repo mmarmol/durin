@@ -261,6 +261,23 @@ def _no_one_left_waiting():
     approval._HANDOFF_DECIDED_BY.clear()
 
 
+@pytest.fixture(autouse=True)
+def _not_shutting_down():
+    """Start and end every test in a process that is not shutting down.
+
+    ``cancellation.begin_shutdown`` sets a process-wide flag that nothing
+    clears, because a real process never stops shutting down. A test that
+    drives a graceful stop or a ``/restart`` sets it, and every later test in
+    the same worker would then see turn cancellations as a shutdown: a
+    foreground run whose turn is cancelled would no longer be stopped.
+    """
+    from durin.workflow import cancellation
+
+    cancellation._shutting_down = False
+    yield
+    cancellation._shutting_down = False
+
+
 # The home of whoever runs the suite, read when this module is imported:
 # before any test points HOME at a folder of its own.
 _REAL_HOME = os.path.expanduser("~")

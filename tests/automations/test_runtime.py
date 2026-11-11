@@ -825,6 +825,40 @@ async def test_stop_running_run_requests_cancel_and_stamps_the_request(tmp_path)
         clear("stop-run-1")
 
 
+async def test_stop_running_run_keeps_the_stop_beside_the_workflow_runs_record(tmp_path):
+    """The live cancel flag dies with the process. The stop kept beside the
+    workflow run's record is what ends a run that dies afterwards cancelled,
+    instead of offering it for resume."""
+    from durin.workflow import run_log as wf_run_log
+    from durin.workflow.cancellation import clear
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None, paced=False):
+        wf_run_log.start_run(tmp_path, name, run_id, root_session_key=root_session_key,
+                             started_at=time.time())
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-kept-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        stopped = await rt.stop("a1", "stop-kept-0", hard=True)
+        wf_run_id = stopped["workflow_run_id"]
+        assert wf_run_log.stop_requested(tmp_path, "w1", wf_run_id)["hard"] is True
+    finally:
+        released.set()
+        await fire_task
+        clear("stop-kept-1")
+
+
 async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
     from durin.workflow.cancellation import clear, is_hard_cancelled
 

@@ -15,6 +15,7 @@ from the bounded pool.
 from __future__ import annotations
 
 import asyncio
+import functools
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -695,6 +696,7 @@ class RunWorkflowTool(Tool, ContextAware):
         from durin.workflow.cancellation import is_cancelled as _is_cancelled
         from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
         from durin.workflow.cancellation import request_cancel as _request_cancel
+        from durin.workflow.cancellation import shutting_down as _shutting_down
         run_id = resume.run_id if resume is not None else uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
@@ -817,7 +819,10 @@ class RunWorkflowTool(Tool, ContextAware):
             # instead the engine is stopped cooperatively below.
             result = await asyncio.shield(engine_future)
         except asyncio.CancelledError:
-            if not engine_future.done():
+            # A turn cancelled because this process is shutting down is not a
+            # stop: nothing is asked of the run, which ends with the process
+            # and is found dead, and resumable, by the next start.
+            if not engine_future.done() and not _shutting_down():
                 # /stop cancelled the turn. asyncio cancellation cannot reach
                 # the engine's worker thread, so signal the cooperative cancel
                 # flag — HARD, since nobody is waiting for the result: the
@@ -825,6 +830,17 @@ class RunWorkflowTool(Tool, ContextAware):
                 # completion. The flag is dropped once the engine actually stops.
                 _request_cancel(run_id, hard=True)
                 engine_future.add_done_callback(lambda _f: _clear_cancel(run_id))
+                # The flag dies with this process; the stop kept beside the
+                # run's record makes a run that dies first end cancelled, not
+                # resumable. Written off the event loop and not awaited: this
+                # turn is being cancelled, and a second cancel of it must not
+                # drop the write. The strong reference keeps it alive.
+                from durin.workflow import run_log
+                keep_stop = asyncio.get_running_loop().run_in_executor(
+                    None, functools.partial(
+                        run_log.request_stop, self._workspace, workflow.name, run_id, hard=True))
+                self._bg_tasks.add(keep_stop)
+                keep_stop.add_done_callback(self._bg_tasks.discard)
             raise
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))

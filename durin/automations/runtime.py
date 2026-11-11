@@ -348,6 +348,21 @@ class AutomationsRuntime:
             if token is not None:
                 reset_telemetry(token)
 
+    def _keep_workflow_stop(self, name: str, workflow_run_id: str, hard: bool) -> None:
+        """Keep a stop beside the record of the workflow run automation
+        ``name`` launched. Its record is filed under the automation's workflow,
+        read from the spec. Best-effort: the live cancel is already set, so a
+        spec that cannot be read only means the stop is not kept."""
+        from durin.workflow import run_log as wf_run_log
+
+        try:
+            workflow = load_automation(self._ws, name).workflow
+        except Exception:  # noqa: BLE001 - the stop itself already took effect
+            logger.exception("automations: could not read automation '{}' to keep the stop "
+                             "of its workflow run {}", name, workflow_run_id)
+            return
+        wf_run_log.request_stop(self._ws, workflow, workflow_run_id, hard=hard)
+
     async def _stop(self, name: str, run_id: str, *, hard: bool) -> dict:
         record = run_log.read_run(self._ws, name, run_id)
         if record is None:
@@ -382,7 +397,14 @@ class AutomationsRuntime:
             # sweep_orphans (run at the next boot) recognize a run whose
             # stop never got the chance to take effect and finalize it
             # honestly instead of relaunching a replacement nobody asked for.
-            return run_log.update_run(self._ws, name, run_id, stop_requested_at=_now_ms())
+            stamped = run_log.update_run(self._ws, name, run_id, stop_requested_at=_now_ms())
+            if workflow_run_id:
+                # The same stop kept beside the workflow run's own record: a
+                # workflow run whose process dies before the stop takes effect
+                # then ends cancelled instead of being offered for resume. A
+                # lock and a file write, so off the event loop.
+                await asyncio.to_thread(self._keep_workflow_stop, name, workflow_run_id, hard)
+            return stamped
 
         if status == "paused":
             # No workflow is in flight to cancel — finalize directly instead
@@ -605,21 +627,24 @@ class AutomationsRuntime:
         wf_run_id = result.run_id or None
         if (result.status in ("aborted", "cancelled") and not result.rejected
                 and self._is_shutting_down()):
-            # A graceful shutdown (SIGTERM) cancels every in-flight workflow
-            # the same way a deliberate tasks(action='stop') does — both
-            # arrive here identically. They must not be treated alike: a
-            # deliberate stop really is over and finalizes as usual below,
-            # but a run cut short by the gateway going down has not failed,
-            # only not finished yet. Finalizing it here — even as
-            # 'interrupted' — would take it out of 'running', and
-            # find_orphans only ever looks at 'running' manifests: that would
-            # silently disable the one mechanism (the next start's orphan
-            # sweep) that finalizes it with a reason, reports it, and
-            # relaunches it if nothing had started. So leave the manifest
-            # exactly as it is and report nothing: the run isn't over. A
-            # genuine approval rejection (rejected=True) is excluded — that
-            # is a deliberate human "no", never a shutdown artifact, even
-            # though it also carries status="cancelled".
+            # A graceful shutdown (SIGTERM, /restart) cancels no workflow run:
+            # a run in flight is left to die with the process, and the next
+            # start finds its workflow record dead (resumable) and this run
+            # in 'running' for the orphan sweep. A result can still reach
+            # here while the gateway goes down, though — a run that ended
+            # aborted or cancelled between the start of the shutdown and the
+            # exit, on its own or because what its steps use was already
+            # being closed. Such an end says nothing about the automation:
+            # the run was cut short by the gateway going down, not failed.
+            # Finalizing it here — even as 'interrupted' — would take it out
+            # of 'running', and find_orphans only ever looks at 'running'
+            # manifests: that would silently disable the one mechanism (the
+            # next start's orphan sweep) that finalizes it with a reason,
+            # reports it, and relaunches it if nothing had started. So leave
+            # the manifest exactly as it is and report nothing. A genuine
+            # approval rejection (rejected=True) is excluded — that is a
+            # deliberate human "no", never a shutdown artifact, even though
+            # it also carries status="cancelled".
             return run_log.read_run(self._ws, spec.name, run_id) or {
                 "run_id": run_id, "automation": spec.name, "status": "running",
             }

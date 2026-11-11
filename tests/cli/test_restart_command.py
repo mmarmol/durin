@@ -117,6 +117,39 @@ class TestRestartCommand:
             mock_execv.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_a_restart_without_a_gateway_begins_the_shutdown_before_stopping_turns(self):
+        """The turns the restart cancels are cancelled by a shutdown, not by
+        anyone stopping their runs: the process says so before it stops them."""
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+        from durin.workflow import cancellation
+
+        loop, _bus = _make_loop()
+        seen: list[bool] = []
+        loop.stop = lambda: seen.append(cancellation.shutting_down())
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        scheduled: list[asyncio.Task] = []
+
+        def _capture_task(coro):
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
+
+        fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=_capture_task)
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+             patch("durin.utils.restart.os.execv"):
+            await cmd_restart(ctx)
+            await scheduled[0]
+
+        assert seen == [True]
+
+    @pytest.mark.asyncio
     async def test_restart_journals_the_turns_in_flight_before_exec(self, tmp_path):
         """os.execv discards everything in memory. /restart must journal the
         turns in flight first, like a graceful shutdown, or a turn waiting on

@@ -3,6 +3,7 @@ what the process leaves behind must be what the engine leaves today."""
 import os
 
 from durin.workflow import resume_store, run_log
+from durin.workflow.engine import resumable_kind
 from durin.workflow.spec import parse_workflow
 from tests.workflow.crash_harness import engine, run_to_end, run_until_killed
 
@@ -112,3 +113,28 @@ def test_a_process_killed_while_a_detached_step_runs_never_names_it_the_failed_s
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert rec["status"] == "crashed" and rec.get("failed_node") != "side"
     assert ("side", True) in [(r["node_id"], r.get("cut", False)) for r in rec["runs"]]
+
+
+def test_a_run_someone_stopped_and_that_then_died_is_cancelled_not_resumable(tmp_path):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c")
+    # the stop had been asked before the process died
+    rec = {**dead.record, "stop_requested": {"at": 1.0, "hard": False}}
+    run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), rec)
+    out = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert out["status"] == "cancelled"
+    assert resumable_kind(out) is None
+
+
+def test_a_stop_asked_through_request_stop_outlives_the_process(tmp_path):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c")
+    assert run_log.request_stop(dead.workspace, "w", "r1", hard=False) is True
+    out = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert out["status"] == "cancelled" and resumable_kind(out) is None
+    assert out["stop_requested"]["hard"] is False
+    assert not run_log.stop_request_path(dead.workspace, "w", "r1").exists()
+
+
+def test_a_run_left_by_a_graceful_stop_is_found_dead_and_resumable(tmp_path):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c", how="term")
+    out = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert out["status"] == "crashed" and resumable_kind(out) == "dead"

@@ -491,6 +491,26 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_stop_through_the_tool_is_kept_beside_the_record(tmp_path):
+    """The live flag is lost with the process; the stop kept beside the record
+    is what makes a run that dies afterwards end cancelled, not resumable."""
+    import os
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "alive790", status="running")
+    _set_manifest_owner(tmp_path, "qa", "alive790", process_identity(os.getpid()))
+    try:
+        await _tool(tmp_path, None).execute(action="stop", id="alive790")
+        assert run_log.stop_requested(tmp_path, "qa", "alive790")["hard"] is False
+        await _tool(tmp_path, None).execute(action="stop", id="alive790", force=True)
+        assert run_log.stop_requested(tmp_path, "qa", "alive790")["hard"] is True
+    finally:
+        cancellation.clear("alive790")
+
+
+@pytest.mark.asyncio
 async def test_create_wires_a_real_jobs_registry(tmp_path, monkeypatch):
     """TasksTool.create(ctx) is the path the real agent loop uses to build
     every tool — proves the wiring the loop actually exercises, not just that

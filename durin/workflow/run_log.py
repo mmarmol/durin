@@ -24,6 +24,13 @@ read-then-write on the SAME manifest. ``run_lock_target`` serializes those so ex
 one of a racing pair wins — see its docstring. A ``running`` record whose process is
 gone is the other one: the crash sweeps convert it (``mark_dead_run``) under the
 same lock, so a resume claiming it and a sweep converting it never both act.
+
+A stop someone asks for while a run executes is never written into the record:
+the walk is that record's only writer then, and rewrites it whole without a lock,
+so a second writer's change could be lost under the walk's next rewrite. The stop
+is kept in a file of its own beside the record instead (``request_stop``), which
+the crash conversion reads, so a run someone stopped ends ``cancelled`` even when
+its process died before the stop took effect.
 """
 
 from __future__ import annotations
@@ -517,6 +524,9 @@ def finalize_run(
     path = _record_path(workspace, name, result.run_id)
     _write_json(path, record)
     _drop_resume_files(workspace, record)
+    # The run has ended, so a stop asked for while it ran has nothing left to
+    # stop. Removed after the record is written: see request_stop.
+    _drop_stop_request(stop_request_path(workspace, name, result.run_id))
     return path
 
 
@@ -568,6 +578,7 @@ def finalize_short_circuit(
     path = _record_path(workspace, name, run_id)
     _write_json(path, record)
     _drop_resume_files(workspace, record)
+    _drop_stop_request(stop_request_path(workspace, name, run_id))
     return record
 
 
@@ -575,6 +586,112 @@ def finalize_short_circuit(
 # never matches the `*.json` glob list_runs/list_all_runs/reconcile_running walk —
 # mirrors workflow/version_store.py's VERSION_LOCK_NAME/version_lock_target pattern.
 _RUN_CLAIM_LOCK_SUFFIX = ".claim"
+
+# The file holding a stop someone asked for, kept BESIDE the run's record for
+# the same reason as the claim lock: no ``*.json`` listing can ever match it.
+_STOP_REQUEST_SUFFIX = ".stop"
+
+# How long ``request_stop`` waits for the per-run lock before giving up on
+# keeping the stop (the live cancel flag its caller set still applies).
+STOP_REQUEST_LOCK_TIMEOUT_S = 15.0
+
+
+def stop_request_path(workspace: str | Path, name: str, run_id: str) -> Path:
+    """Where the stop asked for a run is kept: ``<run_id>.stop`` beside its record."""
+    return _wf_dir(workspace, name) / f"{run_id}{_STOP_REQUEST_SUFFIX}"
+
+
+def _read_stop_request(path: Path) -> dict | None:
+    """The stop kept at ``path`` as ``{"at", "hard"}``, or None when there is
+    none. A file that exists but cannot be read as one is still a stop someone
+    asked for: it reads as ``{"at": None, "hard": False}``."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        return {"at": None, "hard": False}
+    at = data.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        at = None
+    return {"at": at, "hard": data.get("hard") is True}
+
+
+def _write_stop_request(path: Path, stop: dict) -> None:
+    atomic_write_text(path, json.dumps(stop))
+
+
+def _drop_stop_request(path: Path) -> None:
+    """Remove a kept stop. Best-effort: never fails the write it follows."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def stop_requested(workspace: str | Path, name: str, run_id: str) -> dict | None:
+    """The stop someone asked for this run while it ran, ``{"at", "hard"}``, or
+    None. Kept beside the record until the run ends (see ``request_stop``)."""
+    return _read_stop_request(stop_request_path(workspace, name, run_id))
+
+
+def _is_running(workspace: str | Path, name: str, run_id: str) -> bool:
+    record = read_manifest(workspace, name, run_id)
+    return isinstance(record, dict) and record.get("status") == "running"
+
+
+def request_stop(workspace: str | Path, name: str, run_id: str, *, hard: bool) -> bool:
+    """Keep a stop someone asked for a ``running`` run, so it outlives the
+    process: if the process dies before the run ends, ``mark_dead_run`` ends
+    the run ``cancelled`` instead of offering it for resume.
+
+    The stop is written to its own file beside the record (``stop_request_path``),
+    ``{"at": <epoch seconds>, "hard": bool}``, never into the record: the walk
+    rewrites the record whole without a lock, and a change written into it here
+    could be lost under the walk's next rewrite. A second request keeps the
+    first ``at`` and can only turn ``hard`` from False to True. Two requests are
+    serialized by ``run_lock_target``'s lock.
+
+    Returns True when the stop is kept. Returns False, and keeps nothing, when
+    the record does not exist or is not ``running``, or when the lock stayed
+    busy or the file could not be written (logged; never raises). This only
+    keeps the stop: the caller stops the run itself with
+    ``cancellation.request_cancel``.
+
+    The walk ends the run without the lock, and removes the file after its end
+    is written. So the file is written first and the record read again after:
+    a run that ended in between has its file removed here, and one that ends
+    later removes it itself. Either way no stop is left beside an ended run,
+    where a later resume of it would find it."""
+    if not _is_running(workspace, name, run_id):
+        return False
+    path = stop_request_path(workspace, name, run_id)
+    try:
+        with cross_process_lock(run_lock_target(workspace, name, run_id),
+                                timeout=STOP_REQUEST_LOCK_TIMEOUT_S):
+            if not _is_running(workspace, name, run_id):
+                return False
+            prior = _read_stop_request(path)
+            stop = {
+                "at": (prior or {}).get("at") or time.time(),
+                "hard": bool(hard) or bool(prior and prior["hard"]),
+            }
+            if stop != prior:
+                _write_stop_request(path, stop)
+            if not _is_running(workspace, name, run_id):
+                _drop_stop_request(path)
+                return False
+            return True
+    except TimeoutError:
+        logger.warning("run {} of workflow {!r}: its lock stayed busy; the stop asked "
+                       "for it is not kept beside its record", run_id, name)
+        return False
+    except OSError:
+        logger.exception("run {} of workflow {!r}: could not keep the stop asked for it",
+                         run_id, name)
+        return False
 
 
 def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
@@ -585,8 +702,9 @@ def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
     finalizing a paused run, every resume claiming the run (moving it to
     ``running`` before actually resuming it — ``ResumeClaim``, used by the
     workflows service and the ``run_workflow`` tool alike), and the
-    approval-reject short-circuit inside the service's resume path, and the crash
-    conversion of a ``running`` run whose process is gone (``mark_dead_run``). Each of those
+    approval-reject short-circuit inside the service's resume path, the crash
+    conversion of a ``running`` run whose process is gone (``mark_dead_run``),
+    and ``request_stop`` keeping a stop beside a running record. Each of those
     is a read-then-write on the SAME manifest; without a lock, two racing callers
     can both read the resumable status before either writes, so — for example —
     two resumes both run real nodes, or a resume runs them on a run
@@ -617,7 +735,10 @@ def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
     run is usually resumed after a restart, so its recorded owner is often a dead
     process: the claim re-stamps the owner, or the crash sweep would flip the
     waiting resume to ``crashed``. A resume whose engine never makes that write
-    undoes the claim with ``release_resume_claim``. Returns the claimed record."""
+    undoes the claim with ``release_resume_claim``. A stop file still beside the
+    record belongs to an earlier walk (a process that died while keeping one)
+    and is removed, so it cannot end this walk cancelled. Returns the claimed
+    record."""
     from durin.utils.process_tree import process_identity
 
     prior = read_manifest(workspace, name, run_id) or {}
@@ -626,6 +747,7 @@ def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
     record["owner"] = process_identity()
     path = _record_path(workspace, name, run_id)
     _write_json(path, record)
+    _drop_stop_request(stop_request_path(workspace, name, run_id))
     return record
 
 
@@ -742,15 +864,17 @@ def _cut_row(entry: dict) -> dict:
     }
 
 
-def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict:
+def _dead_run_record(workspace: str | Path, record: dict, now_ts: float,
+                     stop: object = None) -> dict:
     """The record a dead ``running`` run is converted to (see ``mark_dead_run``).
-    Raises when the record or its resume files cannot be read as expected; the
-    caller then falls back to ``_minimal_mark``."""
+    ``stop`` is the stop someone asked for the run, or None. Raises when the
+    record or its resume files cannot be read as expected; the caller then
+    falls back to ``_minimal_mark``."""
     position = record.get("position")
     if position is not None and not (isinstance(position, dict) and position.get("node")):
         raise ValueError(f"the position is not a step: {position!r}")
     active = record.get("active_node")
-    stopped = bool(record.get("stop_requested"))
+    stopped = bool(stop)
     if not isinstance(record.get("runs") or [], list):
         raise ValueError("the runs are not a list")
     detached = record.get("detached_active") or []
@@ -787,8 +911,10 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict
         out["detached_active"] = []
     if stopped:
         # A stop was asked for: the run ends where nothing can resume it, so it
-        # names no step and its resume files are removed after the write.
+        # names no step and its resume files are removed after the write. The
+        # stop itself goes on the record, which is the run's last word.
         out["position"] = None
+        out["stop_requested"] = stop
     elif position and position["node"] not in started_detached:
         # The step the record names is the step the run failed at: the one that
         # was running, or the one about to start. What it was to receive comes
@@ -811,14 +937,22 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict
     return out
 
 
-def _minimal_mark(record: dict) -> dict:
+def _minimal_mark(record: dict, stop: object = None) -> dict:
     """The mark a dead run gets when its full conversion cannot be built: status
     ``crashed``, ``active_node`` cleared and ``owner`` removed (both describe a
     process that no longer exists), every other field as it was. The run then
-    reads as ended, and no sweep finds it again."""
+    reads as ended, and no sweep finds it again.
+
+    A run someone asked to stop (``stop``) is marked ``cancelled`` instead, with
+    the stop on the record and no step named, so it is never offered for resume
+    whatever else the record carries."""
     out = dict(record)
     out.pop("owner", None)
     out.update(status="crashed", active_node=None)
+    if stop:
+        out.update(status="cancelled", stop_requested=stop)
+        if "position" in out:
+            out["position"] = None
     return out
 
 
@@ -840,9 +974,11 @@ def mark_dead_run(
     resume that claimed it first (owner re-stamped to a live process) is left
     alone. The conversion:
 
-    - ``status``: ``cancelled`` when the record holds a ``stop_requested``, else
-      ``crashed``; ``finished_at``/``ts`` now; ``active_node`` None and
-      ``owner`` removed, since both describe a process that no longer exists;
+    - ``status``: ``cancelled`` when someone asked to stop the run — a stop file
+      kept beside the record (``request_stop``), or a ``stop_requested`` the
+      record holds itself — else ``crashed``; ``finished_at``/``ts`` now;
+      ``active_node`` None and ``owner`` removed, since both describe a
+      process that no longer exists;
     - a row for the step that was running (when ``active_node`` is the step the
       ``position`` names) and for every step in ``detached_active``:
       ``status: "node_failed"``, ``cut: True``, ``error`` ``DEAD_RUN_ERROR``;
@@ -850,7 +986,12 @@ def mark_dead_run(
     - when not cancelled and the record has a position: ``failed_node`` (the
       position's step), ``resume_upstream`` (its stored input, capped) and
       ``resume_inputs`` (the stored sources, capped, over the recorded ones);
-    - when cancelled: ``position`` None and the resume files removed.
+    - when cancelled: ``position`` None, the stop written to the record's
+      ``stop_requested`` (the stop file's value when there is one), and the
+      resume files removed.
+
+    The stop file is removed once the converted record is written; a write
+    that fails leaves it, for the next sweep to find.
 
     A step listed in ``detached_active`` is never written as ``failed_node``:
     a record naming one as its position keeps that position and gets no
@@ -869,14 +1010,17 @@ def mark_dead_run(
                 return None
             if not _owner_gone(record, now, max_age_s):
                 return None
+            stop_path = stop_request_path(workspace, name, run_id)
+            stop = _read_stop_request(stop_path) or record.get("stop_requested") or None
             try:
-                out = _dead_run_record(workspace, record, time.time())
+                out = _dead_run_record(workspace, record, time.time(), stop)
             except Exception as exc:  # noqa: BLE001 - an odd record is still marked ended
                 logger.warning("run {} of workflow {!r}: its process is gone, but its record "
-                               "cannot be converted ({}); marked crashed only",
-                               run_id, name, exc)
-                out = _minimal_mark(record)
+                               "cannot be converted ({}); marked {} only",
+                               run_id, name, exc, "cancelled" if stop else "crashed")
+                out = _minimal_mark(record, stop)
             _write_json(_record_path(workspace, name, run_id), out)
+            _drop_stop_request(stop_path)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
@@ -1239,6 +1383,9 @@ def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
         terminal.sort(key=lambda pair: pair[0], reverse=True)   # newest first
         for _ts, path in terminal[keep:]:
             path.unlink()
+            # A stop file goes with its record (an ended run keeps none, but
+            # one a dead process left behind must not outlive the record).
+            _drop_stop_request(path.with_suffix(_STOP_REQUEST_SUFFIX))
     except OSError:
         pass
 

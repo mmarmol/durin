@@ -133,6 +133,7 @@ from durin.utils.restart import (
     set_restart_handler,
     should_show_cli_restart_notice,
 )
+from durin.workflow.cancellation import begin_shutdown
 
 # Shown at the bottom of `durin --help`. The top-level listing only
 # gives one line per command and never reveals what lives *inside* the
@@ -1767,10 +1768,11 @@ def _run_gateway(
             )
 
     # Flips True the instant the gateway begins a graceful shutdown
-    # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP). AutomationsRuntime
-    # reads it to tell a workflow cancelled BY that shutdown apart from one a
-    # user deliberately stopped via tasks(action='stop') — both surface as
-    # the same cancelled/aborted result.
+    # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP, /restart). The
+    # shutdown cancels no workflow run, but a run can still end aborted or
+    # cancelled while the gateway goes down; AutomationsRuntime reads this to
+    # leave such a run to the next start's orphan sweep instead of
+    # finalizing it as if someone had stopped it.
     _shutdown_requested = False
 
     # Set by /restart (durin.utils.restart.request_restart): once the graceful
@@ -2227,6 +2229,10 @@ def _run_gateway(
 
         def _request_shutdown(signame: str) -> None:
             nonlocal _shutdown_requested, _restart_requested, _restart_timer, stopping
+            # First, before any turn is cancelled below (the OpenAI-compatible
+            # turns here, every chat turn in the drain): a turn cancelled by
+            # the shutdown is not a stop of the workflow run it waits on.
+            begin_shutdown()
             _shutdown_requested = True
             if signame != "/restart" and _restart_requested:
                 # A real signal wins over a restart already under way: this
@@ -2403,6 +2409,10 @@ def _run_gateway(
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
+            # Also reached without _request_shutdown (a crash, or Ctrl+C where
+            # signal handlers are unsupported): the drain below cancels every
+            # turn, and those cancels must not stop the runs the turns wait on.
+            begin_shutdown()
             await janitor.stop()
             await agent.close_mcp()
             cron.stop()
@@ -2574,6 +2584,12 @@ def agent(
             markdown=markdown,
             auto_resume=auto_resume,
         )
+        # Quitting is a shutdown, not a stop of the runs in flight: a run
+        # still on its thread would hold the exit until it ended, so the
+        # process leaves it, to be found dead and resumable.
+        from durin.workflow.run_threads import leave_unfinished_runs
+
+        leave_unfinished_runs()
         return
 
     # `--legacy` (or one-shot via -m) — fall through to the original REPL/one-shot.
@@ -2679,6 +2695,9 @@ def agent(
             cli_channel, cli_chat_id = "cli", session_id
 
         def _handle_signal(signum, frame):
+            # The exit cancels the turn in flight: said first, so the
+            # workflow run it waits on is not taken as stopped.
+            begin_shutdown()
             sig_name = signal.Signals(signum).name
             _restore_terminal()
             console.print(f"\nReceived {sig_name}, goodbye!")
@@ -2878,12 +2897,26 @@ def agent(
                         console.print("\nGoodbye!")
                         break
             finally:
+                # Leaving cancels whatever turn is still in flight: a
+                # shutdown, not a stop of the workflow run it waits on.
+                begin_shutdown()
                 agent_loop.stop()
                 outbound_task.cancel()
                 await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
                 await agent_loop.close_mcp()
 
-        asyncio.run(run_interactive())
+        # A run still on its thread would hold the exit until it ended; on a
+        # quit (a normal return, or the signal handler's exit) the process
+        # leaves it instead, to be found dead and resumable. An error keeps
+        # its traceback and exit code.
+        from durin.workflow.run_threads import leave_unfinished_runs
+
+        try:
+            asyncio.run(run_interactive())
+        except SystemExit:
+            leave_unfinished_runs()
+            raise
+        leave_unfinished_runs()
 
 
 # ============================================================================

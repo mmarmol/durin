@@ -204,8 +204,8 @@ directly (see Stopping, below) — so `cancelled` only ever classifies through t
 `rejected` row. And if the workflow result is
 `aborted`/`cancelled`, not a deliberate rejection, and the gateway is mid graceful
 shutdown (`is_shutting_down()`), `_handle_result` leaves the run's manifest exactly
-as `"running"` and reports nothing — a SIGTERM cutting a workflow short has not
-failed, only not finished; the next boot's orphan sweep (§4d) is what finalizes and,
+as `"running"` and reports nothing — a run that ended that way while the gateway was
+going down has not failed, only not finished; the next boot's orphan sweep (§4d) is what finalizes and,
 if warranted, relaunches it. A genuine approval rejection is excluded from this
 carve-out even though it also carries `status == "cancelled"`, since that is a
 deliberate human decision, not a shutdown artifact.
@@ -333,9 +333,12 @@ statuses end differently because only one of them has a workflow actually in fli
 
 - **`running`** — registers the run's `workflow_run_id` with
   `durin.workflow.cancellation.request_cancel` (the same process-global registry the
-  `tasks` chat tool signals a workflow stop through), stamps `stop_requested_at` on the
-  run record durably (the in-memory registry above does not survive a crash — see
-  §4d), and returns the record. Only an explicit `hard=true` escalates, and it can
+  `tasks` chat tool signals a workflow stop through), keeps the same stop beside the
+  workflow run's own record (`durin.workflow.run_log.request_stop`, so a workflow run
+  whose process dies before the stop takes effect ends `cancelled` instead of being
+  offered for resume — `docs/internals/workflow.md` §4a), stamps
+  `stop_requested_at` on the run record durably (the in-memory registry above does not
+  survive a crash — see §4d), and returns the record. Only an explicit `hard=true` escalates, and it can
   never be downgraded by a later graceful call — `request_cancel`'s own contract. A
   *repeat* call with `hard` left at its default is a no-op on an already-graceful
   request; the webui dashboard's own Stop button only ever issues a graceful stop, and
@@ -469,14 +472,17 @@ direct delivery bypassing `route()`, since there is no run manifest to attach a
 delivery record to) so a recipient told "replacement X is coming" is also told when
 X never happened, rather than waiting on a message that will never arrive.
 
-**Shutdown vs. deliberate stop.** A graceful shutdown (SIGTERM/SIGINT/SIGHUP) cancels
-every in-flight workflow the same way a deliberate `tasks(action='stop')` does —
-both arrive at `_handle_result` as the same `WorkflowResult.status in
-("aborted", "cancelled")`. They are told apart by `rejected` (only a deliberate
-answer to a paused approval sets it) plus `is_shutting_down()`: a shutdown-caused
-cancellation is left exactly as `"running"` (§4b) so the *next* boot's orphan sweep
-is what finalizes, reports, and — if warranted — relaunches it, rather than this
-process misreporting it as `"failed"` on its way down.
+**Shutdown vs. deliberate stop.** A graceful shutdown (SIGTERM/SIGINT/SIGHUP, or
+`/restart`) cancels no workflow run: a run in flight is left to end with the process,
+its workflow record is found dead and resumable at the next start, and its automation
+run is still `"running"` for the orphan sweep above. A run can still end `aborted` or
+`cancelled` between the start of the shutdown and the exit — on its own, or because
+what its steps use is already being closed — and such a result reaches
+`_handle_result` looking like a deliberate stop. The two are told apart by `rejected`
+(only a deliberate answer to a paused approval sets it) plus `is_shutting_down()`: a
+result that arrives during the shutdown is left exactly as `"running"` (§4b) so the
+*next* boot's orphan sweep is what finalizes, reports, and — if warranted — relaunches
+it, rather than this process misreporting it as `"failed"` on its way down.
 
 ### 4e. Cron integration (`durin/automations/cron_sync.py`)
 

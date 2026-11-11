@@ -827,7 +827,7 @@ manifests written before this field existed).
 workflow; callers that need only terminal runs should skip records whose `status` is
 `"running"` or `"crashed"`.
 
-**Crash reconciliation.** A gateway stop or restart does not wait for a run still executing: the process ends once everything is flushed, so the run is reconciled like any other crash. Every manifest records its **owner** — the pid, the
+**Crash reconciliation.** A gateway stop or restart does not wait for a run still executing, and does not stop it either: the process ends once everything is flushed, so the run is reconciled like any other crash and can be resumed (see "A shutdown is not a stop" below). Every manifest records its **owner** — the pid, the
 process start-time string, and a random boot id made once per start of the program,
 so an owner is one start of a process. A restart in place (`execv`) keeps the pid and
 start time but gets a new boot id, so the restarted process sees the runs its earlier
@@ -855,7 +855,9 @@ the next sweep tries again; a file that cannot be read or parsed as a record is 
 it is, since nothing can be written over it safely. The `tasks` tool runs its self-heal
 off the event loop, so that wait never blocks the gateway. The written record has:
 
-- `status` `"crashed"`, or `"cancelled"` when the record holds a `stop_requested`;
+- `status` `"crashed"`, or `"cancelled"` when someone had asked to stop the run — a
+  stop file beside the record (see "A stop outlives the process" below), or a
+  `stop_requested` the record holds itself;
   `finished_at` and `ts` the time of the conversion (not on a record written before
   positions existed, below); `active_node` `null` and `owner`
   removed, since both describe a process that no longer exists;
@@ -874,8 +876,10 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   `detached_active` is never written as `failed_node`: a record that holds one as its
   position keeps that position and gets no `failed_node` and no resume fields, since a
   resume would launch the detached side effect again;
-- when it ends `cancelled`: `position` `null`, no `failed_node`, and the run's resume
-  files removed, like any cancelled run. The cut rows are still written.
+- when it ends `cancelled`: `position` `null`, no `failed_node`, the stop written to
+  the record's `stop_requested` (`{"at", "hard"}`, from the stop file when there is
+  one), and the run's resume files removed, like any cancelled run. The cut rows are
+  still written, and the stop file is removed once the record is.
 
 A record without a position gets no `failed_node` and no resume fields. There are three
 kinds: a sub-workflow's own run (`position: null` at every write), which still gets its
@@ -891,8 +895,48 @@ unexpected shape (`runs` not a list, a `position` that names no step, a
 stored input whose text is not text — still gets marked, with one warning naming the run
 and the reason: `status: "crashed"`, `active_node` cleared, `owner` removed, every other
 field as it was. The run then reads as ended on every surface and no sweep finds it
-again. A stored input file that cannot be parsed at all is treated as missing: the full
-conversion is written without `resume_upstream`.
+again. A run someone had asked to stop is marked `cancelled` instead, with the stop in
+`stop_requested` and `position` `null`, so it is never offered for resume whatever else
+the record carries. A stored input file that cannot be parsed at all is treated as
+missing: the full conversion is written without `resume_upstream`.
+
+**A stop outlives the process.** The live stop is a flag in memory (see "Cooperative
+cancellation" below) and dies with the process. So whoever stops a running run also
+keeps the stop beside its record, with `run_log.request_stop`: the `tasks` tool's
+`stop`, the automation runtime's stop of a running automation run (for the workflow run
+it launched), and the `run_workflow` tool when the turn waiting on a foreground run is
+cancelled by anything but a shutdown. The stop goes to a file of its own,
+`<run_id>.stop` in the workflow's runs folder, `{"at": <epoch seconds>, "hard": bool}`,
+written atomically under the per-run lock, never into the record: while the run
+executes the walk is the record's only writer and rewrites it whole without a lock, so
+a change written into it by anyone else could be lost under the walk's next rewrite.
+The `.stop` name never matches the `*.json` listings. A second request keeps the first
+`at` and can only turn `hard` on. A request on a record that does not exist or is not
+`running` keeps nothing. The walk's own writes leave the file alone, so it holds until
+the run ends:
+
+- a run that ends by itself (`finalize_run`, `finalize_short_circuit`) removes it after
+  its end is written; since the walk takes no lock, `request_stop` reads the record
+  again after writing the file and removes the file itself when the run has ended in
+  between, so no stop is left beside an ended run;
+- the conversion of a dead run reads it, ends the run `cancelled` with the stop on the
+  record, and removes it;
+- a resume claim removes one still there from an earlier walk, and pruning a record
+  removes its stop file with it.
+
+So a run someone stopped is never resumable, even when its process died before the
+stop took effect.
+
+**A shutdown is not a stop.** A process that is going down — the gateway on a signal or
+a `/restart`, or after its main loop ended any other way; the TUI or the legacy REPL
+quitting; a `/restart` without a gateway — first marks itself as shutting down
+(`cancellation.begin_shutdown`, a process-wide flag), and only then cancels the turns in
+flight. A foreground `run_workflow` call whose turn is cancelled while the process is
+shutting down asks nothing of its run: no cancel flag, no stop file. The run is left to
+end with the process (a process with a run still on its thread leaves it rather than
+wait for it), and the next start finds it dead and resumable at the step it was in. A
+`durin agent -m` one-shot interrupted with Ctrl+C is the exception: asyncio's own Ctrl+C
+handling cancels its turn with no shutdown marked first, so that run is stopped.
 
 **Resuming a dead run.** A `crashed` run is resumed like an aborted one, with
 `resume_run_id`, on both surfaces (the workflows service and the `run_workflow` tool).
@@ -1395,7 +1439,9 @@ and when it was cancelled the first time.
 mode; the engine polls it via a `cancel_check` callback at the top of its node
 walk. `request_cancel` upgrades graceful → hard and never downgrades, so a
 repeat stop escalates on its own and a second graceful stop cannot undo a
-force-stop already in flight.
+force-stop already in flight. The registry lives in memory; the same stop is
+also kept beside the run's record, so it outlives the process (see "A stop
+outlives the process" above).
 
 - **Graceful** (the default): the run stops at its next node boundary. A script
   node still dies immediately — the callback is threaded into its subprocess
@@ -1448,6 +1494,8 @@ turn awaiting it, `run_workflow` signals the run's cooperative flag **hard** —
 asyncio cancellation cannot reach the engine's worker thread, and with nobody
 waiting for the result there is no reason to let the in-flight node burn tokens
 to completion — and the flag is dropped once the detached engine actually stops.
+It also keeps that stop beside the run's record. When the turn is cancelled because
+the process is shutting down, it does neither: see "A shutdown is not a stop" above.
 
 **Live per-node and per-branch progress.** Every frame the sequential walk
 emits — the running node, a finished node, the certain-but-not-yet-started
@@ -1769,7 +1817,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
-| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `request_stop`, `stop_requested`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `request_stop` keeps a stop someone asked for beside a running record (`<run_id>.stop`), which `mark_dead_run` reads. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |

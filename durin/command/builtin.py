@@ -22,6 +22,7 @@ from durin.utils.restart import (
     request_restart,
     set_restart_notice_to_env,
 )
+from durin.workflow.cancellation import begin_shutdown
 
 # Strong refs to fire-and-forget command tasks (restart, background dream)
 # so the event loop can't GC them before they run (RUF006).
@@ -330,6 +331,12 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         # them when it starts. A hang in any of that (close_mcp, the drain)
         # must still end in a re-exec, so arm the same watchdog the gateway
         # path uses before starting them.
+        #
+        # The drain cancels the turns in flight. Said first: a turn cancelled
+        # by this restart is not a stop of the workflow run it waits on, which
+        # is left to end with the process and found dead, and resumable, by
+        # the next one.
+        begin_shutdown()
         timer = arm_restart_deadline()
         try:
             if loop is not None:
