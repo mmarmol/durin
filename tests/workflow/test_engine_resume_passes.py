@@ -227,3 +227,24 @@ def test_a_resumed_run_does_not_list_an_earlier_file_that_is_gone(tmp_path):
     assert done.status == "completed"
     assert done.output_files == ["b.txt"]
     assert done.missing_artifacts == ["a.txt"]
+
+
+def test_a_gate_is_not_told_its_fail_is_final_while_its_target_has_passes_left(tmp_path):
+    # make (budget 2) fails its first attempt; the resumed walk runs its second
+    # attempt as its first pass, so a FAIL from the gate still has a pass to go to.
+    wf = parse_workflow({"name": "w", "start": "make", "nodes": [
+        {"id": "make", "kind": "work", "max_visits": 2, "next": "gate"},
+        {"id": "gate", "kind": "work", "on_pass": None, "on_fail": "make"}]})
+    seen = []
+
+    class Recording(_Runner):
+        def __call__(self, req):
+            if req.node.id == "gate":
+                seen.append(req.fail_would_exhaust)
+            return super().__call__(req)
+
+    runner = Recording(fail={"make": 1}, outputs={"gate": "fine\nPASS"})
+    assert _engine(tmp_path, runner).run(wf, "t").status == "aborted"
+    assert _resume(tmp_path, wf, runner).status == "completed"
+    assert runner.attempts("make") == [1, 2]
+    assert seen == [False]
