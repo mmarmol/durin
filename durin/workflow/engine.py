@@ -648,16 +648,23 @@ class WorkflowEngine:
             # manifest records that same key or runs_for_session can't find the run.
             effective_root = root_session_key or f"workflow:{run_id}:root"
             started_at = time.time()
-            # What a step receives is stored whole beside the run so a run whose
-            # process died can be entered again. A sub-workflow's run is never
-            # resumed on its own (its caller re-runs the whole step), so it
-            # stores nothing and leaves no folder of its own under `.workflow/`.
-            store = self._workspace is not None and work_dir_override is None
+            # The record names the step to enter next, and what that step
+            # receives is stored whole beside the run's working folder, so a run
+            # whose process died can be entered again. A sub-workflow's own run
+            # is never resumed on its own (its caller re-runs the whole step), so
+            # its record names no step and it stores nothing.
+            nested = parent_run_id is not None or work_dir_override is not None
+            store: Path | None = (
+                resume_store.store_dir(
+                    self._workspace, run_id, work_dir=work_dir,
+                    keyed=work_dir_override is None and resolved_work_key is not None)
+                if self._workspace is not None and not nested else None
+            )
             start_seq = self._start_manifest(
                 workflow, run_id, effective_root, started_at, task,
                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
                 resumed=resume is not None,
-                start_at=resume.start_at if resume else workflow.start,
+                start_at=None if nested else (resume.start_at if resume else workflow.start),
                 start_upstream=resume.upstream if resume else None,
                 store=store)
             sources = run_log.source_nodes(workflow)
@@ -666,18 +673,21 @@ class WorkflowEngine:
             def _store_sources() -> None:
                 # The rows that joined the trace since the last write: every one
                 # of a step another step reads by name has its whole output kept,
-                # in trace order, so the last output of a step is the one stored.
+                # an empty one included, in trace order, so the stored output is
+                # the last row the walk itself would read for that step.
                 nonlocal stored_rows
                 fresh, stored_rows = runs[stored_rows:], len(runs)
-                if store:
-                    self._store_sources(workflow, run_id,
-                                        [r for r in fresh if r.node_id in sources and r.output])
+                if store is not None:
+                    self._store_sources(workflow, store,
+                                        [r for r in fresh if r.node_id in sources])
 
             def _update(*, position: dict | None | object = run_log.KEEP_POSITION,
                         upstream: str | None = None) -> None:
                 _store_sources()
-                if store and isinstance(position, dict) and not self._store_input(
-                        workflow, run_id, position, upstream):
+                if nested:
+                    position = run_log.KEEP_POSITION
+                elif isinstance(position, dict) and store is not None and not self._store_input(
+                        workflow, store, position, upstream):
                     # Never point the record at an input that was not written.
                     position = run_log.KEEP_POSITION
                 self._update_manifest(workflow, run_id, runs, position=position)
@@ -853,14 +863,15 @@ class WorkflowEngine:
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
                         parent_run_id=None, work_dir=None, work_key=None,
                         resumed=False, start_at=None, start_upstream=None,
-                        store=False) -> int:
-        """Write the run's first record, naming ``start_at`` as its position, and
-        return that position's sequence number. A fresh run starts at 1; a resumed
-        walk continues one past the sequence its record reached, so a number is
-        never given to two positions of one run (a record written before positions
-        existed has none, and its resumed walk starts at 1). With ``store``, the
-        step's input is written first, so the record never names an input that
-        was not written."""
+                        store=None) -> int:
+        """Write the run's first record, naming ``start_at`` as its position (none
+        when ``start_at`` is None), and return that position's sequence number. A
+        fresh run starts at 1; a resumed walk continues one past the sequence its
+        record reached, so a number is never given to two positions of one run (a
+        record written before positions existed has none, and its resumed walk
+        starts at 1). ``store`` is the run's resume folder: the step's input is
+        written there first, so the record never names an input that was not
+        written."""
         seq = 1
         if self._workspace is None:
             return seq
@@ -871,8 +882,8 @@ class WorkflowEngine:
             except Exception:  # noqa: BLE001 - a bad record must not block the run
                 logger.exception("workflow run position read failed for {}", workflow.name)
         position: dict | None = {"node": start_at, "seq": seq} if start_at else None
-        if store and position is not None and not self._store_input(
-                workflow, run_id, position, start_upstream):
+        if store is not None and position is not None and not self._store_input(
+                workflow, store, position, start_upstream):
             position = None
         typical = {}
         typical_total = None
@@ -905,21 +916,23 @@ class WorkflowEngine:
             logger.exception("workflow run manifest start failed for {}", workflow.name)
         return seq
 
-    def _store_input(self, workflow, run_id, position: dict, upstream: str | None) -> bool:
-        """Keep the whole input of the step ``position`` names. False when it could
-        not be written; the failure is logged and never breaks the run."""
+    @staticmethod
+    def _store_input(workflow, store: Path, position: dict, upstream: str | None) -> bool:
+        """Keep the whole input of the step ``position`` names in the run's resume
+        folder ``store``. False when it could not be written; the failure is
+        logged and never breaks the run."""
         try:
-            resume_store.save_input(self._workspace, run_id, position["seq"],
-                                    position["node"], upstream)
+            resume_store.save_input(store, position["seq"], position["node"], upstream)
         except Exception:  # noqa: BLE001 - a resume-store write must not break the run
             logger.exception("workflow resume input write failed for {}", workflow.name)
             return False
         return True
 
-    def _store_sources(self, workflow, run_id, rows: list[NodeRun]) -> None:
+    @staticmethod
+    def _store_sources(workflow, store: Path, rows: list[NodeRun]) -> None:
         for row in rows:
             try:
-                resume_store.save_source(self._workspace, run_id, row.node_id, row.output)
+                resume_store.save_source(store, row.node_id, row.output or "")
             except Exception:  # noqa: BLE001 - a resume-store write must not break the run
                 logger.exception("workflow resume source write failed for {}", workflow.name)
 

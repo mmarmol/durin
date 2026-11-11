@@ -49,7 +49,8 @@ def test_a_run_left_by_a_restart_in_place_is_swept(tmp_path, monkeypatch):
 def test_a_killed_process_leaves_the_step_it_was_in_as_the_position(tmp_path):
     dead = run_until_killed(tmp_path, CHAIN, stop_in="c")
     assert dead.record["position"]["node"] == "c"
-    node, upstream = resume_store.load_input(dead.workspace, "r1", dead.record["position"]["seq"])
+    store = resume_store.store_dir_of(dead.workspace, dead.record)
+    node, upstream = resume_store.load_input(store, dead.record["position"]["seq"])
     assert node == "c" and upstream.strip() == "b-out"
 
 
@@ -64,8 +65,11 @@ def test_a_death_between_the_input_file_and_the_record_keeps_the_earlier_step(tm
     def failing(*args, **kwargs):
         position = kwargs.get("position")
         if isinstance(position, dict) and position.get("node") == "c" and "record" not in seen:
-            seen["record"] = run_log.read_manifest(workspace, "w", "r1")
-            seen["c_input"] = resume_store.load_input(workspace, "r1", position["seq"])
+            record = run_log.read_manifest(workspace, "w", "r1")
+            store = resume_store.store_dir_of(workspace, record)
+            seen["record"] = record
+            seen["c_input"] = resume_store.load_input(store, position["seq"])
+            seen["b_input"] = resume_store.load_input(store, record["position"]["seq"])
             raise OSError("disk full")
         return real(*args, **kwargs)
 
@@ -74,6 +78,5 @@ def test_a_death_between_the_input_file_and_the_record_keeps_the_earlier_step(tm
     assert result.status == "completed"                       # the engine logged and went on
     node, upstream = seen["c_input"]                          # the file was written before the record
     assert node == "c" and upstream.strip() == "b-out"
-    record = seen["record"]
-    assert record["position"]["node"] == "b"
-    assert resume_store.load_input(workspace, "r1", record["position"]["seq"]) == ("b", "a-out")
+    assert seen["record"]["position"]["node"] == "b"
+    assert seen["b_input"] == ("b", "a-out")

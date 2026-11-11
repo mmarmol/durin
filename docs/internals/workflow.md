@@ -681,45 +681,57 @@ and on `finalize_run`; when the walk has no such row yet, the rewrite keeps the 
 already on the record, and a resume's `start_run` carries it from the earlier walks. A
 resume reloads the shared-context buffer from it (§4e). A record written before it
 existed lacks it, and its resume starts with an empty buffer.
-`position` — `{node, seq}`, the step the walk enters next, or `null` once the walk has
-ended. `start_run` names the step the walk enters first. The write after each step
+
+`position` — `{node, seq}`, the step the walk enters next, or `null` when there is
+none. `start_run` names the step the walk enters first. The write after each step
 names the step the walk goes to next, with the edge text that step will receive
 already stored. A binary gate that passes hands on the input it received, so that
 input is what is stored. The write `mark_node_started` makes leaves the position
-untouched, so while a step runs the position names that step. A walk that stops early
+untouched, so while a step runs the position names that step. The write after the
+walk's last step names none. A walk that stops early
 writes no further position: a failed step, a pause, a stop from a parallel node, a
 cancel, or an exhausted step. Its record keeps the last position written (the step
-that was running, or the one about to start), and `finalize_run` carries it
-unchanged. A completed run has `position: null`.
-`seq` rises by one every time the walk names a step, a step entered again included,
-and continues across resumes: a resumed walk starts one past the `seq` its record
-reached (at 1 when the record has no `position`). A record written before the field
+that was running, or the one about to start). A run that can still be resumed
+(`aborted`, `needs_input`) keeps it through `finalize_run`. A run that ends in a state
+no resume can enter (`completed`, `exhausted`, `cancelled`) has `position: null`,
+whether `finalize_run` or `finalize_short_circuit` (an approval answered, a pause
+cancelled) wrote the end. `seq` rises by one every time the walk names a step, a step
+entered again included, and continues across resumes: a resumed walk starts one past
+the `seq` its record reached (at 1 when the record has no `position`). A sub-workflow's
+own run (a record with a `parent_run_id`) never has a position: it is never resumed on
+its own, so its record names no step at any write. A record written before the field
 existed lacks it.
-**What a step receives is kept whole** beside the run, in
-`<workspace>/.workflow/<run_id>/resume/` (`durin/workflow/resume_store.py`), because
-the record keeps text only in capped copies. `input-<seq>.json` holds the step a
-position names and its edge text (the composed `inputs_from` blocks are not stored:
-they are built again from the sources). It is written before the record that points
-at it, so a record never names an input that was not written. When it cannot be
-written, the record does not name it: the write after a step keeps the earlier
-position, and the first write records none. Writing one drops every input older
-than the one before it. The input the record named before therefore survives a death
-between the two writes, and that record still names it. `source-<hash>.json` holds the
-whole last output of every step another step reads by name (the same set
-`resume_inputs` keeps), saved before the record write that follows the step. The file
-is named by a hash because a step id is free text; the id is kept inside the file. A
-sub-workflow's own run stores nothing: it is never resumed on its own. For a run
-with a per-run working folder, the resume folder sits beside it under the same
-`.workflow/<run_id>/`, so `keep_runs` prunes both together and spares both while the
-run is live. A `work_key` run's working folder lives under `.workflow/keys/` and ages
-out on its own clock, while its resume folder is alone in `.workflow/<run_id>/`: it
-counts against `keep_runs`, is spared only while the run is live, and is dated from
-the run's start (the per-step touch reaches the keyed folder, not this one). A stopped
-keyed run can therefore keep its working folder after its stored inputs were pruned.
-The capped `resume_inputs` and `resume_upstream` copies on the record remain, for readers
-of the record. Every file is replaced whole,
-like the record. A write failure is logged and never breaks the run, and an engine
-without a workspace writes none of this.
+
+**What a step receives is kept whole** beside the run's working folder
+(`durin/workflow/resume_store.py`), because the record keeps text only in capped
+copies. A run without a work key keeps its files in `<workspace>/.workflow/<run_id>/resume/`,
+beside its `work/` folder. A `work_key` run keeps them beside the key's shared working
+folder, one folder per run: `<workspace>/.workflow/keys/<safe workflow name>/<safe work_key>/resume/<run_id>/`.
+Either way the files go with the working folder: `keep_runs` prunes a per-run folder
+whole, and the keyed sweep removes a key's whole folder. A keyed run creates no
+`.workflow/<run_id>/`, so it takes no `keep_runs` slot. A reader that holds only the
+record finds the folder with `store_dir_of`: the record's `work_key` says whether the
+run was keyed, and its `work_dir` is then the key's working folder.
+`input-<seq>.json` holds the step a position names and its edge text (the composed
+`inputs_from` blocks are not stored: they are built again from the sources). It is
+written before the record that points at it, so a record never names an input that was
+not written. When it cannot be written, the record does not name it: the write after a
+step keeps the earlier position, and the first write records none. Writing one drops
+every input older than the one before it. The input the record named before therefore
+survives a death between the two writes, and that record still names it.
+`source-<hash>.json` holds the whole last output of every step another step reads by
+name (the same set `resume_inputs` keeps), an empty output included, since an empty
+last output is what the walk itself reads. It is saved before the record write that
+follows the step. The file is named by a hash because a step id is free text; the id
+is kept inside the file. A sub-workflow's own run stores nothing. When a run ends in a
+state no resume can enter (`completed`, `exhausted`, `cancelled`), its resume folder is
+removed right after the terminal record is written, so files do not pile up under a key
+many runs share. A run that ends `aborted` or `needs_input`, or that a dead process left
+`running`, keeps it. The capped `resume_inputs` and `resume_upstream` copies on the
+record remain, for readers of the record. Every file is replaced whole, like the record.
+A write failure is logged and never breaks the run, and an engine without a workspace
+writes none of this.
+
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -1566,7 +1578,7 @@ End-to-end for a single `run_workflow` call:
 | `Workflow`, `WorkNode`, `ScriptNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (agent work nodes and deterministic script nodes; routing optional; structural-equivalence guard). |
 | `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output — `PASS` only when every line that states a verdict says so (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when neither the node's own `route` call nor the forced one returned a label. |
 | `artifact_dir`, `keyed_work_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. `keyed_work_dir` (the `work_key` folder, shared across runs) ages out on its own clock instead: `prune_runs` reaps a `keys/<workflow>/<key>/` dir once idle past `KEYED_WORK_MAX_AGE_DAYS` (30) days, unless its run lock is held OR `run_log.live_work_keys` still names it (a parked `needs_input` run releases its lock the instant it parks, so the lock check alone would miss it) — the sweep itself runs at most once a day (`keys/.last-sweep`), not on every run. |
-| `save_input`, `load_input`, `save_source`, `load_sources`, `resume_dir` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole in `.workflow/<run_id>/resume/`: the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. The record keeps only capped copies, for its readers. |
+| `store_dir`, `store_dir_of`, `save_input`, `load_input`, `save_source`, `load_sources`, `discard` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole beside its working folder (`.workflow/<run_id>/resume/`, or `resume/<run_id>/` beside a work key's shared folder): the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. `store_dir_of` finds the folder from a record. Removed when a run ends in a state no resume can enter. The record keeps only capped copies, for its readers. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |

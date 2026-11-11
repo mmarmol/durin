@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 from durin.utils.atomic_write import atomic_write_text
+from durin.workflow import resume_store
 
 
 def runs_root(workspace: str | Path) -> Path:
@@ -164,6 +165,24 @@ def _write_json(path: Path, data: dict) -> None:
     reader here takes for "no record". The temporary name never matches the
     ``*.json`` globs the listings walk."""
     atomic_write_text(path, json.dumps(data))
+
+
+# Terminal statuses no resume can enter: a run that ends with one of these has no
+# step left to enter, so its record names none and its resume files are removed.
+# ``aborted`` and ``needs_input`` are resumable, and ``crashed`` is a run whose
+# process died, so all three keep both.
+UNRESUMABLE_ENDS = frozenset({"completed", "exhausted", "cancelled"})
+
+
+def _drop_resume_files(workspace: str | Path, record: dict) -> None:
+    """Remove the resume folder of a run whose record was just written with an
+    end no resume can enter. Best-effort: never fails the write it follows."""
+    if record.get("status") not in UNRESUMABLE_ENDS or not record.get("run_id"):
+        return
+    try:
+        resume_store.discard(resume_store.store_dir_of(workspace, record))
+    except Exception:  # noqa: BLE001 - leftover files are pruned with the run's folder later
+        pass
 
 
 # The default of ``update_run``'s ``position``: keep the recorded one. An explicit
@@ -407,7 +426,9 @@ def finalize_run(
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
     ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run.
-    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it.
+    A run that ends with a status no resume can enter (``UNRESUMABLE_ENDS``) has
+    its resume files removed after the write."""
     # Preserve the task/parent_run_id from the running manifest when the caller does not
     # supply them (the engine's _finalize_manifest does not hold either; reading them here
     # keeps finalize_run safe without requiring the engine to carry the values separately).
@@ -436,9 +457,10 @@ def finalize_run(
         "history": prior.get("history") or [],
         "passes": prior.get("passes") or {},
         "shared_session": shared_session if shared_session is not None else prior.get("shared_session"),
-        # A stopped run keeps the step it stopped at, which a resume enters again;
-        # a completed run has no step left to enter.
-        "position": None if result.status == "completed" else prior.get("position"),
+        # A run that can still be resumed (aborted, paused) keeps the step it
+        # stopped at, which a resume enters again; a run no resume can enter has
+        # no step left, and its stored input is removed below.
+        "position": None if result.status in UNRESUMABLE_ENDS else prior.get("position"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -469,6 +491,7 @@ def finalize_run(
     }
     path = _record_path(workspace, name, result.run_id)
     _write_json(path, record)
+    _drop_resume_files(workspace, record)
     return path
 
 
@@ -496,7 +519,9 @@ def finalize_short_circuit(
     (``durin.service.approvals.decider_of``'s shape) is recorded together with
     ``cancelled_at`` only when a caller passes it — a person explicitly cancelling
     a paused run through ``WorkflowsService.cancel_run``, never an approval
-    reject/approve, which leave both fields unset. Returns the rewritten dict."""
+    reject/approve, which leave both fields unset. When ``status`` is one no
+    resume can enter (``UNRESUMABLE_ENDS``) the ``position`` is cleared and the
+    run's resume files are removed. Returns the rewritten dict."""
     prior = read_manifest(workspace, name, run_id) or {}
     now = time.time()
     record = dict(prior)
@@ -508,11 +533,16 @@ def finalize_short_circuit(
     record["active_node"] = None
     record["needs_input_node"] = None
     record["ask_kind"] = None
+    if status in UNRESUMABLE_ENDS:
+        # Nothing is left to enter, so the record names no step and the step's
+        # stored input goes away with the run's other resume files below.
+        record["position"] = None
     if cancelled_by is not None:
         record["cancelled_by"] = cancelled_by
         record["cancelled_at"] = now
     path = _record_path(workspace, name, run_id)
     _write_json(path, record)
+    _drop_resume_files(workspace, record)
     return record
 
 
