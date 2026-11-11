@@ -4,6 +4,9 @@ One `ps` invocation snapshots pid/ppid/rss for the whole system and the
 tree is resolved in-process, so the helpers work unchanged on Linux and
 macOS without psutil. Intended for coarse waypoints (dream pass
 boundaries, a supervisor watchdog tick) — not per-allocation profiling.
+
+Also the identity of a process (pid plus start time), and ending a recorded
+process group only while its leader is still the process that was recorded.
 """
 from __future__ import annotations
 
@@ -14,10 +17,12 @@ import uuid
 __all__ = [
     "BOOT_ID",
     "available_memory_mb",
+    "end_process_groups",
     "memory_snapshot",
     "process_alive",
     "process_identity",
     "process_rss_mb",
+    "same_live_process",
     "total_memory_mb",
     "tree_rss_mb",
 ]
@@ -125,6 +130,98 @@ def process_alive(owner: object) -> bool:
         return False
     recorded = owner.get("started")
     return recorded is None or current == recorded
+
+
+def _zombie(pid: int) -> bool:
+    """Whether ``pid`` is a process that has exited but not been reaped."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.stdout.strip().startswith("Z")
+
+
+def same_live_process(pid: object, started: object) -> bool:
+    """True when ``pid`` is still the process that had start time ``started``
+    and has not exited. A recorded identity without a start time cannot be
+    told from a later process given the same pid, so it never counts."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if not isinstance(started, str) or not started:
+        return False
+    return _lstart(pid) == started and not _zombie(pid)
+
+
+def _protected(pid: int) -> bool:
+    """A pid nothing here may ever signal: 0 and 1, this process, and the
+    group this process belongs to."""
+    if pid <= 1 or pid == _own_pid():
+        return True
+    try:
+        return pid == os.getpgrp()
+    except OSError:
+        return True
+
+
+def _signal_group(pid: int, started: str, sig: int) -> None:
+    """Send ``sig`` to the process group led by ``pid``, only after checking,
+    immediately before, that ``pid`` is still the process started at
+    ``started``. A process that left its group is signalled alone."""
+    if _protected(pid) or not same_live_process(pid, started):
+        return
+    try:
+        os.killpg(pid, sig)
+    except ProcessLookupError:
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+    except PermissionError:
+        pass
+
+
+def _reap(pid: int) -> None:
+    """Collect ``pid``'s exit status when it is a child of this process (a
+    process restarted in place still has its earlier start's children), so it
+    does not linger as a zombie. Anyone else's child is left to its parent."""
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
+
+
+def end_process_groups(members: list[tuple[int, str]], *, term_wait_s: float,
+                       kill_wait_s: float, poll_s: float = 0.05) -> set[int]:
+    """End the process groups led by ``members`` (``(pid, started)`` pairs, each
+    a group leader started with a session of its own): SIGTERM, up to
+    ``term_wait_s`` for them to go, then SIGKILL for the rest and up to
+    ``kill_wait_s`` more. Each signal goes only to a leader that is still the
+    recorded process (see ``_signal_group``). Returns the pids still the
+    recorded, live process at the end. A member that is no longer that process,
+    or that nothing here may signal, is not signalled and not returned."""
+    import signal
+    import time
+
+    alive = [(pid, started) for pid, started in members
+             if not _protected(pid) and same_live_process(pid, started)]
+    for sig, wait_s in ((signal.SIGTERM, term_wait_s), (signal.SIGKILL, kill_wait_s)):
+        if not alive:
+            break
+        for pid, started in alive:
+            _signal_group(pid, started, sig)
+        deadline = time.monotonic() + wait_s
+        while True:
+            for pid, _started in alive:
+                _reap(pid)
+            alive = [(pid, started) for pid, started in alive
+                     if same_live_process(pid, started)]
+            if not alive or time.monotonic() >= deadline:
+                break
+            time.sleep(poll_s)
+    return {pid for pid, _started in alive}
 
 
 def _read_meminfo(field: str) -> float:

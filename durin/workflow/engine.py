@@ -130,6 +130,10 @@ class NodeRunRequest:
     # on a worker thread with its own event loop, so this must never be awaited
     # from inside the node — it marshals to the gateway loop itself.
     progress: Any = None
+    # The folder holding the run's record. A script runner records each process
+    # it starts there while it runs, so the conversion of a dead run can end the
+    # scripts its process left. None when the engine keeps no records.
+    record_dir: str | None = None
 
 
 @dataclass
@@ -318,7 +322,9 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     the conversion did not name as failed: a detached step that had started, a
     walk that had ended), when ``workflow`` (the current definition) no longer
     has its step, when ``workspace`` shows its working folder or its stored input
-    gone, and when a later run on its ``work_key`` has taken the folder over."""
+    gone, when a later run on its ``work_key`` has taken the folder over, and
+    while a script of the earlier process that the conversion could not end
+    (``scripts_left``) is still running."""
     status = manifest.get("status")
     paused = status == "needs_input" and manifest.get("needs_input_node")
     failed = manifest.get("failed_node") if status == "aborted" else None
@@ -364,6 +370,14 @@ def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
         if later:
             return (f"run {later!r} on the same key started after it and has taken over "
                     "its folder.")
+    # A script the earlier process started that could not be ended: running
+    # the step again would run it twice at once. Checked live, so the run can
+    # be resumed as soon as that process is gone.
+    from durin.utils.process_tree import same_live_process
+    for entry in manifest.get("scripts_left") or []:
+        if isinstance(entry, dict) and same_live_process(entry.get("pid"), entry.get("started")):
+            return (f"a script of its step '{entry.get('node_id')}' from the earlier process "
+                    f"is still running (pid {entry.get('pid')}). End it, then resume.")
     return None
 
 
@@ -1209,6 +1223,13 @@ class WorkflowEngine:
             except Exception:  # noqa: BLE001 - pruning must not break the run
                 logger.exception("workflow run manifest prune failed for {}", workflow.name)
 
+    def _record_dir(self, workflow) -> str | None:
+        """The folder of this engine's run records for ``workflow``, or None when
+        the engine keeps none."""
+        if self._workspace is None:
+            return None
+        return str(run_log.runs_root(self._workspace) / workflow.name)
+
     @staticmethod
     def _frame_task(workflow: Workflow, task: str, output_format: str | None = None) -> str:
         """Frame the task with the workflow's optional I/O descriptions: the input
@@ -1510,7 +1531,7 @@ class WorkflowEngine:
                     self._launch_detached(
                         detached_tracker, node, task, detached_input, run_id,
                         iteration, root_session_key, work_dir, raw_task=raw_task,
-                        entry=detached_entry)
+                        entry=detached_entry, record_dir=self._record_dir(workflow))
                 current = node.next
 
             elif isinstance(node, (WorkNode, ScriptNode)):
@@ -1553,6 +1574,7 @@ class WorkflowEngine:
                     run_id=run_id,
                     iteration=iteration,
                     root_session_key=root_session_key,
+                    record_dir=self._record_dir(workflow),
                     output_dir=out_dir,
                     # Same condition as the output_file write after the node returns.
                     output_file=((node.output_file or None)
@@ -2161,7 +2183,7 @@ class WorkflowEngine:
                 "characters), so nothing was started on a partial copy. Start a new run instead.")
 
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
-                         root_key, work_dir, raw_task=None, *, entry):
+                         root_key, work_dir, raw_task=None, *, entry, record_dir=None):
         """Submit a detached node to the run's tracker, with ``entry`` its item of
         the record's ``detached_active``. The callable mirrors branch
         execution (same kind dispatch, working-folder anchoring) but captures every
@@ -2171,7 +2193,7 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     node, task, upstream, run_id, iteration, root_key,
-                    None, out_dir=work_dir, raw_task=raw_task)
+                    None, out_dir=work_dir, raw_task=raw_task, record_dir=record_dir)
                 return self._unit_run(node.id, iteration, t0, node=node, resp=resp)
             except Exception as exc:  # noqa: BLE001 - a detached failure is a record, not an abort
                 return self._unit_run(node.id, iteration, t0, node=node, exc=exc)
@@ -2179,7 +2201,7 @@ class WorkflowEngine:
         tracker.launch(_execute, entry)
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
-                        workspace_override, out_dir=None, raw_task=None):
+                        workspace_override, out_dir=None, raw_task=None, record_dir=None):
         # Same kind dispatch as the linear walk: a script branch runs the script
         # contract (stdin = the parallel's upstream text, cwd = out_dir) beside
         # the agent branches.
@@ -2192,7 +2214,7 @@ class WorkflowEngine:
         return runner(NodeRunRequest(
             node=branch, task=task, raw_task=raw_task, upstream_output=upstream, shared_context=[],
             run_id=run_id, iteration=iteration, root_session_key=root_key,
-            workspace_override=workspace_override,
+            workspace_override=workspace_override, record_dir=record_dir,
             output_dir=out_dir if (is_script or getattr(branch, "tools", "none") == "default") else None,
             # Same split as the linear walk: a script branch's subprocess dies on
             # either cancel mode, an agent branch's turn only on a hard cancel.
@@ -2569,7 +2591,8 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                        None, out_dir=work_dir, raw_task=raw_task)
+                        None, out_dir=work_dir, raw_task=raw_task,
+                        record_dir=self._record_dir(workflow))
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
@@ -2615,7 +2638,8 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                    str(fork_dir), out_dir=str(fork_dir), raw_task=raw_task)
+                    str(fork_dir), out_dir=str(fork_dir), raw_task=raw_task,
+                    record_dir=self._record_dir(workflow))
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()

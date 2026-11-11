@@ -876,6 +876,8 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   `detached_active` is never written as `failed_node`: a record that holds one as its
   position keeps that position and gets no `failed_node` and no resume fields, since a
   resume would launch the detached side effect again;
+- `scripts_left`, only when a script process the run had started could not be ended
+  (see "A dead run's scripts end before its step runs again" below);
 - when it ends `cancelled`: `position` `null`, no `failed_node`, the stop written to
   the record's `stop_requested` (`{"at", "hard"}`, from the stop file when there is
   one), and the run's resume files removed, like any cancelled run. The cut rows are
@@ -934,9 +936,48 @@ quitting; a `/restart` without a gateway — first marks itself as shutting down
 flight. A foreground `run_workflow` call whose turn is cancelled while the process is
 shutting down asks nothing of its run: no cancel flag, no stop file. The run is left to
 end with the process (a process with a run still on its thread leaves it rather than
-wait for it), and the next start finds it dead and resumable at the step it was in. A
+wait for it; the TUI and the REPL also write one line to stderr naming how many runs
+were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
+the dashboard, since their log line is usually disabled). The run's record stays
+`running` until something finds its process gone: the gateway's crash sweep (at its
+start and periodically), the `tasks` tool when asked about that run, or a resume of
+it. Each converts it, resumable at the step it was in. A
 `durin agent -m` one-shot interrupted with Ctrl+C is the exception: asyncio's own Ctrl+C
 handling cancels its turn with no shutdown marked first, so that run is stopped.
+
+**A dead run's scripts end before its step runs again.** A script step runs in a
+process group of its own, and nothing outlives a crash to end it: a process killed, or
+one that leaves its runs on the way out, leaves the script running. So while a script
+process runs, the script runner records it beside the run's record, in a file of its own
+named `<run_id>.script.<pid>`: `{"pid", "started", "node_id"}`, the pid (also its process
+group) and its start time. One file per process, so the script branches of a parallel
+step, started at once from several threads, never share a file; the `.script.` name
+never matches the `*.json` listings. The engine hands the runner the folder of the
+run's record (`NodeRunRequest.record_dir`), so a sub-workflow's script is recorded beside
+the child run's record. The runner removes the file once the process has exited, however
+the step ends: on its own, killed on a timeout or a cancel, or when the wait itself fails
+(the runner then kills and reaps the process first). Nothing is recorded when the start
+time cannot be read, since the pid could not be told from a later process given the same
+one.
+
+The conversion of a dead run (`mark_dead_run`) ends what is left, under the per-run lock,
+before it writes the converted record. A recorded process that is still the same process
+(same pid, same start time, not a zombie) gets SIGTERM to its group, a bounded wait, then
+SIGKILL and another bounded wait. The start time is checked again right before each signal,
+and pid 0, pid 1, the converting process and its own group are never signalled. A record
+whose process is gone, or whose pid now belongs to a process started at another time, is
+only forgotten. This happens under the lock because a resume claims the run under the same
+lock: no resume can run the step again between the check that the run's process is gone and
+the end of its scripts. The waits are short and bounded, well under the lock's timeout. A
+process still alive after that (one the signals cannot reach) is named in the record's
+`scripts_left` (`{"pid", "node_id", "started"}`), and the conversion still completes.
+`resume_refusal` refuses the run while any of them is still that process, and accepts it
+once they are gone. The script files are removed once the converted record is written. The
+conversion then converts the dead sub-workflow runs of the run (`running` records whose
+`parent_run_id` is this run), so their scripts end before a resume runs the sub-workflow step
+again. A run that ends by itself (`finalize_run`, `finalize_short_circuit`) removes any
+script file left beside its record, and pruning a record removes them with it. No exit path
+ends scripts itself: the conversion covers every way a process can die, a kill included.
 
 **Resuming a dead run.** A `crashed` run is resumed like an aborted one, with
 `resume_run_id`, on both surfaces (the workflows service and the `run_workflow` tool).
@@ -963,6 +1004,7 @@ refused, in the order they are asked (after the sub-workflow refusal above):
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
 | its `work_dir` is gone, or no input is stored for its position (or the stored one names another step) | `its working folder was pruned. Start a new run instead.` |
 | a run of the same workflow on the same `work_key` started after it | `run '<id>' on the same key started after it and has taken over its folder.` |
+| a process in `scripts_left` is still the same live process (checked each time it is asked) | `a script of its step '<id>' from the earlier process is still running (pid <n>). End it, then resume.` |
 
 The parallel-unit refusal is not asked of a dead run: its step is its position, which
 only ever names a step of the walk, and a run that died between two steps has no row for
@@ -1817,7 +1859,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
-| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `request_stop`, `stop_requested`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `request_stop` keeps a stop someone asked for beside a running record (`<run_id>.stop`), which `mark_dead_run` reads. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `request_stop`, `stop_requested`, `record_script`, `script_records`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `request_stop` keeps a stop someone asked for beside a running record (`<run_id>.stop`), which `mark_dead_run` reads. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |

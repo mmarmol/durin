@@ -334,8 +334,7 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         #
         # The drain cancels the turns in flight. Said first: a turn cancelled
         # by this restart is not a stop of the workflow run it waits on, which
-        # is left to end with the process and found dead, and resumable, by
-        # the next one.
+        # is left to end with the process and later found dead, and resumable.
         begin_shutdown()
         timer = arm_restart_deadline()
         try:

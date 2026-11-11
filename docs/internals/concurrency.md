@@ -108,7 +108,10 @@ re-execs, and a stop ends the process as soon as everything is flushed
 (`leave_unfinished_runs`), naming the runs it left (the whole stop sequence is
 in [observability](observability.md)). Quitting the TUI or the legacy REPL
 ends the same way. Either way the run ends
-where a crash would, for the startup sweep to mark it `crashed`. Reactive dreams run
+where a crash would: its record stays `running` until the gateway's crash sweep (at
+start and periodically), the `tasks` tool asked about it, or a resume of it finds its
+process gone and marks it `crashed`, resumable. A script it had started is ended then,
+before its step can run again (see [workflow.md](workflow.md)). Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.
 

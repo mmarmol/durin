@@ -260,9 +260,14 @@ async def _cancel_a_foreground_turn(tmp_path, *, then):
             await then(started[0])
         finally:
             released.set()
+            # Return only once the run's thread is gone: a thread left behind
+            # would be taken for an unfinished run by a later test.
+            from durin.workflow.run_threads import runs_in_flight
             deadline = time.time() + 5
-            while not saw_cancel and time.time() < deadline:
+            while ((not saw_cancel or started[0] in runs_in_flight())
+                   and time.time() < deadline):
                 await asyncio.sleep(0.01)
+            assert started[0] not in runs_in_flight()
             cancellation.clear(started[0])
     return saw_cancel[0]
 

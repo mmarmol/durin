@@ -3,7 +3,10 @@ can end this process while a chosen step is running.
 
     python -I tests/workflow/_crash_driver.py <workspace> <definition.json> <task>
 
-Every step records each start as one line in ``<workspace>/marks/<step id>``.
+Every step records each start as one line in ``<workspace>/marks/<step id>``
+(a script step first waits until the runner has recorded its process beside
+the run's record, so a test that ends the process once the step has started
+always finds the script recorded).
 An agent step also records the attempt number it was given as one line in
 ``marks/<step id>.iter``, and what it was given (its task, the shared
 conversation and the edge text) as one JSON line in ``marks/<step id>.seen``; a
@@ -182,6 +185,14 @@ class MarkingScriptRunner:
                      if marks.is_file() else 0) + 1
             stdin = shlex.quote(str(self._marks / f"{node.id}.stdin.{start}"))
             mark = f"echo x >> {shlex.quote(str(marks))}; cat > {stdin};"
+            if req.record_dir:
+                # The runner records this process beside the run's record right
+                # after starting it. Waiting for that record (bounded) before
+                # marking the start means a test that ends the process once the
+                # step has started always finds the script recorded.
+                record = shlex.quote(str(Path(req.record_dir) / f"{req.run_id}.script.")) + "$$"
+                mark = (f"for _ in $(seq 500); do [ -e {record} ] && break; sleep 0.01; done; "
+                        + mark)
             if _hangs(node.id):
                 hung = shlex.quote(str(self._marks / ".hung"))
                 command = f"{mark} touch {hung}; sleep {HANG_SECONDS}"

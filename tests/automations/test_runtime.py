@@ -859,6 +859,65 @@ async def test_stop_running_run_keeps_the_stop_beside_the_workflow_runs_record(t
         clear("stop-kept-1")
 
 
+async def test_an_automation_stop_is_kept_even_when_its_caller_is_cancelled(tmp_path, monkeypatch):
+    """The coroutine that asked for the stop can be cancelled (a shutdown drain)
+    while the stop's write still waits for an executor thread; the write must
+    still happen."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from durin.workflow import cancellation
+    from durin.workflow import run_log as wf_run_log
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None, paced=False):
+        wf_run_log.start_run(tmp_path, name, run_id, root_session_key=root_session_key,
+                             started_at=time.time())
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-held-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    gate = threading.Event()
+    real_request_cancel = cancellation.request_cancel
+
+    def cancel_then_hold_the_only_thread(run_id, *, hard=False):
+        real_request_cancel(run_id, hard=hard)
+        loop.run_in_executor(None, gate.wait, 10)
+
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        loop.set_default_executor(executor)
+        monkeypatch.setattr(cancellation, "request_cancel", cancel_then_hold_the_only_thread)
+        stop = asyncio.create_task(rt.stop("a1", "stop-held-0", hard=True))
+        while not cancellation.is_cancelled("stop-held-1"):
+            await asyncio.sleep(0)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        gate.set()
+        deadline = time.monotonic() + 5
+        while (wf_run_log.stop_requested(tmp_path, "w1", "stop-held-1") is None
+               and time.monotonic() < deadline):
+            await asyncio.sleep(0.01)
+        assert wf_run_log.stop_requested(tmp_path, "w1", "stop-held-1")["hard"] is True
+    finally:
+        gate.set()
+        released.set()
+        await fire_task
+        cancellation.clear("stop-held-1")
+        executor.shutdown(wait=True)
+
+
 async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
     from durin.workflow.cancellation import clear, is_hard_cancelled
 

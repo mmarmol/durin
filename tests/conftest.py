@@ -278,6 +278,25 @@ def _not_shutting_down():
     cancellation._shutting_down = False
 
 
+@pytest.fixture(autouse=True)
+def _no_test_ends_its_own_process(monkeypatch):
+    """Keep every in-process exit path from ending the test process.
+
+    ``leave_unfinished_runs`` ends the process (``os._exit(0)``) whenever a
+    thread named like a workflow run is alive. The gateway, the TUI and the
+    legacy REPL call it on their way out, and a test drives those in-process.
+    One stray run thread from another test would then end the pytest worker,
+    or, without xdist, end the whole run with exit code 0, which reads as a
+    pass while every later test never ran. Every call site looks the name up
+    on ``durin.workflow.run_threads`` when it is called, so replacing it there
+    covers them all. A test of the function itself holds the real one, taken
+    at import time, or runs it in a subprocess.
+    """
+    from durin.workflow import run_threads
+
+    monkeypatch.setattr(run_threads, "leave_unfinished_runs", lambda **_kw: None)
+
+
 # The home of whoever runs the suite, read when this module is imported:
 # before any test points HOME at a folder of its own.
 _REAL_HOME = os.path.expanduser("~")

@@ -890,3 +890,51 @@ async def test_force_parameter_is_declared_and_documented(tmp_path):
     force = tool.parameters["properties"]["force"]
     assert "boolean" in force["type"]
     assert "force" in tool.description
+
+
+@pytest.mark.asyncio
+async def test_a_stop_is_kept_even_when_the_turn_asking_for_it_is_cancelled(
+    tmp_path, monkeypatch,
+):
+    """A shutdown drain cancels the turn that asked for the stop. The write of
+    the stop must not be dropped with it, even while it still waits for an
+    executor thread."""
+    import asyncio
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "alive791", status="running")
+    _set_manifest_owner(tmp_path, "qa", "alive791", process_identity(os.getpid()))
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    gate = threading.Event()
+    real_request_cancel = cancellation.request_cancel
+
+    def cancel_then_hold_the_only_thread(run_id, *, hard=False):
+        real_request_cancel(run_id, hard=hard)
+        # The write of the stop now waits in the executor's queue.
+        loop.run_in_executor(None, gate.wait, 10)
+
+    monkeypatch.setattr(cancellation, "request_cancel", cancel_then_hold_the_only_thread)
+    try:
+        stop = asyncio.create_task(_tool(tmp_path, None).execute(action="stop", id="alive791"))
+        while not cancellation.is_cancelled("alive791"):
+            await asyncio.sleep(0)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        gate.set()
+        deadline = time.monotonic() + 5
+        while (run_log.stop_requested(tmp_path, "qa", "alive791") is None
+               and time.monotonic() < deadline):
+            await asyncio.sleep(0.01)
+        assert run_log.stop_requested(tmp_path, "qa", "alive791") is not None
+    finally:
+        gate.set()
+        cancellation.clear("alive791")
+        executor.shutdown(wait=True)

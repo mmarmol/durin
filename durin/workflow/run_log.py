@@ -35,6 +35,7 @@ its process died before the stop took effect.
 
 from __future__ import annotations
 
+import glob
 import json
 import time
 from pathlib import Path
@@ -527,6 +528,9 @@ def finalize_run(
     # The run has ended, so a stop asked for while it ran has nothing left to
     # stop. Removed after the record is written: see request_stop.
     _drop_stop_request(stop_request_path(workspace, name, result.run_id))
+    # Every script of the run has exited by now; a record left by an earlier
+    # walk whose process died goes too.
+    _drop_script_records(workspace, name, result.run_id)
     return path
 
 
@@ -579,6 +583,7 @@ def finalize_short_circuit(
     _write_json(path, record)
     _drop_resume_files(workspace, record)
     _drop_stop_request(stop_request_path(workspace, name, run_id))
+    _drop_script_records(workspace, name, run_id)
     return record
 
 
@@ -629,6 +634,83 @@ def _drop_stop_request(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# Each script process a run starts is recorded in a file of its own beside the
+# run's record while it runs, ``<run_id>.script.<pid>``: one file per process,
+# so script branches running at once on several threads never rewrite a shared
+# file. No ``*.json`` listing matches the name.
+_SCRIPT_INFIX = ".script."
+
+# How long the conversion of a dead run waits for a script it signalled: first
+# after SIGTERM, then after SIGKILL. Bounded, since it waits under the run's lock.
+DEAD_RUN_SCRIPT_TERM_WAIT_S = 2.0
+DEAD_RUN_SCRIPT_KILL_WAIT_S = 1.0
+
+
+def record_script(record_dir: str | Path, run_id: str, *, pid: int, started: str,
+                  node_id: str) -> Path:
+    """Record a script process a run started, in ``record_dir`` (the folder of
+    the run's record): ``{"pid", "started", "node_id"}``, written atomically.
+    The process leads a process group of its own (its pid is the group id).
+    Returns the file, which the caller removes once the process has exited."""
+    path = Path(record_dir) / f"{run_id}{_SCRIPT_INFIX}{pid}"
+    atomic_write_text(path, json.dumps({"pid": pid, "started": started, "node_id": node_id}))
+    return path
+
+
+def forget_script(path: str | Path | None) -> None:
+    """Remove a script record (``record_script``). Best-effort."""
+    if path is None:
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def script_records(workspace: str | Path, name: str, run_id: str) -> list[Path]:
+    """The script records of a run, one file per script process."""
+    folder = _wf_dir(workspace, name)
+    if not folder.is_dir():
+        return []
+    return sorted(folder.glob(f"{glob.escape(run_id)}{_SCRIPT_INFIX}*"))
+
+
+def _drop_script_records(workspace: str | Path, name: str, run_id: str) -> None:
+    for path in script_records(workspace, name, run_id):
+        forget_script(path)
+
+
+def _end_recorded_scripts(workspace: str | Path, name: str,
+                          run_id: str) -> tuple[list[dict], list[Path]]:
+    """End the script processes a dead run left that are still running, and
+    return ``(left, records)``: the ones still alive afterwards as
+    ``{"pid", "node_id", "started"}``, and every record file read (removed by
+    the caller once the converted record is written). A record whose process is
+    gone, or whose pid now belongs to another process (another start time), is
+    only forgotten: nothing is signalled."""
+    from durin.utils.process_tree import end_process_groups, same_live_process
+
+    records = script_records(workspace, name, run_id)
+    candidates: list[dict] = []
+    for path in records:
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if same_live_process(entry.get("pid"), entry.get("started")):
+            candidates.append(entry)
+    if not candidates:
+        return [], records
+    alive = end_process_groups(
+        [(e["pid"], e["started"]) for e in candidates],
+        term_wait_s=DEAD_RUN_SCRIPT_TERM_WAIT_S, kill_wait_s=DEAD_RUN_SCRIPT_KILL_WAIT_S)
+    left = [{"pid": e["pid"], "node_id": e.get("node_id"), "started": e["started"]}
+            for e in candidates if e["pid"] in alive]
+    return left, records
 
 
 def stop_requested(workspace: str | Path, name: str, run_id: str) -> dict | None:
@@ -993,6 +1075,25 @@ def mark_dead_run(
     The stop file is removed once the converted record is written; a write
     that fails leaves it, for the next sweep to find.
 
+    Before the record is written, every script process the run recorded
+    (``record_script``) that is still the same live process (same pid, same
+    start time) is ended: its process group gets SIGTERM, then SIGKILL, with a
+    bounded wait after each (``DEAD_RUN_SCRIPT_TERM_WAIT_S``,
+    ``DEAD_RUN_SCRIPT_KILL_WAIT_S``). Otherwise a resume would run the step
+    again while its earlier script still runs. A record whose process is gone,
+    or whose pid belongs to another process now, is only forgotten. This
+    happens under the lock: a resume claims the run under the same lock, so no
+    resume can start the step again between the check that the run's process
+    is gone and the end of its scripts, and the waits are bounded well under
+    the lock's timeout. A script still alive after that is named in the
+    record's ``scripts_left`` (``{"pid", "node_id", "started"}``), and
+    ``resume_refusal`` refuses the run while it lives. The script records are
+    removed once the converted record is written.
+
+    Then the dead sub-workflow runs this run started (``running`` records whose
+    ``parent_run_id`` is this run) are converted the same way, so their scripts
+    end too before a resume runs the sub-workflow step again.
+
     A step listed in ``detached_active`` is never written as ``failed_node``:
     a record naming one as its position keeps that position and gets no
     ``failed_node`` or resume fields.
@@ -1019,8 +1120,16 @@ def mark_dead_run(
                                "cannot be converted ({}); marked {} only",
                                run_id, name, exc, "cancelled" if stop else "crashed")
                 out = _minimal_mark(record, stop)
+            left, scripts = _end_recorded_scripts(workspace, name, run_id)
+            if left:
+                logger.warning("run {} of workflow {!r}: {} script process(es) of the dead "
+                               "run could not be ended: {}", run_id, name, len(left),
+                               ", ".join(str(e["pid"]) for e in left))
+                out["scripts_left"] = left
             _write_json(_record_path(workspace, name, run_id), out)
             _drop_stop_request(stop_path)
+            for path in scripts:
+                forget_script(path)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
@@ -1031,7 +1140,27 @@ def mark_dead_run(
         return None
     if out["status"] in UNRESUMABLE_ENDS:
         _drop_resume_files(workspace, out)
+    _mark_dead_children(workspace, run_id, now=now, max_age_s=max_age_s)
     return out
+
+
+def _mark_dead_children(workspace: str | Path, run_id: str, *, now: float,
+                        max_age_s: float) -> None:
+    """Convert the dead ``running`` sub-workflow runs whose caller is
+    ``run_id`` (and theirs, in turn). Best-effort: a sweep finds any left."""
+    root = runs_root(workspace)
+    if not root.is_dir():
+        return
+    for path in list(root.glob("*/*.json")):
+        if path.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (isinstance(rec, dict) and rec.get("status") == "running"
+                and rec.get("parent_run_id") == run_id):
+            mark_dead_run(workspace, path.parent.name, path.stem, now=now, max_age_s=max_age_s)
 
 
 def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) -> int:
@@ -1386,6 +1515,7 @@ def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
             # A stop file goes with its record (an ended run keeps none, but
             # one a dead process left behind must not outlive the record).
             _drop_stop_request(path.with_suffix(_STOP_REQUEST_SUFFIX))
+            _drop_script_records(workspace, name, path.stem)
     except OSError:
         pass
 

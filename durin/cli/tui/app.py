@@ -402,8 +402,8 @@ class DurinApp(App[None]):
 
         The process is going down, and every turn still in flight is cancelled
         with it: said first, so a workflow run a cancelled turn waits on is left
-        to end with the process (found dead, and resumable, by the next start)
-        instead of being taken as stopped."""
+        to end with the process (later found dead, and resumable) instead of
+        being taken as stopped."""
         from durin.workflow.cancellation import begin_shutdown
 
         begin_shutdown()

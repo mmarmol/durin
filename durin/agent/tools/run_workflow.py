@@ -821,7 +821,8 @@ class RunWorkflowTool(Tool, ContextAware):
         except asyncio.CancelledError:
             # A turn cancelled because this process is shutting down is not a
             # stop: nothing is asked of the run, which ends with the process
-            # and is found dead, and resumable, by the next start.
+            # and is later found dead, and resumable (by the crash sweep, the
+            # tasks tool or a resume of it).
             if not engine_future.done() and not _shutting_down():
                 # /stop cancelled the turn. asyncio cancellation cannot reach
                 # the engine's worker thread, so signal the cooperative cancel

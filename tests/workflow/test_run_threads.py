@@ -13,7 +13,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from loguru import logger
 
+from durin.workflow import run_threads
 from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
+
+# The real function, held from import time: the suite-wide guard replaces the
+# module's name with a no-op for every test, so no test can end its process.
+_REAL_LEAVE_UNFINISHED_RUNS = run_threads.leave_unfinished_runs
 
 _VAR: contextvars.ContextVar[str] = contextvars.ContextVar("_VAR", default="unset")
 
@@ -254,3 +259,43 @@ def test_a_stopped_gateway_with_no_run_exits_normally():
 
     assert done.returncode == 0
     assert done.stdout.splitlines() == ["stopped", "exited on its own"]
+
+
+class _ExitedError(Exception):
+    pass
+
+
+def _left_with_a_run_thread(monkeypatch, **kwargs) -> int:
+    """Run the real ``leave_unfinished_runs`` with a run thread alive and
+    ``os._exit`` replaced by an exception; returns the exit code it asked for."""
+    codes: list[int] = []
+
+    def _exit(code):
+        codes.append(code)
+        raise _ExitedError
+
+    monkeypatch.setattr(run_threads.os, "_exit", _exit)
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, args=(10,), name="workflow-run-left1")
+    thread.start()
+    try:
+        with pytest.raises(_ExitedError):
+            _REAL_LEAVE_UNFINISHED_RUNS(**kwargs)
+    finally:
+        release.set()
+        thread.join(5)
+    return codes[0]
+
+
+def test_a_quit_tells_the_person_how_many_runs_were_left(monkeypatch, capsys):
+    assert _left_with_a_run_thread(monkeypatch, tell_user=True) == 0
+    lines = capsys.readouterr().err.splitlines()
+    told = [line for line in lines if "left1" in line]
+    assert len(told) == 1
+    assert "1 workflow run" in told[0] and "resume" in told[0]
+    assert "resume_run_id" in told[0] and "dashboard" in told[0]
+
+
+def test_a_gateway_stop_keeps_only_its_log_line(monkeypatch, capsys):
+    _left_with_a_run_thread(monkeypatch)
+    assert "resume_run_id" not in capsys.readouterr().err

@@ -402,8 +402,11 @@ class AutomationsRuntime:
                 # The same stop kept beside the workflow run's own record: a
                 # workflow run whose process dies before the stop takes effect
                 # then ends cancelled instead of being offered for resume. A
-                # lock and a file write, so off the event loop.
-                await asyncio.to_thread(self._keep_workflow_stop, name, workflow_run_id, hard)
+                # lock and a file write, so off the event loop: handed to the
+                # executor here and now, and only the wait is shielded, so a
+                # cancel of this call (a shutdown drain) cannot drop it.
+                await asyncio.shield(asyncio.get_running_loop().run_in_executor(
+                    None, self._keep_workflow_stop, name, workflow_run_id, hard))
             return stamped
 
         if status == "paused":

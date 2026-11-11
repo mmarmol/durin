@@ -86,11 +86,16 @@ def run_to_end(tmp_path: Path, definition: dict, task: str = "t", *,
 
 def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
                      how: str = "kill", task: str = "t",
-                     env: dict[str, str] | None = None) -> Dead:
+                     env: dict[str, str] | None = None,
+                     keep_scripts: bool = False) -> Dead:
     """Run `definition` in a child process and end the process while step
     `stop_in` is running (None: while the step `env` makes hang, such as a
     fan-out worker by its task). `how`: "kill" (SIGKILL), "term" (SIGTERM, then
-    wait), "exec" (the child replaces its own image, keeping its pid)."""
+    wait), "exec" (the child replaces its own image, keeping its pid).
+
+    The script processes the child leaves behind are killed at once, unless
+    `keep_scripts`: they then stay alive for the test, which is what a dead
+    process leaves in production, and ``reap`` still kills any left after it."""
     if how not in ("kill", "term", "exec"):
         raise ValueError(f"how must be 'kill', 'term' or 'exec', got {how!r}")
     tmp_path = Path(tmp_path)
@@ -112,7 +117,8 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
         except subprocess.TimeoutExpired:
             raise AssertionError(
                 f"the child outlived {how} for {_EXIT_WAIT_S:.0f}s\n{_log(tmp_path)}") from None
-        _kill_strays()
+        if not keep_scripts:
+            _kill_strays()
     run_id = _run_id(env)
     return Dead(workspace=workspace, run_id=run_id,
                 record=_record(workspace, definition, run_id), marks=marks(workspace))

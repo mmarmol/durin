@@ -30,8 +30,9 @@ process died) is also kept beside the run's record: see
 
 A process that is going down says so with :func:`begin_shutdown` before it
 cancels the turns in flight. A turn cancelled by that shutdown is not anyone
-stopping the run it waits on: the run is left to die with the process, and the
-next start finds it dead and resumable. :func:`shutting_down` is how the code
+stopping the run it waits on: the run is left to die with the process, to be
+found dead, and resumable, by the gateway's crash sweep, the ``tasks`` tool or a
+resume of it. :func:`shutting_down` is how the code
 that cancels a run on a cancelled turn tells the two apart.
 """
 

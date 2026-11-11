@@ -33,6 +33,7 @@ Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from pathlib import Path
 from typing import Any
@@ -490,10 +491,13 @@ class TasksTool(Tool, ContextAware):
         # The flag above stops the run but dies with this process. Kept beside
         # the record too, a run that dies before the stop takes effect ends
         # cancelled instead of being offered for resume. It takes the run's
-        # lock and writes a file, so it runs off the event loop.
+        # lock and writes a file, so it runs off the event loop: handed to the
+        # executor here and now, and only the wait is shielded, so a cancel of
+        # this call (a shutdown drain cancelling the turn) cannot drop it.
         from durin.workflow import run_log
-        await asyncio.to_thread(
-            run_log.request_stop, self._workspace, row["label"], task_id, hard=hard)
+        await asyncio.shield(asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(
+                run_log.request_stop, self._workspace, row["label"], task_id, hard=hard)))
         if hard:
             return (
                 f"Workflow run [{task_id}] force-stopped: the node currently "

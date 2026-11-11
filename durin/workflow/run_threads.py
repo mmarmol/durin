@@ -115,7 +115,7 @@ def runs_in_flight() -> list[str]:
         if thread.name.startswith(prefix))
 
 
-def leave_unfinished_runs() -> None:
+def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     """End a stopped process now if a run is still executing on its thread.
 
     A run's thread is no daemon, so an interpreter exit would wait for it, and
@@ -123,9 +123,14 @@ def leave_unfinished_runs() -> None:
     the exit begins, so each DNS lookup and thread hop fails, and a provider
     reports that as a connection error and retries until a supervisor kills
     the process. Leaving instead ends the run where a crash would: its manifest
-    stays ``running``, and the next start marks it ``crashed`` and tells whoever
-    is waiting, the same as after a restart. With no run executing this returns
-    and the interpreter exits as usual.
+    stays ``running`` until a sweep, a ``tasks`` call about it or a resume
+    finds its process gone and marks it ``crashed``, resumable at the step it
+    was in. With no run executing this returns and the interpreter exits as
+    usual.
+
+    ``tell_user`` also writes one line to stderr naming how many runs were left
+    and how to resume them: the terminal UI and the REPL, where a person is
+    watching and the log line is usually disabled.
     """
     unfinished = runs_in_flight()
     if not unfinished:
@@ -133,6 +138,15 @@ def leave_unfinished_runs() -> None:
     logger.warning(
         "Shutdown: exiting with {} workflow run(s) unfinished: {}",
         len(unfinished), ", ".join(unfinished))
+    if tell_user:
+        count = len(unfinished)
+        with suppress(Exception):
+            print(
+                f"durin: left {count} workflow run{'s' if count != 1 else ''} unfinished "
+                f"({', '.join(unfinished)}); "
+                f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
+                "(resume_run_id) or from the dashboard.",
+                file=sys.stderr, flush=True)
     _flush_logs_before_exit()
     with suppress(Exception):
         sys.stdout.flush()

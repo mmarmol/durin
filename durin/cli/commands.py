@@ -2586,10 +2586,11 @@ def agent(
         )
         # Quitting is a shutdown, not a stop of the runs in flight: a run
         # still on its thread would hold the exit until it ended, so the
-        # process leaves it, to be found dead and resumable.
-        from durin.workflow.run_threads import leave_unfinished_runs
+        # process leaves it, resumable, and tells the person so on stderr
+        # (the log line is usually disabled here).
+        from durin.workflow import run_threads
 
-        leave_unfinished_runs()
+        run_threads.leave_unfinished_runs(tell_user=True)
         return
 
     # `--legacy` (or one-shot via -m) — fall through to the original REPL/one-shot.
@@ -2907,16 +2908,17 @@ def agent(
 
         # A run still on its thread would hold the exit until it ended; on a
         # quit (a normal return, or the signal handler's exit) the process
-        # leaves it instead, to be found dead and resumable. An error keeps
-        # its traceback and exit code.
-        from durin.workflow.run_threads import leave_unfinished_runs
+        # leaves it instead, resumable, and tells the person so on stderr (the
+        # log line is usually disabled here). An error keeps its traceback and
+        # exit code.
+        from durin.workflow import run_threads
 
         try:
             asyncio.run(run_interactive())
         except SystemExit:
-            leave_unfinished_runs()
+            run_threads.leave_unfinished_runs(tell_user=True)
             raise
-        leave_unfinished_runs()
+        run_threads.leave_unfinished_runs(tell_user=True)
 
 
 # ============================================================================
