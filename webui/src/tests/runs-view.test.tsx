@@ -259,7 +259,7 @@ describe("RunsView", () => {
     vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
       status: "aborted", final_output: "boom", failed_node: "build", run_id: "run-failed", runs: [],
     });
-    vi.mocked(api.runWorkflow).mockRejectedValue(new Error("cannot be resumed — already resumed"));
+    vi.mocked(api.runWorkflow).mockRejectedValueOnce(new Error("cannot be resumed — already resumed"));
     const user = userEvent.setup();
     render(wrap(<RunsView />));
     await user.click(await screen.findByRole("button", { name: /provision the workspace/ }));
@@ -291,7 +291,7 @@ describe("RunsView", () => {
     vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
       status: "crashed", final_output: "", failed_node: "build", run_id: "run-dead", runs: [],
     });
-    vi.mocked(api.runWorkflow).mockRejectedValue(new Error("a script it started is still running"));
+    vi.mocked(api.runWorkflow).mockRejectedValueOnce(new Error("a script it started is still running"));
     const user = userEvent.setup();
     render(wrap(<RunsView />));
     await user.click(await screen.findByRole("button", { name: /migrate the data/ }));

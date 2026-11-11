@@ -1410,7 +1410,7 @@
     "keepWaiting": "Tiếp tục chờ",
     "abortedTitle": "Lượt chạy bị dừng",
     "retryFailedStep": "Thử lại bước bị lỗi",
-    "crashedTitle": "Lần chạy bị gián đoạn",
+    "crashedTitle": "Lượt chạy bị cắt ngang do tiến trình kết thúc",
     "crashedBody": "Tiến trình chạy nó đã kết thúc trước khi hoàn tất. Bước đang chạy chưa hoàn thành.",
     "retryCutStep": "Tiếp tục từ bước bị gián đoạn",
     "cancelledTitle": "Lượt chạy đã hủy",

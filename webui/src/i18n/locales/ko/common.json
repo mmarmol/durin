@@ -1410,7 +1410,7 @@
     "keepWaiting": "계속 기다리기",
     "abortedTitle": "실행 중단됨",
     "retryFailedStep": "실패한 단계 다시 시도",
-    "crashedTitle": "실행이 중단됨",
+    "crashedTitle": "프로세스 종료로 실행이 끊김",
     "crashedBody": "실행하던 프로세스가 끝나기 전에 종료되었습니다. 진행 중이던 단계는 완료되지 않았습니다.",
     "retryCutStep": "중단된 단계에서 재개",
     "cancelledTitle": "실행 취소됨",

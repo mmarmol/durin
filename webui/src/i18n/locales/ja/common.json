@@ -1410,7 +1410,7 @@
     "keepWaiting": "待ち続ける",
     "abortedTitle": "実行が中断されました",
     "retryFailedStep": "失敗したステップを再試行",
-    "crashedTitle": "実行が中断されました",
+    "crashedTitle": "プロセスの終了で実行が途切れました",
     "crashedBody": "実行していたプロセスが完了前に終了しました。実行中だったステップは完了していません。",
     "retryCutStep": "中断されたステップから再開",
     "cancelledTitle": "実行がキャンセルされました",

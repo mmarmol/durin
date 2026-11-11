@@ -1410,7 +1410,7 @@
     "keepWaiting": "Tetap menunggu",
     "abortedTitle": "Run dihentikan",
     "retryFailedStep": "Coba lagi langkah yang gagal",
-    "crashedTitle": "Eksekusi terhenti",
+    "crashedTitle": "Run terputus karena prosesnya berakhir",
     "crashedBody": "Proses yang menjalankannya berakhir sebelum selesai. Langkah yang sedang berjalan tidak selesai.",
     "retryCutStep": "Lanjutkan dari langkah yang terhenti",
     "cancelledTitle": "Run dibatalkan",
