@@ -422,3 +422,91 @@ async def test_a_run_the_service_launches_is_recorded_as_the_services(tmp_path):
         result = await _svc(tmp_path).execute("wf", "go", run_id="fresh1")
     assert result.status == "completed"
     assert run_log.read_manifest(tmp_path, "wf", "fresh1")["surface"] == "service"
+
+
+# An agent-launched run of a workflow with an `mcps` step. Only a dead run is
+# refused for it through the service; a paused or aborted one is resumed as it
+# always was (its later `mcps` steps run without those tools, a known limit).
+
+_MCP_FLOW = {"name": "wf", "start": "ask", "nodes": [
+    {"id": "ask", "kind": "work", "approval": True, "next": "tool"},
+    {"id": "tool", "kind": "work", "mcps": ["tracker"], "next": None}]}
+
+
+def _agent_record(tmp_path, definition: dict, **fields) -> None:
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{definition['name']}.json").write_text(json.dumps(definition), encoding="utf-8")
+    run_log.start_run(tmp_path, "wf", "agent1", root_session_key="s", started_at=1.0,
+                      task="the task", surface="agent")
+    f = tmp_path / "workflows-runs" / "wf" / "agent1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, **fields)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+
+
+def _engine_run_completes():
+    from durin.workflow.result import WorkflowResult
+    return patch("durin.workflow.engine.WorkflowEngine.run", return_value=WorkflowResult(
+        status="completed", final_output="done", runs=[], run_id="agent1"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["approve", "please shorten it"])
+async def test_an_agent_approval_pause_with_mcp_steps_is_answered_through_the_service(
+        tmp_path, reply):
+    _agent_record(tmp_path, _MCP_FLOW, status="needs_input", needs_input_node="ask",
+                  ask_kind="approval", final_output="the proposal")
+    with _provider(), _engine_run_completes() as fake_run:
+        result = await _svc(tmp_path).execute("wf", reply, resume_run_id="agent1")
+    assert result.status == "completed"
+    fake_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_question_pause_with_mcp_steps_is_answered_through_the_service(tmp_path):
+    flow = {**_MCP_FLOW, "nodes": [{**_MCP_FLOW["nodes"][0], "approval": False},
+                                   _MCP_FLOW["nodes"][1]]}
+    _agent_record(tmp_path, flow, status="needs_input", needs_input_node="ask",
+                  ask_kind="question", final_output="which env?")
+    with _provider(), _engine_run_completes() as fake_run:
+        result = await _svc(tmp_path).execute("wf", "prod", resume_run_id="agent1")
+    assert result.status == "completed"
+    fake_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_aborted_run_with_mcp_steps_is_retried_through_the_service(tmp_path):
+    _agent_record(tmp_path, _MCP_FLOW, status="aborted", failed_node="tool",
+                  resume_upstream="x", final_output="boom",
+                  runs=[{"node_id": "tool", "iteration": 1, "status": "node_failed"}])
+    with _provider(), _engine_run_completes() as fake_run:
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="agent1")
+    assert result.status == "completed"
+    fake_run.assert_called_once()
+
+
+def _write_flow(tmp_path, definition: dict) -> None:
+    (workflows_dir(tmp_path) / f"{definition['name']}.json").write_text(
+        json.dumps(definition), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_a_dead_agent_run_whose_sub_workflow_has_mcp_steps_is_left_to_the_agent(tmp_path):
+    _dead_run(tmp_path, {"kind": "subworkflow", "workflow": "child"}, surface="agent")
+    _write_flow(tmp_path, {"name": "child", "start": "x", "nodes": [
+        {"id": "x", "kind": "work", "mcps": ["tracker"], "next": None}]})
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError, match="only a run resumed by the agent"):
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    fake_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_dead_agent_run_whose_sub_workflow_has_no_mcp_steps_is_resumed(tmp_path):
+    _dead_run(tmp_path, {"kind": "subworkflow", "workflow": "child"}, surface="agent")
+    _write_flow(tmp_path, {"name": "child", "start": "x", "nodes": [
+        {"id": "x", "kind": "script", "command": "echo child-ok", "next": None}]})
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed" and "child-ok" in (result.final_output or "")

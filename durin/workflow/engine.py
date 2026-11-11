@@ -196,6 +196,10 @@ class ResumeState:
     # resumed walk — whose in-memory runs list starts empty — can still compose
     # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
     recorded_outputs: dict[str, str] = field(default_factory=dict)
+    # The steps of ``recorded_outputs`` whose text was read whole from the run's
+    # resume store rather than from the record's capped copies: a parallel step
+    # may read its list or its branch ids from these whatever their length.
+    whole_outputs: frozenset[str] = frozenset()
     # The work_key the ORIGINAL (paused/failed) run used, if any — read from its
     # manifest (see build_resume_state). "Same run_id" alone does not guarantee "same
     # folder" once work_key exists: a keyed run's folder is a function of
@@ -363,15 +367,60 @@ def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
     return None
 
 
+MCP_TOOLS_REFUSAL = ("its steps use MCP tools that only a run resumed by the agent has. "
+                     "Ask the agent to resume it with run_workflow.")
+
+
+def _uses_mcp_tools(workflow: Workflow, workspace: str | Path) -> bool:
+    """Whether a step of ``workflow``, or of a workflow a sub-workflow step names
+    (followed to any depth), names ``mcps``. Each workflow is read once, so one
+    that names itself, directly or through another, ends the walk; a named
+    workflow that cannot be loaded counts as having no such step."""
+    from durin.workflow.loader import load_workflow
+
+    seen = {workflow.name}
+    pending = [workflow]
+    while pending:
+        for node in pending.pop().nodes.values():
+            if isinstance(node, WorkNode) and node.mcps:
+                return True
+            if isinstance(node, SubworkflowNode) and node.workflow not in seen:
+                seen.add(node.workflow)
+                try:
+                    pending.append(load_workflow(workspace, node.workflow))
+                except Exception:  # noqa: BLE001 - an unreadable definition has no steps to give tools to
+                    continue
+    return False
+
+
+def mcp_tools_refusal(manifest: dict, workflow: Workflow, *,
+                      workspace: str | Path) -> str | None:
+    """Why a surface without the gateway's live MCP tools (the workflows service)
+    must not resume this run, or None. Only a dead run is refused: one the agent's
+    run tool launched (``surface: "agent"``), whose steps had those tools, of a
+    workflow where a step — its own, or one of a sub-workflow it calls — names
+    ``mcps``. A paused or failed run is resumed by such a surface as it always
+    was, and a record without ``surface`` is never refused on its account."""
+    if resumable_kind(manifest) != "dead" or manifest.get("surface") != "agent":
+        return None
+    return MCP_TOOLS_REFUSAL if _uses_mcp_tools(workflow, workspace) else None
+
+
 def resume_source_outputs(manifest: dict, workspace: str | Path | None) -> dict[str, str]:
     """What a resumed walk reads for the steps other steps read by name: the
     record's capped ``resume_inputs``, overlaid with the whole outputs the run
     stored when ``workspace`` is given."""
     recorded = dict(manifest.get("resume_inputs") or {})
-    if workspace is not None and manifest.get("run_id"):
-        recorded.update(resume_store.load_sources(
-            resume_store.store_dir_of(workspace, manifest)))
+    recorded.update(whole_source_outputs(manifest, workspace))
     return recorded
+
+
+def whole_source_outputs(manifest: dict, workspace: str | Path | None) -> dict[str, str]:
+    """The outputs of the steps read by name that the run stored whole in its
+    resume folder; ``{}`` without a workspace."""
+    if workspace is None or not manifest.get("run_id"):
+        return {}
+    return resume_store.load_sources(resume_store.store_dir_of(workspace, manifest))
 
 
 def build_resume_state(manifest: dict, answers: str, *,
@@ -396,6 +445,7 @@ def build_resume_state(manifest: dict, answers: str, *,
     visits = manifest_visit_counts(manifest)
     completed = manifest_completed_passes(manifest)
     recorded_outputs = resume_source_outputs(manifest, workspace)
+    whole_outputs = frozenset(whole_source_outputs(manifest, workspace))
     work_key = manifest.get("work_key")
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     shared_session = manifest.get("shared_session")
@@ -415,6 +465,7 @@ def build_resume_state(manifest: dict, answers: str, *,
             completed=completed,
             upstream=upstream,
             recorded_outputs=recorded_outputs,
+            whole_outputs=whole_outputs,
             work_key=work_key,
             earlier_rows=earlier_rows,
             shared_session=shared_session,
@@ -433,6 +484,7 @@ def build_resume_state(manifest: dict, answers: str, *,
                 f"--- The user's answers ---\n{answers}\n\nContinue from here."
             ),
             recorded_outputs=recorded_outputs,
+            whole_outputs=whole_outputs,
             work_key=work_key,
             earlier_rows=earlier_rows,
             shared_session=shared_session,
@@ -444,6 +496,7 @@ def build_resume_state(manifest: dict, answers: str, *,
         completed=completed,
         upstream=manifest.get("resume_upstream"),
         recorded_outputs=recorded_outputs,
+        whole_outputs=whole_outputs,
         work_key=work_key,
         earlier_rows=earlier_rows,
         shared_session=shared_session,
@@ -881,6 +934,7 @@ class WorkflowEngine:
                     initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
+                    whole_outputs=resume.whole_outputs if resume else frozenset(),
                     earlier_rows=list(resume.earlier_rows) if resume else None,
                     initial_shared_context=initial_shared_context,
                     work_dir=work_dir,
@@ -1207,6 +1261,7 @@ class WorkflowEngine:
         keyed: bool = False,
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
+        whole_outputs: frozenset[str] = frozenset(),
         earlier_rows: list[dict] | None = None,
         initial_shared_context: list[dict] | None = None,
     ) -> WorkflowResult:
@@ -1832,10 +1887,11 @@ class WorkflowEngine:
                         merged, abort = self._run_dynamic_parallel(
                             workflow, node, task, run_id, iteration, root_session_key,
                             upstream_output, runs, work_dir=work_dir,
-                            resume_outputs=resume_outputs)
+                            resume_outputs=resume_outputs, whole_outputs=whole_outputs)
                     elif node.branches_from is not None:
                         resolved, abort = self._resolve_runtime_branches(
-                            workflow, node, runs, upstream_output, resume_outputs)
+                            workflow, node, runs, upstream_output, resume_outputs,
+                            whole_outputs=whole_outputs)
                         # An empty resolved list is a legitimate "nothing applies" pass:
                         # record the node with empty output and continue to `next`.
                         merged = ""
@@ -2077,23 +2133,25 @@ class WorkflowEngine:
         return "\n\n".join(blocks)
 
     @staticmethod
-    def _source_output(runs, source, resume_outputs):
+    def _source_output(runs, source, resume_outputs, whole_outputs=frozenset()):
         """The last output node ``source`` recorded, for a parallel node that reads
         its list or its branch ids from it: ``(text, cut, stored)``.
 
         The walk's own trace comes first. A resumed walk starts with an empty trace,
         so a source that ran before the resume point is read from the outputs the
-        record kept (``stored`` is True). Those copies are capped: one that reaches
-        the cap may be a fragment and is reported as ``cut`` — a list must never be
-        parsed from a fragment. ``text`` is None when the source left no output in
-        either place."""
+        resume was given (``stored`` is True). A source in ``whole_outputs`` was read
+        whole from the run's resume store. Any other is the record's capped copy: one
+        that reaches the cap may be a fragment and is reported as ``cut`` — a list
+        must never be parsed from a fragment. ``text`` is None when the source left
+        no output in either place."""
         for recorded in reversed(runs):
             if recorded.node_id == source:
                 return recorded.output, recorded.output_truncated, False
         stored = (resume_outputs or {}).get(source)
         if stored is None:
             return None, False, False
-        return stored, len(stored) >= run_log.RESUME_INPUT_MAX_CHARS, True
+        return (stored, source not in whole_outputs
+                and len(stored) >= run_log.RESUME_INPUT_MAX_CHARS, True)
 
     @staticmethod
     def _stored_source_cut(node, source: str, what: str) -> str:
@@ -2253,7 +2311,7 @@ class WorkflowEngine:
             )
         return [str(x) for x in parsed][:50], None
 
-    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, resume_outputs=None):
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, resume_outputs=None, whole_outputs=frozenset()):
         """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
 
         Returns ``(merged_output, abort_message)``.  Each worker run is appended to
@@ -2262,7 +2320,8 @@ class WorkflowEngine:
         # Resolve the list source: prefer the most recent recorded output of the
         # list_from node (it may not be the immediate predecessor); fall back to
         # upstream_output for the common case where it is.
-        list_text, list_truncated, stored = self._source_output(runs, node.list_from, resume_outputs)
+        list_text, list_truncated, stored = self._source_output(
+            runs, node.list_from, resume_outputs, whole_outputs)
         if stored and list_truncated:
             return "", self._stored_source_cut(node, node.list_from, "list")
         if list_text is None:
@@ -2371,7 +2430,8 @@ class WorkflowEngine:
         last_line = candidate.splitlines()[-1]
         return [tok.strip().strip("'\"") for tok in last_line.split(",") if tok.strip()][:50]
 
-    def _resolve_runtime_branches(self, workflow, node, runs, upstream, resume_outputs=None):
+    def _resolve_runtime_branches(self, workflow, node, runs, upstream, resume_outputs=None,
+                                  whole_outputs=frozenset()):
         """Resolve a ``branches_from`` parallel node's branch ids for this pass.
 
         Reads the most recent recorded output of the source node (falling back to the
@@ -2381,7 +2441,8 @@ class WorkflowEngine:
         in the emitting node — abort naming it rather than guessing.
         Returns ``(ids, abort_message)``.
         """
-        source_text, cut, stored = self._source_output(runs, node.branches_from, resume_outputs)
+        source_text, cut, stored = self._source_output(
+            runs, node.branches_from, resume_outputs, whole_outputs)
         if stored and cut:
             return [], self._stored_source_cut(node, node.branches_from, "branch ids")
         if source_text is None:

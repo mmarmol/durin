@@ -441,10 +441,15 @@ is unchanged.
 A crashed run is refused, with the reason, when it was recorded by an older
 version that did not keep the step it was in, when that step is no longer in
 the workflow, when its working folder has been pruned, or when a later run
-with the same `work_key` has worked in its folder since. A run the agent
-started whose workflow has a step with `mcps` is resumed only through the
-agent's `run_workflow`: the dashboard and the API refuse it, because only the
-agent can give those steps their MCP tools.
+with the same `work_key` has worked in its folder since. A crashed run the
+agent started is resumed only through the agent's `run_workflow` when its
+workflow, or a sub-workflow it calls, has a step with `mcps`: the dashboard
+and the API refuse it, because only the agent can give those steps their MCP
+tools. This applies to crashed runs only. A paused run (a question or an
+approval) and a run that aborted at a step are answered or retried from the
+dashboard or the API as before; when the agent started such a run, its later
+`mcps` steps then run without their MCP tools, as in any run started from
+the dashboard.
 
 Known limits: a process that dies while a `union` parallel step is
 applying its branches' files can leave the working folder partly applied. A

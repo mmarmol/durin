@@ -32,6 +32,16 @@ def _lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def _given(workspace: Path, step: str) -> list:
+    """What ``step`` received at each start: an agent step's task, shared
+    conversation and edge text; a script step's stdin, byte for byte."""
+    marks_folder = driver.marks_dir(workspace)
+    if (marks_folder / f"{step}.seen").is_file():
+        return driver.seen(marks_folder, step)
+    starts = len(_lines(marks_folder / step))
+    return [(marks_folder / f"{step}.stdin.{n}").read_bytes() for n in range(1, starts + 1)]
+
+
 def _attempts(workspace: Path, name: str, step: str) -> list[tuple[int, bool]]:
     """The walk's own rows of ``step`` over every walk of run r1: (attempt, cut)."""
     rec = run_log.read_manifest(workspace, name, "r1")
@@ -51,6 +61,8 @@ def test_only_the_step_that_was_cut_runs_again(tmp_path, stop_in, again):
     assert done.final_output == whole["final_output"]
     assert marks(dead.workspace) == again
     assert _attempts(dead.workspace, "w", stop_in) == [(1, True), (2, False)]
+    first, second = _given(dead.workspace, stop_in)
+    assert second == first          # the step that was cut got the same input again
 
 
 def test_the_attempt_numbers_never_repeat(tmp_path):
@@ -117,12 +129,15 @@ def test_a_fan_out_that_was_cut_runs_every_worker_again(tmp_path):
         {"id": "w", "kind": "work"},
         {"id": "after", "kind": "work", "next": None}]}
     dead = run_until_killed(tmp_path, definition, stop_in=None,
-                            env={driver.HANG_TASK_ENV: "three"})
+                            env={driver.HANG_TASK_ENV: "three",
+                                 driver.HANG_AFTER_ENV: "w=one,w=two"})
     done = _resume(dead, definition)
     assert done.status == "completed"
     m = marks(dead.workspace)
     assert (m["ids"], m["w"], m["after"]) == (1, 6, 1)
     assert _attempts(dead.workspace, "w", "fan") == [(1, True), (2, False)]
+    tasks = [s["task"] for s in _given(dead.workspace, "w")]
+    assert sorted(tasks[:3]) == sorted(tasks[3:]) == ["one", "three", "two"]
 
 
 def test_a_sub_workflow_that_was_cut_starts_its_child_again(tmp_path):
@@ -307,3 +322,116 @@ def test_a_sub_workflow_run_names_the_surface_of_its_caller(tmp_path):
     [child] = run_log.list_runs(tmp_path, "child")
     assert run_log.read_manifest(tmp_path, "w", "p1")["surface"] == "agent"
     assert run_log.read_manifest(tmp_path, "child", child["run_id"])["surface"] == "agent"
+
+
+def _flow(folder: Path, name: str, nodes: list[dict]) -> dict:
+    definition = {"name": name, "start": nodes[0]["id"], "nodes": nodes}
+    (folder / f"{name}.json").write_text(json.dumps(definition), encoding="utf-8")
+    return definition
+
+
+def test_the_mcp_refusal_follows_sub_workflows_once_each_and_only_for_a_dead_run(tmp_path):
+    from durin.workflow.engine import mcp_tools_refusal
+
+    flows = tmp_path / "workflows"
+    flows.mkdir()
+    # p -> loop (names itself and p) -> deep (has an mcps step); gone is missing.
+    parent = _flow(flows, "p", [
+        {"id": "s1", "kind": "subworkflow", "workflow": "loop", "next": "s2"},
+        {"id": "s2", "kind": "subworkflow", "workflow": "gone", "next": None}])
+    _flow(flows, "loop", [
+        {"id": "again", "kind": "subworkflow", "workflow": "loop", "next": "up"},
+        {"id": "up", "kind": "subworkflow", "workflow": "p", "next": "down"},
+        {"id": "down", "kind": "subworkflow", "workflow": "deep", "next": None}])
+    _flow(flows, "deep", [{"id": "t", "kind": "work", "mcps": ["tracker"], "next": None}])
+    dead = {"run_id": "r", "status": "crashed", "surface": "agent",
+            "position": {"node": "s1", "seq": 1}, "failed_node": "s1"}
+    wf = parse_workflow(parent)
+    assert "only a run resumed by the agent" in mcp_tools_refusal(dead, wf, workspace=tmp_path)
+    # Not for a run another surface launched, a record without a surface, or a run
+    # that is paused or failed.
+    assert mcp_tools_refusal({**dead, "surface": "service"}, wf, workspace=tmp_path) is None
+    assert mcp_tools_refusal({k: v for k, v in dead.items() if k != "surface"}, wf,
+                             workspace=tmp_path) is None
+    paused = {**dead, "status": "needs_input", "needs_input_node": "s1"}
+    failed = {**dead, "status": "aborted"}
+    assert mcp_tools_refusal(paused, wf, workspace=tmp_path) is None
+    assert mcp_tools_refusal(failed, wf, workspace=tmp_path) is None
+    # Without the mcps step anywhere, the cycle and the missing workflow end the walk.
+    _flow(flows, "deep", [{"id": "t", "kind": "work", "next": None}])
+    assert mcp_tools_refusal(dead, wf, workspace=tmp_path) is None
+
+
+# The input a re-entered step receives is the whole text, not the record's capped
+# copies (resume_upstream, resume_inputs).
+
+def _pad(n: int) -> str:
+    """A shell expression printing ``n`` x characters."""
+    return f"head -c {n} /dev/zero | tr '\\0' x"
+
+
+def test_a_cut_step_gets_its_whole_input_beyond_the_records_cap(tmp_path):
+    size = run_log.RESUME_UPSTREAM_MAX_CHARS + 4_000
+    definition = {"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "next": None}]}
+    dead = run_until_killed(tmp_path, definition, stop_in="c",
+                            env={driver.OUTPUT_CHARS_ENV: f"a={size}"})
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert len(rec["resume_upstream"]) == run_log.RESUME_UPSTREAM_MAX_CHARS
+    assert _resume(dead, definition, rec=rec).status == "completed"
+    first, second = _given(dead.workspace, "c")
+    assert len(first["upstream"]) == size and second == first
+
+
+def test_a_cut_step_reading_a_long_source_by_name_gets_the_same_composed_input(tmp_path):
+    size = run_log.RESUME_INPUT_MAX_CHARS + 2_000
+    definition = {"name": "w", "start": "big", "nodes": [
+        {"id": "big", "kind": "work", "next": "mid"},
+        {"id": "mid", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "inputs_from": ["big"], "next": None}]}
+    dead = run_until_killed(tmp_path, definition, stop_in="c",
+                            env={driver.OUTPUT_CHARS_ENV: f"big={size}"})
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert len(rec["resume_inputs"]["big"]) == run_log.RESUME_INPUT_MAX_CHARS
+    assert _resume(dead, definition, rec=rec).status == "completed"
+    first, second = _given(dead.workspace, "c")
+    assert "big-out".ljust(size, "x") in first["upstream"] and second == first
+
+
+def test_a_cut_fan_out_reading_a_long_list_starts_the_same_workers(tmp_path):
+    long_item = f'three$({_pad(run_log.RESUME_INPUT_MAX_CHARS)})'
+    definition = {"name": "w", "start": "ids", "nodes": [
+        {"id": "ids", "kind": "script", "command": f'echo "[\\"one\\",\\"two\\",\\"{long_item}\\"]"',
+         "next": "fan"},
+        {"id": "fan", "kind": "parallel", "worker": "w", "list_from": "ids", "next": None},
+        {"id": "w", "kind": "work"}]}
+    dead = run_until_killed(tmp_path, definition, stop_in=None,
+                            env={driver.HANG_TASK_ENV: "three",
+                                 driver.HANG_AFTER_ENV: "w=one,w=two"})
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert len(rec["resume_inputs"]["ids"]) == run_log.RESUME_INPUT_MAX_CHARS
+    assert _resume(dead, definition, rec=rec).status == "completed"
+    tasks = [s["task"] for s in _given(dead.workspace, "w")]
+    assert len(tasks) == 6 and sorted(tasks[:3]) == sorted(tasks[3:])
+    assert max(len(t) for t in tasks) > run_log.RESUME_INPUT_MAX_CHARS
+
+
+def test_a_cut_parallel_step_reading_long_branch_ids_starts_the_same_branches(tmp_path):
+    definition = {"name": "w", "start": "pick", "nodes": [
+        {"id": "pick", "kind": "script",
+         "command": f"{_pad(run_log.RESUME_INPUT_MAX_CHARS + 500)}; echo; "
+                    """echo '["left","right"]'""",
+         "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches_from": "pick",
+         "branches": ["left", "right", "spare"], "next": None},
+        {"id": "left", "kind": "work"},
+        {"id": "right", "kind": "work"},
+        {"id": "spare", "kind": "work"}]}
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert len(rec["resume_inputs"]["pick"]) == run_log.RESUME_INPUT_MAX_CHARS
+    assert _resume(dead, definition, rec=rec).status == "completed"
+    m = marks(dead.workspace)
+    assert (m["left"], m["right"], m["pick"]) == (2, 2, 1) and "spare" not in m

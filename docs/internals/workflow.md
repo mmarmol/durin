@@ -289,8 +289,12 @@ never lost and a script chain between producer and consumer needs no courier fil
 walk starts with an empty trace: a parallel node past the resume point reads its list
 or its branch ids from there when the source ran before it. The stored outputs are
 carried forward from one resume to the next, so a run that stops again after a resume
-still holds the sources of its first attempt. The stored copies are capped. A composed input shows a capped copy as it is; a parallel node whose source
-copy reached the cap aborts instead of parsing a list from a fragment.
+still holds the sources of its first attempt. The copies on the record are capped; a
+resume given the workspace reads each source whole from the run's resume store instead
+(§4a, "What a step receives is kept whole") and marks it whole on the `ResumeState`
+(`whole_outputs`). A composed input shows a capped copy as it is; a parallel node whose
+source is a capped copy that reached the cap aborts instead of parsing a list from a
+fragment, while a source read whole is parsed whatever its length.
 A work node may declare a **structured output** (`output_schema`): the node runner forces a
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
@@ -939,13 +943,21 @@ workers again; a sub-workflow step starts its child again from the child's start
 as a new child run, and the dead child stays on record as `crashed`. Steps that finished
 before the death do not run again.
 
-The workflows service refuses to run the steps of a run whose `surface` is `"agent"` when
-any step of the workflow's definition names `mcps`: `its steps use MCP tools that only a
-run resumed by the agent has. Ask the agent to resume it with run_workflow.` The run tool
-gives a run's steps the gateway's live MCP tools and the service has none to give. The
-check is asked once the resume is certain to run steps, so an approval reject, or an
-approve that completes the run, still goes through the service. A record without
-`surface` is never refused on its account.
+The workflows service refuses a dead run whose `surface` is `"agent"` when a step names
+`mcps` — a step of the workflow's own definition, or of a workflow a sub-workflow step
+names, followed to any depth (each definition read once, so a workflow that names itself
+directly or through another ends the walk; one that cannot be loaded counts as having no
+such step): `its steps use MCP tools that only a run resumed by the agent has. Ask the
+agent to resume it with run_workflow.` The run tool gives a run's steps the gateway's
+live MCP tools and the service has none to give. The check is
+`engine.mcp_tools_refusal(record, workflow, workspace=...)`, one function beside
+`resume_refusal`. A record without `surface` is never refused on its account.
+
+Only a dead run is refused. A paused run (a question or an approval) and an aborted run
+are resumed through the service as before, whatever their `surface`, so a person can
+still approve, revise or answer an agent-launched pause from the dashboard. That keeps a
+known limit: such a resume runs the later `mcps` steps of a run the agent started without
+their MCP tools, as a run started from the dashboard or the API always does.
 
 A cut row is not a failure of the step's own: the improve pass's evidence
 (`compute_diagnostics`: the `script_failures` count and the `failure_samples`) and
@@ -1743,7 +1755,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
-| `resumable_kind`, `resume_refusal`, `build_resume_state`, `resume_source_outputs` | `durin/workflow/engine.py` | What a stopped run's record allows (paused, failed, dead), why a resume is refused, and the `ResumeState` a resume enters with — the one set both resume surfaces use (§4a, "Resuming a dead run"). |
+| `resumable_kind`, `resume_refusal`, `mcp_tools_refusal`, `build_resume_state`, `resume_source_outputs`, `whole_source_outputs` | `durin/workflow/engine.py` | What a stopped run's record allows (paused, failed, dead), why a resume is refused (on any surface, and on one without the gateway's MCP tools), and the `ResumeState` a resume enters with — the one set both resume surfaces use (§4a, "Resuming a dead run"). |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes; the node's tools resolve relative paths in its working folder), persisted as a lineage'd node session, checkpointed every round. |
 | `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. Records the command and both redacted streams on every exit path — a script node keeps no session, so this is its only record. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |

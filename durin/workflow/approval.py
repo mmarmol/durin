@@ -25,6 +25,7 @@ from durin.workflow.engine import (
     manifest_completed_passes,
     manifest_visit_counts,
     resume_source_outputs,
+    whole_source_outputs,
 )
 from durin.workflow.spec import Workflow
 
@@ -88,6 +89,7 @@ def build_approval_resume(
     completed = manifest_completed_passes(manifest)
     work_key = manifest.get("work_key")
     recorded_outputs = resume_source_outputs(manifest, workspace)
+    whole_outputs = frozenset(whole_source_outputs(manifest, workspace))
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     shared_session = manifest.get("shared_session")
     if action == "approve":
@@ -103,6 +105,8 @@ def build_approval_resume(
             completed=completed,
             upstream=proposal,
             recorded_outputs=recorded_outputs,
+            # The proposal is the record's capped copy, not a stored whole one.
+            whole_outputs=whole_outputs - {node_id},
             work_key=work_key,
             earlier_rows=earlier_rows,
             shared_session=shared_session,
@@ -115,6 +119,7 @@ def build_approval_resume(
         completed=completed,
         upstream=f"{original}\n\n[Revision requested by approver]\n{comment}",
         recorded_outputs=recorded_outputs,
+        whole_outputs=whole_outputs,
         work_key=work_key,
         earlier_rows=earlier_rows,
         shared_session=shared_session,

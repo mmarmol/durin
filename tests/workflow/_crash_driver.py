@@ -3,15 +3,19 @@ can end this process while a chosen step is running.
 
     python -I tests/workflow/_crash_driver.py <workspace> <definition.json> <task>
 
-Every step records each start as one line in ``<workspace>/marks/<step id>``,
-the attempt number it was given as one line in ``marks/<step id>.iter``, and what
-it was given (the shared conversation and the edge text) as one JSON line in
-``marks/<step id>.seen``. The step whose id is in ``DURIN_TEST_HANG_IN`` (or the
-fan-out worker whose task is ``DURIN_TEST_HANG_TASK``) writes
-``<workspace>/marks/.hung`` and then sleeps, which is the moment the test ends
-the process; when ``DURIN_TEST_HANG_AFTER`` names steps (comma-separated), it
-first waits until each of them has started, so the test knows what ran before
-the end. ``SIGUSR1`` makes the process replace its own image (same pid) with an
+Every step records each start as one line in ``<workspace>/marks/<step id>``.
+An agent step also records the attempt number it was given as one line in
+``marks/<step id>.iter``, and what it was given (its task, the shared
+conversation and the edge text) as one JSON line in ``marks/<step id>.seen``; a
+script step records the stdin of its n-th start in ``marks/<step id>.stdin.<n>``.
+The step whose id is in ``DURIN_TEST_HANG_IN`` (or the fan-out worker whose task
+starts with ``DURIN_TEST_HANG_TASK``) writes ``<workspace>/marks/.hung`` and then
+sleeps, which is the moment the test ends the process. When
+``DURIN_TEST_HANG_AFTER`` names steps (comma-separated), it first waits until
+each has started: ``<id>`` for a step, ``<id>=<prefix>`` for a start of agent step
+``<id>`` whose task starts with ``<prefix>`` (a fan-out worker), so the test knows
+what ran before the end. ``DURIN_TEST_OUTPUT_CHARS`` (``<id>=<n>``, comma-separated)
+pads an agent step's reply to ``n`` characters. ``SIGUSR1`` makes the process replace its own image (same pid) with an
 idle interpreter, which is what a restart in place looks like from outside.
 
 Other switches: ``DURIN_TEST_RUN_ID`` gives the run another id than ``r1``;
@@ -31,6 +35,7 @@ import os
 import shlex
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -58,6 +63,7 @@ HANG_AFTER_ENV = "DURIN_TEST_HANG_AFTER"
 RUN_ID_ENV = "DURIN_TEST_RUN_ID"
 WORK_KEY_ENV = "DURIN_TEST_WORK_KEY"
 RESUME_ENV = "DURIN_TEST_RESUME"
+OUTPUT_CHARS_ENV = "DURIN_TEST_OUTPUT_CHARS"
 HANG_SECONDS = 120
 _HANG_AFTER_WAIT_S = 20.0
 
@@ -74,15 +80,30 @@ def _hangs(step_id: str, task: str | None = None) -> bool:
     if os.environ.get(HANG_ENV) == step_id:
         return True
     hang_task = os.environ.get(HANG_TASK_ENV)
-    return bool(hang_task) and (task or "").strip() == hang_task
+    return bool(hang_task) and (task or "").strip().startswith(hang_task)
+
+
+def seen(marks: Path, step: str) -> list[dict]:
+    """What agent step ``step`` was given at each start, in start order."""
+    path = marks / f"{step}.seen"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _started(marks: Path, entry: str) -> bool:
+    step, _, prefix = entry.partition("=")
+    if not prefix:
+        return (marks / step).exists()
+    return any((s.get("task") or "").strip().startswith(prefix) for s in seen(marks, step))
 
 
 def _hang(marks: Path) -> None:
-    """Wait until every step named in ``DURIN_TEST_HANG_AFTER`` has started, then
+    """Wait until every start named in ``DURIN_TEST_HANG_AFTER`` happened, then
     flag the hang and sleep until the test ends this process."""
     after = [s for s in os.environ.get(HANG_AFTER_ENV, "").split(",") if s]
     deadline = time.monotonic() + _HANG_AFTER_WAIT_S
-    while not all((marks / s).exists() for s in after) and time.monotonic() < deadline:
+    while not all(_started(marks, s) for s in after) and time.monotonic() < deadline:
         time.sleep(0.02)
     (marks / ".hung").touch()
     time.sleep(HANG_SECONDS)
@@ -103,6 +124,10 @@ class StandInAgent:
     it saves under its session key with the shared conversation it was given
     (what a real step's saved session holds)."""
 
+    # Workers of one fan-out start on several threads: one start's lines are
+    # written whole before the next start's.
+    _write_lock = threading.Lock()
+
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace)
         self._marks = marks_dir(workspace)
@@ -110,16 +135,21 @@ class StandInAgent:
     def __call__(self, req):
         step = req.node.id
         self._marks.mkdir(parents=True, exist_ok=True)
-        with open(self._marks / step, "a", encoding="utf-8") as fh:
-            fh.write(step + "\n")
-        with open(self._marks / f"{step}.iter", "a", encoding="utf-8") as fh:
-            fh.write(f"{req.iteration}\n")
-        with open(self._marks / f"{step}.seen", "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"shared": req.shared_context,
-                                 "upstream": req.upstream_output}) + "\n")
+        with self._write_lock:
+            with open(self._marks / step, "a", encoding="utf-8") as fh:
+                fh.write(step + "\n")
+            with open(self._marks / f"{step}.iter", "a", encoding="utf-8") as fh:
+                fh.write(f"{req.iteration}\n")
+            with open(self._marks / f"{step}.seen", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"task": req.task, "shared": req.shared_context,
+                                     "upstream": req.upstream_output}) + "\n")
         if _hangs(step, req.task):
             _hang(self._marks)
         output = f"{step}-out"
+        size = dict(e.split("=", 1) for e in os.environ.get(OUTPUT_CHARS_ENV, "").split(",")
+                    if "=" in e).get(step)
+        if size:
+            output = output.ljust(int(size), "x")
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             Path(req.output_dir).mkdir(parents=True, exist_ok=True)
             Path(req.output_dir, f"{step}.txt").write_text(output + "\n", encoding="utf-8")
@@ -134,8 +164,8 @@ class StandInAgent:
 
 class MarkingScriptRunner:
     """The real script runner, with each inline command rewritten as it is
-    dispatched: it first records the start, and the step that is to hang runs
-    ``sleep`` instead of its own command. Rewriting at dispatch rather than in
+    dispatched: it first records the start and keeps the stdin it was given, and
+    the step that is to hang runs ``sleep`` instead of its own command. Rewriting at dispatch rather than in
     the definition keeps the definition (and its hash on the record) the one
     the test wrote, so the same definition can be resumed in the test process."""
 
@@ -147,12 +177,16 @@ class MarkingScriptRunner:
         node = req.node
         if node.command:
             self._marks.mkdir(parents=True, exist_ok=True)
-            mark = f"echo x >> {shlex.quote(str(self._marks / node.id))};"
+            marks = self._marks / node.id
+            start = (len(marks.read_text(encoding="utf-8").splitlines())
+                     if marks.is_file() else 0) + 1
+            stdin = shlex.quote(str(self._marks / f"{node.id}.stdin.{start}"))
+            mark = f"echo x >> {shlex.quote(str(marks))}; cat > {stdin};"
             if _hangs(node.id):
                 hung = shlex.quote(str(self._marks / ".hung"))
                 command = f"{mark} touch {hung}; sleep {HANG_SECONDS}"
             else:
-                command = f"{mark} {node.command}"
+                command = f"{mark} ( {node.command} ) < {stdin}"
             req = dataclasses.replace(req, node=dataclasses.replace(node, command=command))
         return self._inner(req)
 

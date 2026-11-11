@@ -791,6 +791,7 @@ class WorkflowsService:
         from durin.workflow.engine import (
             WorkflowEngine,
             build_resume_state,
+            mcp_tools_refusal,
             resumable_kind,
             resume_refusal,
         )
@@ -908,17 +909,13 @@ class WorkflowsService:
                 resume = build_resume_state(manifest, task, workspace=self._workspace)
                 task = manifest.get("task") or task
                 accepted_record = manifest
-            if (accepted_record.get("surface") == "agent"
-                    and any(getattr(n, "mcps", ()) for n in workflow.nodes.values())):
-                # The agent's run tool gives a run's steps the gateway's live MCP
-                # tools; this service has none to give, so the resumed steps
-                # would run without tools they had. Asked once the resume is
-                # certain to run steps: an approval reject, or an approve that
-                # completes the run, has returned above without running any.
+            # The agent's run tool gives a run's steps the gateway's live MCP
+            # tools and this service has none to give: a dead run the agent
+            # launched, with steps that name `mcps`, is left to the agent.
+            mcp_refusal = mcp_tools_refusal(accepted_record, workflow, workspace=self._workspace)
+            if mcp_refusal:
                 raise ValidationFailedError(
-                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — its "
-                    "steps use MCP tools that only a run resumed by the agent has. Ask "
-                    "the agent to resume it with run_workflow.")
+                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {mcp_refusal}")
 
         app_config = self._live_config()
         preset = app_config.resolve_default_preset()

@@ -196,8 +196,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   whether it already acted, and tell the user when you cannot. The resume is refused, with
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
-  over — then start a new run. A run you started whose workflow has a step with `mcps` can
-  only be resumed by you, through `run_workflow`: the dashboard and API refuse it.
+  over — then start a new run. A crashed run you started whose workflow (or a sub-workflow it
+  calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
+  dashboard and API refuse it. A paused or aborted run you started can still be answered or
+  retried from the dashboard, but its later `mcps` steps then run without their MCP tools.
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused
   for a person's approval is not yours to resolve**: the summary says so, and
