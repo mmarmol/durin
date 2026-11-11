@@ -56,6 +56,10 @@ class ResumeClaim:
         self._handoff = threading.Lock()
         self._started = False
         self._dropped = False
+        # A claim is released at most once. A later claim of the same record by
+        # this process writes exactly the record this one wrote, so a second
+        # release could not tell them apart and would undo that later claim.
+        self._released = False
 
     @classmethod
     def take(cls, workspace: str | Path, name: str, run_id: str, *,
@@ -88,8 +92,8 @@ class ResumeClaim:
 
     def drop(self) -> None:
         """The caller is giving up before the walk started (cancelled while
-        waiting for a thread): put the record back. No effect once the walk
-        has started."""
+        waiting for a thread, or before its task ran at all): put the record
+        back. No effect once the walk has started, or on a second call."""
         with self._handoff:
             self._dropped = not self._started
         if self._dropped:
@@ -97,8 +101,13 @@ class ResumeClaim:
 
     def _release(self) -> None:
         # Does nothing once the engine rewrote the record (it then differs from
-        # the claimed one). A failure here is logged and never replaces the
-        # run's own outcome or the caller's exception.
+        # the claimed one), or once this claim was released already. A failure
+        # here is logged and never replaces the run's own outcome or the
+        # caller's exception.
+        with self._handoff:
+            if self._released:
+                return
+            self._released = True
         try:
             with cross_process_lock(run_log.run_lock_target(self._workspace, self._name, self._run_id)):
                 run_log.release_resume_claim(

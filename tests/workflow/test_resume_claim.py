@@ -52,3 +52,30 @@ def test_a_dropped_claim_never_walks(tmp_path):
     claim.drop()
     assert run_log.read_manifest(tmp_path, "w", "r1") == rec
     assert claim.guard(lambda: pytest.fail("walked after drop"))() is None
+
+
+def test_a_claim_releases_once_and_never_undoes_a_later_claim(tmp_path):
+    # A later claim by the same process on the same record writes exactly the
+    # record the first claim wrote, so a second release of the first claim
+    # cannot tell the two apart: it must not release at all.
+    rec = _record(tmp_path, "aborted", failed_node="b")
+    first = ResumeClaim.take(tmp_path, "w", "r1", expected=rec)
+    first.drop()
+    assert run_log.read_manifest(tmp_path, "w", "r1") == rec
+    ResumeClaim.take(tmp_path, "w", "r1", expected=rec)
+    first.drop()
+    assert run_log.read_manifest(tmp_path, "w", "r1")["status"] == "running"
+
+
+def test_a_guarded_walk_that_released_is_not_released_again_by_a_late_drop(tmp_path):
+    rec = _record(tmp_path, "needs_input", needs_input_node="ask")
+    first = ResumeClaim.take(tmp_path, "w", "r1", expected=rec)
+
+    def refused():
+        raise ValueError("rejected before the walk")
+
+    with pytest.raises(ValueError):
+        first.guard(refused)()
+    ResumeClaim.take(tmp_path, "w", "r1", expected=rec)
+    first.drop()
+    assert run_log.read_manifest(tmp_path, "w", "r1")["status"] == "running"

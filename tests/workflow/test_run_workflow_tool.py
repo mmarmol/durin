@@ -1022,3 +1022,23 @@ async def test_the_run_tool_gives_the_record_back_when_its_resume_never_walks(tm
         out = await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1", background=False)
     assert "script file not found" in out
     assert run_log.read_manifest(tmp_path, "doer", "r1") == before
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_gives_the_record_back_when_its_background_resume_is_cancelled_before_it_starts(tmp_path):
+    import asyncio
+
+    before = _aborted_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    tool = _tool(tmp_path)
+    with patch("durin.providers.factory.make_provider", return_value=fake), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        await tool.execute(name="doer", task="", resume_run_id="r1", background=True)
+        assert run_log.read_manifest(tmp_path, "doer", "r1")["status"] == "running"
+        pending = list(tool._bg_tasks)
+        for t in pending:
+            t.cancel()   # before the task ever ran a step
+        await asyncio.gather(*pending, return_exceptions=True)
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "doer", "r1") == before

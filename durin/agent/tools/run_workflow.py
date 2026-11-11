@@ -774,6 +774,15 @@ class RunWorkflowTool(Tool, ContextAware):
             # Keep a reference so the task isn't garbage-collected mid-flight.
             self._bg_tasks.add(task_handle)
             task_handle.add_done_callback(self._bg_tasks.discard)
+            if claim is not None:
+                # A task cancelled before its first step never reaches the
+                # drop in _walk_on_a_thread: give the claimed record back here,
+                # or it stays running until the crash sweep calls it crashed.
+                # The drop does nothing once the walk started or the claim was
+                # already released.
+                resume_claim = claim
+                task_handle.add_done_callback(
+                    lambda t: resume_claim.drop() if t.cancelled() else None)
             return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
