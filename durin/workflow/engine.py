@@ -30,7 +30,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import provenance, run_log, workspace_fork
+from durin.workflow import provenance, resume_store, run_log, workspace_fork
 from durin.workflow.artifacts import (
     EVIDENCE_DIRNAME,
     artifact_dir,
@@ -648,12 +648,39 @@ class WorkflowEngine:
             # manifest records that same key or runs_for_session can't find the run.
             effective_root = root_session_key or f"workflow:{run_id}:root"
             started_at = time.time()
-            self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
-                                 resumed=resume is not None)
+            # What a step receives is stored whole beside the run so a run whose
+            # process died can be entered again. A sub-workflow's run is never
+            # resumed on its own (its caller re-runs the whole step), so it
+            # stores nothing and leaves no folder of its own under `.workflow/`.
+            store = self._workspace is not None and work_dir_override is None
+            start_seq = self._start_manifest(
+                workflow, run_id, effective_root, started_at, task,
+                parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
+                resumed=resume is not None,
+                start_at=resume.start_at if resume else workflow.start,
+                start_upstream=resume.upstream if resume else None,
+                store=store)
+            sources = run_log.source_nodes(workflow)
+            stored_rows = 0
 
-            def _update() -> None:
-                self._update_manifest(workflow, run_id, runs)
+            def _store_sources() -> None:
+                # The rows that joined the trace since the last write: every one
+                # of a step another step reads by name has its whole output kept,
+                # in trace order, so the last output of a step is the one stored.
+                nonlocal stored_rows
+                fresh, stored_rows = runs[stored_rows:], len(runs)
+                if store:
+                    self._store_sources(workflow, run_id,
+                                        [r for r in fresh if r.node_id in sources and r.output])
+
+            def _update(*, position: dict | None | object = run_log.KEEP_POSITION,
+                        upstream: str | None = None) -> None:
+                _store_sources()
+                if store and isinstance(position, dict) and not self._store_input(
+                        workflow, run_id, position, upstream):
+                    # Never point the record at an input that was not written.
+                    position = run_log.KEEP_POSITION
+                self._update_manifest(workflow, run_id, runs, position=position)
 
             # One tracker per run for launch-and-continue (detached) nodes. Every exit
             # from the try below joins it before the manifest is finalized, so a run
@@ -668,6 +695,7 @@ class WorkflowEngine:
                     input_files=None if resume else input_files,
                     update_manifest=_update,
                     start_at=resume.start_at if resume else None,
+                    start_seq=start_seq,
                     initial_visits=dict(resume.visits) if resume else None,
                     initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
@@ -725,6 +753,7 @@ class WorkflowEngine:
             # never aborts) and land in the trace the manifest is finalized with —
             # `result.runs` aliases this same list.
             runs.extend(detached_tracker.join())
+            _store_sources()
             self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
             return result
         finally:
@@ -823,9 +852,28 @@ class WorkflowEngine:
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
                         parent_run_id=None, work_dir=None, work_key=None,
-                        resumed=False) -> None:
+                        resumed=False, start_at=None, start_upstream=None,
+                        store=False) -> int:
+        """Write the run's first record, naming ``start_at`` as its position, and
+        return that position's sequence number. A fresh run starts at 1; a resumed
+        walk continues one past the sequence its record reached, so a number is
+        never given to two positions of one run (a record written before positions
+        existed has none, and its resumed walk starts at 1). With ``store``, the
+        step's input is written first, so the record never names an input that
+        was not written."""
+        seq = 1
         if self._workspace is None:
-            return
+            return seq
+        if resumed:
+            try:
+                prior = run_log.read_manifest(self._workspace, workflow.name, run_id) or {}
+                seq = int((prior.get("position") or {}).get("seq") or 0) + 1
+            except Exception:  # noqa: BLE001 - a bad record must not block the run
+                logger.exception("workflow run position read failed for {}", workflow.name)
+        position: dict | None = {"node": start_at, "seq": seq} if start_at else None
+        if store and position is not None and not self._store_input(
+                workflow, run_id, position, start_upstream):
+            position = None
         typical = {}
         typical_total = None
         try:
@@ -851,17 +899,43 @@ class WorkflowEngine:
                               spec_hash=provenance.node_hash(
                                   {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
                               durin_version=provenance.durin_version(),
-                              resumed=resumed)
+                              resumed=resumed,
+                              position=position)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
+        return seq
 
-    def _update_manifest(self, workflow, run_id, runs) -> None:
+    def _store_input(self, workflow, run_id, position: dict, upstream: str | None) -> bool:
+        """Keep the whole input of the step ``position`` names. False when it could
+        not be written; the failure is logged and never breaks the run."""
+        try:
+            resume_store.save_input(self._workspace, run_id, position["seq"],
+                                    position["node"], upstream)
+        except Exception:  # noqa: BLE001 - a resume-store write must not break the run
+            logger.exception("workflow resume input write failed for {}", workflow.name)
+            return False
+        return True
+
+    def _store_sources(self, workflow, run_id, rows: list[NodeRun]) -> None:
+        for row in rows:
+            try:
+                resume_store.save_source(self._workspace, run_id, row.node_id, row.output)
+            except Exception:  # noqa: BLE001 - a resume-store write must not break the run
+                logger.exception("workflow resume source write failed for {}", workflow.name)
+
+    def _update_manifest(self, workflow, run_id, runs, *,
+                         position: dict | None | object = run_log.KEEP_POSITION) -> None:
+        """Rewrite the live record. ``position`` is the step the walk enters next
+        (None once the walk has ended); left out, the recorded one is kept — the
+        write that precedes a step's failure, where the failed step stays the
+        position."""
         if self._workspace is None:
             return
         try:
             run_log.update_run(self._workspace, workflow.name, run_id,
                                WorkflowResult(status="running", final_output=None, runs=runs),
-                               shared_session=_last_shared_session(workflow, runs))
+                               shared_session=_last_shared_session(workflow, runs),
+                               position=position)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
@@ -936,8 +1010,9 @@ class WorkflowEngine:
         raw_task: str | None = None,
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
-        update_manifest: Callable[[], None] | None = None,
+        update_manifest: Callable[..., None] | None = None,
         start_at: str | None = None,
+        start_seq: int = 1,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
         initial_completed: dict[str, int] | None = None,
@@ -973,6 +1048,10 @@ class WorkflowEngine:
         final_output_node: str | None = None
         final_route_label: str | None = None  # the label that ends the run: matched cases label, "PASS"/"FAIL", or None
         current: str | None = start_at or workflow.start
+        # The sequence number of the position the record names: it rises by one
+        # every time the walk names a next step, a step entered again included,
+        # and continues across resumes (run() passes where the record left off).
+        seq = start_seq
 
         # Seed input_files into the shared working folder so the start node reads them as
         # the run's starting files.
@@ -1608,10 +1687,18 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts. Detached nodes
             # that finished since the last refresh join the trace here, so an
             # in-flight run shows them without waiting for the terminal join.
+            # The same write names the step to enter next and the exact edge text
+            # it will receive (every branch above set both), or no step once the
+            # walk has ended.
             if detached_tracker is not None:
                 runs.extend(detached_tracker.drain())
             if update_manifest is not None:
-                update_manifest()
+                if current is None:
+                    update_manifest(position=None)
+                else:
+                    seq += 1
+                    update_manifest(position={"node": current, "seq": seq},
+                                    upstream=upstream_output)
             if work_dir is not None and own_work_dir:
                 try:
                     os.utime(Path(work_dir).parent, None)   # keep .workflow/<run_id>/ recent while running

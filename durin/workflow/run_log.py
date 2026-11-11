@@ -67,6 +67,18 @@ RESUME_UPSTREAM_MAX_CHARS = 16_000
 RESUME_INPUT_MAX_CHARS = 8_000
 
 
+def source_nodes(workflow) -> set[str]:
+    """Every node another node names as a source: ``inputs_from``, or a parallel
+    node's ``list_from`` / ``branches_from``. Their outputs are what a resumed
+    walk, whose own trace starts empty, must still be able to read."""
+    sources: set[str] = set()
+    for node in workflow.nodes.values():
+        sources.update(getattr(node, "inputs_from", ()) or ())
+        sources.update(s for s in (getattr(node, "list_from", None),
+                                   getattr(node, "branches_from", None)) if s)
+    return sources
+
+
 def _resume_inputs(workflow, result, carried: dict | None = None) -> dict[str, str] | None:
     """{source: capped last output} for every node another node names as a source
     (``inputs_from``, ``list_from``, ``branches_from``) — only for runs that can be
@@ -84,11 +96,7 @@ def _resume_inputs(workflow, result, carried: dict | None = None) -> dict[str, s
     )
     if not resumable:
         return None
-    sources: set[str] = set()
-    for node in workflow.nodes.values():
-        sources.update(getattr(node, "inputs_from", ()) or ())
-        sources.update(s for s in (getattr(node, "list_from", None),
-                                   getattr(node, "branches_from", None)) if s)
+    sources = source_nodes(workflow)
     if not sources:
         return None
     out: dict[str, str] = {k: v for k, v in (carried or {}).items() if k in sources}
@@ -158,6 +166,11 @@ def _write_json(path: Path, data: dict) -> None:
     atomic_write_text(path, json.dumps(data))
 
 
+# The default of ``update_run``'s ``position``: keep the recorded one. An explicit
+# None is a value of its own: the walk ended, so there is no step to enter.
+KEEP_POSITION = object()
+
+
 # Most rows of earlier walks a resumed run's record keeps in ``history``; the
 # oldest are dropped first. The per-step pass counts in ``passes`` are carried
 # separately, so they stay exact however many rows were dropped.
@@ -220,6 +233,7 @@ def start_run(
     spec_hash: str | None = None,
     durin_version: str | None = None,
     resumed: bool = False,
+    position: dict | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -236,7 +250,8 @@ def start_run(
     re-enters an existing run (a failure-resume or a paused run's reply): its
     ``runs`` start empty here, so they never hold the earlier attempts' rows; the
     node ids those attempts walked are kept in ``earlier_nodes`` and their rows in
-    ``history`` (bounded), with per-step pass counts in ``passes``."""
+    ``history`` (bounded), with per-step pass counts in ``passes``.
+    ``position`` is the step the walk enters first, ``{"node", "seq"}``."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -295,6 +310,10 @@ def start_run(
         # walk: it holds the whole shared conversation, so a resume reloads it.
         # Carried from the earlier walks until this walk finishes a shared step.
         "shared_session": prior.get("shared_session") if resumed else None,
+        # The step to enter next and the sequence number of that position, which
+        # names the file holding the step's whole input (resume_store). None once
+        # the walk has ended.
+        "position": position,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -305,10 +324,13 @@ def start_run(
 def update_run(
     workspace: str | Path, name: str, run_id: str, result, *, status: str = "running",
     shared_session: str | None = None,
+    position: dict | None | object = KEEP_POSITION,
 ) -> None:
     """Rewrite the manifest with the run's per-node trace so far, preserving the
     ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite.
-    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it.
+    ``position`` replaces the recorded one when given, ``None`` included (the walk
+    ended); left out, the recorded one is kept."""
     path = _record_path(workspace, name, run_id)
     base = read_manifest(workspace, name, run_id) or {}
     record = {
@@ -334,6 +356,7 @@ def update_run(
         "passes": base.get("passes") or {},
         "resume_inputs": base.get("resume_inputs"),
         "shared_session": shared_session if shared_session is not None else base.get("shared_session"),
+        "position": base.get("position") if position is KEEP_POSITION else position,
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -413,6 +436,9 @@ def finalize_run(
         "history": prior.get("history") or [],
         "passes": prior.get("passes") or {},
         "shared_session": shared_session if shared_session is not None else prior.get("shared_session"),
+        # A stopped run keeps the step it stopped at, which a resume enters again;
+        # a completed run has no step left to enter.
+        "position": None if result.status == "completed" else prior.get("position"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

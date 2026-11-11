@@ -2,8 +2,9 @@
 what the process leaves behind must be what the engine leaves today."""
 import os
 
-from durin.workflow import run_log
-from tests.workflow.crash_harness import run_to_end, run_until_killed
+from durin.workflow import resume_store, run_log
+from durin.workflow.spec import parse_workflow
+from tests.workflow.crash_harness import engine, run_to_end, run_until_killed
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "a", "kind": "work", "next": "b"},
@@ -43,3 +44,36 @@ def test_a_run_left_by_a_restart_in_place_is_swept(tmp_path, monkeypatch):
     # The sweep runs in the process that now has that pid: the restarted one.
     monkeypatch.setattr("durin.utils.process_tree._own_pid", lambda: owner["pid"])
     assert run_log.reconcile_one(dead.workspace, "w", "r1") is True
+
+
+def test_a_killed_process_leaves_the_step_it_was_in_as_the_position(tmp_path):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c")
+    assert dead.record["position"]["node"] == "c"
+    node, upstream = resume_store.load_input(dead.workspace, "r1", dead.record["position"]["seq"])
+    assert node == "c" and upstream.strip() == "b-out"
+
+
+def test_a_death_between_the_input_file_and_the_record_keeps_the_earlier_step(tmp_path, monkeypatch):
+    # The write that would name "c" fails after c's input file was written: the
+    # record still names "b", and the input it points at is still on disk.
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    real = run_log.update_run
+    seen = {}
+
+    def failing(*args, **kwargs):
+        position = kwargs.get("position")
+        if isinstance(position, dict) and position.get("node") == "c" and "record" not in seen:
+            seen["record"] = run_log.read_manifest(workspace, "w", "r1")
+            seen["c_input"] = resume_store.load_input(workspace, "r1", position["seq"])
+            raise OSError("disk full")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(run_log, "update_run", failing)
+    result = engine(workspace).run(parse_workflow(CHAIN), "t")
+    assert result.status == "completed"                       # the engine logged and went on
+    node, upstream = seen["c_input"]                          # the file was written before the record
+    assert node == "c" and upstream.strip() == "b-out"
+    record = seen["record"]
+    assert record["position"]["node"] == "b"
+    assert resume_store.load_input(workspace, "r1", record["position"]["seq"]) == ("b", "a-out")
