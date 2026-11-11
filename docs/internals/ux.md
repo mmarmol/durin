@@ -292,6 +292,12 @@ Metadata flags on `OutboundMessage` route behavior at each surface:
 ### WebUI message rendering
 
 **Math.** Inline `$…$` and display `$$…$$` expressions are rendered via KaTeX.
+The dashboard imports KaTeX's stylesheet itself, while the markup comes from the
+copy its dependents resolve (the markdown plugin, and Mermaid for formulas in
+diagram labels). KaTeX renames its layout classes between releases, so
+`overrides` in `webui/package.json` pins every dependent to the dashboard's own
+copy; keep that entry and the direct dependency on the same range. A test renders
+a formula and fails when the stylesheet has no rule for the classes it gets.
 Each rendered formula exposes two per-formula actions: *Copy LaTeX* (puts the raw
 LaTeX source on the clipboard) and *Copy for Word* (puts MathML on the clipboard
 for paste-as-editable-equation into Word or Google Docs). The composer toolbar
