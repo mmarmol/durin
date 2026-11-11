@@ -481,6 +481,26 @@ export function RunsView({
     [onSelectEntry],
   );
 
+  // Retry the failed step of an aborted run: same run_id and an empty task, which
+  // the server reads as "run the failed step again".
+  const onRetry = useCallback(
+    async (entry: WorkflowGlobalRun) => {
+      setResumingId(entry.run_id);
+      setError(null);
+      try {
+        await runWorkflow(token, entry.workflow, "", [], "", "", entry.run_id);
+        await refresh();
+        setSelected(null);
+        setManifest(null);
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setResumingId(null);
+      }
+    },
+    [token, refresh],
+  );
+
   const onResumeFromDetail = useCallback(
     (answers: string) => {
       if (!selected) return;
@@ -669,6 +689,7 @@ export function RunsView({
                     result={manifest}
                     resuming={resumingId === selected.run_id}
                     onResume={onResumeFromDetail}
+                    onRetry={() => void onRetry(selected)}
                     cancelling={cancellingId === selected.run_id}
                     onCancel={onCancelFromDetail}
                     childRuns={childEntries}

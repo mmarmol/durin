@@ -202,6 +202,18 @@ def test_stored_sources_survive_a_second_failure_after_a_resume(tmp_path):
     assert sorted(runner.calls) == [("a", 3, "nothing to see"), ("b", 3, "nothing to see")]
 
 
+def test_a_parallel_step_whose_branch_fails_three_times_is_still_retried(tmp_path):
+    wf = _writing_wf("union")                       # default allowed passes: 3
+    runner = _Runner(fail_times={"b": 3})
+    result = _engine(tmp_path, runner).run(wf, "t")
+    for _ in range(3):
+        assert result.status == "aborted" and result.failed_node == "fan"
+        result = _engine(tmp_path, runner).run(
+            wf, "t", resume=build_resume_state(_manifest(tmp_path), ""))
+    assert result.status == "completed"
+    assert [it for n, it, _u in runner.ran("b")] == [1, 2, 3, 4]         # no branch key reused
+
+
 def _fan_out_after_a_failure(list_text):
     wf = parse_workflow({"name": "w", "start": "orch", "nodes": [
         {"id": "orch", "kind": "work", "next": "mid"},

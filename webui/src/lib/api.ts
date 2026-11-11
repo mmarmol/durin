@@ -423,6 +423,10 @@ export type WorkflowRunNode = {
   // The node's effective visit budget at this pass (null for parallel branches/workers,
   // which are not loop targets).
   budget?: number | null;
+  // Which of its `budget` passes this row is. `iteration` is the attempt number, which
+  // runs ahead of it once a failed attempt was retried; absent on a row recorded
+  // before this field existed, where `iteration` is the pass.
+  pass_number?: number | null;
   status: string;
   route_label: string | null;
   // Seconds this node took, once finished; absent/null for a row recorded before
@@ -450,6 +454,9 @@ export type WorkflowRunResult = {
   exhausted_node?: string;
   // set when status=="needs_input": the node that asked
   needs_input_node?: string;
+  // set when status=="aborted" because a step failed: the node that failed
+  // (the step a retry runs again)
+  failed_node?: string | null;
   // relative paths in output_dir (completed runs)
   output_files?: string[];
   // The node currently in flight, while status=="running"; absent once the run
@@ -476,6 +483,10 @@ export type WorkflowRunResult = {
   // interactive session, same source as WorkflowGlobalRun's `origin` below.
   // Absent on a manifest written before this field existed.
   root_session_key?: string | null;
+  // Set on a sub-workflow step's run: the run that called it. Such a run is
+  // resumed through that caller, never on its own. Present on a stored manifest
+  // only; the synchronous run response never carries it.
+  parent_run_id?: string | null;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.

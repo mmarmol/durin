@@ -45,6 +45,10 @@ Every work node (`"kind": "work"`, the default) has:
 - **Skills and MCP servers.** A node can name `skills` (skill docs injected
   into its own prompt) and `mcps` (a subset of your already-configured MCP
   servers) — scoped per node, so a node only sees what its job needs.
+  A node's MCP tools reach it only when the agent starts the run from a
+  chat. A run started by an automation, through the HTTP API or from the
+  dashboard executes the node without its MCP tools, and nothing in the run
+  says so.
 - **A mode.** Non-routing work nodes default to `mode: "build"` (full
   access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
   `cases`) default to `mode: "read"` (read-only, neutral posture) — a
@@ -100,7 +104,8 @@ The I/O contract is plain Unix:
   files for a later step.
 - **Environment.** A handful of `DURIN_*` variables carry run metadata:
   `DURIN_TASK` (the run's task as passed, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
-  `DURIN_ITERATION` (which pass this is, for a looping node), and
+  `DURIN_ITERATION` (the step's attempt number: one more each time it runs,
+  a retry after an error included), and
   `DURIN_WORK_DIR` (the shared working folder's path). The rest of the
   subprocess environment is controlled by `env`: `"clean"` (the default) gives
   the script a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`,
@@ -229,11 +234,14 @@ A `FAIL` (or a case that targets an earlier node) can send the flow back to
 redo a step. Loops are bounded so they can't run forever:
 
 - **`max_visits`** on the workflow (default 3) or a specific node caps how
-  many times that node may run, clamped by a hard global ceiling
-  (`workflow.max_node_visits`, default 25) no node can exceed regardless of
-  what the definition says — a node in a nested sub-workflow included. If a
-  node's budget runs out, the run ends with status `exhausted` rather than
-  looping silently forever.
+  many passes that node may complete over the whole run, clamped by a hard
+  global ceiling (`workflow.max_node_visits`, default 25) no node can exceed
+  regardless of what the definition says — a node in a nested sub-workflow
+  included. If a node's budget runs out, the run ends with status `exhausted`
+  rather than looping silently forever. A step that stopped with an error
+  (not a `FAIL` verdict, which is a pass like any other) did not complete a
+  pass, so resuming the run retries it even when it failed on its last
+  allowed pass.
 - **Pass awareness.** On a revisit, the node is told which pass it's on
   ("Pass 2 of 3"), and on its last allowed pass it's told explicitly that
   no further iteration will happen — so it delivers a final, complete
@@ -283,7 +291,12 @@ across iterations as the node refines its work in response to loop feedback.
   rather than a relay of isolated summaries. (Only sequential nodes can
   share context; parallel branches and fan-out workers are always
   isolated, and a routing node can't use `context: "shared"` since it
-  needs to judge its own output, not a shared narrative.)
+  needs to judge its own output, not a shared narrative.) When a run is
+  resumed — a failed step retried, or a paused run answered — the shared
+  steps from there on still see the discussion the earlier steps had: it
+  is read back from the saved conversation of the last shared step that
+  finished. If that saved conversation is gone, the run still resumes,
+  starting the shared discussion afresh.
 - **The shared working folder.** Any node with `tools: "default"` reads
   and writes files in one folder shared by the whole run — so a "write the
   code" step, a "write the test" step, and a "fix the bug" step all see
@@ -392,15 +405,19 @@ node's output, then re-runs.
 To continue instead of starting over, re-run with `resume_run_id` set to
 the paused run's id and the user's answers as the task. The run re-enters
 the graph **at the node that asked** — same run id, same shared working
-folder, same node sessions, and the same visit counts already spent —
+folder, same node sessions, and the same loop passes already spent —
 rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
 their intake step. `resume_run_id` also retries a run that ended `aborted` at
 a named node: the failed node re-runs with its exact input, in the same
-folder. When what failed was one branch of a parallel step that merges or
+folder — even when it failed on its last allowed pass, because a step that
+stopped with an error used up no pass. When what failed was one branch of a parallel step that merges or
 picks between its branches' files, the whole parallel step re-runs. A resume that can't get going — a script the workflow names has gone
 missing, say — leaves the run paused as it was, so you can answer it again
-once that's fixed.
+once that's fixed. A sub-workflow step's own run is never resumed on its own,
+paused or failed: resume the run that called it, which runs the sub-workflow
+step again in its own folder. A resume of the sub-workflow's run is refused
+with the id of that caller.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
@@ -417,6 +434,13 @@ cancel it instead, from the Runs pane or the Pending page (below), next to
 the resume form. Cancelling finalizes the run as `cancelled` in place — its
 trace and working folder stay for the record — and it can no longer be
 resumed, so the dashboard asks you to confirm before it goes through.
+
+A run that ended `aborted` because a step failed shows a **Retry the failed step**
+button in its detail, in the Runs pane and in the editor's test-run panel. It
+resumes the run with no new answer, which re-runs the failed step as described
+above. A run an [automation](automations.md) started has no such button: the
+dashboard offers no retry for it, and running the automation again starts a new
+run. A sub-workflow step's own run has none either: retry the run that called it.
 
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
@@ -484,6 +508,11 @@ same paused run never asks for attention in two places at once; when one
 exists, a small link under the tray takes you there. The same stranded runs,
 with their resume and Cancel controls, also show on the dashboard's
 **Pending** page, next to everything else that waits on you.
+
+Opening an `aborted` run in the Runs pane offers **Retry the failed step**,
+which re-runs the step that failed in the same run. A run an automation started
+has no retry: running the automation again starts a new run. A sub-workflow
+step's own run has no retry either; retry the run that called it.
 
 Each workflow also has a self-improvement mode (`"improvement_mode"`,
 `manual` by default, or `auto`): a

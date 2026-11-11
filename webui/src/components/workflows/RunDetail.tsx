@@ -13,6 +13,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText } from "@/components/MarkdownText";
+import { Button } from "@/components/ui/button";
 import { NeedsInputForm } from "@/components/workflows/NeedsInputForm";
 import type { WorkflowGlobalRun, WorkflowRunNode, WorkflowRunResult } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -164,7 +165,10 @@ export function RunNodeRow({
         : run.passed === false
           ? "✗"
           : null;
-  const isFinalPass = run.budget != null && run.iteration === run.budget;
+  // The pass this row is; a row recorded before pass numbers existed carries only
+  // its iteration, which then is the pass.
+  const pass = run.pass_number ?? run.iteration;
+  const isFinalPass = run.budget != null && pass === run.budget;
 
   // "took"/"typical" combined into one line rather than two separate elements:
   // an actual duration can format to the same m:ss as its typical counterpart,
@@ -190,13 +194,13 @@ export function RunNodeRow({
             className="rounded font-mono text-[11.5px] font-medium underline-offset-2 hover:underline"
           >
             {run.budget != null
-              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: pass, budget: run.budget })}`
               : `${run.node_id}#${run.iteration}`}
           </button>
         ) : (
           <span className="font-mono text-[11.5px] font-medium">
             {run.budget != null
-              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: pass, budget: run.budget })}`
               : `${run.node_id}#${run.iteration}`}
           </span>
         )}
@@ -291,6 +295,7 @@ function continuesSessionFlags(runs: WorkflowRunNode[]): boolean[] {
 export function RunDetail({
   result,
   onResume,
+  onRetry,
   resuming,
   onCancel,
   cancelling = false,
@@ -300,6 +305,9 @@ export function RunDetail({
 }: {
   result: WorkflowRunResult;
   onResume: (answers: string) => void;
+  // Absent leaves the aborted banner with no Retry control. Runs the failed
+  // step again: it cannot ride on onResume, whose callers ignore an empty answer.
+  onRetry?: () => void;
   resuming: boolean;
   // Absent leaves the needs_input banner with no Cancel control (the workflow
   // editor's own inline test-run panel, which has no need to abandon a run it
@@ -349,6 +357,9 @@ export function RunDetail({
   // end it (same origin check the Pending page's workflow-run source uses to
   // leave such a run to the Automations inbox instead of listing it twice).
   const isAutomationOrigin = !!result.root_session_key?.startsWith("automation:");
+  // A sub-workflow step's run is resumed through the run that called it: the
+  // server refuses it on its own, so no Retry is offered for it.
+  const isChildRun = !!result.parent_run_id;
 
   return (
     <div className="flex flex-col gap-3">
@@ -383,6 +394,18 @@ export function RunDetail({
             <span className="font-medium">{t("workflows.abortedTitle")}</span>
           </div>
           {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
+          {onRetry && result.failed_node && !isAutomationOrigin && !isChildRun && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="mt-1 self-start"
+              disabled={resuming}
+              onClick={onRetry}
+            >
+              {t("workflows.retryFailedStep")}
+            </Button>
+          )}
         </div>
       )}
       {result.status === "cancelled" && (

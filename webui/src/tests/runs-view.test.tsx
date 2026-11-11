@@ -54,6 +54,16 @@ const NEEDS_INPUT: api.WorkflowGlobalRun = {
   questions: "Which environment — staging or prod?",
 };
 
+const ABORTED: api.WorkflowGlobalRun = {
+  workflow: "onboarding",
+  run_id: "run-failed",
+  status: "aborted",
+  started_at: 3000,
+  finished_at: 3100,
+  task: "provision the workspace",
+  needs_input_node: null,
+};
+
 const COMPLETED: api.WorkflowGlobalRun = {
   workflow: "digest",
   run_id: "run-done",
@@ -216,6 +226,36 @@ describe("RunsView", () => {
     await waitFor(() =>
       expect(api.runWorkflow).toHaveBeenCalledWith("tok", "onboarding", "prod", [], "", "", "run-waiting"),
     );
+  });
+
+  it("retries an aborted run from its detail", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([ABORTED]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "aborted", final_output: "boom", failed_node: "build", run_id: "run-failed", runs: [],
+    });
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "completed", final_output: "done", run_id: "run-failed", runs: [],
+    });
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+    await user.click(await screen.findByRole("button", { name: /provision the workspace/ }));
+    await user.click(await screen.findByRole("button", { name: "Retry the failed step" }));
+    await waitFor(() =>
+      expect(api.runWorkflow).toHaveBeenCalledWith("tok", "onboarding", "", [], "", "", "run-failed"));
+  });
+
+  it("shows why a retry was refused and lets the person try again", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([ABORTED]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "aborted", final_output: "boom", failed_node: "build", run_id: "run-failed", runs: [],
+    });
+    vi.mocked(api.runWorkflow).mockRejectedValue(new Error("cannot be resumed — already resumed"));
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+    await user.click(await screen.findByRole("button", { name: /provision the workspace/ }));
+    await user.click(await screen.findByRole("button", { name: "Retry the failed step" }));
+    await screen.findByText(/already resumed/);
+    expect(screen.getByRole("button", { name: "Retry the failed step" })).toBeEnabled();
   });
 
   it("shows a Cancel control only for a needs_input run, not a completed one", async () => {
@@ -812,6 +852,47 @@ describe("RunDetail", () => {
     );
   }
 
+  function renderAborted(over: Partial<api.WorkflowRunResult>, retry: () => void, resuming = false) {
+    const result: api.WorkflowRunResult = {
+      status: "aborted", final_output: "boom", run_id: "r-abort", runs: [], ...over,
+    };
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <RunDetail result={result} onResume={() => {}} onRetry={retry} resuming={resuming} />
+      </I18nextProvider>,
+    );
+  }
+
+  it("offers to retry the failed step of an aborted run", async () => {
+    const onRetry = vi.fn();
+    renderAborted({ failed_node: "build" }, onRetry);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry the failed step" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no retry when the aborted run names no failed step", async () => {
+    renderAborted({}, () => {});
+    await screen.findByText("Run aborted");
+    expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
+  });
+
+  it("leaves an automation's aborted run to the automation", async () => {
+    renderAborted({ failed_node: "build", root_session_key: "automation:nightly" }, () => {});
+    await screen.findByText("Run aborted");
+    expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
+  });
+
+  it("leaves a sub-workflow's aborted run to the run that called it", async () => {
+    renderAborted({ failed_node: "build", parent_run_id: "caller-1" }, () => {});
+    await screen.findByText("Run aborted");
+    expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
+  });
+
+  it("disables the retry while a resume is in flight", async () => {
+    renderAborted({ failed_node: "build" }, () => {}, true);
+    expect(await screen.findByRole("button", { name: "Retry the failed step" })).toBeDisabled();
+  });
+
   const RUNNING: api.WorkflowRunResult = {
     status: "running",
     final_output: "",
@@ -899,5 +980,39 @@ describe("RunNodeRow", () => {
 
     expect(screen.getByText(/6:01/)).toBeInTheDocument();     // 361.5 s elapsed
     expect(screen.getByText(/context\.json/)).toBeInTheDocument();
+  });
+
+  function passRow(extra: Partial<api.WorkflowRunNode>) {
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <RunNodeRow
+          continuesSession={false}
+          run={{
+            node_id: "draft", iteration: 1, passed: null,
+            session_key: null, worker_index: null, branch_id: null,
+            budget: 3, status: "ok", route_label: null,
+            ...extra,
+          }}
+        />
+      </I18nextProvider>,
+    );
+  }
+
+  it("labels a retried last pass by its pass number and marks it final", () => {
+    passRow({ iteration: 4, pass_number: 3 });
+    expect(screen.getByText("draft · pass 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("final pass")).toBeInTheDocument();
+  });
+
+  it("does not mark an earlier pass final even when its attempt number reaches the budget", () => {
+    passRow({ iteration: 3, pass_number: 2 });
+    expect(screen.getByText("draft · pass 2 of 3")).toBeInTheDocument();
+    expect(screen.queryByText("final pass")).not.toBeInTheDocument();
+  });
+
+  it("reads the iteration as the pass on a row recorded without a pass number", () => {
+    passRow({ iteration: 3 });
+    expect(screen.getByText("draft · pass 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("final pass")).toBeInTheDocument();
   });
 });

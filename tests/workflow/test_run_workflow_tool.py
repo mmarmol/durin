@@ -14,6 +14,7 @@ from durin.session.manager import SessionManager
 from durin.workflow import run_log
 from durin.workflow.loader import workflows_dir
 from durin.workflow.result import NodeRun, WorkflowResult
+from durin.workflow.resume_claim import ResumeClaim
 
 
 def _tool(tmp_path):
@@ -980,3 +981,64 @@ async def test_summary_cuts_one_very_long_error_with_a_mark(tmp_path, background
     assert len(failure_line) < 1000
     assert "more characters" in failure_line            # and says it was cut, and by how much
     assert "the report is written" in text
+
+
+def _aborted_doer(tmp_path, node):
+    _write_workflow(tmp_path, "doer", {"name": "doer", "start": "only",
+                                       "nodes": [{"id": "only", **node, "next": None}]})
+    old = WorkflowResult(status="aborted", run_id="r1", final_output="boom", failed_node="only",
+                         resume_upstream="",
+                         runs=[NodeRun(node_id="only", iteration=1, output="", status="node_failed")])
+    run_log.finalize_run(tmp_path, "doer", old, root_session_key=None,
+                         started_at=1.0, finished_at=2.0, task="original task")
+    return run_log.read_manifest(tmp_path, "doer", "r1")
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_loses_to_a_resume_that_claimed_first(tmp_path):
+    before = _aborted_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    tool = _tool(tmp_path)
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        ResumeClaim.take(tmp_path, "doer", "r1", expected=before)
+        fake = MagicMock(spec=LLMProvider)
+        fake.get_default_model.return_value = "m"
+        return fake
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await tool.execute(name="doer", task="", resume_run_id="r1", background=False)
+    assert out.startswith("Error:") and "already resumed" in out
+    fake_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_gives_the_record_back_when_its_resume_never_walks(tmp_path):
+    before = _aborted_doer(tmp_path, {"kind": "script", "script": "gone.sh"})
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        out = await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1", background=False)
+    assert "script file not found" in out
+    assert run_log.read_manifest(tmp_path, "doer", "r1") == before
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_gives_the_record_back_when_its_background_resume_is_cancelled_before_it_starts(tmp_path):
+    import asyncio
+
+    before = _aborted_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    tool = _tool(tmp_path)
+    with patch("durin.providers.factory.make_provider", return_value=fake), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        await tool.execute(name="doer", task="", resume_run_id="r1", background=True)
+        assert run_log.read_manifest(tmp_path, "doer", "r1")["status"] == "running"
+        pending = list(tool._bg_tasks)
+        for t in pending:
+            t.cancel()   # before the task ever ran a step
+        await asyncio.gather(*pending, return_exceptions=True)
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "doer", "r1") == before

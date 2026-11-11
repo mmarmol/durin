@@ -45,7 +45,9 @@ descriptions. The output descriptor may
 additionally declare **`artifacts`** — a list of `{path, description?}` naming the files (relative
 to the run's working folder) the run promises to produce. Declared paths are validated at parse
 time (relative, no `..`, no duplicates), ride in every agent node's framing as the file contract, and
-after a completed run the engine reports the ones not produced as `missing_artifacts` on the
+after a completed run the engine reports the ones not produced (by any walk of the run, so a
+resumed run counts the files written before it stopped that are still in its working
+folder) as `missing_artifacts` on the
 result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
 downstream stage learns immediately which promised file is absent instead of failing confusingly
 later. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
@@ -487,10 +489,25 @@ shape — a config default, a per-unit override, and a hard cap). Each node's bu
 `min(its own max_visits or the workflow's max_visits, workflow.max_node_visits)`: a
 per-node `WorkNode.max_visits` overrides the per-workflow `max_visits` (default 3), and
 both are clamped by the global config ceiling `workflow.max_node_visits` (default 25, in
-settings) — the runaway backstop no node may exceed. Exceeding the budget ends the run
-with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
+settings) — the runaway backstop no node may exceed. The budget counts the node's passes
+that completed, over the run's whole life: when a node is reached with as many completed
+passes as its budget, the run ends with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
 runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
 caller learns it did not complete and why instead of treating a partial as done. The engine hands each work node its effective budget; on a revisit the runner tells the model which pass this is ("Pass X of Y"), and on the last allowed pass says explicitly that no further iteration will happen, so loops converge deliberately instead of being cut off by the cap.
+
+A node's **attempt number** and its **pass number** are kept apart. Every dispatch of a
+node takes the next attempt number, which names its trace row (`iteration`), its
+conversation (`workflow:<run_id>:<node_id>:<iteration>`), `DURIN_ITERATION` and the
+running marker, so no attempt ever writes over another attempt's conversation (a
+persistent-session node keeps one conversation across all of them by design). The pass
+number is one more than the node's completed passes; the budget, the "Pass X of Y" note
+and a gate's definitive-verdict check (the `on_fail` target's completed passes against
+its budget) all read passes. Within one walk the two rise together, because a failed
+attempt ends the walk. They part across a resume: an attempt that failed keeps its
+`node_failed` row and its conversation but uses no pass, so a node that failed on its
+last allowed pass is still retried, as that same pass under a new attempt number. Rows
+and progress frames carry both numbers (`iteration` and `pass_number`), and the
+dashboard labels a pass by `pass_number`.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
 within a single node execution. When set on a `WorkNode`, the node runner (1) appends a
@@ -589,7 +606,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes, shared_session}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -601,7 +618,7 @@ The per-node entries in the manifest's `runs` array carry:
 | Field | Meaning |
 |---|---|
 | `node_id` | the node's id in the graph |
-| `iteration` | how many times this node has executed (loop-back counting) |
+| `iteration` | the attempt number: one more on every dispatch of this node in the run, a retry of a failed attempt included (a failed attempt uses a number but not a pass) |
 | `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, with a `:<worker_index>` suffix for fan-out workers; a persistent-session node's key omits the iteration suffix — one session across its passes) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
@@ -609,6 +626,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
+| `pass_number` | which of its `budget` passes this row is: one more than the node's passes that completed before it. It differs from `iteration` once a failed attempt was retried; the dashboard shows it ("pass N of budget", and the final-pass marker when it equals `budget`). Set wherever `budget` is (`null` otherwise); a row recorded before the field existed lacks it, and the dashboard then reads `iteration` as the pass |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
 | `command` | a script node's command as a reader would recognize it — the inline command, or the workspace-relative script path — captured at run time, since definitions are versioned per run and a later reader consulting today's definition would show a past run the wrong command. Redacted like the streams: a command line carries credentials as readily as output does (`null` for agent nodes) |
 | `stdout` | a script node's captured stdout, redacted and capped at `workflow.script_log_max_chars` (`null` for agent nodes, whose record is their persisted conversation) |
@@ -640,6 +658,29 @@ attempts'; the flag is carried forward on every rewrite; and `earlier_nodes` —
 ids of every node the earlier attempts of a resumed run walked, gathered across all
 its resumes (`[]` on a run that never resumed), so the run's route stays on record
 even though its `runs` do not; carried forward on every rewrite.
+`history` — the rows of the earlier walks, oldest first (`[]` on a run that never
+resumed). `runs` still covers the last walk only; on a resume the previous `runs`
+are appended to `history`, which keeps at most a fixed number of rows and drops the
+oldest first. `passes` — `{node_id: {reached, completed}}` for the earlier walks:
+`reached` is the highest attempt number (`iteration`) any row of the step carries,
+`completed` the number of distinct attempts with at least one row that did not fail. The counts are
+taken from the whole prior record, so they do not depend on `history` being
+complete. Both are carried forward on every rewrite; a record written before they
+existed lacks them. Such a record that was never resumed is counted from its `runs`
+as above. One that had already been resumed (`resumed` set, no `passes` key) holds
+only its last walk in `runs`, while attempt numbers ran on over every walk, so the
+attempts below a step's rows ran in walks the record no longer holds: every attempt
+of a step from 1 to its `reached` counts as completed unless its rows show it failed
+(an attempt with no row is taken as completed). A step those walks ran but the last
+walk did not has no row and stays uncounted. The first resume after that writes
+`passes`, and every later one counts as above.
+`shared_session` — the session key of the last `context: "shared"` work step that
+finished `ok` on the main walk (a parallel branch or fan-out worker row never counts),
+or `null` when none has. The engine takes it from the walk's rows on every `update_run`
+and on `finalize_run`; when the walk has no such row yet, the rewrite keeps the value
+already on the record, and a resume's `start_run` carries it from the earlier walks. A
+resume reloads the shared-context buffer from it (§4e). A record written before it
+existed lacks it, and its resume starts with an empty buffer.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -664,13 +705,23 @@ resumed);
 and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
 `resume_run_id` on such a run retries the failed node with the same input — completed
 nodes never re-run, and no retry framing pollutes the replayed text (a retried script
-parses its stdin). The failed node is always one the walk dispatches, with a
-`node_failed` row for the visit it consumed: a sub-workflow node keeps the input its
+parses its stdin). The resumed walk is seeded from the whole record — the carried
+`passes` plus the last walk's `runs` — so each node's next attempt number is one above
+its `reached` and its bound reads its `completed`: the retry gets a conversation of its
+own (a persistent-session node, whose key carries no attempt number, continues its one
+conversation), and the failed attempt uses up no pass. A record written before `passes` existed
+is seeded from its `runs` alone, counted as described under `passes` above. The failed node is always one the walk dispatches,
+with a `node_failed` row for the attempt that failed: a sub-workflow node keeps the input its
 child received, and when a `choose`/`union` branch fails the failed node is the
 parallel node, not the branch (see failure isolation below). A record that names a
 unit of a parallel node as its failed node cannot be resumed — the run tool and the
 API refuse it (`resume_refusal`) before anything is rewritten, because re-entering at
-a branch would run that one unit as a step of the walk and report the run completed;
+a branch would run that one unit as a step of the walk and report the run completed.
+`resume_refusal` also refuses every resume of a sub-workflow step's own run (a record
+with a `parent_run_id`), paused or aborted, naming the caller's run id: resumed on its
+own it would run its step in its own folder instead of the caller's, end `completed`
+and leave the caller stopped. Resuming the caller re-runs the sub-workflow step in the
+caller's folder;
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `final_route_label` — the verdict that ended the run:
 a matched `cases` label, binary `"PASS"`/`"FAIL"`, or `null` for every other ending (§4d);
@@ -681,7 +732,7 @@ failed (`false` otherwise); `cancelled_by`/`cancelled_at` — who (in the same s
 person cancelled a `needs_input` run through `WorkflowsService.cancel_run` (§4g);
 absent on every other terminal status, including an approval reject/approve, which
 never set either; `output_files`: the relative paths (within the
-run's output folder) a completed run produced, empty for a run that ended any other
+run's output folder) a completed run produced, across every walk of the run, empty for a run that ended any other
 status or produced no files (never includes the engine's own `.provenance.json`
 bookkeeping file — same exclusion as a node's `artifacts`, above); `missing_artifacts` — declared `output.artifacts` paths a
 completed run did not produce (the warning-only file contract, empty otherwise); and
@@ -703,18 +754,34 @@ minutes clears its ghosts at the next boot, while a run owned by another live pr
 AND periodically (a background thread wired in the service registry), so an orphan left
 by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
 additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
-A paused run is usually answered after a restart, so its manifest names a process that
-is gone; the workflows service's resume claim (`claim_for_resume`, which moves the
-manifest off `needs_input` under the per-run lock once the resume's engine is built,
-after re-checking that nothing touched the run since the resume first read it)
-therefore re-stamps the owner to the resuming process, so a resume waiting for a free
-workflow-run thread is not swept as crashed. A claimed manifest owned by the live
-gateway is one no sweep or self-heal ever ends, so a resume whose engine never writes
-the run's own manifest releases the claim (`release_resume_claim`): cancelled while it
-waits for a thread, or the engine returning or raising before its walk (a preflight
-rejection such as a missing script file, a busy `work_key`). The paused record comes
-back exactly as it was, still answerable and cancellable. Manifests written before the
-owner field existed fall back to a generous `started_at` age threshold.
+Manifests written before the owner field existed fall back to a generous `started_at`
+age threshold.
+
+**Resume claim.** Every resume claims its run first, on every surface — the
+workflows service (webui, API, automations) and the agent's `run_workflow` tool —
+and for a paused (`needs_input`) run as for an aborted one retried at its
+`failed_node`. The claim (`ResumeClaim` in `workflow/resume_claim.py`, over
+`run_log.claim_for_resume`) is taken once everything the resume needs is built,
+right before the walk is handed to a workflow-run thread: under the per-run lock
+(`run_lock_target`, shared with `cancel_run`) it re-reads the record, refuses unless
+it is still exactly the one the resume accepted, and moves it to `running` owned by
+the resuming process. A second resume or a cancel racing in behind it reads
+`running` under the same lock and refuses, so two resumes of one run can never both
+start; the loser is told the run `cannot be resumed — it was cancelled, or already
+resumed, before this reached it.` (a validation error from the service, an `Error:`
+reply from the tool). A stopped run is usually resumed after a restart, so its
+manifest names a process that is gone; re-stamping the owner keeps a resume waiting
+for a free workflow-run thread from being swept as crashed. A claimed manifest owned
+by the live gateway is one no sweep or self-heal ever ends, so a resume whose engine
+never writes the run's own manifest releases the claim (`release_resume_claim`):
+cancelled while it waits for a thread, or the engine returning or raising before its
+walk (a preflight rejection such as a missing script file, a busy `work_key`). The
+record comes back exactly as it was — paused or aborted, still resumable, and a
+paused one still cancellable. The `run_workflow` tool's background launch also gives
+the record back when its task is cancelled before it runs a step. A claim is released
+at most once: a later claim of the same record by the same process writes exactly the
+record the first one wrote, so a second release could not tell the two apart. A
+failed release is logged and never replaces the run's own outcome.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the
@@ -894,6 +961,25 @@ re-deriving it from the last row of the per-node trace.
   node's own turns only — never its system prompt nor the context it inherited — so a
   chain of shared nodes cannot re-accumulate (duplicate) earlier context.
 
+**The buffer survives a resume.** It lives in the walk's memory, so a resumed walk
+rebuilds it from disk. The node runner saves each step's session as its system prompt,
+the shared buffer it was given, then its own turns, so the session of the last shared
+step that finished holds the whole buffer as it stood after that step. The run manifest
+names that session in `shared_session` (§4a). On a resume, `WorkflowEngine.run` hands
+that key to the engine's `shared_context_loader` — the `run_workflow` tool and
+`WorkflowsService` pass `node_runner.shared_context_from_session`, which returns the
+session's messages without the leading system prompt — keeps the most recent messages
+under the same cap, and seeds the walk with them. A retried or re-entered shared node
+therefore sees the conversation it would have seen had the run never stopped — short of
+the turns of a shared step whose session failed to save (`persist_failed`) after the
+named one, since no session holds them. When the named session yields nothing, the
+resume goes on with an empty buffer and `WorkflowEngine.run` logs it, naming the
+workflow, the run and the session key and saying the shared conversation starts empty:
+a warning when the loader returns no messages (`shared_context_from_session` returns
+`[]` for a session that was deleted or never saved, and logs nothing itself), an error
+with the traceback when the loader raises. A nested run's engine has no loader: a child
+run always starts from its first step.
+
 **`shared` is sequential-only.** Parallel workers are always isolated (each gets its
 own session; there is no shared buffer across concurrent threads), and only their text
 outputs are merged (`[0] … [1] …`). A routing node may not use `context="shared"`;
@@ -996,9 +1082,10 @@ panels (like the web UI's Work panel) can show what is being asked.
 
 **Resuming a needs_input run.** A run that ended needs_input can be resumed
 instead of restarted: the engine re-enters the graph AT the asking node, with
-the same run_id (same shared working folder, same node-session keys), the
-visit counts already consumed, and the user's answers as that node's upstream
-input. The shared-context buffer is not reconstructed across a resume —
+the same run_id (same shared working folder, same node-session keys), each
+node's attempt numbers and completed passes so far over every walk of the run,
+and the user's answers as that node's upstream input. The shared-context buffer is
+restored from the session the manifest names in `shared_session` (§4e),
 persistent-session nodes recover their own history, and files live in the
 working folder.
 
@@ -1186,9 +1273,12 @@ path, which builds one explicitly from the finished `WorkflowResult` — so a
 read the run's manifest (§4a) or the global feed (§4f) to learn how it
 actually ended.
 
-Every node entry carries `iteration` (current pass number) and `budget`
-(effective visit limit, `null` where not applicable) so the panels can render
-loop progress live, not just after the run completes; `label` (see **Node
+Every node entry carries `iteration` (the attempt number), `pass_number` (which
+of its allowed passes it is; it trails `iteration` once a failed attempt was
+retried) and `budget` (effective visit limit; `pass_number` and `budget` are
+`null` where not applicable) so the panels can render loop progress live, not
+just after the run completes, as "pass `pass_number` of `budget`" (reading
+`iteration` as the pass on a frame that carries no `pass_number`); `label` (see **Node
 labels** below) and `description` (the node's role-prompt first sentence, for
 hover text — empty for a node type with no prompt). The running node's own
 frame additionally carries `started_at` (wall-clock epoch seconds): surfaces
@@ -1359,7 +1449,14 @@ live-ticking elapsed clock — gated on the run's own status, so a crashed run's
 last in-flight node is not rendered as one still going — and the run header
 sums actual elapsed time (completed nodes plus the active node's running
 delta) alongside the run's recorded `typical_total_s`, so the two read as a
-direct comparison of like quantities.
+direct comparison of like quantities. An `aborted` run that names a `failed_node`
+offers **Retry the failed step** in its status banner: it resumes the run with an
+empty answer through `POST /api/v1/workflows/{name}/run` (`resume_run_id`), which
+re-runs the failed step. The button is left out for a run an automation started
+(`root_session_key` `automation:<name>`) and for a sub-workflow step's own run (a
+`parent_run_id`), which is resumed through its caller. The editor's test-run panel
+shows the same detail, with the same retry, for a run made there: the run route's
+response carries `failed_node`.
 
 **The node detail panel.** A node's identity in that trace — and a node row in
 the chat's work strip — opens a drawer describing that one pass: its status,
@@ -1447,6 +1544,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |

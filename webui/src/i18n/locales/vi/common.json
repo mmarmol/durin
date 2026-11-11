@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "Kết thúc lượt chạy ngay bây giờ — lượt chạy sẽ không thể tiếp tục.",
     "keepWaiting": "Tiếp tục chờ",
     "abortedTitle": "Lượt chạy bị dừng",
+    "retryFailedStep": "Thử lại bước bị lỗi",
     "cancelledTitle": "Lượt chạy đã hủy",
     "outputFiles": "tệp đầu ra",
     "outputPruneHint": "sẽ bị dọn bớt khi các lượt chạy cũ tích lũy — hãy sao chép ra những gì bạn cần",

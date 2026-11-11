@@ -23,6 +23,10 @@ class NodeRun:
     worker_index: int | None = None  # for a fan-out worker: its index in the batch (None otherwise)
     branch_id: str | None = None     # for a static-parallel branch: the branch node id (None otherwise)
     budget: int | None = None        # the node's effective visit budget at this pass (None for parallel units)
+    # Which of its allowed passes this row is: one more than the node's passes that
+    # completed before it. ``iteration`` is the attempt number, so after a failed
+    # attempt is retried the two differ. Set wherever ``budget`` is (None otherwise).
+    pass_number: int | None = None
     status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised) | "reused" (skipped the runner; see origin_run_id)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)

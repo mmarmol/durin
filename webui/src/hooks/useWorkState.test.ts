@@ -529,6 +529,22 @@ describe("useWorkState", () => {
     expect(nodes[1].activity).toEqual({ tool: "read_file", target: "investigation.json", at: 1712 });
   });
 
+  it("carries a node's pass number from a live workflow frame", () => {
+    const { result } = renderHookWithFrame({
+      version: 1, phase: "running", call_id: "workflow:r1", name: "workflow_progress",
+      arguments: { workflow: "w" },
+      nodes: [
+        { id: "draft", status: "running", iteration: 4, pass_number: 3, budget: 3 },
+        { id: "check", status: "done", iteration: 2, budget: 3 },
+      ],
+    });
+
+    const nodes = result.current.active[0].nodes!;
+    expect(nodes[0].iteration).toBe(4);
+    expect(nodes[0].passNumber).toBe(3);
+    expect(nodes[1].passNumber).toBeUndefined();   // a frame without one stays as it was
+  });
+
   it("keeps a polled running node when no live frame has arrived", async () => {
     // The reload case: liveRef is empty, the poll is the only source.
     const { result } = await renderHookWithPolled([

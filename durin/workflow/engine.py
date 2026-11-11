@@ -66,6 +66,9 @@ class NodeRunRequest:
     upstream_output: str | None
     shared_context: list[dict]
     run_id: str
+    # The attempt number: every dispatch of this node in the run gets the next one,
+    # a retry of a failed attempt included, so it names a conversation that no
+    # earlier attempt wrote.
     iteration: int
     root_session_key: str | None
     # When set, the node's file tools operate here (a private branch copy) instead of
@@ -95,6 +98,11 @@ class NodeRunRequest:
     # is and that the final allowed pass IS final. None when budgets don't apply
     # (parallel branches/workers, which are not loop targets).
     budget: int | None = None
+    # Which of its allowed passes this dispatch is: one more than the passes of
+    # this node that completed. A retry of a failed attempt is the same pass again,
+    # so this differs from ``iteration`` once an attempt has failed. None when the
+    # caller does not track passes (the runner then reads ``iteration``).
+    pass_number: int | None = None
     # True when this is a binary routing node whose on_fail target has no visits
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
@@ -169,14 +177,21 @@ NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
 @dataclass
 class ResumeState:
-    """Where to re-enter a run that ended needs_input: the same run_id (same working
-    folder and node-session keys), the node that asked, the visit counts already
-    consumed, and the composed answers context fed to that node as upstream input."""
+    """Where to re-enter a run that stopped: the same run_id (same working folder and
+    node-session keys), the node to re-enter at, each node's highest attempt number
+    and completed passes so far, and the composed context fed to that node as
+    upstream input."""
 
     run_id: str
     start_at: str
+    # Per node, the highest attempt number already used: the resumed walk numbers
+    # the node's next attempt one above it, so no attempt's conversation is reused.
     visits: dict[str, int]
     upstream: str | None = None
+    # Per node, how many of its passes completed: the resumed walk bounds the node
+    # on these, so an attempt that failed does not use up an allowed pass. Empty
+    # when the caller did not count them; the walk then bounds on ``visits``.
+    completed: dict[str, int] = field(default_factory=dict)
     # Last recorded outputs of prior nodes (from the manifest's resume_inputs), so a
     # resumed walk — whose in-memory runs list starts empty — can still compose
     # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
@@ -190,24 +205,37 @@ class ResumeState:
     # nodes wrote. WorkflowEngine.run falls back to this when its own work_key
     # argument is None.
     work_key: str | None = None
+    # The record rows of every earlier walk of the run (``history`` plus ``runs``),
+    # so a resumed walk that completes lists the files and satisfies the declared
+    # artifacts of the steps that ran before it stopped.
+    earlier_rows: list[dict] = field(default_factory=list)
+    # The session of the last shared-context step that finished before the run
+    # stopped (the record's ``shared_session``): it holds the shared conversation
+    # the resumed walk starts from. None when no shared step has finished.
+    shared_session: str | None = None
 
 
 def manifest_visit_counts(manifest: dict) -> dict[str, int]:
-    """Per-node visit counts already consumed by a run, from its manifest's per-node
-    trace: each node's max recorded iteration. Shared by ``build_resume_state`` and
-    ``build_approval_resume`` (``durin/workflow/approval.py``) — both need the same
-    "how many times did this node already run" counts to seed a resumed walk's
-    per-node budget tracking."""
-    visits: dict[str, int] = {}
-    for r in manifest.get("runs", []):
-        nid, it = r.get("node_id"), r.get("iteration", 1)
-        if nid:
-            visits[nid] = max(visits.get(nid, 0), int(it))
-    return visits
+    """Per-node highest attempt number a run has used, over every walk of the run
+    (the counts its record carries in ``passes`` for earlier walks plus its ``runs``)."""
+    return {node: c["reached"] for node, c in run_log.pass_counts(manifest).items()}
+
+
+def manifest_completed_passes(manifest: dict) -> dict[str, int]:
+    """Per-node passes that completed over every walk of a run: what a resumed walk
+    bounds each node on, so an attempt that failed does not use up a pass."""
+    return {node: c["completed"] for node, c in run_log.pass_counts(manifest).items()}
 
 
 def resume_refusal(manifest: dict) -> str | None:
-    """Why an aborted run that names a failed node still cannot be resumed, or None.
+    """Why a run whose status could be resumed (``needs_input`` with a
+    ``needs_input_node``, or ``aborted`` with a ``failed_node``) still cannot be,
+    or None. Every resume surface asks this before it touches the record.
+
+    A sub-workflow step's run (a record with a ``parent_run_id``) is never resumed
+    on its own, paused or failed: it would run its step in its own folder instead
+    of the caller's, end ``completed`` and leave the caller stopped. Resuming the
+    caller re-runs the sub-workflow step, in the caller's folder.
 
     A resume re-enters the walk at the failed node, so that node must be one the
     walk itself dispatched: it has a failed row that belongs to no parallel node.
@@ -215,8 +243,15 @@ def resume_refusal(manifest: dict) -> str | None:
     input for it. Re-entering there would run that one unit as if it were a step
     of the walk — without its input, without reconciling its siblings, without
     anything that follows the parallel node — and report the run completed."""
-    failed = manifest.get("failed_node")
-    if manifest.get("status") != "aborted" or not failed:
+    paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
+    failed = manifest.get("failed_node") if manifest.get("status") == "aborted" else None
+    if not paused and not failed:
+        return None
+    parent = manifest.get("parent_run_id")
+    if parent:
+        return (f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
+                f"run {parent!r} instead: it runs the sub-workflow step again.")
+    if not failed:
         return None
     for r in manifest.get("runs") or []:
         if (r.get("node_id") == failed and r.get("status") == "node_failed"
@@ -229,16 +264,20 @@ def resume_refusal(manifest: dict) -> str | None:
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     """The ResumeState for re-entering a paused or failed run, built from its manifest.
     The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
-    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: max
-    iteration per node as the consumed visit counts, and the re-entry upstream.
+    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: each
+    node's highest attempt number and completed passes over the whole run, and the
+    re-entry upstream.
 
     Two distinct upstream contracts: a ``needs_input`` node ASKED, so it receives the
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
     retry framing may pollute it."""
     visits = manifest_visit_counts(manifest)
+    completed = manifest_completed_passes(manifest)
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     work_key = manifest.get("work_key")
+    earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
+    shared_session = manifest.get("shared_session")
     needs_input_node = manifest.get("needs_input_node")
     if needs_input_node:
         questions = manifest.get("final_output") or ""
@@ -246,6 +285,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
             run_id=manifest["run_id"],
             start_at=needs_input_node,
             visits=visits,
+            completed=completed,
             upstream=(
                 "This run previously stopped to ask for more information.\n\n"
                 f"--- Your questions were ---\n{questions}\n\n"
@@ -253,14 +293,19 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
             ),
             recorded_outputs=recorded_outputs,
             work_key=work_key,
+            earlier_rows=earlier_rows,
+            shared_session=shared_session,
         )
     return ResumeState(
         run_id=manifest["run_id"],
         start_at=manifest["failed_node"],
         visits=visits,
+        completed=completed,
         upstream=manifest.get("resume_upstream"),
         recorded_outputs=recorded_outputs,
         work_key=work_key,
+        earlier_rows=earlier_rows,
+        shared_session=shared_session,
     )
 
 
@@ -289,6 +334,21 @@ def _reaches(workflow: Workflow, src: str, dst: str, avoid: str | None = None) -
 # chain of 'shared' nodes would otherwise grow this without limit and balloon the
 # prompt for every later node; keep only the most recent N messages.
 _SHARED_CONTEXT_MAX_MESSAGES = 200
+
+
+def _last_shared_session(workflow: Workflow, runs: list[NodeRun]) -> str | None:
+    """The session key of the last shared-context work step that finished ``ok``
+    on the main walk, or None. The runner saves a step's conversation as its system
+    prompt, the shared conversation it was given and its own turns, so this session
+    holds the whole shared buffer as it stood after that step. A parallel branch or
+    fan-out worker never reads or extends the buffer, so its rows are skipped."""
+    for r in reversed(runs):
+        node = workflow.nodes.get(r.node_id)
+        if (isinstance(node, WorkNode) and node.context == "shared" and r.status == "ok"
+                and r.branch_id is None and r.worker_index is None and r.session_key):
+            return r.session_key
+    return None
+
 
 # Simultaneous detached side-effect nodes per run. Detached nodes are rare
 # (persist/notify/archive) — a small pool bounds their concurrency the same way
@@ -418,6 +478,7 @@ class WorkflowEngine:
         parallel_llm_concurrency: int = 2,
         parallel_script_concurrency: int = 4,
         on_run_end: Callable[[str], None] | None = None,
+        shared_context_loader: Callable[[str], list[dict]] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -466,6 +527,11 @@ class WorkflowEngine:
         # thread's own statements, so any reader of the manifest is guaranteed the
         # hook already ran. Best-effort: an exception here must never break the run.
         self._on_run_end = on_run_end
+        # Optional: given a session key, the shared conversation that session
+        # holds (its messages without the system prompt). A resume uses it to
+        # restore the shared-context buffer from the record's ``shared_session``;
+        # None means a resumed walk starts with an empty buffer.
+        self._shared_context_loader = shared_context_loader
 
     def run(
         self,
@@ -593,6 +659,7 @@ class WorkflowEngine:
             # from the try below joins it before the manifest is finalized, so a run
             # never reports terminal with a side-effect node silently still running.
             detached_tracker = _DetachedTracker()
+            initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
                 result = self._walk(
                     workflow, self._frame_task(workflow, task, output_format), run_id, runs,
@@ -602,8 +669,11 @@ class WorkflowEngine:
                     update_manifest=_update,
                     start_at=resume.start_at if resume else None,
                     initial_visits=dict(resume.visits) if resume else None,
+                    initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
+                    earlier_rows=list(resume.earlier_rows) if resume else None,
+                    initial_shared_context=initial_shared_context,
                     work_dir=work_dir,
                     own_work_dir=work_dir_override is None,
                     # True only for a run that OWNS a work_key folder — the one
@@ -662,6 +732,29 @@ class WorkflowEngine:
             # above, or any other exception) so a keyed run never leaks the lock —
             # nullcontext's __exit__ is a safe no-op when no lock was acquired.
             lock_cm.__exit__(None, None, None)
+
+    def _resume_shared_context(self, workflow: Workflow,
+                               resume: ResumeState | None) -> list[dict] | None:
+        """The shared conversation a resumed walk starts with: the messages of the
+        session the record names as the last shared step's, bounded like the
+        running buffer. A session that cannot be read, or holds no messages, leaves
+        the buffer empty rather than stopping the resume, and says so in the log so
+        a lost conversation is told apart from a run that never had one. None when
+        there is nothing to restore."""
+        if resume is None or not resume.shared_session or self._shared_context_loader is None:
+            return None
+        try:
+            messages = list(self._shared_context_loader(resume.shared_session))
+        except Exception:  # noqa: BLE001 - a lost conversation must not block the resume
+            logger.exception("workflow {} run {}: could not read shared session {}; the "
+                             "shared conversation starts empty",
+                             workflow.name, resume.run_id, resume.shared_session)
+            return []
+        if not messages:
+            logger.warning("workflow {} run {}: shared session {} holds no conversation; "
+                           "the shared conversation starts empty",
+                           workflow.name, resume.run_id, resume.shared_session)
+        return messages[-_SHARED_CONTEXT_MAX_MESSAGES:]
 
     def _preflight_inputs(self, workflow, input_files, run_id, *, resuming: bool):
         """Validate the run's inputs before any node (or manifest) exists. Returns a
@@ -767,7 +860,8 @@ class WorkflowEngine:
             return
         try:
             run_log.update_run(self._workspace, workflow.name, run_id,
-                               WorkflowResult(status="running", final_output=None, runs=runs))
+                               WorkflowResult(status="running", final_output=None, runs=runs),
+                               shared_session=_last_shared_session(workflow, runs))
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
@@ -787,7 +881,8 @@ class WorkflowEngine:
             run_log.finalize_run(self._workspace, workflow.name, result,
                                  root_session_key=root_session_key, started_at=started_at,
                                  finished_at=time.time(), parent_run_id=parent_run_id,
-                                 workflow=workflow)
+                                 workflow=workflow,
+                                 shared_session=_last_shared_session(workflow, result.runs))
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest finalize failed for {}", workflow.name)
         else:
@@ -845,14 +940,29 @@ class WorkflowEngine:
         start_at: str | None = None,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
+        initial_completed: dict[str, int] | None = None,
         work_dir: str | None = None,
         own_work_dir: bool = True,
         keyed: bool = False,
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
+        earlier_rows: list[dict] | None = None,
+        initial_shared_context: list[dict] | None = None,
     ) -> WorkflowResult:
-        shared_context: list[dict] = []
+        # A resumed walk starts from the shared conversation of the run's earlier
+        # walks (a copy: this list is extended and trimmed in place).
+        shared_context: list[dict] = list(initial_shared_context or [])
+        # Two counters per node. ``visits`` is the attempt number: it names the
+        # node's conversation and trace row, so it never repeats within a run.
+        # ``completed`` counts the node's passes and is what the allowed-passes
+        # bound reads. Both rise on every dispatch, because a failed attempt ends the
+        # walk; they differ only by what a resume seeds them with: an attempt that
+        # failed in an earlier walk used a number but not a pass. Without a
+        # completed count the walk bounds on the attempt numbers, as a caller that
+        # does not count passes always did.
         visits: dict[str, int] = dict(initial_visits or {})
+        completed: dict[str, int] = dict(initial_completed if initial_completed is not None
+                                         else visits)
         upstream_output: str | None = initial_upstream
         # One shared working folder per run (chosen by run(), which also records it in
         # the manifest): every sequential node reads and writes here, so created/edited
@@ -880,15 +990,17 @@ class WorkflowEngine:
                     status="cancelled", final_output=final_output, runs=runs,
                     run_id=run_id, final_output_node=final_output_node,
                 )
-            visits[current] = visits.get(current, 0) + 1
             node = workflow.nodes[current]
             budget = min(getattr(node, "max_visits", None) or workflow.max_visits, self._max_node_visits)
-            if visits[current] > budget:
+            if completed.get(current, 0) >= budget:
                 return WorkflowResult(
                     status="exhausted", final_output=final_output, runs=runs,
                     run_id=run_id, exhausted_node=current, final_output_node=final_output_node,
                 )
+            visits[current] = visits.get(current, 0) + 1
+            completed[current] = completed.get(current, 0) + 1
             iteration = visits[current]
+            pass_number = completed[current]
 
             # Emit a "node started" frame so the caller can show a spinner on
             # the in-flight node before it finishes.  Fires for every node type
@@ -988,6 +1100,7 @@ class WorkflowEngine:
                 started.append(running_frame(
                     node, iteration=iteration,
                     budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
+                    pass_number=pass_number if isinstance(node, (WorkNode, ScriptNode)) else None,
                     started_at=node_started_at,
                 ))
                 started.extend(pending_frames(workflow, node.id,
@@ -1001,11 +1114,12 @@ class WorkflowEngine:
             # turn. The node hands over raw state ({"round", "activity", "max_rounds"})
             # and the engine re-emits a whole frame set, because only the engine knows
             # the other nodes — a bare fragment could not be merged into a node list.
-            # `_node`, `_iter`, `_budget`, `_started` and `_activity` are pinned as
-            # default arguments so this closure keeps this visit's values rather than
-            # the enclosing loop's — `node`, `iteration`, `budget`, `node_started_at`
-            # and `node_activity` are all rebound on the next visit. That rebinding
-            # would be able to corrupt an in-flight closure if this callback could
+            # `_node`, `_iter`, `_budget`, `_pass`, `_started` and `_activity` are
+            # pinned as default arguments so this closure keeps this visit's values
+            # rather than the enclosing loop's — `node`, `iteration`, `budget`,
+            # `pass_number`, `node_started_at` and `node_activity` are all rebound on
+            # the next visit. That rebinding would be able to corrupt an in-flight
+            # closure if this callback could
             # still be invoked once the loop has moved on, but it can't: it is only
             # ever called synchronously on this walk thread, inside the `runner(req)`
             # call below, and must stay synchronous and never await there or the node
@@ -1014,7 +1128,7 @@ class WorkflowEngine:
             node_activity: dict = {"round": None, "activity": None, "max_rounds": None}
 
             def _node_progress(update: dict, _node=node, _iter=iteration,
-                               _budget=budget, _started=node_started_at,
+                               _budget=budget, _pass=pass_number, _started=node_started_at,
                                _activity=node_activity) -> None:
                 _activity.update(update)
                 if self._progress_emit is None:
@@ -1025,6 +1139,7 @@ class WorkflowEngine:
                 frames.append(running_frame(
                     _node, iteration=_iter,
                     budget=_budget if isinstance(_node, (WorkNode, ScriptNode)) else None,
+                    pass_number=_pass if isinstance(_node, (WorkNode, ScriptNode)) else None,
                     started_at=_started,
                     activity=_activity["activity"],
                     round_=_activity["round"],
@@ -1075,7 +1190,7 @@ class WorkflowEngine:
                             getattr(t, "max_visits", None) or workflow.max_visits,
                             self._max_node_visits,
                         )
-                        fail_would_exhaust = visits.get(node.on_fail, 0) >= t_budget
+                        fail_would_exhaust = completed.get(node.on_fail, 0) >= t_budget
 
                 node_input = upstream_output
                 if getattr(node, "inputs_from", ()):
@@ -1097,6 +1212,7 @@ class WorkflowEngine:
                     output_file=((node.output_file or None)
                                  if isinstance(node, WorkNode) and work_dir is not None else None),
                     budget=budget,
+                    pass_number=pass_number,
                     fail_would_exhaust=fail_would_exhaust,
                     fail_loops_back=fail_loops_back,
                     # A script node polls the plain check (its subprocess dies on
@@ -1143,7 +1259,7 @@ class WorkflowEngine:
                         exc.resume_upstream = upstream_output
                         runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                             output="", session_key=exc.session_key,
-                                            budget=budget,
+                                            budget=budget, pass_number=pass_number,
                                             status="node_failed", error=str(exc.cause),
                                             exit_code=getattr(exc, "exit_code", None),
                                             command=getattr(exc, "command", None),
@@ -1174,7 +1290,7 @@ class WorkflowEngine:
                 )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
-                                    passed=passed, budget=budget,
+                                    passed=passed, budget=budget, pass_number=pass_number,
                                     status=("reused" if reuse_hit is not None else
                                             "persist_failed" if resp.persist_failed else "ok"),
                                     exit_code=getattr(resp, "exit_code", None),
@@ -1526,14 +1642,31 @@ class WorkflowEngine:
         # against a write failure: a failed write must still surface as
         # missing, not get credited via status alone.
         produced: set[str] = set()
-        for r in runs:
-            produced.update(r.artifacts)
-            if r.status in ("ok", "reused"):
-                node_spec = workflow.nodes.get(r.node_id)
+
+        def _credit(node_id: str, status: str, artifacts: list[str]) -> None:
+            produced.update(artifacts)
+            if status in ("ok", "reused"):
+                node_spec = workflow.nodes.get(node_id)
                 if (isinstance(node_spec, WorkNode) and node_spec.output_file
                         and terminal_output_dir is not None
                         and (Path(terminal_output_dir) / node_spec.output_file).is_file()):
                     produced.add(node_spec.output_file)
+
+        # A resumed run also credits the rows of its earlier walks (the walk's own
+        # ``runs`` starts empty), so a step that ran before the stop still counts.
+        # Only the files still in the working folder: a stopped run's folder can
+        # be pruned or edited before it is resumed, and a file listed from an
+        # old row alone would be reported as produced when it is gone.
+        def _on_disk(paths: list[str]) -> list[str]:
+            if terminal_output_dir is None:
+                return []
+            return [p for p in paths if (Path(terminal_output_dir) / p).is_file()]
+
+        for row in earlier_rows or []:
+            _credit(row.get("node_id", ""), row.get("status", ""),
+                    _on_disk(row.get("artifacts") or []))
+        for r in runs:
+            _credit(r.node_id, r.status, r.artifacts)
         output_files = sorted(produced)
         # The declared file contract (output.artifacts): report promised paths the
         # completed run did not produce. A warning, never a failure — the caller

@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "Termine l’exécution maintenant — elle ne reprendra pas.",
     "keepWaiting": "Continuer à attendre",
     "abortedTitle": "Exécution interrompue",
+    "retryFailedStep": "Réessayer l'étape en échec",
     "cancelledTitle": "Exécution annulée",
     "outputFiles": "fichiers de sortie",
     "outputPruneHint": "supprimés une fois que les anciennes exécutions s’accumulent — copiez ce dont vous avez besoin",

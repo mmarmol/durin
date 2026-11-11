@@ -17,6 +17,9 @@ An automation has four parts:
   [Workflows](workflows.md). The workflow must already exist: the name is not
   checked when the automation is saved, and a run that names a missing workflow
   ends `failed`.
+  A workflow run started by an automation does not give its nodes their `mcps`
+  tools: a node that names MCP servers runs without them, and nothing in the run
+  says so (see [Workflows](workflows.md)).
 - **Delivery and help** — where it speaks (below).
 - **An optional life condition** — when it stops (below).
 

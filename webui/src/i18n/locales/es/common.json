@@ -2476,6 +2476,7 @@
     "cancelConfirmBody": "Termina la ejecución ahora — no podrá reanudarse.",
     "keepWaiting": "Seguir esperando",
     "abortedTitle": "Ejecución abortada",
+    "retryFailedStep": "Reintentar el paso fallido",
     "cancelledTitle": "Ejecución cancelada",
     "outputFiles": "archivos de salida",
     "outputPruneHint": "se eliminan cuando se acumulan ejecuciones más nuevas — copia lo que necesites",

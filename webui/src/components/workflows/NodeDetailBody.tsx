@@ -74,7 +74,7 @@ export function NodeDetailBody({
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <span className="font-mono text-[12px] font-medium text-foreground">{row.node_id}</span>
         {row.budget != null && (
-          <span>{t("workflows.passOf", { iteration: row.iteration, budget: row.budget })}</span>
+          <span>{t("workflows.passOf", { iteration: row.pass_number ?? row.iteration, budget: row.budget })}</span>
         )}
         {row.duration_s != null && (
           <span className="tabular-nums">

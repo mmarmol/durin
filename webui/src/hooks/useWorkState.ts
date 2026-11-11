@@ -24,6 +24,7 @@ export function toWorkNodes(
     status: string;
     iteration?: number | null;
     budget?: number | null;
+    pass_number?: number | null;
     started_at?: number | null;
     duration_s?: number | null;
     round?: number | null;
@@ -47,6 +48,7 @@ export function toWorkNodes(
       status: n.status as WorkNode["status"],
       ...(n.iteration != null ? { iteration: n.iteration } : {}),
       ...(n.budget != null ? { budget: n.budget } : {}),
+      ...(n.pass_number != null ? { passNumber: n.pass_number } : {}),
       ...(n.started_at != null ? { startedAt: n.started_at } : {}),
       ...(n.duration_s != null ? { durationS: n.duration_s } : {}),
       ...(n.round != null ? { round: n.round } : {}),

@@ -63,6 +63,7 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
             "route_label": getattr(r, "route_label", None),
             "iteration": r.iteration,
             "budget": getattr(r, "budget", None),
+            "pass_number": getattr(r, "pass_number", None),
             # A subworkflow/parallel aggregate row never measures its own
             # duration (the time is spent inside nested runs/branches), so this
             # stays None there rather than becoming a misleading 0 seconds.
@@ -88,7 +89,8 @@ def pending_frames(workflow: Any, from_node_id: str,
     """
     def _pending(node: Any) -> dict:
         return {"id": node.id, "label": node_label(node), "status": "pending",
-                "route_label": None, "iteration": None, "budget": None}
+                "route_label": None, "iteration": None, "budget": None,
+                "pass_number": None}
 
     frames: list[dict] = []
     seen = {from_node_id, *visited}
@@ -109,6 +111,7 @@ def pending_frames(workflow: Any, from_node_id: str,
 
 
 def running_frame(node: Any, *, iteration: int, budget: int | None,
+                  pass_number: int | None = None,
                   started_at: float | None = None,
                   activity: dict | None = None,
                   round_: int | None = None,
@@ -118,6 +121,10 @@ def running_frame(node: Any, *, iteration: int, budget: int | None,
     ``started_at`` is wall-clock epoch seconds; surfaces derive the elapsed
     clock from it rather than counting frames, so the clock stays right across
     a reconnect that misses frames.
+
+    ``iteration`` is the attempt number; ``pass_number`` is which of its
+    ``budget`` passes this is, which surfaces show. They differ once a failed
+    attempt has been retried. None wherever ``budget`` is None.
 
     ``activity`` is what the node is doing right now — ``{tool, target, at}``,
     reported from inside the running turn — and ``round_`` which tool round it
@@ -135,6 +142,7 @@ def running_frame(node: Any, *, iteration: int, budget: int | None,
         "route_label": None,
         "iteration": iteration,
         "budget": budget,
+        "pass_number": pass_number,
         "started_at": started_at,
         "activity": activity,
         "round": round_,

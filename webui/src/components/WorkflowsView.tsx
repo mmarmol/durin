@@ -2088,6 +2088,27 @@ export function WorkflowsView({
     [selected, token, outFmt],
   );
 
+  // Retry the failed step of an aborted run: same run_id and an empty task, which
+  // the server reads as "run the failed step again". Replaces the run's entry in
+  // place, like onResume.
+  const onRetry = useCallback(
+    async (runId: string) => {
+      if (!selected) return;
+      setResuming(true);
+      setError(null);
+      try {
+        const result = await runWorkflow(token, selected, "", [], outFmt, "", runId);
+        setRunResult(result);
+        setRunHistory((prev) => prev.map((r) => (r.run_id === result.run_id ? result : r)));
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setResuming(false);
+      }
+    },
+    [selected, token, outFmt],
+  );
+
   // Show a run's detail: a live/already-fetched run is already in `runHistory` and just
   // gets re-shown; a persisted-only chip fetches its manifest (raw, no per-node output
   // text) and caches it into `runHistory` so re-clicking it is instant.
@@ -2729,6 +2750,7 @@ export function WorkflowsView({
                         result={runResult}
                         resuming={resuming}
                         onResume={(answers) => onResume(runResult.run_id, answers)}
+                        onRetry={() => onRetry(runResult.run_id)}
                       />
                     </div>
                   )}

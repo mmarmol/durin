@@ -110,6 +110,7 @@ def _node_records(result) -> list[dict]:
             "worker_index": r.worker_index,
             "branch_id": r.branch_id,
             "budget": getattr(r, "budget", None),
+            "pass_number": getattr(r, "pass_number", None),
             "status": r.status,
             "route_label": r.route_label,
             "exit_code": getattr(r, "exit_code", None),
@@ -157,6 +158,56 @@ def _write_json(path: Path, data: dict) -> None:
     atomic_write_text(path, json.dumps(data))
 
 
+# Most rows of earlier walks a resumed run's record keeps in ``history``; the
+# oldest are dropped first. The per-step pass counts in ``passes`` are carried
+# separately, so they stay exact however many rows were dropped.
+HISTORY_MAX_ROWS = 500
+
+
+def pass_counts(record: dict) -> dict[str, dict[str, int]]:
+    """Per-step pass counts of a run: ``{node_id: {"reached", "completed"}}``.
+    ``reached`` is the highest attempt number (``iteration``) any row of the step
+    carries; ``completed`` is how many distinct attempt numbers of the step have
+    at least one row that did not fail. Counts carried in ``passes`` (earlier
+    walks) are added to those of ``runs`` (the current walk), so they never
+    depend on ``history``.
+
+    A record resumed before ``passes`` existed (``resumed`` set, no ``passes``
+    key) holds only its last walk in ``runs``, while attempt numbers ran on over
+    every walk: the attempts below a step's lowest row ran in walks the record no
+    longer holds. Counting only the rows would forget every pass those walks
+    completed and loosen the step's bound, so on such a record every attempt
+    from 1 to ``reached`` counts as completed unless its rows show it failed."""
+    counts = {
+        node: {"reached": int(c.get("reached", 0)), "completed": int(c.get("completed", 0))}
+        for node, c in (record.get("passes") or {}).items()
+    }
+    reached: dict[str, int] = {}
+    seen: dict[str, set[int]] = {}
+    done: dict[str, set[int]] = {}
+    for row in record.get("runs") or []:
+        node = row.get("node_id")
+        if not node:
+            continue
+        it = int(row.get("iteration") or 0)
+        reached[node] = max(reached.get(node, 0), it)
+        seen.setdefault(node, set()).add(it)
+        if row.get("status") != "node_failed":
+            done.setdefault(node, set()).add(it)
+        else:
+            done.setdefault(node, set())
+    unrecorded_walks = bool(record.get("resumed")) and "passes" not in record
+    for node, top in reached.items():
+        entry = counts.setdefault(node, {"reached": 0, "completed": 0})
+        entry["reached"] = max(entry["reached"], top)
+        if unrecorded_walks:
+            failed = seen[node] - done[node]
+            entry["completed"] += top - len({it for it in failed if 1 <= it <= top})
+        else:
+            entry["completed"] += len(done[node])
+    return counts
+
+
 def start_run(
     workspace: str | Path, name: str, run_id: str, *,
     root_session_key: str | None, started_at: float,
@@ -184,7 +235,8 @@ def start_run(
     them (e.g. a caller with no workflow object). ``resumed`` marks a walk that
     re-enters an existing run (a failure-resume or a paused run's reply): its
     ``runs`` start empty here, so they never hold the earlier attempts' rows; the
-    node ids those attempts walked are kept in ``earlier_nodes`` instead."""
+    node ids those attempts walked are kept in ``earlier_nodes`` and their rows in
+    ``history`` (bounded), with per-step pass counts in ``passes``."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -228,9 +280,21 @@ def start_run(
         # all its resumes and carried forward on every rewrite, so the run's route
         # is on record even though ``runs`` holds only the last walk.
         "earlier_nodes": earlier_nodes,
+        # The rows of the earlier walks, oldest first and bounded, and the per-step
+        # pass counts they add up to. The counts are computed from the full prior
+        # record, so dropping old history rows never changes them.
+        "history": (
+            (list(prior.get("history") or []) + list(prior.get("runs") or []))[-HISTORY_MAX_ROWS:]
+            if resumed else []
+        ),
+        "passes": pass_counts(prior) if resumed else {},
         # The source outputs the earlier attempts stored, carried forward the same
         # way: this walk's own trace cannot supply them if it stops again.
         "resume_inputs": (prior.get("resume_inputs") or None) if resumed else None,
+        # The session of the last shared-context step that finished on the main
+        # walk: it holds the whole shared conversation, so a resume reloads it.
+        # Carried from the earlier walks until this walk finishes a shared step.
+        "shared_session": prior.get("shared_session") if resumed else None,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -240,9 +304,11 @@ def start_run(
 
 def update_run(
     workspace: str | Path, name: str, run_id: str, result, *, status: str = "running",
+    shared_session: str | None = None,
 ) -> None:
     """Rewrite the manifest with the run's per-node trace so far, preserving the
-    ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite."""
+    ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite.
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
     path = _record_path(workspace, name, run_id)
     base = read_manifest(workspace, name, run_id) or {}
     record = {
@@ -264,7 +330,10 @@ def update_run(
         "durin_version": base.get("durin_version"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
+        "history": base.get("history") or [],
+        "passes": base.get("passes") or {},
         "resume_inputs": base.get("resume_inputs"),
+        "shared_session": shared_session if shared_session is not None else base.get("shared_session"),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -311,9 +380,11 @@ def finalize_run(
     task: str | None = None,
     parent_run_id: str | None = None,
     workflow=None,
+    shared_session: str | None = None,
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
-    ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run."""
+    ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run.
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
     # Preserve the task/parent_run_id from the running manifest when the caller does not
     # supply them (the engine's _finalize_manifest does not hold either; reading them here
     # keeps finalize_run safe without requiring the engine to carry the values separately).
@@ -339,6 +410,9 @@ def finalize_run(
         "durin_version": prior.get("durin_version"),
         "resumed": prior.get("resumed", False),
         "earlier_nodes": prior.get("earlier_nodes") or [],
+        "history": prior.get("history") or [],
+        "passes": prior.get("passes") or {},
+        "shared_session": shared_session if shared_session is not None else prior.get("shared_session"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -424,38 +498,42 @@ _RUN_CLAIM_LOCK_SUFFIX = ".claim"
 
 def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
     """The cross-process lock target serializing every caller that checks a
-    ``needs_input`` run's status and then acts on it: ``WorkflowsService.cancel_run``
-    finalizing it, ``WorkflowsService.execute``'s resume path claiming it (moving it
-    off ``needs_input`` before actually resuming), and the approval-reject
-    short-circuit inside that same resume path. Each of those is a read-then-write
-    on the SAME manifest; without a lock, two racing callers can both read
-    ``needs_input`` before either writes, so — for example — a resume goes on to run
-    real nodes on a run ``cancel_run`` just finalized. Whichever caller acquires the
-    lock first wins outright: the loser's own re-read, taken only once it acquires
-    the lock in turn, sees the winner's already-written status and refuses instead
-    of acting a second time. Every OTHER manifest write (a running walk's own
-    per-node updates, a terminal ``finalize_run``) stays single-writer with no lock,
-    same as this module's own docstring says — this guards only the ``needs_input``
-    check-then-act window, where an outside caller (not the walk itself) can act on
-    the manifest."""
+    resumable run's status and then acts on it — a ``needs_input`` run, or an
+    ``aborted`` one with a ``failed_node``: ``WorkflowsService.cancel_run``
+    finalizing a paused run, every resume claiming the run (moving it to
+    ``running`` before actually resuming it — ``ResumeClaim``, used by the
+    workflows service and the ``run_workflow`` tool alike), and the
+    approval-reject short-circuit inside the service's resume path. Each of those
+    is a read-then-write on the SAME manifest; without a lock, two racing callers
+    can both read the resumable status before either writes, so — for example —
+    two resumes both run real nodes, or a resume runs them on a run
+    ``cancel_run`` just finalized. Whichever caller acquires the lock first wins
+    outright: the loser's own re-read, taken only once it acquires the lock in
+    turn, sees the winner's already-written status and refuses instead of acting
+    a second time. Every OTHER manifest write (a running walk's own per-node
+    updates, a terminal ``finalize_run``) stays single-writer with no lock, same
+    as this module's own docstring says — this guards only the check-then-act
+    window on a stopped run, where an outside caller (not the walk itself) can
+    act on the manifest."""
     return _wf_dir(workspace, name) / f"{run_id}{_RUN_CLAIM_LOCK_SUFFIX}"
 
 
 def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
-    """Move a ``needs_input`` manifest to ``running`` IN PLACE, owned by this
-    process, preserving every other field — called under ``run_lock_target``'s
-    lock, right before the caller releases it and actually resumes the run, so a
-    ``cancel_run`` (or an approval reject) racing in right behind sees this run is
-    no longer ``needs_input`` and refuses instead of finalizing a run that is, by
+    """Move a resumable manifest (``needs_input``, or ``aborted`` with a
+    ``failed_node``) to ``running`` IN PLACE, owned by this process, preserving
+    every other field — called under ``run_lock_target``'s lock, right before the
+    caller releases it and actually resumes the run, so a second resume or a
+    ``cancel_run`` (or an approval reject) racing in right behind sees this run
+    is no longer resumable and refuses instead of acting on a run that is, by
     then, genuinely resuming. ``WorkflowEngine.run``'s own ``_start_manifest``
-    fully rewrites the manifest once the resume gets a workflow-run thread (a fresh
-    ``started_at``, the resumed walk's own ``runs``) — this claim only needs to
-    survive until that first real write, not to be a lasting record itself. That
-    can take a while when every run thread is busy, and a paused run is usually
-    answered after a restart, so its recorded owner is often a dead process: the
-    claim re-stamps the owner, or the crash sweep would flip the waiting resume to
-    ``crashed``. A resume whose engine never makes that write undoes the claim
-    with ``release_resume_claim``. Returns the claimed record."""
+    fully rewrites the manifest once the resume gets a workflow-run thread (a
+    fresh ``started_at``, the resumed walk's own ``runs``) — this claim only
+    needs to survive until that first real write, not to be a lasting record
+    itself. That can take a while when every run thread is busy, and a stopped
+    run is usually resumed after a restart, so its recorded owner is often a dead
+    process: the claim re-stamps the owner, or the crash sweep would flip the
+    waiting resume to ``crashed``. A resume whose engine never makes that write
+    undoes the claim with ``release_resume_claim``. Returns the claimed record."""
     from durin.utils.process_tree import process_identity
 
     prior = read_manifest(workspace, name, run_id) or {}
@@ -471,13 +549,14 @@ def release_resume_claim(
     workspace: str | Path, name: str, run_id: str, *, prior: dict, claimed: dict,
 ) -> bool:
     """Undo ``claim_for_resume`` for a resume whose engine never wrote the run's
-    own manifest: put back ``prior``, the paused record exactly as it was before
-    the claim (``needs_input``, its original owner), so the run can be answered
-    or cancelled again. A claimed manifest owned by this live process is one
-    that neither the crash sweep nor the ``tasks`` self-heal ever ends, and one
-    ``cancel_run`` and a new resume both refuse. Does nothing — returns False —
-    once the manifest differs from ``claimed``: the engine took the run over.
-    Called under ``run_lock_target``'s lock, like the claim."""
+    own manifest: put back ``prior``, the record exactly as it was before the
+    claim (``needs_input`` or ``aborted``, its original owner), so the run can be
+    resumed — or, when paused, cancelled — again. A claimed manifest owned by
+    this live process is one that neither the crash sweep nor the ``tasks``
+    self-heal ever ends, and one ``cancel_run`` and a new resume both refuse.
+    Does nothing — returns False — once the manifest differs from ``claimed``:
+    the engine took the run over. Called under ``run_lock_target``'s lock, like
+    the claim."""
     if read_manifest(workspace, name, run_id) != claimed:
         return False
     _write_json(_record_path(workspace, name, run_id), prior)

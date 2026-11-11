@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "立即结束运行——运行将无法恢复。",
     "keepWaiting": "继续等待",
     "abortedTitle": "运行已中止",
+    "retryFailedStep": "重试失败的步骤",
     "cancelledTitle": "运行已取消",
     "outputFiles": "输出文件",
     "outputPruneHint": "旧运行积累后会被清理——请提前复制出你需要的内容",
