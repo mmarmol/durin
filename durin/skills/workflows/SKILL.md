@@ -183,7 +183,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the SAME run — same working folder, node sessions, and loop counters — at the node that
   asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
   failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
-  retries the FAILED node with the exact input it had — completed nodes never re-run.
+  retries the FAILED node with the exact input it had — completed nodes never re-run
+  (a failed `choose`/`union` branch retries its whole parallel node).
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused
   for a person's approval is not yours to resolve**: the summary says so, and

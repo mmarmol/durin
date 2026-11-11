@@ -58,16 +58,20 @@ RECONCILE_AGE_S = 6 * 3600
 # of THAT run degrades gracefully (the node sees the capped text).
 RESUME_UPSTREAM_MAX_CHARS = 16_000
 
-# Per-source cap for ``resume_inputs``: the last outputs of nodes referenced by
-# some node's ``inputs_from``, stored on a paused/aborted manifest so a resumed
-# walk (whose in-memory trace starts empty) can still compose those inputs.
+# Per-source cap for ``resume_inputs``: the last outputs of nodes that another
+# node names as a source — ``inputs_from``, or a parallel node's ``list_from`` /
+# ``branches_from`` — stored on a paused/aborted manifest so a resumed walk (whose
+# in-memory trace starts empty) can still read them. A node composing its input
+# sees a capped copy as it is; a parallel node refuses one that reached the cap
+# rather than parse a list from a fragment.
 RESUME_INPUT_MAX_CHARS = 8_000
 
 
 def _resume_inputs(workflow, result) -> dict[str, str] | None:
-    """{source: capped last output} for the union of every node's inputs_from —
-    only for runs that can be resumed (needs_input, or aborted with a failed
-    node), and only for sources that actually recorded an output."""
+    """{source: capped last output} for every node another node names as a source
+    (``inputs_from``, ``list_from``, ``branches_from``) — only for runs that can be
+    resumed (needs_input, or aborted with a failed node), and only for sources
+    that actually recorded an output."""
     if workflow is None:
         return None
     resumable = (
@@ -79,6 +83,8 @@ def _resume_inputs(workflow, result) -> dict[str, str] | None:
     sources: set[str] = set()
     for node in workflow.nodes.values():
         sources.update(getattr(node, "inputs_from", ()) or ())
+        sources.update(s for s in (getattr(node, "list_from", None),
+                                   getattr(node, "branches_from", None)) if s)
     if not sources:
         return None
     out: dict[str, str] = {}

@@ -575,7 +575,7 @@ class RunWorkflowTool(Tool, ContextAware):
         resume = None
         if resume_run_id:
             from durin.workflow import run_log
-            from durin.workflow.engine import build_resume_state
+            from durin.workflow.engine import build_resume_state, resume_refusal
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             if manifest is None:
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
@@ -586,6 +586,9 @@ class RunWorkflowTool(Tool, ContextAware):
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
                         f"needs_input run (with the answers as task) or an aborted run "
                         f"(retried at its failed node) can.")
+            refusal = resume_refusal(manifest)
+            if refusal:
+                return f"Error: run '{resume_run_id}' cannot be resumed — {refusal}"
             if manifest.get("ask_kind") == "approval":
                 # Approving, revising or rejecting is a person's decision, and a
                 # value in this tool call is the model's claim, never evidence

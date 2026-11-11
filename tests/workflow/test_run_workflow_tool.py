@@ -299,6 +299,38 @@ async def test_resume_rejects_a_run_that_did_not_end_needs_input(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resume_refuses_a_record_whose_failed_node_is_a_branch(tmp_path):
+    # Older versions named the branch itself when a choose/union branch failed, and
+    # kept no input for it. Resuming there would run that one branch as if it were a
+    # step of the walk and call the run completed.
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "fan",
+        "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "reconcile": "union", "next": None},
+            {"id": "a", "kind": "work", "tools": "default"},
+            {"id": "b", "kind": "work", "tools": "default"},
+        ],
+    })
+    old = WorkflowResult(status="aborted", run_id="r1", final_output="boom", failed_node="b",
+                         runs=[NodeRun(node_id="a", iteration=1, output="x", branch_id="a")])
+    run_log.finalize_run(
+        tmp_path, "doer", old,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="original task",
+    )
+    record = tmp_path / "workflows-runs" / "doer" / "r1.json"
+    before = record.read_bytes()
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await tool.execute(name="doer", task="", resume_run_id="r1", background=False)
+    assert "cannot be resumed" in out and "new run" in out
+    fake_run.assert_not_called()
+    assert record.read_bytes() == before
+
+
+@pytest.mark.asyncio
 async def test_resume_builds_resume_state_from_the_manifest(tmp_path):
     _write_workflow(tmp_path, "doer", {
         "name": "doer", "start": "plan",
