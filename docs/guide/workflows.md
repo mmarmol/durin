@@ -45,6 +45,10 @@ Every work node (`"kind": "work"`, the default) has:
 - **Skills and MCP servers.** A node can name `skills` (skill docs injected
   into its own prompt) and `mcps` (a subset of your already-configured MCP
   servers) — scoped per node, so a node only sees what its job needs.
+  A node's MCP tools reach it only when the agent starts the run from a
+  chat. A run started by an automation, through the HTTP API or from the
+  dashboard executes the node without its MCP tools, and nothing in the run
+  says so.
 - **A mode.** Non-routing work nodes default to `mode: "build"` (full
   access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
   `cases`) default to `mode: "read"` (read-only, neutral posture) — a
