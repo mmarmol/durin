@@ -401,7 +401,6 @@ def mark_node_started(
     workspace: str | Path, name: str, run_id: str, *,
     node_id: str, label: str, started_at: float,
     iteration: int | None = None, session_key: str | None = None,
-    detached_active: list[dict] | None = None,
 ) -> None:
     """Record which node is in flight, so a reader that arrives mid-node knows.
 
@@ -417,9 +416,7 @@ def mark_node_started(
     persists no conversation — script, sub-workflow, parallel — where a key
     would point at a session that does not exist.
 
-    ``detached_active`` replaces the recorded list of detached steps still
-    running when given (the step starting here is a detached one, so it joins
-    that list in the same write); ``None`` keeps it.
+    Every other field is kept as recorded, ``detached_active`` included.
 
     No-op when no manifest exists — a nested run may not have written one, and
     fabricating a partial record here would confuse the crash sweep.
@@ -431,8 +428,6 @@ def mark_node_started(
         "node_id": node_id, "label": label, "started_at": started_at,
         "iteration": iteration, "session_key": session_key,
     }
-    if detached_active is not None:
-        base["detached_active"] = list(detached_active)
     _write_json(_record_path(workspace, name, run_id), base)
 
 
@@ -739,24 +734,33 @@ def _cut_row(entry: dict) -> dict:
 
 def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict:
     """The record a dead ``running`` run is converted to (see ``mark_dead_run``).
-    Raises on a malformed record; the caller then writes nothing."""
+    Raises when the record or its resume files cannot be read as expected; the
+    caller then falls back to ``_minimal_mark``."""
     position = record.get("position")
     if position is not None and not (isinstance(position, dict) and position.get("node")):
-        raise ValueError(f"malformed position: {position!r}")
+        raise ValueError(f"the position is not a step: {position!r}")
     active = record.get("active_node")
     stopped = bool(record.get("stop_requested"))
     if not isinstance(record.get("runs") or [], list):
-        raise ValueError("malformed runs")
+        raise ValueError("the runs are not a list")
+    detached = record.get("detached_active") or []
+    if not isinstance(detached, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("node_id"), str) for e in detached):
+        raise ValueError("a detached_active entry names no step")
     rows = list(record.get("runs") or [])
     cut: set[tuple] = set()
     if position and isinstance(active, dict) and active.get("node_id") == position["node"]:
         rows.append(_cut_row(active))
         cut.add((active["node_id"], active.get("iteration")))
-    for entry in record.get("detached_active") or []:
+    for entry in detached:
         key = (entry["node_id"], entry.get("iteration"))
         if key not in cut:
             rows.append(_cut_row(entry))
             cut.add(key)
+    # A detached step that started is never a step to run again: a resume would
+    # launch its side effect a second time. A record naming one as its position
+    # (only a record from another build can) keeps that position, unnamed as failed.
+    started_detached = {e["node_id"] for e in detached}
 
     out = dict(record)
     out.pop("owner", None)
@@ -775,7 +779,7 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict
         # A stop was asked for: the run ends where nothing can resume it, so it
         # names no step and its resume files are removed after the write.
         out["position"] = None
-    elif position:
+    elif position and position["node"] not in started_detached:
         # The step the record names is the step the run failed at: the one that
         # was running, or the one about to start. What it was to receive comes
         # from the resume store, used only when stored for that same step.
@@ -784,11 +788,27 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict
         stored = resume_store.load_input(store, position.get("seq") or 0)
         if stored is not None and stored[0] == position["node"]:
             upstream = stored[1]
+            if upstream is not None and not isinstance(upstream, str):
+                raise ValueError("the stored input of the step is not text")
             out["resume_upstream"] = (
                 upstream[:RESUME_UPSTREAM_MAX_CHARS] if upstream is not None else None)
+        recorded = record.get("resume_inputs") or {}
+        if not isinstance(recorded, dict):
+            raise ValueError("the recorded resume_inputs are not a mapping")
         sources = {node: text[:RESUME_INPUT_MAX_CHARS]
                    for node, text in resume_store.load_sources(store).items()}
-        out["resume_inputs"] = {**(record.get("resume_inputs") or {}), **sources} or None
+        out["resume_inputs"] = {**recorded, **sources} or None
+    return out
+
+
+def _minimal_mark(record: dict) -> dict:
+    """The mark a dead run gets when its full conversion cannot be built: status
+    ``crashed``, ``active_node`` cleared and ``owner`` removed (both describe a
+    process that no longer exists), every other field as it was. The run then
+    reads as ended, and no sweep finds it again."""
+    out = dict(record)
+    out.pop("owner", None)
+    out.update(status="crashed", active_node=None)
     return out
 
 
@@ -800,8 +820,10 @@ def mark_dead_run(
     step leaves, so a resume can enter it. Returns the written record, or None
     when nothing was written: the record is not ``running``, its owner is alive
     (an owner-less one counts as dead once older than ``max_age_s`` before
-    ``now``), it is unreadable or malformed, or its lock stayed busy for
-    ``DEAD_RUN_LOCK_TIMEOUT_S``. Never raises.
+    ``now``), the file cannot be read or parsed as a record, the write failed,
+    or its lock stayed busy for ``DEAD_RUN_LOCK_TIMEOUT_S``. Never raises. A
+    dead run whose conversion cannot be built (a field or a resume file of an
+    unexpected shape) gets ``_minimal_mark`` instead, with one warning.
 
     The record is re-read under ``run_lock_target``'s lock, so two finders (the
     sweep and the ``tasks`` tool, or two processes) convert it once, and a
@@ -820,6 +842,10 @@ def mark_dead_run(
       ``resume_inputs`` (the stored sources, capped, over the recorded ones);
     - when cancelled: ``position`` None and the resume files removed.
 
+    A step listed in ``detached_active`` is never written as ``failed_node``:
+    a record naming one as its position keeps that position and gets no
+    ``failed_node`` or resume fields.
+
     A record without a position (written before positions existed, or a
     sub-workflow's own run) gets no ``failed_node`` and no resume fields. One
     written before positions existed (no ``position`` key) also keeps its
@@ -833,14 +859,20 @@ def mark_dead_run(
                 return None
             if not _owner_gone(record, now, max_age_s):
                 return None
-            out = _dead_run_record(workspace, record, time.time())
+            try:
+                out = _dead_run_record(workspace, record, time.time())
+            except Exception as exc:  # noqa: BLE001 - an odd record is still marked ended
+                logger.warning("run {} of workflow {!r}: its process is gone, but its record "
+                               "cannot be converted ({}); marked crashed only",
+                               run_id, name, exc)
+                out = _minimal_mark(record)
             _write_json(_record_path(workspace, name, run_id), out)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
         return None
-    except Exception:  # noqa: BLE001 - a bad record must never stop a sweep
-        logger.exception("run {} of workflow {!r}: could not convert the dead run's record",
+    except Exception:  # noqa: BLE001 - a sweep must never stop on one record
+        logger.exception("run {} of workflow {!r}: could not write the dead run's record",
                          run_id, name)
         return None
     if out["status"] in UNRESUMABLE_ENDS:

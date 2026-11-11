@@ -32,6 +32,7 @@ Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -191,7 +192,7 @@ class TasksTool(Tool, ContextAware):
         if action == "status":
             if not id:
                 return "Error: 'id' is required for status."
-            return self._render_status(session_key, id)
+            return await self._render_status(session_key, id)
         if action == "stop":
             if not id:
                 return "Error: 'id' is required for stop."
@@ -240,7 +241,8 @@ class TasksTool(Tool, ContextAware):
         2026-07-18 ghost); when the user pokes it before the periodic sweep
         does, flip it here and answer with the truth instead of describing a
         process that no longer exists. Returns the healed message, or None
-        when the row is genuinely alive."""
+        when the row is genuinely alive. It takes the run's lock and may wait
+        for it, so both callers run it off the event loop."""
         if row["kind"] != "workflow" or row["status"] != "running":
             return None
         from durin.workflow import run_log
@@ -265,7 +267,7 @@ class TasksTool(Tool, ContextAware):
             "Re-run the workflow if the result is still needed."
         )
 
-    def _render_status(self, session_key: str, task_id: str) -> str:
+    async def _render_status(self, session_key: str, task_id: str) -> str:
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
         if row is None:
             return f"Error: unknown task id {task_id!r} in this session."
@@ -273,7 +275,7 @@ class TasksTool(Tool, ContextAware):
             return self._render_subagent_status(session_key, task_id, row)
         if row["kind"] == "job":
             return self._render_job_status(row)
-        healed = self._heal_orphaned_workflow(row)
+        healed = await asyncio.to_thread(self._heal_orphaned_workflow, row)
         if healed:
             return healed
         return self._render_workflow_status(row)
@@ -465,7 +467,7 @@ class TasksTool(Tool, ContextAware):
                 f"if you need to confirm it stopped.{dropped}"
             )
         # workflow
-        healed = self._heal_orphaned_workflow(row)
+        healed = await asyncio.to_thread(self._heal_orphaned_workflow, row)
         if healed:
             return healed
         if row["status"] not in ("running", "stopping"):

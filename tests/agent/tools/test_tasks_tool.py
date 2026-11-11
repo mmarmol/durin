@@ -411,6 +411,44 @@ async def test_a_ghost_run_asked_to_stop_is_reported_cancelled(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "stop"])
+async def test_healing_a_ghost_run_waits_for_its_lock_off_the_event_loop(tmp_path, action):
+    """The heal takes the run's lock; while another caller holds it, the wait
+    happens off the event loop, and the heal completes once it is released."""
+    import asyncio
+    import threading
+
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghostlck", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghostlck", _DEAD_OWNER)
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with cross_process_lock(run_log.run_lock_target(tmp_path, "qa", "ghostlck")):
+            held.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        held.wait(10)
+        heal = asyncio.create_task(_tool(tmp_path, None).execute(action=action, id="ghostlck"))
+        ticks = 0
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            ticks += 1
+        assert ticks == 20 and not heal.done()   # the loop kept running while the heal waited
+    finally:
+        release.set()
+        holder.join()
+    out = await asyncio.wait_for(heal, 10)
+    assert "crashed" in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghostlck")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
 async def test_stop_live_owner_run_still_cancels(tmp_path):
     """A running manifest owned by a LIVE process keeps the normal cancel path."""
     import os

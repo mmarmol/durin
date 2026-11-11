@@ -700,7 +700,8 @@ class WorkflowEngine:
                                         [r for r in fresh if r.node_id in sources])
 
             def _update(*, position: dict | None | object = run_log.KEEP_POSITION,
-                        upstream: str | None = None) -> None:
+                        upstream: str | None = None,
+                        starting_detached: dict | None = None) -> None:
                 _store_sources()
                 if nested:
                     position = run_log.KEEP_POSITION
@@ -710,9 +711,13 @@ class WorkflowEngine:
                     position = run_log.KEEP_POSITION
                 # The detached nodes still running go with the trace: a node
                 # whose row was just drained into `runs` leaves the list in the
-                # same write.
+                # same write, and one about to be launched (`starting_detached`)
+                # joins it in the write that moves the position past it.
+                active = detached_tracker.active()
+                if starting_detached is not None:
+                    active.append(starting_detached)
                 self._update_manifest(workflow, run_id, runs, position=position,
-                                      detached_active=detached_tracker.active())
+                                      detached_active=active)
 
             initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
@@ -1125,29 +1130,26 @@ class WorkflowEngine:
             # lives in their children's own rows.
             started_session_key = (node_session_key(run_id, node, iteration)
                                    if isinstance(node, WorkNode) else None)
-            # A detached node that is launched below joins the record's list of
-            # detached nodes still running in this same write, so it is on
-            # record from the moment it starts.
-            detached_entry: dict | None = None
-            if (isinstance(node, (WorkNode, ScriptNode)) and node.detached
-                    and detached_tracker is not None):
-                detached_entry = {"node_id": node.id, "iteration": iteration,
-                                  "session_key": started_session_key}
+            # A detached node is not marked here: the record names it as in flight
+            # only through `detached_active`, in the write that also moves the
+            # position past it (below, before it is launched). Marked here, the
+            # record would hold it as the position and as started at once, and a
+            # death then would make a resume launch its side effect again.
+            is_detached = isinstance(node, (WorkNode, ScriptNode)) and node.detached
+            # Set once this visit's record write naming the next step was made.
+            position_written = False
             # Guarded like every other manifest write in this class: without a
             # workspace there is no manifest to mark, and calling through would
             # raise on every node of every workspace-less run — an exception the
             # handler below would then swallow on a purely normal path, hiding
             # any real write failure among the noise.
-            if self._workspace is not None:
+            if self._workspace is not None and not is_detached:
                 try:
                     run_log.mark_node_started(
                         self._workspace, workflow.name, run_id,
                         node_id=node.id, label=node_label(node), started_at=node_started_at,
                         iteration=iteration,
                         session_key=started_session_key,
-                        detached_active=(
-                            [*detached_tracker.active(), detached_entry]
-                            if detached_entry is not None else None),
                     )
                 except Exception:  # noqa: BLE001 - observability write; never break the run
                     logger.exception("workflow node start marker failed for {}", workflow.name)
@@ -1285,6 +1287,22 @@ class WorkflowEngine:
                     detached_input = upstream_output
                     if getattr(node, "inputs_from", ()):
                         detached_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
+                    detached_entry = {"node_id": node.id, "iteration": iteration,
+                                      "session_key": started_session_key}
+                    # One write, before the launch: the node joins
+                    # `detached_active` and the position moves to its `next`,
+                    # which receives the same edge text. Rows of detached nodes
+                    # that finished meanwhile are drained into it too.
+                    runs.extend(detached_tracker.drain())
+                    if update_manifest is not None:
+                        if node.next is None:
+                            update_manifest(position=None, starting_detached=detached_entry)
+                        else:
+                            seq += 1
+                            update_manifest(position={"node": node.next, "seq": seq},
+                                            upstream=upstream_output,
+                                            starting_detached=detached_entry)
+                        position_written = True
                     self._launch_detached(
                         detached_tracker, node, task, detached_input, run_id,
                         iteration, root_session_key, work_dir, raw_task=raw_task,
@@ -1734,10 +1752,11 @@ class WorkflowEngine:
             # in-flight run shows them without waiting for the terminal join.
             # The same write names the step to enter next and the exact edge text
             # it will receive (every branch above set both), or no step once the
-            # walk has ended.
-            if detached_tracker is not None:
+            # walk has ended. A detached node's branch already made that write,
+            # before its launch.
+            if detached_tracker is not None and not position_written:
                 runs.extend(detached_tracker.drain())
-            if update_manifest is not None:
+            if update_manifest is not None and not position_written:
                 if current is None:
                     update_manifest(position=None)
                 else:

@@ -100,3 +100,15 @@ def test_a_detached_step_running_when_the_process_dies_is_on_record(tmp_path):
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert ("side", True) in [(r["node_id"], r.get("cut", False)) for r in rec["runs"]]
     assert rec["detached_active"] == []
+
+
+def test_a_process_killed_while_a_detached_step_runs_never_names_it_the_failed_step(tmp_path):
+    wf = {"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "side"},
+        {"id": "side", "kind": "script", "command": "echo side", "detached": True, "next": "b"},
+        {"id": "b", "kind": "work", "next": None}]}
+    dead = run_until_killed(tmp_path, wf, stop_in="side")
+    assert dead.record["position"] is None or dead.record["position"]["node"] != "side"
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert rec["status"] == "crashed" and rec.get("failed_node") != "side"
+    assert ("side", True) in [(r["node_id"], r.get("cut", False)) for r in rec["runs"]]

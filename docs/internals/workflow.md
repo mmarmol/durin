@@ -690,8 +690,9 @@ none. `start_run` names the step the walk enters first. The write after each ste
 names the step the walk goes to next, with the edge text that step will receive
 already stored. A binary gate that passes hands on the input it received, so that
 input is what is stored. The write `mark_node_started` makes leaves the position
-untouched, so while a step runs the position names that step. The write after the
-walk's last step names none. A walk that stops early
+untouched, so while a step runs the position names that step. A detached node is the
+exception: the walk does not wait for it, and the write that starts it already names
+its `next` (see `detached_active` below). The write after the walk's last step names none. A walk that stops early
 writes no further position: a failed step, a pause, a stop from a parallel node, a
 cancel, or an exhausted step. Its record keeps the last position written (the step
 that was running, or the one about to start). A run that can still be resumed
@@ -753,10 +754,18 @@ longer `"running"` never reports one either way — a record an older release ma
 crashed without clearing it does not show its last in-flight node as a phantom "still
 running" entry.
 `detached_active` — `[{node_id, iteration, session_key}]`, the detached nodes launched
-and not yet in `runs`. A detached node joins it in the `mark_node_started` write that
-starts it, and leaves it in the `update_run` write that drains its row into `runs`, so
-at every write a launched detached node is in exactly one of the two. Both writes carry
-the list; `finalize_run` writes it empty (every detached node was joined first). A
+and not yet in `runs`. A detached node gets no `mark_node_started` write and is never
+`active_node`. Its start is one `update_run` write, made before it is launched (its
+`next`'s input stored first, as for every position): it joins `detached_active`, and
+the position moves to its `next` (or to `null` when it has none), which receives the
+edge text the detached node passes through unchanged. So a record never holds a step
+both as its position and as a started detached node, and a death never makes a resume
+enter one again. A detached node leaves the list in the `update_run` write that drains
+its row into `runs`; from its start to the end of the run it is in exactly one of the
+two. `mark_node_started` keeps the list as recorded; `finalize_run` writes it empty
+(every detached node was joined first). When the start write cannot store the next
+step's input it keeps the earlier position, which then names the detached node while
+the list holds it; the crash conversion never names such a step as failed (below). A
 record written before the field existed lacks it.
 On finalization: `needs_input_node` — the node the run paused at: a multi-way route to
 `__needs_input__`, a sub-workflow node whose child paused, or a `WorkNode.approval`
@@ -831,8 +840,9 @@ and does nothing unless it is still `running` with an owner that is gone. Two fi
 (the sweep and the `tasks` tool, or two processes) therefore convert it once, and a
 resume that claimed the record first — re-stamping the owner to its live process — is
 left alone. A record whose lock stays busy past its timeout is skipped and logged, and
-the next sweep tries again; an unreadable or malformed record is skipped and left as
-it is. The written record has:
+the next sweep tries again; a file that cannot be read or parsed as a record is left as
+it is, since nothing can be written over it safely. The `tasks` tool runs its self-heal
+off the event loop, so that wait never blocks the gateway. The written record has:
 
 - `status` `"crashed"`, or `"cancelled"` when the record holds a `stop_requested`;
   `finished_at` and `ts` the time of the conversion (not on a record written before
@@ -844,20 +854,36 @@ it is. The written record has:
   `"the process ended while this step was running"`, `budget` and `pass_number`
   `null`. Like any failed attempt it uses an attempt number but no pass. A death
   between two steps (no step in flight) adds no row;
-- a cut row of the same shape for every entry of `detached_active` (one row when the
-  detached node is also the step in flight), and `detached_active` empty;
+- a cut row of the same shape for every entry of `detached_active` (one row when an
+  entry is also the step in flight), and `detached_active` empty;
 - when it ends `crashed` and has a position: `failed_node` — the position's step —
   `resume_upstream`, the step's stored input (only when the stored input names that
   same step), capped like a failed step's, and `resume_inputs`, the stored source
-  outputs, each capped, merged over the ones the record already held;
+  outputs, each capped, merged over the ones the record already held. A step listed in
+  `detached_active` is never written as `failed_node`: a record that holds one as its
+  position keeps that position and gets no `failed_node` and no resume fields, since a
+  resume would launch the detached side effect again;
 - when it ends `cancelled`: `position` `null`, no `failed_node`, and the run's resume
   files removed, like any cancelled run. The cut rows are still written.
 
-A record without a position — a sub-workflow's own run, or one written before positions
-existed — gets no `failed_node` and no resume fields (a sub-workflow's run still gets its
-detached steps' cut rows). One written before positions existed is only marked: its
-status, `active_node` cleared and `owner` removed, its `finished_at` and `ts` untouched. The resume gates still require `aborted`,
-so a `crashed` record is not resumed by them.
+A record without a position gets no `failed_node` and no resume fields. There are three
+kinds: a sub-workflow's own run (`position: null` at every write), which still gets its
+detached nodes' cut rows; a top-level run whose walk had ended (`position: null`) and
+whose process died while its detached nodes were being joined, which gets their cut rows
+too; and a record written before positions existed (no `position` key), which is only
+marked: its status, `active_node` cleared and `owner` removed, its `finished_at` and
+`ts` untouched.
+
+**The minimal mark.** A dead run whose full conversion cannot be built — a field of an
+unexpected shape (`runs` not a list, a `position` that names no step, a
+`detached_active` entry without a step, `resume_inputs` that is not a mapping) or a
+stored input whose text is not text — still gets marked, with one warning naming the run
+and the reason: `status: "crashed"`, `active_node` cleared, `owner` removed, every other
+field as it was. The run then reads as ended on every surface and no sweep finds it
+again. A stored input file that cannot be parsed at all is treated as missing: the full
+conversion is written without `resume_upstream`.
+
+The resume gates still require `aborted`, so a `crashed` record is not resumed by them.
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —

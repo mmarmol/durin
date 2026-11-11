@@ -2,6 +2,9 @@
 enter — the record a step failure would have left."""
 import json
 import threading
+import time
+
+import pytest
 
 from durin.utils.file_lock import cross_process_lock
 from durin.utils.process_tree import process_identity
@@ -64,13 +67,18 @@ def test_a_detached_step_in_flight_is_recorded_as_cut(tmp_path):
 
 
 def test_a_detached_step_that_is_also_the_step_in_flight_gets_one_cut_row(tmp_path):
-    # Between its launch and the write after it, a detached step is both the
-    # marked step in flight and a launched detached step.
+    # The engine never writes this record (a detached step that started is never
+    # the position); one from another build may hold it. The started detached
+    # step must not become the step a resume enters.
+    resume_store.save_input(_store(tmp_path), 1, "note", "x")
     entry = {"node_id": "note", "iteration": 1, "session_key": None}
     _running(tmp_path, position={"node": "note", "seq": 1}, detached_active=[entry],
              active_node={**entry, "label": "note", "started_at": 1.0})
     rec = run_log.mark_dead_run(tmp_path, "w", "r1")
     assert [(r["node_id"], r["cut"]) for r in rec["runs"]] == [("note", True)]
+    assert rec["status"] == "crashed" and not rec.get("failed_node")
+    assert rec.get("resume_upstream") is None
+    assert rec["position"] == {"node": "note", "seq": 1}
 
 
 def test_a_run_someone_asked_to_stop_ends_cancelled(tmp_path):
@@ -130,19 +138,53 @@ def test_an_input_stored_for_another_step_is_not_used(tmp_path):
     assert rec["failed_node"] == "a" and rec.get("resume_upstream") is None
 
 
-def test_an_unreadable_or_malformed_record_is_left_as_it_is(tmp_path):
+def test_an_unreadable_record_is_left_as_it_is(tmp_path):
     path = run_log._record_path(tmp_path, "w", "r1")
     path.write_text("not json", encoding="utf-8")
     assert run_log.mark_dead_run(tmp_path, "w", "r1") is None
+    assert path.read_text(encoding="utf-8") == "not json"
     path.write_text(json.dumps(["a", "list"]), encoding="utf-8")
     assert run_log.mark_dead_run(tmp_path, "w", "r1") is None
-    for malformed in ({"runs": "not a list"}, {"position": "b"},
-                      {"detached_active": [{"iteration": 1}]}):
-        path.unlink(missing_ok=True)
-        _running(tmp_path, **malformed)
-        before = path.read_text(encoding="utf-8")
-        assert run_log.mark_dead_run(tmp_path, "w", "r1") is None
-        assert path.read_text(encoding="utf-8") == before
+    assert run_log.reconcile_running(tmp_path, now=10.0, max_age_s=1.0) == 0
+    assert json.loads(path.read_text(encoding="utf-8")) == ["a", "list"]
+
+
+def _corrupt_input(tmp_path):
+    folder = _store(tmp_path)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "input-1.json").write_text("{not json", encoding="utf-8")
+    return {}
+
+
+def _non_string_upstream(tmp_path):
+    folder = _store(tmp_path)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "input-1.json").write_text(json.dumps({"node": "a", "upstream": 5}), encoding="utf-8")
+    return {}
+
+
+@pytest.mark.parametrize("make", [
+    pytest.param(lambda tmp_path: {"runs": "not a list"}, id="runs-not-a-list"),
+    pytest.param(lambda tmp_path: {"position": "b"}, id="position-not-a-dict"),
+    pytest.param(lambda tmp_path: {"detached_active": [{"iteration": 1}]}, id="detached-entry-without-id"),
+    pytest.param(lambda tmp_path: {"resume_inputs": ["not", "a", "dict"]}, id="resume-inputs-not-a-dict"),
+    pytest.param(_corrupt_input, id="stored-input-corrupt"),
+    pytest.param(_non_string_upstream, id="stored-upstream-not-text"),
+])
+def test_a_dead_run_that_cannot_be_converted_is_still_marked_crashed(tmp_path, make):
+    fields = make(tmp_path)
+    before = _running(tmp_path, active_node={"node_id": "a", "label": "a", "started_at": 1.0,
+                                             "iteration": 1, "session_key": None}, **fields)
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
+    assert rec is not None and rec["status"] == "crashed"
+    assert rec == run_log.read_manifest(tmp_path, "w", "r1")
+    if "runs" in fields or "position" in fields or "detached_active" in fields \
+            or "resume_inputs" in fields:
+        # The minimal mark: nothing but status, active_node and owner changes.
+        expected = {k: v for k, v in before.items() if k != "owner"}
+        assert rec == {**expected, "status": "crashed", "active_node": None}
+    assert run_log.reconcile_running(tmp_path, now=10.0, max_age_s=1.0) == 0
+    assert run_log.reconcile_one(tmp_path, "w", "r1") is False
 
 
 def test_an_ownerless_record_is_dead_only_when_old(tmp_path):
@@ -177,14 +219,31 @@ def test_a_record_whose_lock_is_held_is_skipped(tmp_path, monkeypatch):
     assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
 
 
-def test_two_finders_convert_it_once(tmp_path):
+def test_two_finders_convert_it_once(tmp_path, monkeypatch):
     resume_store.save_input(_store(tmp_path), 1, "a", None)
     _running(tmp_path, active_node={"node_id": "a", "label": "a", "started_at": 1.0,
                                     "iteration": 1, "session_key": None})
+    record_path = run_log._record_path(tmp_path, "w", "r1")
+    real_write = run_log._write_json
+    writes = []
+
+    def counting_write(path, data):
+        if path == record_path:
+            writes.append(data["status"])
+        real_write(path, data)
+
+    monkeypatch.setattr(run_log, "_write_json", counting_write)
+    finders = 8
+    start = threading.Barrier(finders)
     results = []
-    threads = [threading.Thread(target=lambda: results.append(run_log.mark_dead_run(tmp_path, "w", "r1")))
-               for _ in range(8)]
+
+    def find():
+        start.wait(10)
+        results.append(run_log.mark_dead_run(tmp_path, "w", "r1"))
+
+    threads = [threading.Thread(target=find) for _ in range(finders)]
     [t.start() for t in threads]; [t.join() for t in threads]
+    assert writes == ["crashed"]          # one conversion, whatever the timing
     assert sum(1 for r in results if r is not None) == 1
     assert len(run_log.read_manifest(tmp_path, "w", "r1")["runs"]) == 1
 
@@ -205,55 +264,110 @@ def test_detached_active_survives_rewrites_and_a_finished_run_has_none(tmp_path)
     run_log.start_run(tmp_path, "w", "r1", root_session_key=None, started_at=1.0)
     assert run_log.read_manifest(tmp_path, "w", "r1")["detached_active"] == []
     entry = {"node_id": "note", "iteration": 1, "session_key": None}
-    run_log.mark_node_started(tmp_path, "w", "r1", node_id="note", label="note",
-                              started_at=2.0, iteration=1, detached_active=[entry])
+    running = WorkflowResult(status="running", final_output=None, runs=[])
+    run_log.update_run(tmp_path, "w", "r1", running, detached_active=[entry])
     run_log.mark_node_started(tmp_path, "w", "r1", node_id="b", label="b", started_at=3.0)
     assert run_log.read_manifest(tmp_path, "w", "r1")["detached_active"] == [entry]
-    running = WorkflowResult(status="running", final_output=None, runs=[])
     run_log.update_run(tmp_path, "w", "r1", running)
     assert run_log.read_manifest(tmp_path, "w", "r1")["detached_active"] == [entry]
     run_log.update_run(tmp_path, "w", "r1", running, detached_active=[])
     assert run_log.read_manifest(tmp_path, "w", "r1")["detached_active"] == []
-    run_log.mark_node_started(tmp_path, "w", "r1", node_id="note", label="note",
-                              started_at=4.0, iteration=2, detached_active=[entry])
+    run_log.update_run(tmp_path, "w", "r1", running, detached_active=[entry])
     done = WorkflowResult(status="completed", final_output="x", run_id="r1",
                           runs=[NodeRun(node_id="note", iteration=1, output="o")])
     run_log.finalize_run(tmp_path, "w", done, root_session_key=None, started_at=1.0, finished_at=5.0)
     assert run_log.read_manifest(tmp_path, "w", "r1")["detached_active"] == []
 
 
+_SIDE_CHAIN = {"name": "w", "start": "a", "nodes": [
+    {"id": "a", "kind": "work", "next": "side"},
+    {"id": "side", "kind": "work", "detached": True, "next": "b"},
+    {"id": "b", "kind": "work", "next": "c"},
+    {"id": "c", "kind": "work", "next": None}]}
+
+_SIDE_ENTRY = {"node_id": "side", "iteration": 1, "session_key": "workflow:r1:side:1"}
+
+
+def _reply(req):
+    return NodeRunResponse(output=f"{req.node.id}-out",
+                           session_key=f"workflow:r1:{req.node.id}:{req.iteration}")
+
+
 def test_the_engine_records_a_detached_step_until_its_row_lands(tmp_path):
-    release = threading.Event()
+    # `side` finishes while `b` runs, so the write after `b` drains its row:
+    # from then on it is in `runs` and no longer in `detached_active`.
+    release, side_done = threading.Event(), threading.Event()
     seen = {}
 
     def node_runner(req):
         if req.node.id == "side":
             release.wait(10)
+            side_done.set()
         if req.node.id == "b":
             seen["during_b"] = run_log.read_manifest(tmp_path, "w", "r1")
-        return NodeRunResponse(output=f"{req.node.id}-out",
-                               session_key=f"workflow:r1:{req.node.id}:{req.iteration}")
-
-    def wait_then_release(req):
-        out = node_runner(req)
-        if req.node.id == "c":
             release.set()
-        return out
+            side_done.wait(10)
+            time.sleep(0.2)   # the tracker's completion callback runs right after `side` returns
+        if req.node.id == "c":
+            seen["during_c"] = run_log.read_manifest(tmp_path, "w", "r1")
+        return _reply(req)
 
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "next": "side"},
-        {"id": "side", "kind": "work", "detached": True, "next": "b"},
-        {"id": "b", "kind": "work", "next": "c"},
-        {"id": "c", "kind": "work", "next": None}]})
-    engine = WorkflowEngine(node_runner=wait_then_release, run_id_factory=lambda: "r1",
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
                             workspace=str(tmp_path))
-    result = engine.run(wf, "t")
-    assert result.status == "completed"
-    during = seen["during_b"]
-    assert during["detached_active"] == [
-        {"node_id": "side", "iteration": 1, "session_key": "workflow:r1:side:1"}]
-    assert "side" not in [r["node_id"] for r in during["runs"]]
+    assert engine.run(parse_workflow(_SIDE_CHAIN), "t").status == "completed"
+    during_b = seen["during_b"]
+    assert during_b["detached_active"] == [_SIDE_ENTRY]
+    assert "side" not in [r["node_id"] for r in during_b["runs"]]
+    during_c = seen["during_c"]
+    assert during_c["detached_active"] == []
+    assert [r["session_key"] for r in during_c["runs"] if r["node_id"] == "side"] == [
+        "workflow:r1:side:1"]
     final = run_log.read_manifest(tmp_path, "w", "r1")
     assert final["detached_active"] == []
-    side = [r for r in final["runs"] if r["node_id"] == "side"]
-    assert len(side) == 1 and side[0]["session_key"] == "workflow:r1:side:1"
+    assert len([r for r in final["runs"] if r["node_id"] == "side"]) == 1
+
+
+def test_a_started_detached_step_is_never_the_position(tmp_path, monkeypatch):
+    # Checked on every record write, and read from inside the detached step and
+    # the step after it: the record never holds a step both as its position and
+    # as a started detached step, so no death can make it the step to run again.
+    record_path = run_log._record_path(tmp_path, "w", "r1")
+    real_write = run_log._write_json
+    both = []
+
+    def started_and_position(rec):
+        position = (rec.get("position") or {}).get("node")
+        return position is not None and position in {
+            e["node_id"] for e in rec.get("detached_active") or []}
+
+    def checking_write(path, data):
+        if path == record_path and started_and_position(data):
+            both.append(data)
+        real_write(path, data)
+
+    monkeypatch.setattr(run_log, "_write_json", checking_write)
+    release = threading.Event()
+    seen = {}
+
+    def node_runner(req):
+        if req.node.id == "side":
+            rec = seen["during_side"] = run_log.read_manifest(tmp_path, "w", "r1")
+            seen["next_input"] = resume_store.load_input(
+                resume_store.store_dir_of(tmp_path, rec), rec["position"]["seq"])
+            release.wait(10)
+        if req.node.id == "b":
+            seen["during_b"] = run_log.read_manifest(tmp_path, "w", "r1")
+            release.set()
+        return _reply(req)
+
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                            workspace=str(tmp_path))
+    assert engine.run(parse_workflow(_SIDE_CHAIN), "t").status == "completed"
+    assert both == []
+    for rec in (seen["during_side"], seen["during_b"]):
+        assert not started_and_position(rec)
+        assert _SIDE_ENTRY in rec["detached_active"]
+    assert seen["during_side"]["position"]["node"] == "b"
+    # The step after the detached one receives the edge text it passes through,
+    # stored before the record named it.
+    assert seen["next_input"] == ("b", "a-out")
