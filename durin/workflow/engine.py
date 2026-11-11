@@ -719,19 +719,27 @@ class WorkflowEngine:
             # nullcontext's __exit__ is a safe no-op when no lock was acquired.
             lock_cm.__exit__(None, None, None)
 
-    def _resume_shared_context(self, workflow, resume: ResumeState | None) -> list[dict] | None:
+    def _resume_shared_context(self, workflow: Workflow,
+                               resume: ResumeState | None) -> list[dict] | None:
         """The shared conversation a resumed walk starts with: the messages of the
         session the record names as the last shared step's, bounded like the
-        running buffer. A session that cannot be read leaves the buffer empty
-        rather than stopping the resume. None when there is nothing to restore."""
+        running buffer. A session that cannot be read, or holds no messages, leaves
+        the buffer empty rather than stopping the resume, and says so in the log so
+        a lost conversation is told apart from a run that never had one. None when
+        there is nothing to restore."""
         if resume is None or not resume.shared_session or self._shared_context_loader is None:
             return None
         try:
             messages = list(self._shared_context_loader(resume.shared_session))
         except Exception:  # noqa: BLE001 - a lost conversation must not block the resume
-            logger.exception("workflow {}: could not restore the shared conversation from {}",
-                             workflow.name, resume.shared_session)
+            logger.exception("workflow {} run {}: could not read shared session {}; the "
+                             "shared conversation starts empty",
+                             workflow.name, resume.run_id, resume.shared_session)
             return []
+        if not messages:
+            logger.warning("workflow {} run {}: shared session {} holds no conversation; "
+                           "the shared conversation starts empty",
+                           workflow.name, resume.run_id, resume.shared_session)
         return messages[-_SHARED_CONTEXT_MAX_MESSAGES:]
 
     def _preflight_inputs(self, workflow, input_files, run_id, *, resuming: bool):

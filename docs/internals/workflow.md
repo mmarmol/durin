@@ -943,8 +943,12 @@ session's messages without the leading system prompt — keeps the most recent m
 under the same cap, and seeds the walk with them. A retried or re-entered shared node
 therefore sees the conversation it would have seen had the run never stopped — short of
 the turns of a shared step whose session failed to save (`persist_failed`) after the
-named one, since no session holds them. A session that cannot be read (deleted, unreadable, or the loader raises) is logged and the
-buffer starts empty; the resume goes on. A nested run's engine has no loader: a child
+named one, since no session holds them. When the named session yields nothing, the
+resume goes on with an empty buffer and `WorkflowEngine.run` logs it, naming the
+workflow, the run and the session key and saying the shared conversation starts empty:
+a warning when the loader returns no messages (`shared_context_from_session` returns
+`[]` for a session that was deleted or never saved, and logs nothing itself), an error
+with the traceback when the loader raises. A nested run's engine has no loader: a child
 run always starts from its first step.
 
 **`shared` is sequential-only.** Parallel workers are always isolated (each gets its
