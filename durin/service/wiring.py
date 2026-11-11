@@ -35,6 +35,7 @@ def build_service_registry(
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
     approval_deps: Callable[[], Any] | None = None,
+    reconcile_runs: bool = True,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -186,15 +187,18 @@ def build_service_registry(
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died
     # before finalizing them. Best-effort — a sweep failure must not block startup.
-    try:
-        import time
+    # A caller already on its event loop passes reconcile_runs=False: the sweep
+    # can wait on run locks, end a dead run's scripts and observe processes.
+    if reconcile_runs:
+        try:
+            import time
 
-        from durin.workflow import run_log
+            from durin.workflow import run_log
 
-        run_log.reconcile_running(
-            _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
-    except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
-        pass
+            run_log.reconcile_running(
+                _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
+        except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
+            pass
 
     # Automation-run reconciliation is NOT here: an orphaned run has to be
     # reported to whoever fired it and, when no work had started, relaunched —

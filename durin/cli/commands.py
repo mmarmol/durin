@@ -2331,6 +2331,10 @@ def _run_gateway(
                     stop_turn=agent.cancel_session_turns,
                     turn_key=agent.bus_turn_key,
                     approval_deps=agent.approval_exec_deps,
+                    # This build runs on the event loop. The websocket channel's
+                    # own build of the same registry, made before the loop
+                    # started, already swept the dead runs at boot.
+                    reconcile_runs=False,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

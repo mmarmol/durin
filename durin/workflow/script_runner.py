@@ -211,8 +211,9 @@ class ScriptNodeRunner:
             )
         except (FileNotFoundError, PermissionError, OSError) as exc:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
-        record = self._record_child(req, proc)
+        record = None
         try:
+            record = self._record_child(req, proc)
             return self._finish(req, proc, task, timeout)
         finally:
             if proc.returncode is None:
@@ -236,6 +237,11 @@ class ScriptNodeRunner:
 
         started = process_identity(proc.pid)["started"]
         if started is None:
+            if proc.poll() is not None:
+                return None     # it already exited: nothing left to record
+            logger.warning("script of step {!r} in run {}: its start could not be read, "
+                           "so its process (pid {}) is not recorded; if this process dies "
+                           "while it runs, nothing ends it", req.node.id, req.run_id, proc.pid)
             return None
         try:
             return run_log.record_script(req.record_dir, req.run_id, pid=proc.pid,

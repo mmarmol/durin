@@ -196,7 +196,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   whether it already acted, and tell the user when you cannot. The resume is refused, with
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
-  over — then start a new run. A crashed run you started whose workflow (or a sub-workflow it
+  over — then start a new run. It is also refused while a script the dead process started
+  may still run: the reason names the process ids; tell the user to end them (or end them
+  yourself when you can and should), then resume. Never start a new run of it meanwhile:
+  the old script would run beside the new one. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A paused or aborted run you started can still be answered or
   retried from the dashboard, but its later `mcps` steps then run without their MCP tools.

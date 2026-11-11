@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from durin.utils.process_tree import process_alive, process_identity
+from durin.utils.process_tree import process_identity, process_state
 from durin.workflow import run_log
 from durin.workflow.engine import WorkflowEngine
 from tests.workflow import _crash_driver as driver
@@ -231,7 +231,9 @@ def _kill_strays() -> None:
     # that group, so a group leader is killed with its whole group.
     while _strays:
         stray = _strays.pop()
-        if process_alive(stray):
+        # Only on proof it is still that process: one that cannot be observed
+        # is never taken for it.
+        if process_state(stray.get("pid"), stray.get("started")) == "alive":
             pid = stray["pid"]
             try:
                 if os.getpgid(pid) == pid:

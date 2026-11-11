@@ -438,7 +438,12 @@ cut, since a step entered again is never reused, but it does let the steps a
 restarted sub-workflow had already finished skip their work when their input
 is unchanged.
 
-A crashed run is refused, with the reason, when it was recorded by an older
+A script that was running when the process died is ended before its step runs
+again. If something of it cannot be ended (a process the gateway may not signal,
+or one that is no longer provably the script's, such as a child left behind by a
+script whose own process is already gone), the resume is refused and names the
+process ids to end; end them, then resume. A crashed run is also refused, with
+the reason, when it was recorded by an older
 version that did not keep the step it was in, when that step is no longer in
 the workflow, when its working folder has been pruned, or when a later run
 with the same `work_key` has worked in its folder since. A crashed run the

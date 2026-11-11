@@ -806,16 +806,14 @@ class WorkflowsService:
         # against it.
         accepted_record: dict | None = None
         if resume_run_id:
-            manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
-            if manifest is not None and manifest.get("status") == "running":
-                # A run still recorded as running whose process is gone is a
-                # dead run: record it as one first (off the event loop: the
-                # conversion can wait on the run's lock). A run whose owner is
-                # alive — in flight, or claimed by another resume — is left as
-                # it is and refused below.
-                if await asyncio.to_thread(
-                        run_log.mark_dead_run, self._workspace, name, resume_run_id) is not None:
-                    manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+            # A run still recorded as running whose process is gone is a dead
+            # run: it is recorded as one first, its dead sub-workflow runs too,
+            # and the scripts the dead process left are checked. All of it off
+            # the event loop: the conversion can wait on a run's lock and both
+            # observe processes. A run whose owner is alive — in flight, or
+            # claimed by another resume — is left as it is and refused below.
+            manifest, scripts_refusal = await asyncio.to_thread(
+                run_log.settle_dead_run, self._workspace, name, resume_run_id)
             # A resume that names no root_session_key of its own (the common case
             # — the webui's answer/resume actions, an automation's resumed answer)
             # must not leave this None: WorkflowEngine.run's _start_manifest
@@ -829,8 +827,8 @@ class WorkflowsService:
             if root_session_key is None and manifest is not None:
                 root_session_key = manifest.get("root_session_key")
             kind = resumable_kind(manifest) if manifest is not None else None
-            refusal = (resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
-                       if manifest is not None else None)
+            refusal = ((resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
+                        or scripts_refusal) if manifest is not None else None)
             if refusal:
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {refusal}")

@@ -938,3 +938,44 @@ async def test_a_stop_is_kept_even_when_the_turn_asking_for_it_is_cancelled(
         gate.set()
         cancellation.clear("alive791")
         executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path, monkeypatch):
+    """With a script of the dead process still running, resuming or re-running
+    the run now would run that script twice: the tool says why it cannot be
+    resumed yet instead of inviting a second run."""
+    import os
+    import subprocess
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import resume_store, run_log
+
+    resume_store.save_input(resume_store.store_dir(tmp_path, "dead7"), 1, "a", "in")
+    run_log.start_run(tmp_path, "qa", "dead7", root_session_key=SESSION,
+                      started_at=time.time(), position={"node": "a", "seq": 1})
+    _set_manifest_owner(tmp_path, "qa", "dead7", _DEAD_OWNER)
+    proc = subprocess.Popen(["sleep", "61"], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while process_identity(proc.pid)["started"] is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        run_log.record_script(run_log.runs_root(tmp_path) / "qa", "dead7", pid=proc.pid,
+                              started=process_identity(proc.pid)["started"], node_id="a")
+        # Signals reach nothing, as if the script belonged to another user.
+        real_kill, real_killpg = os.kill, os.killpg
+        monkeypatch.setattr(os, "kill", lambda p, s: real_kill(p, s) if not s else None)
+        monkeypatch.setattr(os, "killpg", lambda p, s: real_killpg(p, s) if not s else None)
+        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_TERM_WAIT_S", 0.2)
+        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_KILL_WAIT_S", 0.2)
+
+        out = await _tool(tmp_path, None).execute(action="status", id="dead7")
+
+        assert "Re-run the workflow if the result is still needed." not in out
+        assert "cannot be resumed yet" in out
+        assert f"still running (pid {proc.pid}). End it, then resume." in out
+    finally:
+        monkeypatch.undo()
+        proc.kill()
+        proc.wait(timeout=10)

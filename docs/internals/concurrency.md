@@ -110,8 +110,10 @@ in [observability](observability.md)). Quitting the TUI or the legacy REPL
 ends the same way. Either way the run ends
 where a crash would: its record stays `running` until the gateway's crash sweep (at
 start and periodically), the `tasks` tool asked about it, or a resume of it finds its
-process gone and marks it `crashed`, resumable. A script it had started is ended then,
-before its step can run again (see [workflow.md](workflow.md)). Reactive dreams run
+process gone and marks it `crashed`, resumable. What is left of a script it had started
+is ended then, before its step can run again, and a resume is refused while anything of
+it may still run (see [workflow.md](workflow.md)). An owner that cannot be observed is
+never taken for gone. Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.
 

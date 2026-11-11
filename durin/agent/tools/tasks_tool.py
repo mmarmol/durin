@@ -262,8 +262,17 @@ class TasksTool(Tool, ContextAware):
             )
         row["status"] = "crashed"
         from durin.workflow.engine import resumable_kind, resume_refusal
-        if (resumable_kind(record) == "dead"
-                and resume_refusal(record, workspace=self._workspace) is None):
+        # A script the dead process started may still run: resuming or
+        # re-running now would run it a second time beside the first.
+        scripts = run_log.scripts_left_refusal(self._workspace, record)
+        resumable = (resumable_kind(record) == "dead"
+                     and resume_refusal(record, workspace=self._workspace) is None)
+        if scripts and resumable:
+            follow_up = f"It cannot be resumed yet: {scripts}"
+        elif scripts:
+            follow_up = ("Re-run the workflow if the result is still needed, but not "
+                         f"before nothing of the earlier run is left: {scripts}")
+        elif resumable:
             follow_up = (
                 "If the result is still needed, resume it with run_workflow("
                 f"name='{row['label']}', resume_run_id='{row['id']}'): the step it "

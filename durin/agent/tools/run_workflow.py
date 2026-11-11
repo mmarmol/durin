@@ -585,19 +585,19 @@ class RunWorkflowTool(Tool, ContextAware):
         if resume_run_id:
             from durin.workflow import run_log
             from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
-            manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+            # A run still recorded as running whose process is gone is a dead
+            # run: it is recorded as one first, its dead sub-workflow runs too,
+            # and the scripts the dead process left are checked. All of it off
+            # the event loop: the conversion can wait on a run's lock and both
+            # observe processes. A run whose owner is alive — in flight, or
+            # claimed by another resume — is refused below.
+            manifest, scripts_refusal = await asyncio.to_thread(
+                run_log.settle_dead_run, self._workspace, name, resume_run_id)
             if manifest is None:
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
-            if manifest.get("status") == "running":
-                # A run still recorded as running whose process is gone is a dead
-                # run: record it as one first (off the event loop: the conversion
-                # can wait on the run's lock). A run whose owner is alive — in
-                # flight, or claimed by another resume — is refused below.
-                if await asyncio.to_thread(
-                        run_log.mark_dead_run, self._workspace, name, resume_run_id) is not None:
-                    manifest = run_log.read_manifest(self._workspace, name, resume_run_id) or {}
             kind = resumable_kind(manifest)
-            refusal = resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
+            refusal = (resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
+                       or scripts_refusal)
             if refusal:
                 return f"Error: run '{resume_run_id}' cannot be resumed — {refusal}"
             if kind is None:

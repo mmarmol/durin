@@ -322,9 +322,10 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     the conversion did not name as failed: a detached step that had started, a
     walk that had ended), when ``workflow`` (the current definition) no longer
     has its step, when ``workspace`` shows its working folder or its stored input
-    gone, when a later run on its ``work_key`` has taken the folder over, and
-    while a script of the earlier process that the conversion could not end
-    (``scripts_left``) is still running."""
+    gone, and when a later run on its ``work_key`` has taken the folder over.
+    A script the dead process left that may still run is a refusal of its own,
+    ``run_log.scripts_left_refusal``, which observes processes and so is asked
+    off the event loop, together with the conversion (``run_log.settle_dead_run``)."""
     status = manifest.get("status")
     paused = status == "needs_input" and manifest.get("needs_input_node")
     failed = manifest.get("failed_node") if status == "aborted" else None
@@ -370,14 +371,6 @@ def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
         if later:
             return (f"run {later!r} on the same key started after it and has taken over "
                     "its folder.")
-    # A script the earlier process started that could not be ended: running
-    # the step again would run it twice at once. Checked live, so the run can
-    # be resumed as soon as that process is gone.
-    from durin.utils.process_tree import same_live_process
-    for entry in manifest.get("scripts_left") or []:
-        if isinstance(entry, dict) and same_live_process(entry.get("pid"), entry.get("started")):
-            return (f"a script of its step '{entry.get('node_id')}' from the earlier process "
-                    f"is still running (pid {entry.get('pid')}). End it, then resume.")
     return None
 
 

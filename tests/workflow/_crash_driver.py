@@ -235,9 +235,9 @@ def _replace_image(_signum, _frame) -> None:
 
 def _resume(workspace: Path, workflow, run_id: str, task: str) -> int:
     """Resume the dead run ``run_id`` the way a resume surface does."""
-    record = (run_log.mark_dead_run(workspace, workflow.name, run_id)
-              or run_log.read_manifest(workspace, workflow.name, run_id))
-    refusal = resume_refusal(record or {}, workspace=workspace, workflow=workflow)
+    record, scripts_refusal = run_log.settle_dead_run(workspace, workflow.name, run_id)
+    refusal = (resume_refusal(record or {}, workspace=workspace, workflow=workflow)
+               or scripts_refusal)
     if record is None or refusal:
         print(f"run {run_id!r} cannot be resumed: {refusal}", file=sys.stderr)
         return 2
