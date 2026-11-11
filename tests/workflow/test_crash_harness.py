@@ -80,3 +80,23 @@ def test_a_death_between_the_input_file_and_the_record_keeps_the_earlier_step(tm
     assert node == "c" and upstream.strip() == "b-out"
     assert seen["record"]["position"]["node"] == "b"
     assert seen["b_input"] == ("b", "a-out")
+
+
+def test_a_process_killed_inside_a_step_leaves_a_cut_attempt_on_record(tmp_path):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert rec["status"] == "crashed" and rec["failed_node"] == "c"
+    assert [(r["node_id"], r.get("cut", False)) for r in rec["runs"]] == [
+        ("a", False), ("b", False), ("c", True)]
+    assert rec["resume_upstream"].strip() == "b-out"
+
+
+def test_a_detached_step_running_when_the_process_dies_is_on_record(tmp_path):
+    wf = {"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "side"},
+        {"id": "side", "kind": "script", "command": "sleep 120", "detached": True, "next": "b"},
+        {"id": "b", "kind": "work", "next": None}]}
+    dead = run_until_killed(tmp_path, wf, stop_in="b")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert ("side", True) in [(r["node_id"], r.get("cut", False)) for r in rec["runs"]]
+    assert rec["detached_active"] == []

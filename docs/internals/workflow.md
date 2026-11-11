@@ -372,7 +372,9 @@ passes THROUGH unchanged (the detached node and the next node both receive it), 
 never rides an edge and never becomes `final_output`. It exists for side effects (persist
 to memory, notify, archive) that must not sit on the critical path. Every terminal return
 path **joins** pending detached nodes before the manifest is finalized, and finished ones
-are drained into the trace at each per-node manifest refresh (in-flight visibility). A
+are drained into the trace at each per-node manifest refresh (in-flight visibility). Until
+its row is in the trace, a launched detached node is listed in the record's
+`detached_active` (§4a), so a process that dies with it running leaves it on record. A
 detached node that fails records `node_failed` WITHOUT changing the run status — a side
 effect must not sink the deliverable (the same philosophy as `persist_failed`). Parse-time
 constraints: linear `next` only (no routing — its verdict could never reach the walk), no
@@ -606,12 +608,12 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes, shared_session, position}`, the position naming the step the walk enters first.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes, shared_session, position, detached_active}`, the position naming the step the walk enters first.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, keeps `status: "running"`, and names the step to enter next (`position`), so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
 
-Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. The manifest is read while it is rewritten, though — by the runs panel and the `tasks` tool, the crash sweep, the folder pruner deciding which runs are still live, and the run's own next rewrite, which starts from the previous manifest — so every write replaces the file in one step (`atomic_write_text`: a temporary file beside it, renamed over it). A reader sees the previous manifest or the new one, never a torn file, which every reader would take for "no record". The improve pass's cursor (`.cursor.json`) and pending-validation record (`.pending_validation.json`), and a working folder's `.provenance.json`, are written the same way. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
+Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. The writes that act on a run from outside its walk — a resume claim, a cancel of a paused run, the crash conversion of a dead one — re-read the record under the per-run lock (`run_lock_target`) instead. The manifest is read while it is rewritten, though — by the runs panel and the `tasks` tool, the crash sweep, the folder pruner deciding which runs are still live, and the run's own next rewrite, which starts from the previous manifest — so every write replaces the file in one step (`atomic_write_text`: a temporary file beside it, renamed over it). A reader sees the previous manifest or the new one, never a torn file, which every reader would take for "no record". The improve pass's cursor (`.cursor.json`) and pending-validation record (`.pending_validation.json`), and a working folder's `.provenance.json`, are written the same way. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
 
 The per-node entries in the manifest's `runs` array carry:
 
@@ -638,6 +640,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `provider` | the `provider_key` of the runner's provider (agent nodes only; `null` for script nodes, a failed pass, or when the provider carries no key) |
 | `node_hash` | `provenance.reuse_hash` of the node's definition at the time it ran (`WorkNode` only; `null` for script nodes and for a failed pass) |
 | `origin_run_id` | set only when `status` is `"reused"`: the `run_id` of the ORIGINAL pass that produced the artifact this pass reused instead of dispatching the runner (`null` otherwise) |
+| `cut` | `true` only on a row the crash conversion wrote for an attempt the process's death cut short (`status: "node_failed"`, `error: "the process ended while this step was running"`, no `budget` or `pass_number`); absent on every other row |
 
 The manifest also carries top-level fields. From the very first (`running`) write:
 `work_dir` — the run's shared working folder, recorded at start so an in-flight
@@ -727,7 +730,8 @@ is kept inside the file. A sub-workflow's own run stores nothing. When a run end
 state no resume can enter (`completed`, `exhausted`, `cancelled`), its resume folder is
 removed right after the terminal record is written, so files do not pile up under a key
 many runs share. A run that ends `aborted` or `needs_input`, or that a dead process left
-`running`, keeps it. The capped `resume_inputs` and `resume_upstream` copies on the
+`running` and the crash conversion marks `crashed`, keeps it; the conversion reads it
+(below). A dead run the conversion ends `cancelled` loses it like any cancelled run. The capped `resume_inputs` and `resume_upstream` copies on the
 record remain, for readers of the record. Every file is replaced whole, like the record.
 A write failure is logged and never breaks the run, and an engine without a workspace
 writes none of this.
@@ -744,8 +748,16 @@ from the node id (a persistent-session node omits the iteration suffix), so it i
 advertised instead of left to be guessed. It is `null` for every node kind that
 persists no conversation — script, sub-workflow, parallel. The next `update_run`
 (the node's own completion)
-clears it, and a run whose `status` is no longer `"running"` never reports one — a
-crashed run's last in-flight node does not linger as a phantom "still running" entry.
+clears it, and so does the crash conversion of a dead run. A run whose `status` is no
+longer `"running"` never reports one either way — a record an older release marked
+crashed without clearing it does not show its last in-flight node as a phantom "still
+running" entry.
+`detached_active` — `[{node_id, iteration, session_key}]`, the detached nodes launched
+and not yet in `runs`. A detached node joins it in the `mark_node_started` write that
+starts it, and leaves it in the `update_run` write that drains its row into `runs`, so
+at every write a launched detached node is in exactly one of the two. Both writes carry
+the list; `finalize_run` writes it empty (every detached node was joined first). A
+record written before the field existed lacks it.
 On finalization: `needs_input_node` — the node the run paused at: a multi-way route to
 `__needs_input__`, a sub-workflow node whose child paused, or a `WorkNode.approval`
 pause (`null` otherwise), the resume re-entry point; `ask_kind` — which kind of pause it
@@ -800,16 +812,52 @@ process start-time string, and a random boot id made once per start of the progr
 so an owner is one start of a process. A restart in place (`execv`) keeps the pid and
 start time but gets a new boot id, so the restarted process sees the runs its earlier
 start left behind as dead and the sweep finds them. The sweep
-(`reconcile_running`) rewrites any `running` record whose owner is no longer alive to
-`"crashed"` (preserving its partial trace). Ownership makes the sweep both immediate
+(`reconcile_running`) converts any `running` record whose owner is no longer alive
+(preserving its partial trace) into the record a failed step leaves — see "The
+conversion" below. Ownership makes the sweep both immediate
 and safe in a multi-process workspace: a gateway that crashes and restarts within
 minutes clears its ghosts at the next boot, while a run owned by another live process
 (the TUI sharing the same workspace) is never touched. The sweep runs at gateway boot
 AND periodically (a background thread wired in the service registry), so an orphan left
 by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
-additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
-Manifests written before the owner field existed fall back to a generous `started_at`
-age threshold.
+additionally self-heals a dead-owner run on `status`/`stop` (`reconcile_one`) and
+answers with the truth — that the run crashed, or that it is cancelled when a stop had
+been requested. Manifests written before the owner field existed fall back to a
+generous `started_at` age threshold in the sweep; the `tasks` self-heal leaves them to it.
+
+*The conversion.* Both finders go through one function, `mark_dead_run`. Under the
+per-run lock (`run_lock_target`, the one a resume claim takes) it re-reads the record
+and does nothing unless it is still `running` with an owner that is gone. Two finders
+(the sweep and the `tasks` tool, or two processes) therefore convert it once, and a
+resume that claimed the record first — re-stamping the owner to its live process — is
+left alone. A record whose lock stays busy past its timeout is skipped and logged, and
+the next sweep tries again; an unreadable or malformed record is skipped and left as
+it is. The written record has:
+
+- `status` `"crashed"`, or `"cancelled"` when the record holds a `stop_requested`;
+  `finished_at` and `ts` the time of the conversion (not on a record written before
+  positions existed, below); `active_node` `null` and `owner`
+  removed, since both describe a process that no longer exists;
+- a **cut row** appended to `runs` for the attempt the death interrupted, when
+  `active_node` is the step `position` names: `node_id`, `iteration` and
+  `session_key` from `active_node`, `status: "node_failed"`, `cut: true`, `error`
+  `"the process ended while this step was running"`, `budget` and `pass_number`
+  `null`. Like any failed attempt it uses an attempt number but no pass. A death
+  between two steps (no step in flight) adds no row;
+- a cut row of the same shape for every entry of `detached_active` (one row when the
+  detached node is also the step in flight), and `detached_active` empty;
+- when it ends `crashed` and has a position: `failed_node` — the position's step —
+  `resume_upstream`, the step's stored input (only when the stored input names that
+  same step), capped like a failed step's, and `resume_inputs`, the stored source
+  outputs, each capped, merged over the ones the record already held;
+- when it ends `cancelled`: `position` `null`, no `failed_node`, and the run's resume
+  files removed, like any cancelled run. The cut rows are still written.
+
+A record without a position — a sub-workflow's own run, or one written before positions
+existed — gets no `failed_node` and no resume fields (a sub-workflow's run still gets its
+detached steps' cut rows). One written before positions existed is only marked: its
+status, `active_node` cleared and `owner` removed, its `finished_at` and `ts` untouched. The resume gates still require `aborted`,
+so a `crashed` record is not resumed by them.
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -903,6 +951,14 @@ and abort the run the same way an agent node's failure does. The non-zero-exit p
 also carries the subprocess's `exit_code` into that `NodeRun` (a timeout has none —
 the process never returned one).
 
+**Dead process.** When the process executing a run dies — killed, crashed, or stopped
+without waiting for the run — nothing in the walk records a failure; the record is left
+`running`. The crash conversion (§4a, "Crash reconciliation") then writes what a failed
+step would have left: a `node_failed` row marked `cut: true` for the step that was
+running and for each detached node still running, and the step the record's `position`
+names as `failed_node`, with its stored input as `resume_upstream`. The run status is
+`crashed` (or `cancelled` when a stop had been requested), not `aborted`.
+
 **Missing script file.** When a `ScriptNode` names a `script` file, its existence is
 checked in the same pre-flight pass as input-file validation (§2), before any node
 runs or any manifest exists — a missing file aborts the run naming the node and the
@@ -930,7 +986,8 @@ list source is a script branch therefore refuses a cut list the same way it refu
 one from a linear script.
 
 `NodeRun.status` values: `"ok"` (node persisted), `"persist_failed"` (session save raised
-but the run continued), `"node_failed"` (the node's agent turn raised), `"reused"`
+but the run continued), `"node_failed"` (the node's agent turn raised, or — on a row with
+`cut: true` — the process died during it), `"reused"`
 (the reuse gate skipped the runner; see §2's `reuse: "if-unchanged"` and `origin_run_id`).
 
 ### 4d. The routing verdict — a `route` call, a forced call, text-parse as fallback
@@ -1598,7 +1655,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
-| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |

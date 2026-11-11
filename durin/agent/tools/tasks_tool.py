@@ -246,6 +246,17 @@ class TasksTool(Tool, ContextAware):
         from durin.workflow import run_log
         if not run_log.reconcile_one(self._workspace, row["label"], row["id"]):
             return None
+        record = run_log.read_manifest(self._workspace, row["label"], row["id"]) or {}
+        if record.get("status") == "cancelled":
+            # A stop had been asked for before the process died: the run ends
+            # cancelled rather than crashed.
+            row["status"] = "cancelled"
+            return (
+                f"Workflow run [{row['id']}] was still marked running, but the "
+                "process that owned it is gone (a gateway restart or crash killed "
+                "it mid-run). A stop had been requested, so it is marked cancelled; "
+                "its partial trace is preserved."
+            )
         row["status"] = "crashed"
         return (
             f"Workflow run [{row['id']}] was still marked running, but the "

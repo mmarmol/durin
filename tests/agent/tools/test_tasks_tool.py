@@ -395,6 +395,22 @@ async def test_status_ghost_run_self_heals(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_ghost_run_asked_to_stop_is_reported_cancelled(tmp_path):
+    """A dead run whose record holds a stop request ends cancelled, and the
+    healed answer says so instead of calling it crashed."""
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghost789", status="running")
+    f = Path(tmp_path) / "workflows-runs" / "qa" / "ghost789.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, stop_requested={"at": 5.0, "hard": False})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost789")
+    assert "cancelled" in out and "crashed" not in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghost789")["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_stop_live_owner_run_still_cancels(tmp_path):
     """A running manifest owned by a LIVE process keeps the normal cancel path."""
     import os

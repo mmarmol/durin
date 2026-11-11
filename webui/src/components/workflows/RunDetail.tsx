@@ -324,10 +324,10 @@ export function RunDetail({
   const { t } = useTranslation();
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
-  // Only a run that is still running has a node in flight. Crash reconciliation
-  // flips a dead run to "crashed" without clearing its active_node marker (only
-  // a node's own completion does that), so an ungated read renders a long-dead
-  // node as a spinning "running" row whose clock never stops.
+  // Only a run that is still running has a node in flight. A record an older
+  // release flipped to "crashed" still carries its active_node marker, so an
+  // ungated read renders a long-dead node as a spinning "running" row whose
+  // clock never stops.
   const activeNodeInfo = result.status === "running" ? (result.active_node ?? null) : null;
 
   // Ticks only while a node is actually in flight, so the header's elapsed total

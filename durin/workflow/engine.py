@@ -362,21 +362,29 @@ class _DetachedTracker:
     per-node manifest refresh (in-flight visibility); ``run()`` joins the rest at
     every terminal path so the manifest is complete before it is finalized. The
     submitted callables capture their own failures and return a NodeRun — a
-    future here never raises."""
+    future here never raises.
+
+    It also keeps the entry (``{node_id, iteration, session_key}``) of every
+    launched node whose record has not been drained yet: the record's
+    ``detached_active``, which the walk writes with the trace so a process that
+    dies leaves each of them on record. Only the walk thread calls ``launch``,
+    ``drain``, ``join`` and ``active``, so the record keeps one writer."""
 
     def __init__(self) -> None:
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._futures: list[concurrent.futures.Future] = []
         self._done: list[concurrent.futures.Future] = []
+        self._active: dict[concurrent.futures.Future, dict] = {}
         import threading
         self._lock = threading.Lock()
 
-    def launch(self, fn: Callable[[], NodeRun]) -> None:
+    def launch(self, fn: Callable[[], NodeRun], entry: dict) -> None:
         if self._executor is None:
             self._executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=_DETACHED_MAX_WORKERS, thread_name_prefix="durin-wf-detached")
         fut = self._executor.submit(fn)
         self._futures.append(fut)
+        self._active[fut] = entry
 
         def _mark(f: concurrent.futures.Future) -> None:
             with self._lock:
@@ -384,10 +392,16 @@ class _DetachedTracker:
 
         fut.add_done_callback(_mark)
 
+    def active(self) -> list[dict]:
+        """The entries of launched nodes whose records were not drained yet."""
+        return list(self._active.values())
+
     def drain(self) -> list[NodeRun]:
         """Records of detached nodes that finished since the last drain."""
         with self._lock:
             done, self._done = self._done, []
+        for f in done:
+            self._active.pop(f, None)
         return [f.result() for f in done]
 
     def join(self) -> list[NodeRun]:
@@ -669,6 +683,10 @@ class WorkflowEngine:
                 store=store)
             sources = run_log.source_nodes(workflow)
             stored_rows = 0
+            # One tracker per run for launch-and-continue (detached) nodes. Every exit
+            # from the try below joins it before the manifest is finalized, so a run
+            # never reports terminal with a side-effect node silently still running.
+            detached_tracker = _DetachedTracker()
 
             def _store_sources() -> None:
                 # The rows that joined the trace since the last write: every one
@@ -690,12 +708,12 @@ class WorkflowEngine:
                         workflow, store, position, upstream):
                     # Never point the record at an input that was not written.
                     position = run_log.KEEP_POSITION
-                self._update_manifest(workflow, run_id, runs, position=position)
+                # The detached nodes still running go with the trace: a node
+                # whose row was just drained into `runs` leaves the list in the
+                # same write.
+                self._update_manifest(workflow, run_id, runs, position=position,
+                                      detached_active=detached_tracker.active())
 
-            # One tracker per run for launch-and-continue (detached) nodes. Every exit
-            # from the try below joins it before the manifest is finalized, so a run
-            # never reports terminal with a side-effect node silently still running.
-            detached_tracker = _DetachedTracker()
             initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
                 result = self._walk(
@@ -937,18 +955,19 @@ class WorkflowEngine:
                 logger.exception("workflow resume source write failed for {}", workflow.name)
 
     def _update_manifest(self, workflow, run_id, runs, *,
-                         position: dict | None | object = run_log.KEEP_POSITION) -> None:
+                         position: dict | None | object = run_log.KEEP_POSITION,
+                         detached_active: list[dict] | None = None) -> None:
         """Rewrite the live record. ``position`` is the step the walk enters next
         (None once the walk has ended); left out, the recorded one is kept — the
         write that precedes a step's failure, where the failed step stays the
-        position."""
+        position. ``detached_active`` is the detached nodes still running."""
         if self._workspace is None:
             return
         try:
             run_log.update_run(self._workspace, workflow.name, run_id,
                                WorkflowResult(status="running", final_output=None, runs=runs),
                                shared_session=_last_shared_session(workflow, runs),
-                               position=position)
+                               position=position, detached_active=detached_active)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
@@ -1101,6 +1120,19 @@ class WorkflowEngine:
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
             node_started_at = time.time()
+            # Only a work node persists a conversation. A script has no
+            # session at all, and a sub-workflow's and a parallel's work
+            # lives in their children's own rows.
+            started_session_key = (node_session_key(run_id, node, iteration)
+                                   if isinstance(node, WorkNode) else None)
+            # A detached node that is launched below joins the record's list of
+            # detached nodes still running in this same write, so it is on
+            # record from the moment it starts.
+            detached_entry: dict | None = None
+            if (isinstance(node, (WorkNode, ScriptNode)) and node.detached
+                    and detached_tracker is not None):
+                detached_entry = {"node_id": node.id, "iteration": iteration,
+                                  "session_key": started_session_key}
             # Guarded like every other manifest write in this class: without a
             # workspace there is no manifest to mark, and calling through would
             # raise on every node of every workspace-less run — an exception the
@@ -1112,11 +1144,10 @@ class WorkflowEngine:
                         self._workspace, workflow.name, run_id,
                         node_id=node.id, label=node_label(node), started_at=node_started_at,
                         iteration=iteration,
-                        # Only a work node persists a conversation. A script has no
-                        # session at all, and a sub-workflow's and a parallel's work
-                        # lives in their children's own rows.
-                        session_key=(node_session_key(run_id, node, iteration)
-                                     if isinstance(node, WorkNode) else None),
+                        session_key=started_session_key,
+                        detached_active=(
+                            [*detached_tracker.active(), detached_entry]
+                            if detached_entry is not None else None),
                     )
                 except Exception:  # noqa: BLE001 - observability write; never break the run
                     logger.exception("workflow node start marker failed for {}", workflow.name)
@@ -1256,7 +1287,8 @@ class WorkflowEngine:
                         detached_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
                     self._launch_detached(
                         detached_tracker, node, task, detached_input, run_id,
-                        iteration, root_session_key, work_dir, raw_task=raw_task)
+                        iteration, root_session_key, work_dir, raw_task=raw_task,
+                        entry=detached_entry)
                 current = node.next
 
             elif isinstance(node, (WorkNode, ScriptNode)):
@@ -1903,8 +1935,9 @@ class WorkflowEngine:
                 "characters), so nothing was started on a partial copy. Start a new run instead.")
 
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
-                         root_key, work_dir, raw_task=None):
-        """Submit a detached node to the run's tracker. The callable mirrors branch
+                         root_key, work_dir, raw_task=None, *, entry):
+        """Submit a detached node to the run's tracker, with ``entry`` its item of
+        the record's ``detached_active``. The callable mirrors branch
         execution (same kind dispatch, working-folder anchoring) but captures every
         failure into the returned NodeRun: a side effect must never sink the run."""
         def _execute() -> NodeRun:
@@ -1917,7 +1950,7 @@ class WorkflowEngine:
             except Exception as exc:  # noqa: BLE001 - a detached failure is a record, not an abort
                 return self._unit_run(node.id, iteration, t0, node=node, exc=exc)
 
-        tracker.launch(_execute)
+        tracker.launch(_execute, entry)
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
                         workspace_override, out_dir=None, raw_task=None):

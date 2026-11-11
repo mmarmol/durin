@@ -179,9 +179,9 @@ def collect_tasks(
         if rec.get("status") == "needs_input":
             needs_input_detail = (rec.get("final_output") or "")[:500] or None
         # active_node is only trustworthy while the run is actually "running": crash
-        # reconciliation (reconcile_running / reconcile_one) flips a dead run's status
-        # to "crashed" without clearing it (only a normal completion, via update_run,
-        # does that), so a stale marker would otherwise survive the run's own death.
+        # reconciliation (reconcile_running / reconcile_one) clears it, but a record
+        # an older release flipped to "crashed" still carries the marker, so a stale
+        # marker would otherwise survive the run's own death.
         # Gating here — the sole place a manifest's active_node is read — covers every
         # non-running status uniformly, including any future one that forgets to clear
         # the marker itself. A "needs_input" run is paused rather than dead, but it has

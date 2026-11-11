@@ -21,7 +21,9 @@ consumed.
 One state has more than one writer: a ``needs_input`` pause can be answered (resumed),
 rejected (an approval pause), or cancelled, each from its own caller, each a
 read-then-write on the SAME manifest. ``run_lock_target`` serializes those so exactly
-one of a racing pair wins — see its docstring.
+one of a racing pair wins — see its docstring. A ``running`` record whose process is
+gone is the other one: the crash sweeps convert it (``mark_dead_run``) under the
+same lock, so a resume claiming it and a sweep converting it never both act.
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ import json
 import time
 from pathlib import Path
 
+from loguru import logger
+
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 from durin.workflow import resume_store
 
 
@@ -333,6 +338,10 @@ def start_run(
         # names the file holding the step's whole input (resume_store). None once
         # the walk has ended.
         "position": position,
+        # The detached steps launched and not yet in ``runs``: {node_id,
+        # iteration, session_key} each. A process that dies leaves them here,
+        # and the crash conversion records each as a cut attempt.
+        "detached_active": [],
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -344,12 +353,14 @@ def update_run(
     workspace: str | Path, name: str, run_id: str, result, *, status: str = "running",
     shared_session: str | None = None,
     position: dict | None | object = KEEP_POSITION,
+    detached_active: list[dict] | None = None,
 ) -> None:
     """Rewrite the manifest with the run's per-node trace so far, preserving the
     ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite.
     ``shared_session`` replaces the recorded one when given; ``None`` keeps it.
     ``position`` replaces the recorded one when given, ``None`` included (the walk
-    ended); left out, the recorded one is kept."""
+    ended); left out, the recorded one is kept. ``detached_active`` replaces the
+    recorded list of detached steps still running when given; ``None`` keeps it."""
     path = _record_path(workspace, name, run_id)
     base = read_manifest(workspace, name, run_id) or {}
     record = {
@@ -379,6 +390,8 @@ def update_run(
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
+        "detached_active": (list(base.get("detached_active") or [])
+                            if detached_active is None else list(detached_active)),
         "runs": _node_records(result),
     }
     _write_json(path, record)
@@ -388,6 +401,7 @@ def mark_node_started(
     workspace: str | Path, name: str, run_id: str, *,
     node_id: str, label: str, started_at: float,
     iteration: int | None = None, session_key: str | None = None,
+    detached_active: list[dict] | None = None,
 ) -> None:
     """Record which node is in flight, so a reader that arrives mid-node knows.
 
@@ -403,6 +417,10 @@ def mark_node_started(
     persists no conversation — script, sub-workflow, parallel — where a key
     would point at a session that does not exist.
 
+    ``detached_active`` replaces the recorded list of detached steps still
+    running when given (the step starting here is a detached one, so it joins
+    that list in the same write); ``None`` keeps it.
+
     No-op when no manifest exists — a nested run may not have written one, and
     fabricating a partial record here would confuse the crash sweep.
     """
@@ -413,6 +431,8 @@ def mark_node_started(
         "node_id": node_id, "label": label, "started_at": started_at,
         "iteration": iteration, "session_key": session_key,
     }
+    if detached_active is not None:
+        base["detached_active"] = list(detached_active)
     _write_json(_record_path(workspace, name, run_id), base)
 
 
@@ -487,6 +507,8 @@ def finalize_run(
         ),
         "output_files": list(getattr(result, "output_files", []) or []),
         "missing_artifacts": list(getattr(result, "missing_artifacts", []) or []),
+        # Every detached step was joined before this write, its row in ``runs``.
+        "detached_active": [],
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)
@@ -559,7 +581,8 @@ def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
     finalizing a paused run, every resume claiming the run (moving it to
     ``running`` before actually resuming it — ``ResumeClaim``, used by the
     workflows service and the ``run_workflow`` tool alike), and the
-    approval-reject short-circuit inside the service's resume path. Each of those
+    approval-reject short-circuit inside the service's resume path, and the crash
+    conversion of a ``running`` run whose process is gone (``mark_dead_run``). Each of those
     is a read-then-write on the SAME manifest; without a lock, two racing callers
     can both read the resumable status before either writes, so — for example —
     two resumes both run real nodes, or a resume runs them on a run
@@ -661,22 +684,184 @@ def runs_for_session(workspace: str | Path, root_session_key: str) -> list[dict]
     return out
 
 
-def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) -> int:
-    """Mark orphaned ``running`` manifests as ``crashed`` (keeping the partial trace).
+# The error of the row a dead run's conversion writes for an attempt that was cut.
+DEAD_RUN_ERROR = "the process ended while this step was running"
 
-    A manifest that records an ``owner`` is flipped as soon as that process is
+# How long a conversion waits for the per-run lock. A record whose lock is busy
+# for longer is left for the next sweep.
+DEAD_RUN_LOCK_TIMEOUT_S = 15.0
+
+
+def _owner_gone(record: dict, now: float, max_age_s: float) -> bool:
+    """Whether the process executing a ``running`` record is gone. A record with
+    an ``owner`` is dead as soon as that process is not alive; a record without
+    one (written before owners existed) only once it is older than ``max_age_s``."""
+    from durin.utils.process_tree import process_alive
+
+    owner = record.get("owner")
+    if owner is not None:
+        return not process_alive(owner)
+    try:
+        return float(record.get("started_at") or 0.0) < now - max_age_s
+    except (TypeError, ValueError):
+        return False   # an unreadable start time: no age to judge it by
+
+
+def _cut_row(entry: dict) -> dict:
+    """The row of an attempt the process's death cut short: a failed attempt, so
+    it uses an attempt number but no pass, with every field a finished row has
+    and ``cut: True``. ``entry`` is an ``active_node`` or ``detached_active`` item."""
+    return {
+        "node_id": entry["node_id"],
+        "iteration": entry.get("iteration"),
+        "passed": None,
+        "session_key": entry.get("session_key"),
+        "worker_index": None,
+        "branch_id": None,
+        "budget": None,
+        "pass_number": None,
+        "status": "node_failed",
+        "route_label": None,
+        "exit_code": None,
+        "duration_s": None,
+        "error": DEAD_RUN_ERROR,
+        "artifacts": [],
+        "command": None,
+        "stdout": None,
+        "stderr": None,
+        "model": None,
+        "provider": None,
+        "node_hash": None,
+        "origin_run_id": None,
+        "cut": True,
+    }
+
+
+def _dead_run_record(workspace: str | Path, record: dict, now_ts: float) -> dict:
+    """The record a dead ``running`` run is converted to (see ``mark_dead_run``).
+    Raises on a malformed record; the caller then writes nothing."""
+    position = record.get("position")
+    if position is not None and not (isinstance(position, dict) and position.get("node")):
+        raise ValueError(f"malformed position: {position!r}")
+    active = record.get("active_node")
+    stopped = bool(record.get("stop_requested"))
+    if not isinstance(record.get("runs") or [], list):
+        raise ValueError("malformed runs")
+    rows = list(record.get("runs") or [])
+    cut: set[tuple] = set()
+    if position and isinstance(active, dict) and active.get("node_id") == position["node"]:
+        rows.append(_cut_row(active))
+        cut.add((active["node_id"], active.get("iteration")))
+    for entry in record.get("detached_active") or []:
+        key = (entry["node_id"], entry.get("iteration"))
+        if key not in cut:
+            rows.append(_cut_row(entry))
+            cut.add(key)
+
+    out = dict(record)
+    out.pop("owner", None)
+    out.update(
+        status="cancelled" if stopped else "crashed",
+        active_node=None,
+        runs=rows,
+    )
+    if "position" in record:
+        # A record written before positions existed is only marked, as the
+        # sweep always marked it; every later record gets its end time.
+        out.update(finished_at=now_ts, ts=now_ts)
+    if "detached_active" in record:
+        out["detached_active"] = []
+    if stopped:
+        # A stop was asked for: the run ends where nothing can resume it, so it
+        # names no step and its resume files are removed after the write.
+        out["position"] = None
+    elif position:
+        # The step the record names is the step the run failed at: the one that
+        # was running, or the one about to start. What it was to receive comes
+        # from the resume store, used only when stored for that same step.
+        out["failed_node"] = position["node"]
+        store = resume_store.store_dir_of(workspace, record)
+        stored = resume_store.load_input(store, position.get("seq") or 0)
+        if stored is not None and stored[0] == position["node"]:
+            upstream = stored[1]
+            out["resume_upstream"] = (
+                upstream[:RESUME_UPSTREAM_MAX_CHARS] if upstream is not None else None)
+        sources = {node: text[:RESUME_INPUT_MAX_CHARS]
+                   for node, text in resume_store.load_sources(store).items()}
+        out["resume_inputs"] = {**(record.get("resume_inputs") or {}), **sources} or None
+    return out
+
+
+def mark_dead_run(
+    workspace: str | Path, name: str, run_id: str, *,
+    now: float | None = None, max_age_s: float = RECONCILE_AGE_S,
+) -> dict | None:
+    """Convert a ``running`` run whose process is gone into the record a failed
+    step leaves, so a resume can enter it. Returns the written record, or None
+    when nothing was written: the record is not ``running``, its owner is alive
+    (an owner-less one counts as dead once older than ``max_age_s`` before
+    ``now``), it is unreadable or malformed, or its lock stayed busy for
+    ``DEAD_RUN_LOCK_TIMEOUT_S``. Never raises.
+
+    The record is re-read under ``run_lock_target``'s lock, so two finders (the
+    sweep and the ``tasks`` tool, or two processes) convert it once, and a
+    resume that claimed it first (owner re-stamped to a live process) is left
+    alone. The conversion:
+
+    - ``status``: ``cancelled`` when the record holds a ``stop_requested``, else
+      ``crashed``; ``finished_at``/``ts`` now; ``active_node`` None and
+      ``owner`` removed, since both describe a process that no longer exists;
+    - a row for the step that was running (when ``active_node`` is the step the
+      ``position`` names) and for every step in ``detached_active``:
+      ``status: "node_failed"``, ``cut: True``, ``error`` ``DEAD_RUN_ERROR``;
+      ``detached_active`` then empty;
+    - when not cancelled and the record has a position: ``failed_node`` (the
+      position's step), ``resume_upstream`` (its stored input, capped) and
+      ``resume_inputs`` (the stored sources, capped, over the recorded ones);
+    - when cancelled: ``position`` None and the resume files removed.
+
+    A record without a position (written before positions existed, or a
+    sub-workflow's own run) gets no ``failed_node`` and no resume fields. One
+    written before positions existed (no ``position`` key) also keeps its
+    ``finished_at``/``ts``: it is only marked."""
+    now = time.time() if now is None else now
+    try:
+        with cross_process_lock(run_lock_target(workspace, name, run_id),
+                                timeout=DEAD_RUN_LOCK_TIMEOUT_S):
+            record = read_manifest(workspace, name, run_id)
+            if not isinstance(record, dict) or record.get("status") != "running":
+                return None
+            if not _owner_gone(record, now, max_age_s):
+                return None
+            out = _dead_run_record(workspace, record, time.time())
+            _write_json(_record_path(workspace, name, run_id), out)
+    except TimeoutError:
+        logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
+                       "leaves it for its next round", run_id, name)
+        return None
+    except Exception:  # noqa: BLE001 - a bad record must never stop a sweep
+        logger.exception("run {} of workflow {!r}: could not convert the dead run's record",
+                         run_id, name)
+        return None
+    if out["status"] in UNRESUMABLE_ENDS:
+        _drop_resume_files(workspace, out)
+    return out
+
+
+def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) -> int:
+    """Convert orphaned ``running`` manifests with ``mark_dead_run`` (keeping the
+    partial trace).
+
+    A manifest that records an ``owner`` is converted as soon as that process is
     dead — no age heuristic, so a gateway that crashes and restarts within
     minutes still clears its ghosts, while a run owned by another LIVE process
     (e.g. the TUI sharing this workspace) is never touched. Ownerless legacy
     manifests fall back to the ``started_at`` age cutoff. Safe to run at boot
-    AND periodically. Returns how many records were reconciled; a malformed
-    record is skipped, never fatal."""
-    from durin.utils.process_tree import process_alive
-
+    AND periodically. Returns how many records were converted; a malformed
+    record, or one whose lock is busy, is skipped, never fatal."""
     root = runs_root(workspace)
     if not root.is_dir():
         return 0
-    cutoff = now - max_age_s
     count = 0
     for wf_dir in root.iterdir():
         if not wf_dir.is_dir():
@@ -688,20 +873,15 @@ def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) ->
                 rec = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if rec.get("status") != "running":
+            # Only a record that looks dead without the lock is worth locking:
+            # the conversion checks it again under the lock.
+            if not isinstance(rec, dict) or rec.get("status") != "running":
                 continue
-            owner = rec.get("owner")
-            if owner is not None:
-                orphaned = not process_alive(owner)
-            else:
-                orphaned = rec.get("started_at", 0.0) < cutoff
-            if orphaned:
-                rec["status"] = "crashed"
-                try:
-                    _write_json(f, rec)
-                    count += 1
-                except OSError:
-                    continue
+            if not _owner_gone(rec, now, max_age_s):
+                continue
+            if mark_dead_run(workspace, wf_dir.name, f.stem,
+                             now=now, max_age_s=max_age_s) is not None:
+                count += 1
     return count
 
 
@@ -1020,22 +1200,14 @@ def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
 
 
 def reconcile_one(workspace: str | Path, name: str, run_id: str) -> bool:
-    """Flip ONE ``running`` manifest to ``crashed`` iff its owner process is
-    dead. The self-heal the `tasks` tool applies when the user pokes a run
-    the sweep hasn't reached yet — so "status"/"stop" answer with the truth
-    instead of describing a process that no longer exists. Ownerless legacy
-    manifests are left to the age sweep. Returns True when flipped."""
-    from durin.utils.process_tree import process_alive
-
+    """Convert ONE ``running`` manifest with ``mark_dead_run`` iff its owner
+    process is dead. The self-heal the `tasks` tool applies when the user pokes
+    a run the sweep hasn't reached yet — so "status"/"stop" answer with the
+    truth instead of describing a process that no longer exists. Ownerless
+    legacy manifests are left to the age sweep. Returns True when converted,
+    whatever status the run ended with (``crashed``, or ``cancelled`` when a
+    stop had been asked for)."""
     rec = read_manifest(workspace, name, run_id)
-    if not rec or rec.get("status") != "running":
+    if not isinstance(rec, dict) or rec.get("status") != "running" or rec.get("owner") is None:
         return False
-    owner = rec.get("owner")
-    if owner is None or process_alive(owner):
-        return False
-    rec["status"] = "crashed"
-    try:
-        _write_json(_record_path(workspace, name, run_id), rec)
-    except OSError:
-        return False
-    return True
+    return mark_dead_run(workspace, name, run_id) is not None
