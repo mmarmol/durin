@@ -41,16 +41,16 @@ def _engine(tmp_path, runner, **kw):
 class _Runner:
     """Records every dispatch; ``fail_once`` names nodes whose first pass raises."""
 
-    def __init__(self, fail_once=(), outputs=None, cause=None):
+    def __init__(self, fail_once=(), outputs=None, cause=None, fail_times=None):
         self.calls: list[tuple[str, int, str | None]] = []
-        self._fail = set(fail_once)
+        self._fail = {**{n: 1 for n in fail_once}, **(fail_times or {})}
         self._outputs = outputs or {}
         self._cause = cause
 
     def __call__(self, req):
         self.calls.append((req.node.id, req.iteration, req.upstream_output))
-        if req.node.id in self._fail:
-            self._fail.discard(req.node.id)
+        if self._fail.get(req.node.id, 0) > 0:
+            self._fail[req.node.id] -= 1
             raise NodeExecutionError(req.node.id, req.iteration, None,
                                      self._cause or RuntimeError("transient"))
         if req.workspace_override:
@@ -84,6 +84,7 @@ def test_a_failed_union_branch_names_the_parallel_node_and_keeps_its_input(tmp_p
     m = _manifest(tmp_path)
     assert m["failed_node"] == "fan"
     assert m["resume_upstream"] == "pre-out"
+    assert resume_refusal(m) is None                       # this record is resumable
     fan = next(r for r in m["runs"] if r["node_id"] == "fan")
     assert fan["status"] == "node_failed" and fan["iteration"] == 1
     assert "'b'" in fan["error"]
@@ -175,6 +176,32 @@ def test_resumed_parallel_resolves_its_branches_from_a_non_adjacent_source(tmp_p
     assert sorted(c[0] for c in runner.calls) == ["a", "b"]     # the routed ids, not none, not all
 
 
+def test_stored_sources_survive_a_second_failure_after_a_resume(tmp_path):
+    # A transient error repeats: abort, resume, abort again, resume. The second
+    # abort is recorded by a walk whose trace never held the routing node, so the
+    # record must carry forward what the first one stored.
+    wf = parse_workflow({"name": "w", "start": "route", "nodes": [
+        {"id": "route", "kind": "work", "next": "mid"},
+        {"id": "mid", "kind": "work", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches_from": "route", "branches": ["a", "b", "c"],
+         "reconcile": "union", "next": None},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"},
+        {"id": "c", "kind": "work", "tools": "default"},
+    ]})
+    runner = _Runner(fail_times={"b": 2}, outputs={"route": '["a", "b"]', "mid": "nothing to see"})
+    eng = _engine(tmp_path, runner)
+    assert eng.run(wf, "t").failed_node == "fan"
+    second = eng.run(wf, "t", resume=build_resume_state(_manifest(tmp_path), ""))
+    assert second.status == "aborted" and second.failed_node == "fan"
+    assert _manifest(tmp_path)["resume_inputs"]["route"] == '["a", "b"]'
+    runner.calls.clear()
+
+    third = eng.run(wf, "t", resume=build_resume_state(_manifest(tmp_path), ""))
+    assert third.status == "completed"
+    assert sorted(runner.calls) == [("a", 3, "nothing to see"), ("b", 3, "nothing to see")]
+
+
 def _fan_out_after_a_failure(list_text):
     wf = parse_workflow({"name": "w", "start": "orch", "nodes": [
         {"id": "orch", "kind": "work", "next": "mid"},
@@ -189,6 +216,7 @@ def test_resumed_fan_out_reads_its_list_from_a_source_that_ran_before_the_resume
     wf, runner = _fan_out_after_a_failure('["one", "two"]')
     eng = _engine(tmp_path, runner)
     assert eng.run(wf, "t").failed_node == "mid"
+    assert resume_refusal(_manifest(tmp_path)) is None     # a linear failure stays resumable
     runner.calls.clear()
 
     second = eng.run(wf, "t", resume=build_resume_state(_manifest(tmp_path), ""))
@@ -229,7 +257,19 @@ def test_resuming_a_failed_sub_workflow_gives_it_the_input_it_had(tmp_path):
     first = eng.run(wf, "the task")
     assert first.failed_node == "sub"
     assert _manifest(tmp_path)["resume_upstream"] == "a-out"
+    assert resume_refusal(_manifest(tmp_path)) is None     # so does a failed sub-workflow
 
     second = eng.run(wf, "the task", resume=build_resume_state(_manifest(tmp_path), ""))
     assert second.status == "completed" and second.final_output == "child done"
     assert given == ["a-out", "a-out"]
+
+
+def test_a_failed_script_node_stays_resumable(tmp_path):
+    from durin.workflow.script_runner import ScriptNodeRunner
+
+    wf = parse_workflow({"name": "w", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "exit 3", "next": None}]})
+    eng = WorkflowEngine(node_runner=_Runner(), script_runner=ScriptNodeRunner(tmp_path),
+                         run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    assert eng.run(wf, "t").failed_node == "s"
+    assert resume_refusal(_manifest(tmp_path)) is None

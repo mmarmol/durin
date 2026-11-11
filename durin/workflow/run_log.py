@@ -67,11 +67,15 @@ RESUME_UPSTREAM_MAX_CHARS = 16_000
 RESUME_INPUT_MAX_CHARS = 8_000
 
 
-def _resume_inputs(workflow, result) -> dict[str, str] | None:
+def _resume_inputs(workflow, result, carried: dict | None = None) -> dict[str, str] | None:
     """{source: capped last output} for every node another node names as a source
     (``inputs_from``, ``list_from``, ``branches_from``) — only for runs that can be
     resumed (needs_input, or aborted with a failed node), and only for sources
-    that actually recorded an output."""
+    that actually recorded an output.
+
+    ``carried`` is what the record already held when this walk began: a resumed
+    walk's trace covers only the nodes it ran, so a source from an earlier attempt
+    is kept from there, and a source this walk ran again replaces its entry."""
     if workflow is None:
         return None
     resumable = (
@@ -87,7 +91,7 @@ def _resume_inputs(workflow, result) -> dict[str, str] | None:
                                    getattr(node, "branches_from", None)) if s)
     if not sources:
         return None
-    out: dict[str, str] = {}
+    out: dict[str, str] = {k: v for k, v in (carried or {}).items() if k in sources}
     for r in result.runs:
         if r.node_id in sources and r.output:
             out[r.node_id] = r.output[:RESUME_INPUT_MAX_CHARS]
@@ -224,6 +228,9 @@ def start_run(
         # all its resumes and carried forward on every rewrite, so the run's route
         # is on record even though ``runs`` holds only the last walk.
         "earlier_nodes": earlier_nodes,
+        # The source outputs the earlier attempts stored, carried forward the same
+        # way: this walk's own trace cannot supply them if it stops again.
+        "resume_inputs": (prior.get("resume_inputs") or None) if resumed else None,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -257,6 +264,7 @@ def update_run(
         "durin_version": base.get("durin_version"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
+        "resume_inputs": base.get("resume_inputs"),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -348,8 +356,9 @@ def finalize_run(
         # text it received (verbatim — a retried script parses its stdin, so no
         # framing may pollute it). Only present on aborted runs that name a node.
         "failed_node": getattr(result, "failed_node", None),
-        # {source: capped output} for inputs_from sources — resume composition seeds.
-        "resume_inputs": _resume_inputs(workflow, result),
+        # {source: capped output} for the nodes other nodes read from — what a
+        # resumed walk seeds its lookups with, including what earlier attempts stored.
+        "resume_inputs": _resume_inputs(workflow, result, prior.get("resume_inputs")),
         "resume_upstream": (
             (getattr(result, "resume_upstream", None) or "")[:RESUME_UPSTREAM_MAX_CHARS]
             if getattr(result, "resume_upstream", None) is not None else None

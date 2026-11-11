@@ -285,8 +285,9 @@ never lost and a script chain between producer and consumer needs no courier fil
 `resume_inputs` keeps the last output of every node another node names as a source —
 `inputs_from`, and a parallel node's `list_from` / `branches_from` — because a resumed
 walk starts with an empty trace: a parallel node past the resume point reads its list
-or its branch ids from there when the source ran before it. The stored copies are
-capped. A composed input shows a capped copy as it is; a parallel node whose source
+or its branch ids from there when the source ran before it. The stored outputs are
+carried forward from one resume to the next, so a run that stops again after a resume
+still holds the sources of its first attempt. The stored copies are capped. A composed input shows a capped copy as it is; a parallel node whose source
 copy reached the cap aborts instead of parsing a list from a fragment.
 A work node may declare a **structured output** (`output_schema`): the node runner forces a
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
