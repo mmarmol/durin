@@ -432,6 +432,22 @@ _FINAL_REVIEW = (
 )
 
 
+def shared_context_from_session(sessions: SessionManager, key: str) -> list[dict]:
+    """The shared conversation a saved step session holds: its messages without
+    the leading system prompt. A step's session is saved as its system prompt, the
+    shared conversation it was given, then its own turns, so for a shared-context
+    step this is the whole shared buffer as it stood when the step finished. An
+    unknown key returns ``[]``. The messages are copies, so a caller extending or
+    editing them never changes a cached session."""
+    if not sessions.exists(key):
+        return []
+    messages = sessions.get_or_create(key).messages
+    start = 0
+    while start < len(messages) and messages[start].get("role") == "system":
+        start += 1
+    return [dict(m) for m in messages[start:]]
+
+
 class AgentNodeRunner:
     def __init__(
         self,

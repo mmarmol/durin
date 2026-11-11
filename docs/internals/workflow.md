@@ -605,7 +605,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, resumed, earlier_nodes, history, passes, shared_session}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -666,6 +666,13 @@ oldest first. `passes` — `{node_id: {reached, completed}}` for the earlier wal
 taken from the whole prior record, so they do not depend on `history` being
 complete. Both are carried forward on every rewrite; a record written before they
 existed simply lacks them.
+`shared_session` — the session key of the last `context: "shared"` work step that
+finished `ok` on the main walk (a parallel branch or fan-out worker row never counts),
+or `null` when none has. The engine takes it from the walk's rows on every `update_run`
+and on `finalize_run`; when the walk has no such row yet, the rewrite keeps the value
+already on the record, and a resume's `start_run` carries it from the earlier walks. A
+resume reloads the shared-context buffer from it (§4e). A record written before it
+existed lacks it, and its resume starts with an empty buffer.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -925,6 +932,21 @@ re-deriving it from the last row of the per-node trace.
   node's own turns only — never its system prompt nor the context it inherited — so a
   chain of shared nodes cannot re-accumulate (duplicate) earlier context.
 
+**The buffer survives a resume.** It lives in the walk's memory, so a resumed walk
+rebuilds it from disk. The node runner saves each step's session as its system prompt,
+the shared buffer it was given, then its own turns, so the session of the last shared
+step that finished holds the whole buffer as it stood after that step. The run manifest
+names that session in `shared_session` (§4a). On a resume, `WorkflowEngine.run` hands
+that key to the engine's `shared_context_loader` — the `run_workflow` tool and
+`WorkflowsService` pass `node_runner.shared_context_from_session`, which returns the
+session's messages without the leading system prompt — keeps the most recent messages
+under the same cap, and seeds the walk with them. A retried or re-entered shared node
+therefore sees the conversation it would have seen had the run never stopped — short of
+the turns of a shared step whose session failed to save (`persist_failed`) after the
+named one, since no session holds them. A session that cannot be read (deleted, unreadable, or the loader raises) is logged and the
+buffer starts empty; the resume goes on. A nested run's engine has no loader: a child
+run always starts from its first step.
+
 **`shared` is sequential-only.** Parallel workers are always isolated (each gets its
 own session; there is no shared buffer across concurrent threads), and only their text
 outputs are merged (`[0] … [1] …`). A routing node may not use `context="shared"`;
@@ -1029,7 +1051,8 @@ panels (like the web UI's Work panel) can show what is being asked.
 instead of restarted: the engine re-enters the graph AT the asking node, with
 the same run_id (same shared working folder, same node-session keys), each
 node's attempt numbers and completed passes so far over every walk of the run,
-and the user's answers as that node's upstream input. The shared-context buffer is not reconstructed across a resume —
+and the user's answers as that node's upstream input. The shared-context buffer is
+restored from the session the manifest names in `shared_session` (§4e),
 persistent-session nodes recover their own history, and files live in the
 working folder.
 

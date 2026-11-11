@@ -276,6 +276,10 @@ def start_run(
         # The source outputs the earlier attempts stored, carried forward the same
         # way: this walk's own trace cannot supply them if it stops again.
         "resume_inputs": (prior.get("resume_inputs") or None) if resumed else None,
+        # The session of the last shared-context step that finished on the main
+        # walk: it holds the whole shared conversation, so a resume reloads it.
+        # Carried from the earlier walks until this walk finishes a shared step.
+        "shared_session": prior.get("shared_session") if resumed else None,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -285,9 +289,11 @@ def start_run(
 
 def update_run(
     workspace: str | Path, name: str, run_id: str, result, *, status: str = "running",
+    shared_session: str | None = None,
 ) -> None:
     """Rewrite the manifest with the run's per-node trace so far, preserving the
-    ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite."""
+    ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite.
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
     path = _record_path(workspace, name, run_id)
     base = read_manifest(workspace, name, run_id) or {}
     record = {
@@ -312,6 +318,7 @@ def update_run(
         "history": base.get("history") or [],
         "passes": base.get("passes") or {},
         "resume_inputs": base.get("resume_inputs"),
+        "shared_session": shared_session if shared_session is not None else base.get("shared_session"),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -358,9 +365,11 @@ def finalize_run(
     task: str | None = None,
     parent_run_id: str | None = None,
     workflow=None,
+    shared_session: str | None = None,
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
-    ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run."""
+    ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run.
+    ``shared_session`` replaces the recorded one when given; ``None`` keeps it."""
     # Preserve the task/parent_run_id from the running manifest when the caller does not
     # supply them (the engine's _finalize_manifest does not hold either; reading them here
     # keeps finalize_run safe without requiring the engine to carry the values separately).
@@ -388,6 +397,7 @@ def finalize_run(
         "earlier_nodes": prior.get("earlier_nodes") or [],
         "history": prior.get("history") or [],
         "passes": prior.get("passes") or {},
+        "shared_session": shared_session if shared_session is not None else prior.get("shared_session"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

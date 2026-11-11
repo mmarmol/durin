@@ -788,7 +788,7 @@ class WorkflowsService:
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine, build_resume_state, resume_refusal
         from durin.workflow.judge import AgentJudgeRunner
-        from durin.workflow.node_runner import AgentNodeRunner
+        from durin.workflow.node_runner import AgentNodeRunner, shared_context_from_session
         from durin.workflow.subworkflow import SubworkflowRunner
 
         resume = None
@@ -973,7 +973,10 @@ class WorkflowsService:
             # caller polling the manifest directly (a status check,
             # tasks(action='stop')) needs: this makes "the manifest is terminal"
             # imply "the flag is already cleared", rather than merely usually true.
-            on_run_end=_clear_cancel)
+            on_run_end=_clear_cancel,
+            # A resume restores the shared conversation from the session the node
+            # runner saved for the last shared step (same session manager).
+            shared_context_loader=lambda key: shared_context_from_session(self._sessions, key))
 
         # Claim a paused run once nothing is left to build: move it off
         # needs_input under the per-run lock, so a cancel_run, reject or second

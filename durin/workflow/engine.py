@@ -209,6 +209,10 @@ class ResumeState:
     # so a resumed walk that completes lists the files and satisfies the declared
     # artifacts of the steps that ran before it stopped.
     earlier_rows: list[dict] = field(default_factory=list)
+    # The session of the last shared-context step that finished before the run
+    # stopped (the record's ``shared_session``): it holds the shared conversation
+    # the resumed walk starts from. None when no shared step has finished.
+    shared_session: str | None = None
 
 
 def manifest_visit_counts(manifest: dict) -> dict[str, int]:
@@ -259,6 +263,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     work_key = manifest.get("work_key")
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
+    shared_session = manifest.get("shared_session")
     needs_input_node = manifest.get("needs_input_node")
     if needs_input_node:
         questions = manifest.get("final_output") or ""
@@ -275,6 +280,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
             recorded_outputs=recorded_outputs,
             work_key=work_key,
             earlier_rows=earlier_rows,
+            shared_session=shared_session,
         )
     return ResumeState(
         run_id=manifest["run_id"],
@@ -285,6 +291,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         recorded_outputs=recorded_outputs,
         work_key=work_key,
         earlier_rows=earlier_rows,
+        shared_session=shared_session,
     )
 
 
@@ -313,6 +320,21 @@ def _reaches(workflow: Workflow, src: str, dst: str, avoid: str | None = None) -
 # chain of 'shared' nodes would otherwise grow this without limit and balloon the
 # prompt for every later node; keep only the most recent N messages.
 _SHARED_CONTEXT_MAX_MESSAGES = 200
+
+
+def _last_shared_session(workflow: Workflow, runs: list[NodeRun]) -> str | None:
+    """The session key of the last shared-context work step that finished ``ok``
+    on the main walk, or None. The runner saves a step's conversation as its system
+    prompt, the shared conversation it was given and its own turns, so this session
+    holds the whole shared buffer as it stood after that step. A parallel branch or
+    fan-out worker never reads or extends the buffer, so its rows are skipped."""
+    for r in reversed(runs):
+        node = workflow.nodes.get(r.node_id)
+        if (isinstance(node, WorkNode) and node.context == "shared" and r.status == "ok"
+                and r.branch_id is None and r.worker_index is None and r.session_key):
+            return r.session_key
+    return None
+
 
 # Simultaneous detached side-effect nodes per run. Detached nodes are rare
 # (persist/notify/archive) — a small pool bounds their concurrency the same way
@@ -442,6 +464,7 @@ class WorkflowEngine:
         parallel_llm_concurrency: int = 2,
         parallel_script_concurrency: int = 4,
         on_run_end: Callable[[str], None] | None = None,
+        shared_context_loader: Callable[[str], list[dict]] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -490,6 +513,11 @@ class WorkflowEngine:
         # thread's own statements, so any reader of the manifest is guaranteed the
         # hook already ran. Best-effort: an exception here must never break the run.
         self._on_run_end = on_run_end
+        # Optional: given a session key, the shared conversation that session
+        # holds (its messages without the system prompt). A resume uses it to
+        # restore the shared-context buffer from the record's ``shared_session``;
+        # None means a resumed walk starts with an empty buffer.
+        self._shared_context_loader = shared_context_loader
 
     def run(
         self,
@@ -617,6 +645,7 @@ class WorkflowEngine:
             # from the try below joins it before the manifest is finalized, so a run
             # never reports terminal with a side-effect node silently still running.
             detached_tracker = _DetachedTracker()
+            initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
                 result = self._walk(
                     workflow, self._frame_task(workflow, task, output_format), run_id, runs,
@@ -630,6 +659,7 @@ class WorkflowEngine:
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
                     earlier_rows=list(resume.earlier_rows) if resume else None,
+                    initial_shared_context=initial_shared_context,
                     work_dir=work_dir,
                     own_work_dir=work_dir_override is None,
                     # True only for a run that OWNS a work_key folder — the one
@@ -688,6 +718,21 @@ class WorkflowEngine:
             # above, or any other exception) so a keyed run never leaks the lock —
             # nullcontext's __exit__ is a safe no-op when no lock was acquired.
             lock_cm.__exit__(None, None, None)
+
+    def _resume_shared_context(self, workflow, resume: ResumeState | None) -> list[dict] | None:
+        """The shared conversation a resumed walk starts with: the messages of the
+        session the record names as the last shared step's, bounded like the
+        running buffer. A session that cannot be read leaves the buffer empty
+        rather than stopping the resume. None when there is nothing to restore."""
+        if resume is None or not resume.shared_session or self._shared_context_loader is None:
+            return None
+        try:
+            messages = list(self._shared_context_loader(resume.shared_session))
+        except Exception:  # noqa: BLE001 - a lost conversation must not block the resume
+            logger.exception("workflow {}: could not restore the shared conversation from {}",
+                             workflow.name, resume.shared_session)
+            return []
+        return messages[-_SHARED_CONTEXT_MAX_MESSAGES:]
 
     def _preflight_inputs(self, workflow, input_files, run_id, *, resuming: bool):
         """Validate the run's inputs before any node (or manifest) exists. Returns a
@@ -793,7 +838,8 @@ class WorkflowEngine:
             return
         try:
             run_log.update_run(self._workspace, workflow.name, run_id,
-                               WorkflowResult(status="running", final_output=None, runs=runs))
+                               WorkflowResult(status="running", final_output=None, runs=runs),
+                               shared_session=_last_shared_session(workflow, runs))
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
@@ -813,7 +859,8 @@ class WorkflowEngine:
             run_log.finalize_run(self._workspace, workflow.name, result,
                                  root_session_key=root_session_key, started_at=started_at,
                                  finished_at=time.time(), parent_run_id=parent_run_id,
-                                 workflow=workflow)
+                                 workflow=workflow,
+                                 shared_session=_last_shared_session(workflow, result.runs))
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest finalize failed for {}", workflow.name)
         else:
@@ -878,8 +925,11 @@ class WorkflowEngine:
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
         earlier_rows: list[dict] | None = None,
+        initial_shared_context: list[dict] | None = None,
     ) -> WorkflowResult:
-        shared_context: list[dict] = []
+        # A resumed walk starts from the shared conversation of the run's earlier
+        # walks (a copy: this list is extended and trimmed in place).
+        shared_context: list[dict] = list(initial_shared_context or [])
         # Two counters per node. ``visits`` is the attempt number: it names the
         # node's conversation and trace row, so it never repeats within a run.
         # ``completed`` counts the node's passes and is what the allowed-passes

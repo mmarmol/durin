@@ -80,6 +80,7 @@ def build_approval_resume(
     work_key = manifest.get("work_key")
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
+    shared_session = manifest.get("shared_session")
     if action == "approve":
         node = workflow.nodes[node_id]
         if node.next is None:
@@ -95,6 +96,7 @@ def build_approval_resume(
             recorded_outputs=recorded_outputs,
             work_key=work_key,
             earlier_rows=earlier_rows,
+            shared_session=shared_session,
         )
     original = manifest.get("resume_upstream") or ""
     return ResumeState(
@@ -106,4 +108,5 @@ def build_approval_resume(
         recorded_outputs=recorded_outputs,
         work_key=work_key,
         earlier_rows=earlier_rows,
+        shared_session=shared_session,
     )

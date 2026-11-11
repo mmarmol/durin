@@ -539,7 +539,7 @@ class RunWorkflowTool(Tool, ContextAware):
         from durin.workflow.engine import WorkflowEngine
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
-        from durin.workflow.node_runner import AgentNodeRunner
+        from durin.workflow.node_runner import AgentNodeRunner, shared_context_from_session
         from durin.workflow.subworkflow import SubworkflowRunner
         from durin.workflow.version_store import WorkflowVersionStore
 
@@ -697,6 +697,9 @@ class RunWorkflowTool(Tool, ContextAware):
             # docstring) — so `tasks` (which reads the manifest directly) can
             # never observe a run as terminal while its cancel flag is still set.
             on_run_end=_clear_cancel,
+            # A resume restores the shared conversation from the session the node
+            # runner saved for the last shared step (same session manager).
+            shared_context_loader=lambda key: shared_context_from_session(self._sessions, key),
         )
         root_session_key = self._session_key.get()
         inject_target = {

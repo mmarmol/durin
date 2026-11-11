@@ -287,7 +287,12 @@ across iterations as the node refines its work in response to loop feedback.
   rather than a relay of isolated summaries. (Only sequential nodes can
   share context; parallel branches and fan-out workers are always
   isolated, and a routing node can't use `context: "shared"` since it
-  needs to judge its own output, not a shared narrative.)
+  needs to judge its own output, not a shared narrative.) When a run is
+  resumed — a failed step retried, or a paused run answered — the shared
+  steps from there on still see the discussion the earlier steps had: it
+  is read back from the saved conversation of the last shared step that
+  finished. If that saved conversation is gone, the run still resumes,
+  starting the shared discussion afresh.
 - **The shared working folder.** Any node with `tools: "default"` reads
   and writes files in one folder shared by the whole run — so a "write the
   code" step, a "write the test" step, and a "fix the bug" step all see
