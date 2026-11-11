@@ -57,7 +57,7 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^5",
     "autoprefixer": "^10.4.20",
-    "happy-dom": "^20.10.6",
+    "happy-dom": "^21.0.4",
     "katex": "^0.16.21",
     "openapi-typescript": "^7.8.0",
     "postcss": "^8.5.0",
