@@ -5,6 +5,51 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.13.1 — 2026-11-11
+
+### Highlights
+
+- **A run that stopped on a failed parallel branch resumes at the parallel
+  step.** When a branch of a `choose` or `union` step failed, the run recorded
+  the branch as the failed node. Resuming it ran that one branch alone, with no
+  input, never merged the branches, skipped what followed, and reported the
+  run `completed` with the branch's output. The failed node is now the parallel
+  step: a resume re-runs all of its branches with the input the step had and
+  continues the workflow. A run recorded by an earlier version that names a
+  branch is refused with an explanation instead of resumed. (#736)
+- **A run's record says who produced each parallel branch and what each branch
+  script ran.** A node that ran as a parallel branch, a fan-out worker or a
+  detached step left a thinner row than the same node on the main path. An
+  agent row now records its model, provider and definition hash; a script row
+  its command, output and error stream, on success and on failure. (#735)
+
+### Changes
+
+#### Workflows
+
+- A resumed fan-out or runtime-selected parallel step reads its list or branch
+  ids from the node that produced them, even when that node ran before the
+  resume point. It used to fall back to the previous step's output. (#736)
+- A failed sub-workflow step is retried with the input it had received, not
+  with the run's original task. (#736)
+- A run that is resumed, stops again and is resumed once more keeps the inputs
+  its first attempt stored. (#736)
+- A stored list that reached the storage cap stops the step with a message
+  naming the cap, instead of being parsed as a shorter list. (#736)
+- When a `choose` or `union` branch fails, every branch that ran leaves its row,
+  and the parallel step gets a failed row naming the branch. A summary of such
+  a run counts two failed rows. (#735, #736)
+- `choose` and `union` branches record how long they took, so a workflow's
+  typical duration now includes that time. They also report a session that
+  could not be saved. (#735)
+- A script branch whose output was cut is marked as cut. A fan-out reading its
+  list from it reports the output cap instead of "not a JSON array". (#735)
+
+#### Dependencies and data
+
+- pillow 13. (#734)
+- Refreshed model catalog and MCP server catalog. (#724, #725)
+
 ## 0.13.0 — 2026-11-10
 
 A review of every subsystem against two running instances, and what it turned up.
