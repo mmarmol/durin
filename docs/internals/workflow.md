@@ -1855,6 +1855,16 @@ re-runs the failed step. The button is left out for a run an automation started
 shows the same detail, with the same retry, for a run made there: the run route's
 response carries `failed_node`.
 
+A `crashed` run (its process died) shows an "interrupted" banner. The step the dead
+process was running carries `cut: true` in its trace row, and the row reads
+"interrupted" instead of "failed". When the record names a `failed_node`, the banner
+offers **Resume at the interrupted step**, which sends the same resume request as the
+retry above. It is left out under the same conditions (an automation's run, a
+sub-workflow step's own run) and when the record names no `failed_node`. A leftover
+`scripts_left` list does not hide it: the server decides whether the run can be
+resumed, and a refusal is shown as an error message carrying the server's reason, like a refused
+retry.
+
 **The node detail panel.** A node's identity in that trace — and a node row in
 the chat's work strip — opens a drawer describing that one pass: its status,
 verdict, measured and typical durations, artifacts and session key, then

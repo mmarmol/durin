@@ -1410,6 +1410,9 @@
     "keepWaiting": "繼續等待",
     "abortedTitle": "執行已中止",
     "retryFailedStep": "重試失敗的步驟",
+    "crashedTitle": "執行已中斷",
+    "crashedBody": "執行它的程序在完成前已結束。正在執行的步驟未完成。",
+    "retryCutStep": "從中斷的步驟繼續",
     "cancelledTitle": "執行已取消",
     "outputFiles": "輸出檔案",
     "outputPruneHint": "較舊的執行累積後會被清除——請自行複製所需內容",
@@ -1435,6 +1438,7 @@
       "exhausted": "重試已耗盡",
       "aborted": "已中止",
       "crashed": "當機",
+      "cut": "已中斷",
       "cancelled": "已取消"
     },
     "seedBanner": {

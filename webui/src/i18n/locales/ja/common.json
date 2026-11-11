@@ -1410,6 +1410,9 @@
     "keepWaiting": "待ち続ける",
     "abortedTitle": "実行が中断されました",
     "retryFailedStep": "失敗したステップを再試行",
+    "crashedTitle": "実行が中断されました",
+    "crashedBody": "実行していたプロセスが完了前に終了しました。実行中だったステップは完了していません。",
+    "retryCutStep": "中断されたステップから再開",
     "cancelledTitle": "実行がキャンセルされました",
     "outputFiles": "出力ファイル",
     "outputPruneHint": "古い実行が蓄積すると削除されます — 必要なものはコピーしてください",
@@ -1435,6 +1438,7 @@
       "exhausted": "リトライ上限",
       "aborted": "中断",
       "crashed": "クラッシュ",
+      "cut": "中断",
       "cancelled": "キャンセル済み"
     },
     "seedBanner": {

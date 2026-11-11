@@ -1410,6 +1410,9 @@
     "keepWaiting": "계속 기다리기",
     "abortedTitle": "실행 중단됨",
     "retryFailedStep": "실패한 단계 다시 시도",
+    "crashedTitle": "실행이 중단됨",
+    "crashedBody": "실행하던 프로세스가 끝나기 전에 종료되었습니다. 진행 중이던 단계는 완료되지 않았습니다.",
+    "retryCutStep": "중단된 단계에서 재개",
     "cancelledTitle": "실행 취소됨",
     "outputFiles": "출력 파일",
     "outputPruneHint": "이전 실행이 쌓이면 정리됩니다 — 필요한 파일은 미리 복사해 두세요",
@@ -1435,6 +1438,7 @@
       "exhausted": "재시도 소진",
       "aborted": "중단됨",
       "crashed": "충돌",
+      "cut": "중단됨",
       "cancelled": "취소됨"
     },
     "seedBanner": {

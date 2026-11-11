@@ -1410,6 +1410,9 @@
     "keepWaiting": "Tetap menunggu",
     "abortedTitle": "Run dihentikan",
     "retryFailedStep": "Coba lagi langkah yang gagal",
+    "crashedTitle": "Eksekusi terhenti",
+    "crashedBody": "Proses yang menjalankannya berakhir sebelum selesai. Langkah yang sedang berjalan tidak selesai.",
+    "retryCutStep": "Lanjutkan dari langkah yang terhenti",
     "cancelledTitle": "Run dibatalkan",
     "outputFiles": "file keluaran",
     "outputPruneHint": "dipangkas setelah run lama menumpuk — salin keluar yang Anda perlukan",
@@ -1435,6 +1438,7 @@
       "exhausted": "percobaan ulang habis",
       "aborted": "dihentikan",
       "crashed": "crash",
+      "cut": "terhenti",
       "cancelled": "dibatalkan"
     },
     "seedBanner": {

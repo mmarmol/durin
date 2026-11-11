@@ -495,6 +495,15 @@ above. A run an [automation](automations.md) started has no such button: the
 dashboard offers no retry for it, and running the automation again starts a new
 run. A sub-workflow step's own run has none either: retry the run that called it.
 
+A run cut short because the process running it died (status `crashed`) says so
+in its detail: the banner reads "Run interrupted" and the step that was running is
+labelled "interrupted" rather than "failed". The detail offers **Resume at the
+interrupted step**, which picks the run up at that step. The button is left out
+for an automation's run, for a sub-workflow step's own run (resume the run that
+called it), and for a run recorded without its step. If the run cannot be resumed
+(for example, a script the dead process started is still running), the dashboard
+shows the reason and the run stays as it is.
+
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
 runs) asking for the files — and if you do pass files but one is missing
@@ -566,6 +575,9 @@ Opening an `aborted` run in the Runs pane offers **Retry the failed step**,
 which re-runs the step that failed in the same run. A run an automation started
 has no retry: running the automation again starts a new run. A sub-workflow
 step's own run has no retry either; retry the run that called it.
+
+A `crashed` run shows an interrupted banner and offers **Resume at the interrupted
+step** under the same conditions; see above.
 
 Each workflow also has a self-improvement mode (`"improvement_mode"`,
 `manual` by default, or `auto`): a

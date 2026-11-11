@@ -1410,6 +1410,9 @@
     "keepWaiting": "Continuer à attendre",
     "abortedTitle": "Exécution interrompue",
     "retryFailedStep": "Réessayer l'étape en échec",
+    "crashedTitle": "Exécution interrompue",
+    "crashedBody": "Le processus qui l'exécutait s'est arrêté avant la fin. L'étape en cours ne s'est pas terminée.",
+    "retryCutStep": "Reprendre à l'étape interrompue",
     "cancelledTitle": "Exécution annulée",
     "outputFiles": "fichiers de sortie",
     "outputPruneHint": "supprimés une fois que les anciennes exécutions s’accumulent — copiez ce dont vous avez besoin",
@@ -1435,6 +1438,7 @@
       "exhausted": "tentatives épuisées",
       "aborted": "interrompu",
       "crashed": "planté",
+      "cut": "interrompue",
       "cancelled": "annulé"
     },
     "seedBanner": {

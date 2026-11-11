@@ -113,7 +113,7 @@ function CopyOutputButton({ value }: { value: string }) {
 // repeating "ok" on every healthy row is noise); anything else keeps a labelled
 // chip because the words carry real diagnosis ("save failed" vs "failed" vs
 // "no session").
-function NodeStatusBadge({ status }: { status: string }) {
+function NodeStatusBadge({ status, cut = false }: { status: string; cut?: boolean }) {
   const { t } = useTranslation();
   if (status === "ok") {
     return (
@@ -123,13 +123,15 @@ function NodeStatusBadge({ status }: { status: string }) {
       </>
     );
   }
+  // A step a dead process was running did not fail by its own doing: it was cut.
+  const label = cut ? "cut" : status;
   const tone =
     status === "node_failed" || status === "persist_failed"
       ? "bg-destructive/10 text-destructive"
       : "bg-muted text-muted-foreground";
   return (
     <span className={cn("rounded px-1 py-0.5 text-[10px]", tone)}>
-      {t("workflows.runStatus." + status, status)}
+      {t("workflows.runStatus." + label, label)}
     </span>
   );
 }
@@ -186,7 +188,7 @@ export function RunNodeRow({
   return (
     <div className="flex flex-col gap-1 border-b border-border/60 px-2.5 py-1.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
-        <NodeStatusBadge status={run.status} />
+        <NodeStatusBadge status={run.status} cut={run.cut === true} />
         {onOpen ? (
           <button
             type="button"
@@ -360,6 +362,9 @@ export function RunDetail({
   // A sub-workflow step's run is resumed through the run that called it: the
   // server refuses it on its own, so no Retry is offered for it.
   const isChildRun = !!result.parent_run_id;
+  // The failed-step retry and the interrupted-step resume share one condition:
+  // the run names its step and is this dashboard's to act on.
+  const canRetry = !!onRetry && !!result.failed_node && !isAutomationOrigin && !isChildRun;
 
   return (
     <div className="flex flex-col gap-3">
@@ -394,7 +399,7 @@ export function RunDetail({
             <span className="font-medium">{t("workflows.abortedTitle")}</span>
           </div>
           {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
-          {onRetry && result.failed_node && !isAutomationOrigin && !isChildRun && (
+          {canRetry && (
             <Button
               type="button"
               size="sm"
@@ -404,6 +409,27 @@ export function RunDetail({
               onClick={onRetry}
             >
               {t("workflows.retryFailedStep")}
+            </Button>
+          )}
+        </div>
+      )}
+      {result.status === "crashed" && (
+        <div className="flex flex-col gap-1 rounded-md bg-destructive/10 px-3 py-2 text-destructive">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="font-medium">{t("workflows.crashedTitle")}</span>
+          </div>
+          <p>{t("workflows.crashedBody")}</p>
+          {canRetry && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="mt-1 self-start"
+              disabled={resuming}
+              onClick={onRetry}
+            >
+              {t("workflows.retryCutStep")}
             </Button>
           )}
         </div>

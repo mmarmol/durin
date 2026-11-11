@@ -1410,6 +1410,9 @@
     "keepWaiting": "Tiếp tục chờ",
     "abortedTitle": "Lượt chạy bị dừng",
     "retryFailedStep": "Thử lại bước bị lỗi",
+    "crashedTitle": "Lần chạy bị gián đoạn",
+    "crashedBody": "Tiến trình chạy nó đã kết thúc trước khi hoàn tất. Bước đang chạy chưa hoàn thành.",
+    "retryCutStep": "Tiếp tục từ bước bị gián đoạn",
     "cancelledTitle": "Lượt chạy đã hủy",
     "outputFiles": "tệp đầu ra",
     "outputPruneHint": "sẽ bị dọn bớt khi các lượt chạy cũ tích lũy — hãy sao chép ra những gì bạn cần",
@@ -1435,6 +1438,7 @@
       "exhausted": "hết lượt thử lại",
       "aborted": "đã dừng",
       "crashed": "gặp sự cố",
+      "cut": "bị gián đoạn",
       "cancelled": "đã hủy"
     },
     "seedBanner": {

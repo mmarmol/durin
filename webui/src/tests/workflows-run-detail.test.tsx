@@ -242,6 +242,18 @@ describe("WorkflowsView run detail", () => {
     );
   });
 
+  it("shows why a crashed test run's resume was refused", async () => {
+    vi.mocked(api.runWorkflow)
+      .mockResolvedValueOnce({
+        status: "crashed", final_output: "", failed_node: "gate", run_id: "run-dead", runs: [],
+      })
+      .mockRejectedValueOnce(new Error("the process that ran it still seems alive"));
+    const user = await openRunnerAndRun();
+    await user.click(await screen.findByRole("button", { name: "Resume at the interrupted step" }));
+    await screen.findByText(/still seems alive/);
+    expect(screen.getByRole("button", { name: "Resume at the interrupted step" })).toBeEnabled();
+  });
+
   it("shows a cancelled banner", async () => {
     vi.mocked(api.runWorkflow).mockResolvedValue({
       status: "cancelled",
