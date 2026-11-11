@@ -834,10 +834,12 @@ where `/proc` is readable it is the kernel boot id with the process's start in c
 ticks since boot (`proc:<boot id>:<ticks>`), neither of which moves while the process
 lives, even when the wall clock is stepped; elsewhere (macOS) it is the `ps -o lstart`
 string, and a value recorded in that older form is still compared that way. An owner
-counts as gone only on proof: no process with that pid (signal 0 finds none), a process
-with that pid that has exited, or one with another start identity. When the owner cannot
-be observed (`ps` fails or times out, `/proc` cannot be read), it counts as alive and the
-record is left `running` for a later sweep. A restart in place (`execv`) keeps the pid and
+counts as gone only on proof: no process with that pid, a process with that pid that has
+exited, or one with another start identity. No process is proven the same way on both
+systems: the system's own view of the pid finds nothing (on Linux `/proc/<pid>/stat` is
+missing, on macOS `ps -p` prints nothing) **and** signal 0 finds no process with that pid.
+When the owner cannot be observed (`ps` fails or times out, `/proc` cannot be read, or the
+two disagree), it counts as alive and the record is left `running` for a later sweep. A restart in place (`execv`) keeps the pid and
 start time but gets a new boot id, so the restarted process sees the runs its earlier
 start left behind as dead and the sweep finds them. The sweep
 (`reconcile_running`) converts any `running` record whose owner is no longer alive
@@ -845,9 +847,15 @@ start left behind as dead and the sweep finds them. The sweep
 conversion" below. Ownership makes the sweep both immediate
 and safe in a multi-process workspace: a gateway that crashes and restarts within
 minutes clears its ghosts at the next boot, while a run owned by another live process
-(the TUI sharing the same workspace) is never touched. The sweep runs at gateway boot
-AND periodically (a background thread wired in the service registry), so an orphan left
-by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
+(the TUI sharing the same workspace) is never touched. The sweep runs when the service
+registry is built and then periodically (a background thread the first build starts,
+every ten minutes), so an orphan left by a crashed co-owner clears without waiting for a
+gateway restart. Only a gateway with the websocket channel builds the registry (at boot,
+or when that channel is first started while the gateway runs); a gateway without it has
+neither sweep, and its dead runs are found by the `tasks` tool or a resume. A build made
+on the gateway's event loop (a channel started or restarted while it runs) hands its sweep
+to a thread of its own, since a sweep can wait on run locks and on a dead run's scripts.
+The `tasks` tool
 additionally self-heals a dead-owner run on `status`/`stop` (`reconcile_one`) and
 answers with the truth — that the run crashed, or that it is cancelled when a stop had
 been requested. Manifests written before the owner field existed fall back to a
@@ -867,8 +875,9 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   stop file beside the record (see "A stop outlives the process" below), or a
   `stop_requested` the record holds itself;
   `finished_at` and `ts` the time of the conversion (not on a record written before
-  positions existed, below); `active_node` `null` and `owner`
-  removed, since both describe a process that no longer exists;
+  positions existed, below); `active_node` `null`, since it describes a process that
+  no longer exists; `owner` kept, naming the process found gone, so a resume can check
+  again that it is;
 - a **cut row** appended to `runs` for the attempt the death interrupted, when
   `active_node` is the step `position` names: `node_id`, `iteration` and
   `session_key` from `active_node`, `status: "node_failed"`, `cut: true`, `error`
@@ -896,15 +905,14 @@ kinds: a sub-workflow's own run (`position: null` at every write), which still g
 detached nodes' cut rows; a top-level run whose walk had ended (`position: null`) and
 whose process died while its detached nodes were being joined, which gets their cut rows
 too; and a record written before positions existed (no `position` key), which is only
-marked: its status, `active_node` cleared and `owner` removed, its `finished_at` and
-`ts` untouched.
+marked: its status and `active_node` cleared, its `finished_at` and `ts` untouched.
 
 **The minimal mark.** A dead run whose full conversion cannot be built — a field of an
 unexpected shape (`runs` not a list, a `position` that names no step, a
 `detached_active` entry without a step, `resume_inputs` that is not a mapping) or a
 stored input whose text is not text — still gets marked, with one warning naming the run
-and the reason: `status: "crashed"`, `active_node` cleared, `owner` removed, every other
-field as it was. The run then reads as ended on every surface and no sweep finds it
+and the reason: `status: "crashed"`, `active_node` cleared, every other field (`owner`
+included) as it was. The run then reads as ended on every surface and no sweep finds it
 again. A run someone had asked to stop is marked `cancelled` instead, with the stop in
 `stop_requested` and `position` `null`, so it is never offered for resume whatever else
 the record carries. A stored input file that cannot be parsed at all is treated as
@@ -948,8 +956,8 @@ wait for it; the TUI and the REPL also write one line to stderr naming how many 
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
 the dashboard, since their log line is usually disabled). The run's record stays
 `running` until something finds its process gone: the gateway's crash sweep (at its
-start and periodically), the `tasks` tool when asked about that run, or a resume of
-it. Each converts it, resumable at the step it was in. A
+start and periodically, in a gateway with the websocket channel), the `tasks` tool when
+asked about that run, or a resume of it. Each converts it, resumable at the step it was in. A
 `durin agent -m` one-shot interrupted with Ctrl+C is the exception: asyncio's own Ctrl+C
 handling cancels its turn with no shutdown marked first, so that run is stopped.
 
@@ -976,11 +984,15 @@ outlives a leader that dies on it. Each conversion reads the process table once 
 
 - signals a group only on proof that it is the script's: right before the first signal it
   checks that the recorded pid is alive, has the recorded start identity and leads its own
-  group (its process group id is its pid). It sends SIGTERM to the group, waits, and sends
-  SIGKILL to the group if any member is left, but only while a member seen before SIGTERM is
-  still in it: that proves the group never emptied, so its id was never given to another
-  process. It then waits again. Each poll reads the table once (`ps -A` on macOS, `/proc`
-  where it exists) and reaps the converting process's own children in the group;
+  group (its process group id is its pid). It sends SIGTERM to the group and waits. It
+  sends SIGKILL to the group only when the poll made right before it observed the group and
+  saw in it a member seen before SIGTERM: that proves the group never emptied, so its id was
+  never given to another process. When that poll could not observe the group, nothing is
+  sent and the script goes to `scripts_left`. It then waits again. Each poll reads the
+  table once (`ps -A` on macOS, `/proc` where it exists) and reaps the converting process's
+  own children in the group. In a `/proc` read, a process that exits while it is read
+  counts as gone and another user's process (its `stat` cannot be read) is skipped; any
+  other read error makes the whole table "could not observe";
 - counts a group as ended only when no member that has not exited is left (a group of
   zombies is ended);
 - forgets a record whose pid now belongs to another process (another start identity): a pid
@@ -1003,7 +1015,8 @@ observation that failed. Each entry is `{"pid", "started", "node_id", "members",
 "unchecked"}`: the recorded leader, the identities of the members still seen
 (`{"pid", "started"}`), and whether an observation failed. The record file of such a script
 stays, and only the files of scripts proven over are removed, once the converted record is
-written. A file that cannot be read as a record is skipped and left where it is. After the
+written. A file that cannot be read as a record is skipped by the conversion and left where
+it is; it then refuses the resume (below). After the
 run itself, the conversion converts the dead sub-workflow runs under it, at any depth, one
 run's lock at a time, so their scripts end too. A run that ends by itself
 (`finalize_run`, `finalize_short_circuit`) removes any script file left beside its record,
@@ -1025,12 +1038,18 @@ A record that is still `running` is converted (`mark_dead_run`); when it is not 
 (the owner is alive, or cannot be observed: a run really in flight, or a resume that holds
 the claim), the surface refuses as for any running run. A `crashed` record also gets its
 dead sub-workflow runs converted, which an earlier conversion may have missed, and
-`run_log.scripts_left_refusal` is computed over the run's `scripts_left` and those of its
-sub-workflow runs. Both observe processes, which is why they run in that off-loop call.
-The surface then asks `resume_refusal(record, workspace=..., workflow=...)`, which only
-reads files, before the status check, so a `crashed` record it cannot resume gets its own
-reason; next the scripts refusal; only then `resumable_kind`. The reasons a dead run is
-refused, in the order they are asked (after the sub-workflow refusal above):
+`run_log.dead_run_refusal` is computed. It refuses while the process that was running the
+run (the record's `owner`) is alive or cannot be observed; while any sub-workflow run under
+it, at any depth, is still recorded as `running`; while any script record is present
+beside the run's record or a sub-workflow run's record, readable or not (a readable one is
+checked with its `scripts_left` entry and removed on proof that nothing of the script is
+left); and while a `scripts_left` entry may still run. Both observe processes, which is why
+they run in that off-loop call. These refusals hold the resume of a dead run only: a paused
+run's answer and a failed step's retry are never held by them. The surface then asks
+`resume_refusal(record, workspace=..., workflow=...)`, which only reads files, before the
+status check, so a `crashed` record it cannot resume gets its own reason; next
+`dead_run_refusal`'s; only then `resumable_kind`. The reasons a dead run is refused, in the
+order they are asked (after the sub-workflow refusal above):
 
 | Case | Reason (after "cannot be resumed — ") |
 |---|---|
@@ -1039,8 +1058,11 @@ refused, in the order they are asked (after the sub-workflow refusal above):
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
 | its `work_dir` is gone, or no input is stored for its position (or the stored one names another step) | `its working folder was pruned. Start a new run instead.` |
 | a run of the same workflow on the same `work_key` started after it | `run '<id>' on the same key started after it and has taken over its folder.` |
-| a `scripts_left` entry of the run or of one of its sub-workflow runs: a recorded member is still that process, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `a script of its step '<id>' from the earlier process is still running (pid <pids>). End it, then resume.` |
-| such an entry cannot be checked (an observation fails) | `whether a script of its step '<id>' from the earlier process still runs could not be checked (pid <pids>). End it if it does, then resume.` |
+| its `owner` is alive or cannot be observed | `the process that was running it still seems alive (pid <n>). It can be resumed once that process has ended.` |
+| a sub-workflow run under it is still `running` | `its sub-workflow run '<id>' of workflow '<name>' is still recorded as running. It can be resumed once that run has ended or been found dead.` |
+| a script record that cannot be read | `a record of one of its scripts cannot be read (<path>), so whether that script still runs cannot be checked. Remove that file once you have made sure nothing of that script is left, then resume.` |
+| a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, another recorded member is, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>).` for the recorded process itself, or `processes in the former process group of the script of its step '<id>' are still running (pid <pids>).` for the others (being in that group does not prove they are the script's), or both in one sentence; then `Check that they are that script's before ending them; the run can be resumed once they have ended.` |
+| such a script cannot be checked (an observation fails) | `whether the script of its step '<id>' from the earlier process left anything running could not be checked (pid <pids>). Check those processes; the run can be resumed once nothing of that script is left.` |
 
 The parallel-unit refusal is not asked of a dead run: its step is its position, which
 only ever names a step of the walk, and a run that died between two steps has no row for

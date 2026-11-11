@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +32,20 @@ CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "c", "kind": "work", "next": None}]}
 
 _WAIT_S = 10.0
+
+# How a refusal ends that names processes a person may have to end.
+_CHECK = (" Check that they are that script's before ending them; the run can be resumed "
+          "once they have ended.")
+
+
+def _own(node: str, pids) -> str:
+    return (f"the script of its step '{node}' from the earlier process is still running "
+            f"(pid {', '.join(str(p) for p in pids)}).{_CHECK}")
+
+
+def _group(node: str, pids) -> str:
+    return (f"processes in the former process group of the script of its step '{node}' are "
+            f"still running (pid {', '.join(str(p) for p in pids)}).{_CHECK}")
 
 # The real functions, taken at import: the cleanup must reach the processes a
 # test started even while that test has signals stubbed out.
@@ -133,6 +148,29 @@ def signals(monkeypatch):
         if sig:
             sent.append((pgid, sig))
         return real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(os, "killpg", killpg)
+    return sent
+
+
+@pytest.fixture
+def no_signals(monkeypatch):
+    """Every signal other than 0 is recorded as ``(target, sig)`` and dropped,
+    so a test naming this process can never signal it, whatever the code under
+    test does."""
+    sent: list[tuple[int, int]] = []
+    real_kill, real_killpg = os.kill, os.killpg
+
+    def kill(pid, sig):
+        if not sig:
+            return real_kill(pid, sig)
+        sent.append((pid, sig))
+
+    def killpg(pgid, sig):
+        if not sig:
+            return real_killpg(pgid, sig)
+        sent.append((pgid, sig))
 
     monkeypatch.setattr(os, "kill", kill)
     monkeypatch.setattr(os, "killpg", killpg)
@@ -268,8 +306,7 @@ def test_members_of_a_group_whose_leader_is_gone_are_reported_never_signalled(
     [left] = rec["scripts_left"]
     assert left["node_id"] == "a" and [m["pid"] for m in left["members"]] == [member]
     settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal == (f"a script of its step 'a' from the earlier process is still "
-                       f"running (pid {member}). End it, then resume.")
+    assert refusal == _group("a", [member])
 
     os.kill(member, signal.SIGKILL)                  # the person ends it
     _until(lambda: not _exists(member), "the member to end")
@@ -279,7 +316,7 @@ def test_members_of_a_group_whose_leader_is_gone_are_reported_never_signalled(
     assert resumable_kind(settled) == "dead"
 
 
-def test_a_pid_that_does_not_lead_its_group_is_never_signalled(tmp_path, groups, signals):
+def test_a_pid_that_does_not_lead_its_group_is_never_signalled(tmp_path, groups, no_signals):
     folder = _dead_run(tmp_path)
     proc = _start(groups, "sleep 61 & echo $!; read _", stdin=subprocess.PIPE,
                   stdout=subprocess.PIPE)
@@ -292,7 +329,7 @@ def test_a_pid_that_does_not_lead_its_group_is_never_signalled(tmp_path, groups,
 
     rec = run_log.mark_dead_run(tmp_path, "w", "r1")
 
-    assert [s for s in signals if s[0] in (member, proc.pid, os.getpid(), os.getpgrp())] == []
+    assert no_signals == []
     assert _exists(member) and _exists(proc.pid)
     assert sorted(e["pid"] for e in rec["scripts_left"]) == sorted([member, os.getpid()])
 
@@ -362,26 +399,38 @@ def test_a_final_check_that_fails_leaves_the_script_in_scripts_left(
     assert refusal is None
 
 
-def test_the_wait_is_bounded_even_when_observations_are_slow(tmp_path, groups, monkeypatch):
-    folder = _dead_run(tmp_path)
+def test_slow_observations_cannot_stretch_the_wait_past_its_bound(groups, monkeypatch):
+    """Every observation after the first table read runs into the full timeout
+    it is given (a hung ps); the whole call still ends within its bound,
+    because each observation is only given the time that is left."""
     proc = _start(groups, "exec sleep 61")
-    run_log.record_script(folder, "r1", pid=proc.pid, started=_started(proc.pid), node_id="a")
+    started = _started(proc.pid)          # read before any observation is made slow
     real_table = process_tree._process_table
-    calls = []
+    given: list[float] = []
 
-    def slow_after_the_first(timeout):
-        calls.append(timeout)
-        if len(calls) == 1:
-            return real_table(timeout)
-        time.sleep(max(0.0, timeout))       # a ps that runs into its timeout
+    def hung_observation(timeout):
+        given.append(timeout)
+        time.sleep(max(0.0, timeout))
         raise process_tree.ObservationError("ps timed out")
 
-    monkeypatch.setattr(process_tree, "_process_table", slow_after_the_first)
-    monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_BOUND_S", 1.0)
+    def table(timeout):
+        if not given and not table.done:
+            table.done = True
+            return real_table(timeout)
+        return hung_observation(timeout)
+
+    table.done = False
+    monkeypatch.setattr(process_tree, "_process_table", table)
+    monkeypatch.setattr(process_tree, "_observe",
+                        lambda pid, *, timeout=5.0: hung_observation(timeout))
     t0 = time.monotonic()
-    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
-    assert time.monotonic() - t0 < 1.0 + 0.5
-    assert rec["scripts_left"][0]["unchecked"] is True
+    [result] = process_tree.end_script_groups(
+        [(proc.pid, started)], term_wait_s=2.0, kill_wait_s=1.0, bound_s=1.0)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0 + 0.3
+    assert given and all(t <= 1.0 for t in given)
+    assert result["ended"] is False and result["unchecked"] is True
 
 
 # ── a script that cannot be ended ──
@@ -402,8 +451,7 @@ def test_a_script_that_cannot_be_ended_keeps_the_run_from_resuming_until_it_is_g
     assert left["members"] == [{"pid": proc.pid, "started": started}]
     assert run_log.read_manifest(tmp_path, "w", "r1") == rec
     _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal == (f"a script of its step 'a' from the earlier process is still "
-                       f"running (pid {proc.pid}). End it, then resume.")
+    assert refusal == _own("a", [proc.pid])
     unendable.undo()                    # signals reach it again
     proc.kill()
     proc.wait(timeout=_WAIT_S)
@@ -429,21 +477,147 @@ def test_a_dead_sub_workflow_run_with_a_script_left_refuses_its_callers_resume(
 
     assert settled["status"] == "crashed"
     assert run_log.read_manifest(tmp_path, "child", "c1")["status"] == "crashed"
-    assert refusal == (f"a script of its step 'x' from the earlier process is still "
-                       f"running (pid {proc.pid}). End it, then resume.")
+    assert refusal == _own("x", [proc.pid])
     unendable.undo()                    # signals reach it again
     proc.kill()
     proc.wait(timeout=_WAIT_S)
     assert run_log.settle_dead_run(tmp_path, "w", "r1")[1] is None
 
 
-def test_a_script_record_that_cannot_be_read_is_skipped(tmp_path):
+def test_a_script_record_that_cannot_be_read_refuses_the_resume_and_names_the_file(tmp_path):
     folder = _dead_run(tmp_path)
     deep = folder / "r1.script.4242"
     deep.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     rec = run_log.mark_dead_run(tmp_path, "w", "r1")
     assert rec["status"] == "crashed" and "scripts_left" not in rec
     assert deep.exists()
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal == (f"a record of one of its scripts cannot be read ({deep}), so whether "
+                       "that script still runs cannot be checked. Remove that file once you "
+                       "have made sure nothing of that script is left, then resume.")
+    deep.unlink()
+    assert run_log.settle_dead_run(tmp_path, "w", "r1")[1] is None
+
+
+# ── SIGKILL only on a fresh observation; a failed SIGKILL ──
+
+def test_no_sigkill_without_a_fresh_observation_of_the_group(
+    tmp_path, groups, signals, monkeypatch,
+):
+    """After SIGTERM every check of the group fails: nothing proves a member seen
+    before is still there, so SIGKILL is not sent and the script is left."""
+    folder = _dead_run(tmp_path)
+    proc = _start(groups, "(trap '' TERM; sleep 61) & wait")
+    _until(lambda: len(_members(proc.pid)) >= 2, "the child to start")
+    run_log.record_script(folder, "r1", pid=proc.pid, started=_started(proc.pid), node_id="a")
+    monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_TERM_WAIT_S", 0.3)
+    monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_KILL_WAIT_S", 0.3)
+
+    def cannot_tell(_pgid, _members):
+        raise process_tree.ObservationError("the group cannot be told")
+
+    monkeypatch.setattr(process_tree, "_group_empty", cannot_tell)
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
+
+    assert [sig for target, sig in signals if target == proc.pid] == [signal.SIGTERM]
+    [left] = rec["scripts_left"]
+    assert left["unchecked"] is True
+
+
+def test_a_sigkill_refused_for_permission_leaves_the_script(tmp_path, groups, monkeypatch):
+    folder = _dead_run(tmp_path)
+    proc = _start(groups, "(trap '' TERM; sleep 61) & wait")
+    _until(lambda: len(_members(proc.pid)) >= 2, "the child to start")
+    run_log.record_script(folder, "r1", pid=proc.pid, started=_started(proc.pid), node_id="a")
+    monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_TERM_WAIT_S", 0.3)
+    monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_KILL_WAIT_S", 0.3)
+    real_killpg = os.killpg
+    refused: list[int] = []
+
+    def killpg(pgid, sig):
+        if sig == signal.SIGKILL:
+            refused.append(pgid)
+            raise PermissionError(1, "Operation not permitted")
+        return real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
+
+    assert refused == [proc.pid]
+    [left] = rec["scripts_left"]
+    assert left["unchecked"] is False
+    assert [m["pid"] for m in left["members"]] == _members(proc.pid)
+    assert _members(proc.pid)                     # the TERM-ignoring child is still there
+
+
+# ── what else refuses the resume of a dead run ──
+
+def test_a_descendant_still_recorded_running_refuses_the_dead_runs_resume(tmp_path):
+    _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    # A sub-workflow run whose owner is this live process: it stays running.
+    run_log.start_run(tmp_path, "child", "c1", root_session_key=None, started_at=1.0,
+                      parent_run_id="r1")
+
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert refusal == ("its sub-workflow run 'c1' of workflow 'child' is still recorded as "
+                       "running. It can be resumed once that run has ended or been found dead.")
+    assert run_log.read_manifest(tmp_path, "child", "c1")["status"] == "running"
+
+
+def _crashed_with_owner(tmp_path, owner):
+    _dead_run(tmp_path)
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
+    rec = {**rec, "owner": owner}
+    run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), rec)
+    return rec
+
+
+def test_the_conversion_keeps_the_owner_it_found_gone(tmp_path):
+    _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["owner"] == DEAD
+
+
+def test_a_crashed_run_whose_owner_is_alive_is_not_resumed(tmp_path):
+    _crashed_with_owner(tmp_path, process_tree.process_identity())
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal == (f"the process that was running it still seems alive (pid {os.getpid()})."
+                       " It can be resumed once that process has ended.")
+
+
+def test_a_crashed_run_whose_owner_cannot_be_observed_is_not_resumed(tmp_path, monkeypatch):
+    _crashed_with_owner(tmp_path, {"pid": 4242, "started": "Wed Nov 11 10:00:00 2026"})
+
+    def cannot_observe(*_a, **_kw):
+        raise process_tree.ObservationError("ps timed out")
+
+    monkeypatch.setattr(process_tree, "_observe", cannot_observe)
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal == ("the process that was running it still seems alive (pid 4242). "
+                       "It can be resumed once that process has ended.")
+
+
+@pytest.mark.parametrize("owner", [
+    DEAD,                                                              # gone
+    {"pid": os.getpid(), "started": "Thu Jan  1 00:00:00 1970"},       # pid now another's
+])
+def test_a_crashed_run_whose_owner_is_gone_is_resumed(tmp_path, owner):
+    _crashed_with_owner(tmp_path, owner)
+    settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal is None and resumable_kind(settled) == "dead"
+
+
+@pytest.mark.parametrize("fields", [
+    {"status": "needs_input", "needs_input_node": "a"},
+    {"status": "aborted", "failed_node": "a"},
+])
+def test_a_paused_or_failed_run_is_not_held_by_a_live_owner_or_descendant(tmp_path, fields):
+    _dead_run(tmp_path, owner=process_tree.process_identity(), **fields)
+    run_log.start_run(tmp_path, "child", "c1", root_session_key=None, started_at=1.0,
+                      parent_run_id="r1")
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal is None
 
 
 # ── the start identity ──
@@ -493,11 +667,12 @@ def test_a_command_name_with_spaces_and_parentheses_parses(proc_readers):
     assert (seen.pgid, seen.zombie, seen.started) == (99, True, "proc:boot-a:7")
 
 
-def test_proc_reads_decide_alive_gone_or_unknown(proc_readers):
+def test_proc_reads_decide_alive_gone_or_unknown(proc_readers, monkeypatch):
     owner = {"pid": 4242, "started": "proc:boot-a:12345"}
     assert process_tree.process_alive(owner) is True
     assert process_tree.process_alive({**owner, "started": "proc:boot-a:1"}) is False
     proc_readers["line"] = FileNotFoundError()
+    monkeypatch.setattr(process_tree, "_no_such_process", lambda pid: True)
     assert process_tree.process_alive(owner) is False
     proc_readers["line"] = OSError(5, "I/O error")
     assert process_tree.process_alive(owner) is True          # unknown is not dead
@@ -524,18 +699,38 @@ def test_the_runner_records_its_child_while_it_runs_and_forgets_it_after(tmp_pat
     assert run_log.script_records(tmp_path, "w", "r1") == []
 
 
+def _sleeping_script(tmp_path) -> tuple[str, Path]:
+    """A command that writes its own pid to a file, then sleeps: the test finds
+    the process through the file, whatever the runner did with it."""
+    pid_file = tmp_path / "script.pid"
+    return f'echo $$ > "{pid_file}"; exec sleep 30', pid_file
+
+
+def _end_script_of(pid_file) -> None:
+    if pid_file.exists():
+        _end_group_left_by_the_runner([int(pid_file.read_text().strip())])
+
+
 def test_a_timed_out_script_is_forgotten(tmp_path):
-    with pytest.raises(Exception):
-        ScriptNodeRunner(str(tmp_path))(_request(tmp_path, "sleep 30", timeout=1))
-    assert run_log.script_records(tmp_path, "w", "r1") == []
+    command, pid_file = _sleeping_script(tmp_path)
+    try:
+        with pytest.raises(Exception):
+            ScriptNodeRunner(str(tmp_path))(_request(tmp_path, command, timeout=1))
+        assert run_log.script_records(tmp_path, "w", "r1") == []
+    finally:
+        _end_script_of(pid_file)
 
 
 def test_a_cancelled_script_is_forgotten(tmp_path):
-    req = _request(tmp_path, "sleep 30")
+    command, pid_file = _sleeping_script(tmp_path)
+    req = _request(tmp_path, command)
     req.cancel_check = lambda: True
-    with pytest.raises(Exception):
-        ScriptNodeRunner(str(tmp_path))(req)
-    assert run_log.script_records(tmp_path, "w", "r1") == []
+    try:
+        with pytest.raises(Exception):
+            ScriptNodeRunner(str(tmp_path))(req)
+        assert run_log.script_records(tmp_path, "w", "r1") == []
+    finally:
+        _end_script_of(pid_file)
 
 
 def _end_group_left_by_the_runner(pids: list[int]) -> None:
@@ -615,3 +810,46 @@ def test_the_script_records_are_never_taken_for_runs(tmp_path):
     folder = _dead_run(tmp_path)
     run_log.record_script(folder, "r1", pid=999999, started="x", node_id="a")
     assert [r["run_id"] for r in run_log.list_runs(tmp_path, "w")] == ["r1"]
+
+
+def test_on_linux_a_missing_stat_file_is_gone_only_when_signal_0_agrees(
+    proc_readers, monkeypatch,
+):
+    proc_readers["line"] = FileNotFoundError()
+    monkeypatch.setattr(process_tree, "_no_such_process", lambda pid: True)
+    assert process_tree._observe(4242) is None
+    monkeypatch.setattr(process_tree, "_no_such_process", lambda pid: False)
+    with pytest.raises(process_tree.ObservationError):
+        process_tree._observe(4242)
+
+
+def _proc_table(monkeypatch, reads: dict):
+    """The /proc table as the test says it is: pid -> a stat line or an error."""
+    monkeypatch.setattr(process_tree, "_read_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(process_tree, "_list_proc_pids", lambda: sorted(reads))
+
+    def stat(pid):
+        read = reads[pid]
+        if isinstance(read, Exception):
+            raise read
+        return read
+
+    monkeypatch.setattr(process_tree, "_read_proc_stat", stat)
+    return process_tree._process_table(1.0)
+
+
+def test_a_process_that_exits_while_the_table_is_read_counts_as_gone(monkeypatch):
+    table = _proc_table(monkeypatch, {1: _proc_line("a", pgid=1), 2: FileNotFoundError(),
+                                      3: ProcessLookupError()})
+    assert [m.pid for m in table] == [1]
+
+
+def test_a_process_of_another_user_is_skipped(monkeypatch):
+    table = _proc_table(monkeypatch, {1: _proc_line("a", pgid=1),
+                                      2: PermissionError(13, "Permission denied")})
+    assert [m.pid for m in table] == [1]
+
+
+def test_any_other_read_error_makes_the_table_unknown(monkeypatch):
+    with pytest.raises(process_tree.ObservationError):
+        _proc_table(monkeypatch, {1: _proc_line("a", pgid=1), 2: OSError(5, "I/O error")})

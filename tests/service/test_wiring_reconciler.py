@@ -41,3 +41,72 @@ def test_periodic_reconciler_flips_dead_owner_run(tmp_path, monkeypatch):
 
     assert flipped.wait(timeout=10), "no periodic sweep flipped the dead-owner run"
     assert run_log.read_manifest(tmp_path, "wf", "ghost")["status"] == "crashed"
+
+
+def test_a_registry_built_on_a_running_loop_sweeps_off_that_loop(tmp_path, monkeypatch):
+    """Saving a websocket setting restarts the channel, which builds the
+    registry on the gateway's event loop. The sweep there can wait on run locks
+    and on the end of a dead run's scripts: it must run off that loop."""
+    import asyncio
+    from dataclasses import dataclass
+
+    import durin.service.wiring as wiring
+    from durin.workflow import run_log
+
+    @dataclass
+    class _Sessions:
+        workspace: object
+
+    swept: list[tuple[int, bool]] = []
+    done = threading.Event()
+
+    def recording(*_a, **_kw):
+        try:
+            asyncio.get_running_loop()
+            on_loop = True
+        except RuntimeError:
+            on_loop = False
+        swept.append((threading.get_ident(), on_loop))
+        done.set()
+        return 0
+
+    monkeypatch.setattr(run_log, "reconcile_running", recording)
+    started = threading.Event()
+    started.set()                       # no periodic sweeper thread from this test
+    monkeypatch.setattr(wiring, "_reconciler_started", started)
+
+    async def build_on_the_loop() -> int:
+        wiring.build_service_registry(config=None, session_manager=_Sessions(tmp_path))
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(build_on_the_loop())
+    assert done.wait(timeout=10), "the sweep never ran"
+    [(thread, on_loop)] = swept
+    assert thread != loop_thread and on_loop is False
+
+
+def test_a_first_registry_build_on_a_running_loop_starts_the_periodic_sweeper(
+    tmp_path, monkeypatch,
+):
+    """A gateway whose websocket channel is started only later (a hot start)
+    builds its first registry on the loop: the periodic sweeper starts then."""
+    import asyncio
+    from dataclasses import dataclass
+
+    import durin.service.wiring as wiring
+    from durin.workflow import run_log
+
+    @dataclass
+    class _Sessions:
+        workspace: object
+
+    monkeypatch.setattr(run_log, "reconcile_running", lambda *_a, **_kw: 0)
+    # A fresh once-per-process flag: this build is the first. The sweeper it
+    # starts is a daemon thread that sleeps its whole period before any sweep.
+    monkeypatch.setattr(wiring, "_reconciler_started", threading.Event())
+
+    async def build_on_the_loop() -> None:
+        wiring.build_service_registry(config=None, session_manager=_Sessions(tmp_path))
+
+    asyncio.run(build_on_the_loop())
+    assert wiring._reconciler_started.is_set()

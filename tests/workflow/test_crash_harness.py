@@ -138,3 +138,53 @@ def test_a_run_left_by_a_graceful_stop_is_found_dead_and_resumable(tmp_path):
     dead = run_until_killed(tmp_path, CHAIN, stop_in="c", how="term")
     out = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert out["status"] == "crashed" and resumable_kind(out) == "dead"
+
+
+def test_the_reaper_ends_a_group_whose_leader_died_and_its_later_members(tmp_path):
+    """A process forked after the snapshot is reachable only through its
+    group; when the group's leader is already gone, the reaper must still end
+    the group."""
+    import signal
+    import subprocess
+    import time
+
+    from durin.utils.process_tree import process_identity
+    from tests.workflow import crash_harness
+
+    proc = subprocess.Popen(["bash", "-c", "read _; sleep 61 & echo $!; read _"],
+                            start_new_session=True, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 10
+        while process_identity(proc.pid)["started"] is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        # The snapshot taken while the leader was alone in its group.
+        crash_harness._strays.append({**process_identity(proc.pid), "pgid": proc.pid})
+        proc.stdin.write("go\n")
+        proc.stdin.flush()
+        assert int(proc.stdout.readline()) > 0     # the member, forked after the snapshot
+        proc.stdin.close()
+        proc.wait(timeout=10)                       # the leader is gone
+
+        crash_harness._kill_strays()
+
+        deadline = time.monotonic() + 10
+        while _group_has_members(proc.pid):
+            assert time.monotonic() < deadline, "the group outlived the reaper"
+            time.sleep(0.02)
+    finally:
+        # Killed as a group only while it still has members: a group's id is
+        # never given out while it has members, so this reaches only the test's.
+        if _group_has_members(proc.pid):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+
+def _group_has_members(pgid: int) -> bool:
+    """Whether group ``pgid`` has a member that has not exited, read with ps."""
+    import subprocess
+
+    out = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True,
+                         text=True, timeout=10).stdout
+    return any(parts[0] == str(pgid) and not parts[1].startswith("Z")
+               for parts in (line.split() for line in out.splitlines()) if len(parts) >= 2)

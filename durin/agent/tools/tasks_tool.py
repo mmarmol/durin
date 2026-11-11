@@ -264,7 +264,7 @@ class TasksTool(Tool, ContextAware):
         from durin.workflow.engine import resumable_kind, resume_refusal
         # A script the dead process started may still run: resuming or
         # re-running now would run it a second time beside the first.
-        scripts = run_log.scripts_left_refusal(self._workspace, record)
+        scripts = run_log.dead_run_refusal(self._workspace, record)
         resumable = (resumable_kind(record) == "dead"
                      and resume_refusal(record, workspace=self._workspace) is None)
         if scripts and resumable:

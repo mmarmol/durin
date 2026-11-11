@@ -510,3 +510,50 @@ async def test_a_dead_agent_run_whose_sub_workflow_has_no_mcp_steps_is_resumed(t
     with _provider():
         result = await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
     assert result.status == "completed" and "child-ok" in (result.final_output or "")
+
+
+# ── a descendant still running holds a dead run's resume, and only that ──
+
+_APPROVAL_FLOW = {"name": "wf", "start": "ask", "nodes": [
+    {"id": "ask", "kind": "work", "approval": True, "next": "after"},
+    {"id": "after", "kind": "work", "next": None}]}
+
+
+def _live_descendant(tmp_path, parent_run_id: str) -> None:
+    """A sub-workflow run under ``parent_run_id`` owned by this live process."""
+    run_log.start_run(tmp_path, "child", "c1", root_session_key="s", started_at=1.0,
+                      parent_run_id=parent_run_id)
+
+
+@pytest.mark.asyncio
+async def test_an_approval_is_answered_while_a_descendant_of_the_run_is_live(tmp_path):
+    _agent_record(tmp_path, _APPROVAL_FLOW, status="needs_input", needs_input_node="ask",
+                  ask_kind="approval", final_output="the proposal")
+    _live_descendant(tmp_path, "agent1")
+    with _provider(), _engine_run_completes() as fake_run:
+        result = await _svc(tmp_path).execute("wf", "approve", resume_run_id="agent1")
+    assert result.status == "completed"
+    fake_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_step_is_retried_while_a_descendant_of_the_run_is_live(tmp_path):
+    _agent_record(tmp_path, _APPROVAL_FLOW, status="aborted", failed_node="after",
+                  resume_upstream="x", final_output="boom",
+                  runs=[{"node_id": "after", "iteration": 1, "status": "node_failed"}])
+    _live_descendant(tmp_path, "agent1")
+    with _provider(), _engine_run_completes() as fake_run:
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="agent1")
+    assert result.status == "completed"
+    fake_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_is_not_resumed_while_a_descendant_is_still_running(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    _live_descendant(tmp_path, "dead1")
+    with _provider(), pytest.raises(ValidationFailedError,
+                                    match="sub-workflow run 'c1' of workflow 'child' is "
+                                          "still recorded as running"):
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"

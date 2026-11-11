@@ -520,7 +520,8 @@ read from `gateway.log` by finding the phase with the large duration.
 first marks the process as shutting down (`cancellation.begin_shutdown`), so a
 turn the stop cancels later is not taken as a stop of the workflow run it waits
 on: that run is left to end with the process, and is later found dead, and
-resumable, by the gateway's crash sweep, the `tasks` tool or a resume of it (see
+resumable, by the gateway's crash sweep (in a gateway with the websocket channel), the
+`tasks` tool or a resume of it (see
 [workflow.md](workflow.md)). The gateway's `finally`
 marks it again, for a gateway whose main loop ended without a signal. It then
 stops intake: the agent loop starts no more turns

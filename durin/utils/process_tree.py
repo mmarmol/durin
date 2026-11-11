@@ -179,7 +179,12 @@ def _observe(pid: int, *, timeout: float = _PS_TIMEOUT_S) -> Seen | None:
         try:
             line = _read_proc_stat(pid)
         except (FileNotFoundError, ProcessLookupError):
-            return None
+            # The file can be missing for other reasons (a /proc mounted with
+            # hidepid hides other users' processes): gone only when signal 0
+            # agrees, as on macOS.
+            if _no_such_process(pid):
+                return None
+            raise ObservationError(f"/proc/{pid}/stat is missing for a live pid") from None
         except OSError as exc:
             raise ObservationError(f"/proc/{pid}/stat: {exc}") from exc
         try:
@@ -316,6 +321,8 @@ def _process_table(timeout: float) -> list[Seen]:
                 line = _read_proc_stat(pid)
             except (FileNotFoundError, ProcessLookupError):
                 continue   # exited while the table was read
+            except PermissionError:
+                continue   # another user's process: not a script of this one's
             except OSError as exc:
                 raise ObservationError(f"/proc/{pid}/stat: {exc}") from exc
             try:
@@ -427,9 +434,10 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
     as the signal, to be alive, to be the recorded process and to lead its own
     group: SIGTERM first, SIGKILL after ``term_wait_s`` to a group that still
     has members, then up to ``kill_wait_s`` more. SIGKILL goes to the group
-    only while a member seen before SIGTERM is still in it, which proves the
-    group never emptied (an emptied group's id can be given to another
-    process). Never signalled: a pid of 0 or 1, this process or its group; a
+    only when the poll made right before it observed the group and saw in it a
+    member seen before SIGTERM, which proves the group never emptied (an
+    emptied group's id can be given to another process); when that poll could
+    not observe the group, nothing is sent and the script is reported. Never signalled: a pid of 0 or 1, this process or its group; a
     leader that is gone, has exited, or left its group (its members are
     reported, not signalled: nothing proves they are still the script's); a
     pid now held by another process (then nothing of the script is left: a pid
@@ -456,6 +464,9 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
 
     # Groups this call signalled: index -> (pgid, identities seen before SIGTERM).
     followed: dict[int, tuple[int, set[tuple[int, str]]]] = {}
+    # Per followed group, the live members the latest poll saw, or None when the
+    # latest poll could not observe the group: SIGKILL needs a fresh observation.
+    fresh: dict[int, set[tuple[int, str]] | None] = {}
     for i, (pid, started) in enumerate(scripts):
         members = [m for m in table if m.pgid == pid]
         live = [m for m in members if not m.zombie]
@@ -476,6 +487,7 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
                     continue
                 if _verify_and_signal(pid, started, signal.SIGTERM, left_s()):
                     followed[i] = (pid, {(m.pid, m.started) for m in live})
+                    fresh[i] = None
                 else:
                     results[i] = {"ended": False, "unchecked": True,
                                   "members": [m.identity() for m in live] or results[i]["members"]}
@@ -496,7 +508,13 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
             break
         if sig is not None:
             for i, (pgid, before) in list(followed.items()):
-                still = {(m["pid"], m["started"]) for m in results[i]["members"]}
+                still = fresh.get(i)
+                if still is None:
+                    # The latest poll could not observe the group: nothing
+                    # proves it is still the script's, so nothing is sent.
+                    results[i]["unchecked"] = True
+                    del followed[i]
+                    continue
                 if not (still & before) or _protected(pgid):
                     # The group may have emptied and its id been given out:
                     # nothing here signals it again.
@@ -527,13 +545,16 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
                     empty = _group_empty(pgid, members)
                 except ObservationError:
                     results[i]["unchecked"] = True
+                    fresh[i] = None
                     continue
                 if empty:
                     results[i] = {"ended": True, "unchecked": False, "members": []}
                     del followed[i]
                 else:
+                    live = [m for m in members if not m.zombie]
                     results[i] = {"ended": False, "unchecked": False,
-                                  "members": [m.identity() for m in members if not m.zombie]}
+                                  "members": [m.identity() for m in live]}
+                    fresh[i] = {(m.pid, m.started) for m in live}
             remaining = phase_end - time.monotonic()
             if not followed or remaining <= 0:
                 break
@@ -542,22 +563,34 @@ def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
 
 
 def left_script_state(pid: int, started: str, members: list[dict], *,
-                      timeout: float = _PS_TIMEOUT_S) -> tuple[str, list[int]]:
-    """Whether a script a dead run left could still be running: ``("alive",
-    pids)`` while any recorded member is still that process, or the group the
-    script led still has a member (unless its pid is now another process's,
-    which proves the group emptied); ``("unknown", pids)`` when that cannot be
-    observed; ``("gone", [])`` on proof that nothing of it is left. Only the
-    recorded identities and the group are looked at, so a reused pid never
-    keeps it alive."""
-    alive: list[int] = []
+                      timeout: float = _PS_TIMEOUT_S) -> tuple[str, list[int], list[int]]:
+    """Whether a script a dead run left could still be running, as
+    ``(state, own, group)``:
+
+    - ``"alive"`` while the recorded script process itself (``pid`` with
+      ``started``) is still that process (its pid is in ``own``), or another
+      recorded member is still that process, or the group the script led still
+      has a member, unless the script's pid is now another process's, which
+      proves the group emptied (those pids are in ``group``: they are in the
+      script's former process group, which does not prove they are its);
+    - ``"unknown"`` when that cannot be observed (``group`` holds the recorded
+      pids);
+    - ``"gone"`` on proof that nothing of it is left.
+
+    Only the recorded identities and the group are looked at, so a reused pid
+    never keeps it alive."""
+    own: list[int] = []
+    group: list[int] = []
     unknown = False
     for m in members:
         if not isinstance(m, dict):
             continue
         state = process_state(m.get("pid"), m.get("started"))
         if state == "alive":
-            alive.append(m["pid"])
+            if m.get("pid") == pid and m.get("started") == started:
+                own.append(pid)
+            else:
+                group.append(m["pid"])
         elif state == "unknown":
             unknown = True
     try:
@@ -565,20 +598,22 @@ def left_script_state(pid: int, started: str, members: list[dict], *,
         reused = (leader is not None and not leader.zombie
                   and not _same_start(leader, started, timeout=timeout))
         if not reused:
+            if leader is not None and not leader.zombie and pid not in own:
+                own.append(pid)
             in_group = [m for m in _process_table(timeout) if m.pgid == pid]
             live = [m.pid for m in in_group if not m.zombie]
-            if live:
-                alive.extend(live)
-            elif not _group_empty(pid, in_group):
+            group.extend(p for p in live if p != pid)
+            if not live and not _group_empty(pid, in_group):
                 unknown = True
     except ObservationError:
         unknown = True
-    if alive:
-        return "alive", sorted(set(alive))
+    if own or group:
+        return "alive", sorted(set(own)), sorted(set(group) - set(own))
     if unknown:
-        return "unknown", sorted({m["pid"] for m in members if isinstance(m, dict)
-                                  and isinstance(m.get("pid"), int)} or {pid})
-    return "gone", []
+        recorded = {m["pid"] for m in members
+                    if isinstance(m, dict) and isinstance(m.get("pid"), int)} or {pid}
+        return "unknown", [], sorted(recorded)
+    return "gone", [], []
 
 
 def _read_meminfo(field: str) -> float:

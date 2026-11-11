@@ -105,8 +105,15 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
     # re-parented and can no longer be told apart from anyone else's. A
     # descendant that already exited has no start time and is left out, so a
     # later process given its pid is never mistaken for it.
-    identities = (process_identity(pid) for pid in _descendants(proc.pid))
-    _strays.extend(i for i in identities if i.get("started"))
+    for pid in _descendants(proc.pid):
+        identity = process_identity(pid)
+        if not identity.get("started"):
+            continue
+        try:
+            identity["pgid"] = os.getpgid(pid)
+        except OSError:
+            continue
+        _strays.append(identity)
     if how == "exec":
         proc.send_signal(signal.SIGUSR1)
         _wait_until_replaced(tmp_path, proc)
@@ -228,13 +235,18 @@ def _kill_strays() -> None:
     # Killed only while still the same process (pid and start time), never a
     # stranger that reused the pid. A script step leads its own process group,
     # and a process it forked after the snapshot is only reachable through
-    # that group, so a group leader is killed with its whole group.
+    # that group: a stray that led its group at the snapshot has the group
+    # killed while the group still has members, even when the stray itself is
+    # gone (a group's id is never given out while it has members).
+    leaders: list[int] = []
     while _strays:
         stray = _strays.pop()
+        pid = stray["pid"]
+        if stray.get("pgid") == pid:
+            leaders.append(pid)
         # Only on proof it is still that process: one that cannot be observed
         # is never taken for it.
-        if process_state(stray.get("pid"), stray.get("started")) == "alive":
-            pid = stray["pid"]
+        if process_state(pid, stray.get("started")) == "alive":
             try:
                 if os.getpgid(pid) == pid:
                     os.killpg(pid, signal.SIGKILL)
@@ -242,6 +254,20 @@ def _kill_strays() -> None:
                     os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+    for pgid in leaders:
+        if _group_has_members(pgid):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def _group_has_members(pgid: int) -> bool:
+    """Whether group ``pgid`` has a member that has not exited, read with ps."""
+    out = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True,
+                         text=True, timeout=10).stdout
+    return any(parts[0] == str(pgid) and not parts[1].startswith("Z")
+               for parts in (line.split() for line in out.splitlines()) if len(parts) >= 2)
 
 
 def _record(workspace: Path, definition: dict, run_id: str = driver.RUN_ID) -> dict:

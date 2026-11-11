@@ -197,9 +197,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
   over — then start a new run. It is also refused while a script the dead process started
-  may still run: the reason names the process ids; tell the user to end them (or end them
-  yourself when you can and should), then resume. Never start a new run of it meanwhile:
-  the old script would run beside the new one. A crashed run you started whose workflow (or a sub-workflow it
+  may still run, while the process that ran it still seems alive, or while one of its
+  sub-workflow runs is still recorded as running. When the reason names process ids, NEVER
+  end those processes yourself: after a restart a pid can belong to something else, and
+  the code deliberately does not signal them. Tell the person which process ids are left
+  and that they should check these are the script's before ending them; the run can be
+  resumed once they have ended. Do not start a new run of the workflow meanwhile without
+  telling the person that the old script may still be working. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A paused or aborted run you started can still be answered or
   retried from the dashboard, but its later `mcps` steps then run without their MCP tools.

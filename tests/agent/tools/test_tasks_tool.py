@@ -974,7 +974,9 @@ async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path,
 
         assert "Re-run the workflow if the result is still needed." not in out
         assert "cannot be resumed yet" in out
-        assert f"still running (pid {proc.pid}). End it, then resume." in out
+        assert (f"the script of its step 'a' from the earlier process is still running "
+                f"(pid {proc.pid}). Check that they are that script's before ending them"
+                in out)
     finally:
         monkeypatch.undo()
         proc.kill()

@@ -324,7 +324,7 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     has its step, when ``workspace`` shows its working folder or its stored input
     gone, and when a later run on its ``work_key`` has taken the folder over.
     A script the dead process left that may still run is a refusal of its own,
-    ``run_log.scripts_left_refusal``, which observes processes and so is asked
+    ``run_log.dead_run_refusal``, which observes processes and so is asked
     off the event loop, together with the conversion (``run_log.settle_dead_run``)."""
     status = manifest.get("status")
     paused = status == "needs_input" and manifest.get("needs_input_node")

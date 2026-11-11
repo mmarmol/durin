@@ -475,8 +475,8 @@ X never happened, rather than waiting on a message that will never arrive.
 **Shutdown vs. deliberate stop.** A graceful shutdown (SIGTERM/SIGINT/SIGHUP, or
 `/restart`) cancels no workflow run: a run in flight is left to end with the process.
 Its workflow record is later found dead, and resumable, by the gateway's crash sweep
-(at start and periodically), the `tasks` tool when asked about that run, or a resume
-of it. Its automation run is still `"running"` for the orphan sweep above. A run can still end `aborted` or
+(at start and periodically, in a gateway with the websocket channel), the `tasks` tool
+when asked about that run, or a resume of it. Its automation run is still `"running"` for the orphan sweep above. A run can still end `aborted` or
 `cancelled` between the start of the shutdown and the exit — on its own, or because
 what its steps use is already being closed — and such a result reaches
 `_handle_result` looking like a deliberate stop. The two are told apart by `rejected`

@@ -766,52 +766,113 @@ def _descendant_records(workspace: str | Path, run_id: str) -> list[tuple[str, d
     return out
 
 
-def scripts_left_refusal(workspace: str | Path, record: dict) -> str | None:
-    """Why a dead run must not be resumed yet because a script its process
-    started may still run, or None. Looks at the run's own ``scripts_left`` and
-    those of its sub-workflow runs: a resume runs the steps again, and the
-    earlier script would run beside the new one. A script stops refusing only on
-    proof that nothing of it is left (``process_tree.left_script_state``); one
-    that cannot be checked refuses too. Observes processes, so a caller on an
-    event loop runs it off the loop."""
-    from durin.utils.process_tree import left_script_state
+_CHECK_BEFORE_ENDING = (" Check that they are that script's before ending them; the run "
+                        "can be resumed once they have ended.")
 
-    entries = list(record.get("scripts_left") or [])
+
+def _pids(pids: list[int]) -> str:
+    return ", ".join(str(p) for p in pids)
+
+
+def _left_script_refusal(node: object, state: str, own: list[int],
+                         group: list[int]) -> str | None:
+    """The refusal for one script a dead run left, or None when nothing of it
+    is left. A process is said to be the script only when that is proven (its
+    recorded identity); others are only in the script's former process group."""
+    if state == "alive":
+        if own and group:
+            what = (f"the script of its step '{node}' from the earlier process is still "
+                    f"running (pid {_pids(own)}), and so are processes in its former "
+                    f"process group (pid {_pids(group)}).")
+        elif own:
+            what = (f"the script of its step '{node}' from the earlier process is still "
+                    f"running (pid {_pids(own)}).")
+        else:
+            what = (f"processes in the former process group of the script of its step "
+                    f"'{node}' are still running (pid {_pids(group)}).")
+        return what + _CHECK_BEFORE_ENDING
+    if state == "unknown":
+        return (f"whether the script of its step '{node}' from the earlier process left "
+                f"anything running could not be checked (pid {_pids(group)}). Check those "
+                "processes; the run can be resumed once nothing of that script is left.")
+    return None
+
+
+def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
+    """Why a ``crashed`` run must not be resumed yet, beyond what
+    ``engine.resume_refusal`` reads from its record, or None. Asked in order:
+
+    - the process that was running it (the record's ``owner``) is alive, or
+      cannot be observed: only proof that it is gone lets a resume run its
+      steps again;
+    - one of its sub-workflow runs, at any depth, is still recorded as
+      ``running``: its process may still be working, and nothing of it has
+      been looked at yet;
+    - a script record (``record_script``) is still present beside the run's
+      record or one of its sub-workflow runs' records: something of that
+      script may still run. A record that cannot be read refuses with its
+      path. One that can is checked with ``process_tree.left_script_state``
+      (together with the record's ``scripts_left`` entry for it, which names
+      the members seen in its group) and removed on proof that nothing of the
+      script is left;
+    - a ``scripts_left`` entry whose script may still run.
+
+    Observes processes, so a caller on an event loop runs it off the loop."""
+    from durin.utils.process_tree import left_script_state, process_alive
+
+    owner = record.get("owner")
+    if owner is not None and process_alive(owner):
+        pid = owner.get("pid") if isinstance(owner, dict) else owner
+        return (f"the process that was running it still seems alive (pid {pid}). It can "
+                "be resumed once that process has ended.")
+    runs: list[tuple[str, dict]] = []
+    if isinstance(record.get("workflow"), str):
+        runs.append((record["workflow"], record))
     run_id = record.get("run_id")
-    if isinstance(run_id, str):
-        for _name, child in _descendant_records(workspace, run_id):
-            entries.extend(child.get("scripts_left") or [])
-    unknown: tuple[str, list[int]] | None = None
-    for entry in entries:
-        if not isinstance(entry, dict):
+    descendants = _descendant_records(workspace, run_id) if isinstance(run_id, str) else []
+    for name, child in descendants:
+        if child.get("status") == "running":
+            return (f"its sub-workflow run '{child.get('run_id')}' of workflow '{name}' is "
+                    "still recorded as running. It can be resumed once that run has ended "
+                    "or been found dead.")
+    runs.extend(descendants)
+    for name, rec in runs:
+        rec_id = rec.get("run_id")
+        if not isinstance(rec_id, str):
             continue
-        state, pids = left_script_state(
-            entry.get("pid"), entry.get("started"), entry.get("members") or [])
-        node = entry.get("node_id")
-        listed = ", ".join(str(p) for p in pids)
-        if state == "alive":
-            return (f"a script of its step '{node}' from the earlier process is still "
-                    f"running (pid {listed}). End it, then resume.")
-        if state == "unknown" and unknown is None:
-            unknown = (node, pids)
-    if unknown is not None:
-        node, pids = unknown
-        return (f"whether a script of its step '{node}' from the earlier process still "
-                f"runs could not be checked (pid {', '.join(str(p) for p in pids)}). "
-                "End it if it does, then resume.")
+        left = {e.get("pid"): e for e in rec.get("scripts_left") or [] if isinstance(e, dict)}
+        for path in script_records(workspace, name, rec_id):
+            entry = _read_script_record(path)
+            if entry is None:
+                return (f"a record of one of its scripts cannot be read ({path}), so whether "
+                        "that script still runs cannot be checked. Remove that file once you "
+                        "have made sure nothing of that script is left, then resume.")
+            known = left.pop(entry["pid"], None) or {}
+            members = known.get("members") or [{"pid": entry["pid"], "started": entry["started"]}]
+            state, own, group = left_script_state(entry["pid"], entry["started"], members)
+            refusal = _left_script_refusal(entry.get("node_id"), state, own, group)
+            if refusal:
+                return refusal
+            forget_script(path)      # proven over
+        for entry in left.values():
+            state, own, group = left_script_state(
+                entry.get("pid"), entry.get("started"), entry.get("members") or [])
+            refusal = _left_script_refusal(entry.get("node_id"), state, own, group)
+            if refusal:
+                return refusal
     return None
 
 
 def settle_dead_run(workspace: str | Path, name: str,
                     run_id: str) -> tuple[dict | None, str | None]:
     """What a resume needs before it decides: the run's record after any
-    conversion it is owed, and why a script left by its dead process blocks the
-    resume (``scripts_left_refusal``), or None. A ``running`` record whose
+    conversion it is owed, and why the resume of a ``crashed`` run must wait
+    (``dead_run_refusal``), or None. A ``running`` record whose
     process is gone is converted (``mark_dead_run``); a ``crashed`` one also
     gets its dead sub-workflow runs converted, which a conversion made before
-    may have missed, so their scripts are ended and counted too. Takes the
-    per-run locks one at a time and observes processes: run it off an event
-    loop."""
+    may have missed, so their scripts are ended and counted too; the refusal
+    is ``dead_run_refusal``'s. Takes the per-run locks one at a time and
+    observes processes: run it off an event loop."""
     record = read_manifest(workspace, name, run_id)
     if isinstance(record, dict) and record.get("status") == "running":
         mark_dead_run(workspace, name, run_id)
@@ -819,7 +880,7 @@ def settle_dead_run(workspace: str | Path, name: str,
     if not isinstance(record, dict) or record.get("status") != "crashed":
         return record, None
     _mark_dead_children(workspace, run_id, now=time.time(), max_age_s=RECONCILE_AGE_S)
-    return record, scripts_left_refusal(workspace, record)
+    return record, dead_run_refusal(workspace, record)
 
 
 def stop_requested(workspace: str | Path, name: str, run_id: str) -> dict | None:
@@ -1088,7 +1149,6 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float,
     started_detached = {e["node_id"] for e in detached}
 
     out = dict(record)
-    out.pop("owner", None)
     out.update(
         status="cancelled" if stopped else "crashed",
         active_node=None,
@@ -1130,15 +1190,15 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float,
 
 def _minimal_mark(record: dict, stop: object = None) -> dict:
     """The mark a dead run gets when its full conversion cannot be built: status
-    ``crashed``, ``active_node`` cleared and ``owner`` removed (both describe a
-    process that no longer exists), every other field as it was. The run then
-    reads as ended, and no sweep finds it again.
+    ``crashed``, ``active_node`` cleared (it describes a process that no longer
+    exists), every other field as it was, ``owner`` included: it names the
+    process found gone, which a resume checks again. The run then reads as
+    ended, and no sweep finds it again.
 
     A run someone asked to stop (``stop``) is marked ``cancelled`` instead, with
     the stop on the record and no step named, so it is never offered for resume
     whatever else the record carries."""
     out = dict(record)
-    out.pop("owner", None)
     out.update(status="crashed", active_node=None)
     if stop:
         out.update(status="cancelled", stop_requested=stop)
@@ -1168,8 +1228,9 @@ def mark_dead_run(
     - ``status``: ``cancelled`` when someone asked to stop the run — a stop file
       kept beside the record (``request_stop``), or a ``stop_requested`` the
       record holds itself — else ``crashed``; ``finished_at``/``ts`` now;
-      ``active_node`` None and ``owner`` removed, since both describe a
-      process that no longer exists;
+      ``active_node`` None, since it describes a process that no longer
+      exists; ``owner`` kept, naming the process found gone, so a resume can
+      check again that it is (``dead_run_refusal``);
     - a row for the step that was running (when ``active_node`` is the step the
       ``position`` names) and for every step in ``detached_active``:
       ``status: "node_failed"``, ``cut: True``, ``error`` ``DEAD_RUN_ERROR``;
@@ -1202,7 +1263,7 @@ def mark_dead_run(
     group whose leader was already gone, which are never signalled, or an
     observation that failed) is named in the record's ``scripts_left``
     (``{"pid", "started", "node_id", "members", "unchecked"}``, ``members`` the
-    identities seen in its group), and ``scripts_left_refusal`` refuses the
+    identities seen in its group), and ``dead_run_refusal`` refuses the
     resume until nothing of it is left. Only the records of scripts proven over
     are removed, once the converted record is written.
 

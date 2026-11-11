@@ -187,18 +187,32 @@ def build_service_registry(
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died
     # before finalizing them. Best-effort — a sweep failure must not block startup.
-    # A caller already on its event loop passes reconcile_runs=False: the sweep
-    # can wait on run locks, end a dead run's scripts and observe processes.
+    # The sweep can wait on run locks, end a dead run's scripts and observe
+    # processes, so it never runs on an event loop: a build made on one (a
+    # channel started or restarted while the gateway runs) hands it to a thread
+    # of its own. A caller that knows another build already swept passes
+    # reconcile_runs=False.
     if reconcile_runs:
+        def _boot_sweep() -> None:
+            try:
+                import time
+
+                from durin.workflow import run_log
+
+                run_log.reconcile_running(
+                    _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
+            except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
+                logger.exception("run reconciliation at registry build failed")
+
         try:
-            import time
+            import asyncio
 
-            from durin.workflow import run_log
-
-            run_log.reconcile_running(
-                _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
-        except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
-            pass
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _boot_sweep()
+        else:
+            threading.Thread(target=_boot_sweep, daemon=True,
+                             name="run-reconciler-build").start()
 
     # Automation-run reconciliation is NOT here: an orphaned run has to be
     # reported to whoever fired it and, when no work had started, relaunched —
