@@ -66,6 +66,9 @@ class NodeRunRequest:
     upstream_output: str | None
     shared_context: list[dict]
     run_id: str
+    # The attempt number: every dispatch of this node in the run gets the next one,
+    # a retry of a failed attempt included, so it names a conversation that no
+    # earlier attempt wrote.
     iteration: int
     root_session_key: str | None
     # When set, the node's file tools operate here (a private branch copy) instead of
@@ -95,6 +98,11 @@ class NodeRunRequest:
     # is and that the final allowed pass IS final. None when budgets don't apply
     # (parallel branches/workers, which are not loop targets).
     budget: int | None = None
+    # Which of its allowed passes this dispatch is: one more than the passes of
+    # this node that completed. A retry of a failed attempt is the same pass again,
+    # so this differs from ``iteration`` once an attempt has failed. None when the
+    # caller does not track passes (the runner then reads ``iteration``).
+    pass_number: int | None = None
     # True when this is a binary routing node whose on_fail target has no visits
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
@@ -169,14 +177,21 @@ NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
 @dataclass
 class ResumeState:
-    """Where to re-enter a run that ended needs_input: the same run_id (same working
-    folder and node-session keys), the node that asked, the visit counts already
-    consumed, and the composed answers context fed to that node as upstream input."""
+    """Where to re-enter a run that stopped: the same run_id (same working folder and
+    node-session keys), the node to re-enter at, each node's highest attempt number
+    and completed passes so far, and the composed context fed to that node as
+    upstream input."""
 
     run_id: str
     start_at: str
+    # Per node, the highest attempt number already used: the resumed walk numbers
+    # the node's next attempt one above it, so no attempt's conversation is reused.
     visits: dict[str, int]
     upstream: str | None = None
+    # Per node, how many of its passes completed: the resumed walk bounds the node
+    # on these, so an attempt that failed does not use up an allowed pass. Empty
+    # when the caller did not count them; the walk then bounds on ``visits``.
+    completed: dict[str, int] = field(default_factory=dict)
     # Last recorded outputs of prior nodes (from the manifest's resume_inputs), so a
     # resumed walk — whose in-memory runs list starts empty — can still compose
     # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
@@ -193,17 +208,15 @@ class ResumeState:
 
 
 def manifest_visit_counts(manifest: dict) -> dict[str, int]:
-    """Per-node visit counts already consumed by a run, from its manifest's per-node
-    trace: each node's max recorded iteration. Shared by ``build_resume_state`` and
-    ``build_approval_resume`` (``durin/workflow/approval.py``) — both need the same
-    "how many times did this node already run" counts to seed a resumed walk's
-    per-node budget tracking."""
-    visits: dict[str, int] = {}
-    for r in manifest.get("runs", []):
-        nid, it = r.get("node_id"), r.get("iteration", 1)
-        if nid:
-            visits[nid] = max(visits.get(nid, 0), int(it))
-    return visits
+    """Per-node highest attempt number a run has used, over every walk of the run
+    (the counts its record carries in ``passes`` for earlier walks plus its ``runs``)."""
+    return {node: c["reached"] for node, c in run_log.pass_counts(manifest).items()}
+
+
+def manifest_completed_passes(manifest: dict) -> dict[str, int]:
+    """Per-node passes that completed over every walk of a run: what a resumed walk
+    bounds each node on, so an attempt that failed does not use up a pass."""
+    return {node: c["completed"] for node, c in run_log.pass_counts(manifest).items()}
 
 
 def resume_refusal(manifest: dict) -> str | None:
@@ -229,14 +242,16 @@ def resume_refusal(manifest: dict) -> str | None:
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     """The ResumeState for re-entering a paused or failed run, built from its manifest.
     The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
-    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: max
-    iteration per node as the consumed visit counts, and the re-entry upstream.
+    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: each
+    node's highest attempt number and completed passes over the whole run, and the
+    re-entry upstream.
 
     Two distinct upstream contracts: a ``needs_input`` node ASKED, so it receives the
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
     retry framing may pollute it."""
     visits = manifest_visit_counts(manifest)
+    completed = manifest_completed_passes(manifest)
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     work_key = manifest.get("work_key")
     needs_input_node = manifest.get("needs_input_node")
@@ -246,6 +261,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
             run_id=manifest["run_id"],
             start_at=needs_input_node,
             visits=visits,
+            completed=completed,
             upstream=(
                 "This run previously stopped to ask for more information.\n\n"
                 f"--- Your questions were ---\n{questions}\n\n"
@@ -258,6 +274,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         run_id=manifest["run_id"],
         start_at=manifest["failed_node"],
         visits=visits,
+        completed=completed,
         upstream=manifest.get("resume_upstream"),
         recorded_outputs=recorded_outputs,
         work_key=work_key,
@@ -602,6 +619,7 @@ class WorkflowEngine:
                     update_manifest=_update,
                     start_at=resume.start_at if resume else None,
                     initial_visits=dict(resume.visits) if resume else None,
+                    initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
                     work_dir=work_dir,
@@ -845,6 +863,7 @@ class WorkflowEngine:
         start_at: str | None = None,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
+        initial_completed: dict[str, int] | None = None,
         work_dir: str | None = None,
         own_work_dir: bool = True,
         keyed: bool = False,
@@ -852,7 +871,17 @@ class WorkflowEngine:
         resume_outputs: dict[str, str] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
+        # Two counters per node. ``visits`` is the attempt number: it names the
+        # node's conversation and trace row, so it never repeats within a run.
+        # ``completed`` counts the node's passes and is what the allowed-passes
+        # bound reads. Both rise on every dispatch, because a failed attempt ends the
+        # walk; they differ only by what a resume seeds them with: an attempt that
+        # failed in an earlier walk used a number but not a pass. Without a
+        # completed count the walk bounds on the attempt numbers, as a caller that
+        # does not count passes always did.
         visits: dict[str, int] = dict(initial_visits or {})
+        completed: dict[str, int] = dict(initial_completed if initial_completed is not None
+                                         else visits)
         upstream_output: str | None = initial_upstream
         # One shared working folder per run (chosen by run(), which also records it in
         # the manifest): every sequential node reads and writes here, so created/edited
@@ -880,15 +909,17 @@ class WorkflowEngine:
                     status="cancelled", final_output=final_output, runs=runs,
                     run_id=run_id, final_output_node=final_output_node,
                 )
-            visits[current] = visits.get(current, 0) + 1
             node = workflow.nodes[current]
             budget = min(getattr(node, "max_visits", None) or workflow.max_visits, self._max_node_visits)
-            if visits[current] > budget:
+            if completed.get(current, 0) >= budget:
                 return WorkflowResult(
                     status="exhausted", final_output=final_output, runs=runs,
                     run_id=run_id, exhausted_node=current, final_output_node=final_output_node,
                 )
+            visits[current] = visits.get(current, 0) + 1
+            completed[current] = completed.get(current, 0) + 1
             iteration = visits[current]
+            pass_number = completed[current]
 
             # Emit a "node started" frame so the caller can show a spinner on
             # the in-flight node before it finishes.  Fires for every node type
@@ -1075,7 +1106,7 @@ class WorkflowEngine:
                             getattr(t, "max_visits", None) or workflow.max_visits,
                             self._max_node_visits,
                         )
-                        fail_would_exhaust = visits.get(node.on_fail, 0) >= t_budget
+                        fail_would_exhaust = completed.get(node.on_fail, 0) >= t_budget
 
                 node_input = upstream_output
                 if getattr(node, "inputs_from", ()):
@@ -1097,6 +1128,7 @@ class WorkflowEngine:
                     output_file=((node.output_file or None)
                                  if isinstance(node, WorkNode) and work_dir is not None else None),
                     budget=budget,
+                    pass_number=pass_number,
                     fail_would_exhaust=fail_would_exhaust,
                     fail_loops_back=fail_loops_back,
                     # A script node polls the plain check (its subprocess dies on

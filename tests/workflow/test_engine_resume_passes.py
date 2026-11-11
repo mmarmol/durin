@@ -1,0 +1,118 @@
+"""A step's allowed passes are counted over the whole run, by passes that
+completed. An attempt that failed keeps its number, so its conversation is
+never overwritten, and does not use up a pass."""
+import json
+from pathlib import Path
+
+from durin.workflow.engine import (
+    NodeExecutionError,
+    NodeRunResponse,
+    WorkflowEngine,
+    build_resume_state,
+)
+from durin.workflow.spec import parse_workflow
+
+
+class _Runner:
+    def __init__(self, fail=None, outputs=None):
+        self.fail, self.outputs, self.calls = dict(fail or {}), outputs or {}, []
+
+    def __call__(self, req):
+        self.calls.append((req.node.id, req.iteration, req.pass_number, req.budget))
+        if self.fail.get(req.node.id, 0) > 0:
+            self.fail[req.node.id] -= 1
+            raise NodeExecutionError(req.node.id, req.iteration, None, RuntimeError("transient"))
+        return NodeRunResponse(output=self.outputs.get(req.node.id, f"{req.node.id}-out"))
+
+    def attempts(self, node):
+        return [c[1] for c in self.calls if c[0] == node]
+
+
+def _engine(tmp_path, runner):
+    return WorkflowEngine(node_runner=runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+
+
+def _manifest(tmp_path):
+    return json.loads((Path(tmp_path) / "workflows-runs" / "w" / "r1.json").read_text())
+
+
+def _resume(tmp_path, wf, runner):
+    return _engine(tmp_path, runner).run(wf, "t", resume=build_resume_state(_manifest(tmp_path), ""))
+
+
+def test_a_step_that_failed_on_its_last_allowed_pass_is_retried(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "max_visits": 1, "next": None}]})
+    runner = _Runner(fail={"a": 1})
+    assert _engine(tmp_path, runner).run(wf, "t").status == "aborted"
+    assert _resume(tmp_path, wf, runner).status == "completed"
+    assert runner.calls == [("a", 1, 1, 1), ("a", 2, 1, 1)]   # second attempt, still its first pass
+
+
+def _loop():
+    return parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "b"},
+        {"id": "b", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "on_pass": None, "on_fail": "a"}]})
+
+
+def test_a_loop_after_two_resumes_never_reuses_a_pass_number(tmp_path):
+    wf = _loop()
+    runner = _Runner(fail={"b": 1, "c": 1}, outputs={"c": "needs work\nFAIL"})
+    assert _engine(tmp_path, runner).run(wf, "t").status == "aborted"     # b fails
+    assert _resume(tmp_path, wf, runner).status == "aborted"              # c fails
+    last = _resume(tmp_path, wf, runner)                                  # the loop runs out
+    assert last.status == "exhausted" and last.exhausted_node == "a"
+    dispatched = [(n, it) for n, it, _p, _b in runner.calls]
+    assert len(dispatched) == len(set(dispatched))                        # no key reused
+    assert runner.attempts("a") == [1, 2, 3]                              # three completed passes
+    assert runner.attempts("b") == [1, 2, 3, 4]                           # one failed, three completed
+    assert runner.attempts("c") == [1, 2, 3, 4]
+
+
+def test_the_loop_bound_holds_over_the_whole_run_not_the_last_walk(tmp_path):
+    wf = _loop()
+    runner = _Runner(fail={"b": 1, "c": 1}, outputs={"c": "needs work\nFAIL"})
+    _engine(tmp_path, runner).run(wf, "t")
+    _resume(tmp_path, wf, runner)
+    _resume(tmp_path, wf, runner)
+    passes = [p for n, _it, p, _b in runner.calls if n == "a"]
+    assert passes == [1, 2, 3] and all(b == 3 for n, _i, _p, b in runner.calls if n == "a")
+
+
+def test_the_final_record_holds_every_walks_rows_once(tmp_path):
+    wf = _loop()
+    runner = _Runner(fail={"b": 1, "c": 1}, outputs={"c": "needs work\nFAIL"})
+    _engine(tmp_path, runner).run(wf, "t")
+    _resume(tmp_path, wf, runner)
+    _resume(tmp_path, wf, runner)
+    rec = _manifest(tmp_path)
+    rows = [(r["node_id"], r["iteration"]) for r in rec["history"] + rec["runs"]]
+    assert len(rows) == len(set(rows))
+    assert ("b", 1) in rows and ("c", 1) in rows                          # the failed attempts stay
+
+
+def test_a_record_from_before_this_change_resumes_as_it_did(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "b"}, {"id": "b", "kind": "work", "next": None}]})
+    runner = _Runner(fail={"b": 1})
+    _engine(tmp_path, runner).run(wf, "t")
+    path = Path(tmp_path) / "workflows-runs" / "w" / "r1.json"
+    rec = json.loads(path.read_text())
+    for key in ("history", "passes"):
+        rec.pop(key, None)
+    path.write_text(json.dumps(rec))
+    assert _resume(tmp_path, wf, runner).status == "completed"
+    assert runner.attempts("a") == [1] and runner.attempts("b") == [1, 2]
+
+
+def test_the_pass_note_follows_completed_passes_not_attempts():
+    from types import SimpleNamespace
+
+    from durin.workflow.node_runner import AgentNodeRunner
+    retry = SimpleNamespace(budget=3, iteration=2, pass_number=1)
+    assert AgentNodeRunner._pass_note(retry) == ""                        # a retry is not a second pass
+    second = SimpleNamespace(budget=3, iteration=3, pass_number=2)
+    assert "Pass 2 of 3" in AgentNodeRunner._pass_note(second)
+    last = SimpleNamespace(budget=3, iteration=5, pass_number=3)
+    assert "FINAL PASS (3 of 3)" in AgentNodeRunner._pass_note(last)

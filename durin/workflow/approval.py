@@ -18,7 +18,7 @@ manifest that pause writes is a resume point with three possible replies:
 
 from __future__ import annotations
 
-from durin.workflow.engine import ResumeState, manifest_visit_counts
+from durin.workflow.engine import ResumeState, manifest_completed_passes, manifest_visit_counts
 from durin.workflow.spec import Workflow
 
 # Single-word reply vocabulary (case-insensitive, surrounding punctuation stripped).
@@ -76,6 +76,7 @@ def build_approval_resume(
     """
     node_id = manifest["needs_input_node"]
     visits = manifest_visit_counts(manifest)
+    completed = manifest_completed_passes(manifest)
     work_key = manifest.get("work_key")
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     if action == "approve":
@@ -88,6 +89,7 @@ def build_approval_resume(
             run_id=manifest["run_id"],
             start_at=node.next,
             visits=visits,
+            completed=completed,
             upstream=proposal,
             recorded_outputs=recorded_outputs,
             work_key=work_key,
@@ -97,6 +99,7 @@ def build_approval_resume(
         run_id=manifest["run_id"],
         start_at=node_id,
         visits=visits,
+        completed=completed,
         upstream=f"{original}\n\n[Revision requested by approver]\n{comment}",
         recorded_outputs=recorded_outputs,
         work_key=work_key,

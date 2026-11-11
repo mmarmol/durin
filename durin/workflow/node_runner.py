@@ -703,18 +703,22 @@ class AgentNodeRunner:
         """The loop-awareness note appended to the node's user turn. Empty on a first
         pass (a node that never loops must not be primed to iterate); on a revisit it
         states pass X of Y; on the last allowed pass it says so explicitly so the
-        model delivers a final, complete result instead of another increment."""
-        if req.budget is None or req.iteration <= 1:
+        model delivers a final, complete result instead of another increment. It counts
+        passes, not attempts: a retry of an attempt that failed is the same pass again."""
+        n = getattr(req, "pass_number", None)
+        if n is None:
+            n = req.iteration
+        if req.budget is None or n <= 1:
             return ""
-        remaining = req.budget - req.iteration
+        remaining = req.budget - n
         if remaining > 0:
             return (
-                f"\n\n--- Pass {req.iteration} of {req.budget} ---\n"
-                f"This step already ran {req.iteration - 1} time(s); after this pass, "
+                f"\n\n--- Pass {n} of {req.budget} ---\n"
+                f"This step already ran {n - 1} time(s); after this pass, "
                 f"{remaining} more remain(s)."
             )
         return (
-            f"\n\n--- FINAL PASS ({req.iteration} of {req.budget}) ---\n"
+            f"\n\n--- FINAL PASS ({n} of {req.budget}) ---\n"
             "This is this step's last allowed pass; there will be no further iteration. "
             "Deliver your best complete, final result."
         )

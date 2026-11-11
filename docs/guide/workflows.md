@@ -100,7 +100,8 @@ The I/O contract is plain Unix:
   files for a later step.
 - **Environment.** A handful of `DURIN_*` variables carry run metadata:
   `DURIN_TASK` (the run's task as passed, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
-  `DURIN_ITERATION` (which pass this is, for a looping node), and
+  `DURIN_ITERATION` (the step's attempt number: one more each time it runs,
+  a retry after an error included), and
   `DURIN_WORK_DIR` (the shared working folder's path). The rest of the
   subprocess environment is controlled by `env`: `"clean"` (the default) gives
   the script a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`,
@@ -229,11 +230,14 @@ A `FAIL` (or a case that targets an earlier node) can send the flow back to
 redo a step. Loops are bounded so they can't run forever:
 
 - **`max_visits`** on the workflow (default 3) or a specific node caps how
-  many times that node may run, clamped by a hard global ceiling
-  (`workflow.max_node_visits`, default 25) no node can exceed regardless of
-  what the definition says — a node in a nested sub-workflow included. If a
-  node's budget runs out, the run ends with status `exhausted` rather than
-  looping silently forever.
+  many passes that node may complete over the whole run, clamped by a hard
+  global ceiling (`workflow.max_node_visits`, default 25) no node can exceed
+  regardless of what the definition says — a node in a nested sub-workflow
+  included. If a node's budget runs out, the run ends with status `exhausted`
+  rather than looping silently forever. A step that stopped with an error
+  (not a `FAIL` verdict, which is a pass like any other) did not complete a
+  pass, so resuming the run retries it even when it failed on its last
+  allowed pass.
 - **Pass awareness.** On a revisit, the node is told which pass it's on
   ("Pass 2 of 3"), and on its last allowed pass it's told explicitly that
   no further iteration will happen — so it delivers a final, complete
@@ -392,12 +396,13 @@ node's output, then re-runs.
 To continue instead of starting over, re-run with `resume_run_id` set to
 the paused run's id and the user's answers as the task. The run re-enters
 the graph **at the node that asked** — same run id, same shared working
-folder, same node sessions, and the same visit counts already spent —
+folder, same node sessions, and the same loop passes already spent —
 rather than repeating everything from the start. `writing-plans`,
 `build-specs`, `execute-plan`, and `brainstorming` all use this pattern for
 their intake step. `resume_run_id` also retries a run that ended `aborted` at
 a named node: the failed node re-runs with its exact input, in the same
-folder. When what failed was one branch of a parallel step that merges or
+folder — even when it failed on its last allowed pass, because a step that
+stopped with an error used up no pass. When what failed was one branch of a parallel step that merges or
 picks between its branches' files, the whole parallel step re-runs. A resume that can't get going — a script the workflow names has gone
 missing, say — leaves the run paused as it was, so you can answer it again
 once that's fixed.

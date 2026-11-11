@@ -487,10 +487,23 @@ shape — a config default, a per-unit override, and a hard cap). Each node's bu
 `min(its own max_visits or the workflow's max_visits, workflow.max_node_visits)`: a
 per-node `WorkNode.max_visits` overrides the per-workflow `max_visits` (default 3), and
 both are clamped by the global config ceiling `workflow.max_node_visits` (default 25, in
-settings) — the runaway backstop no node may exceed. Exceeding the budget ends the run
-with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
+settings) — the runaway backstop no node may exceed. The budget counts the node's passes
+that completed, over the run's whole life: when a node is reached with as many completed
+passes as its budget, the run ends with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
 runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
 caller learns it did not complete and why instead of treating a partial as done. The engine hands each work node its effective budget; on a revisit the runner tells the model which pass this is ("Pass X of Y"), and on the last allowed pass says explicitly that no further iteration will happen, so loops converge deliberately instead of being cut off by the cap.
+
+A node's **attempt number** and its **pass number** are kept apart. Every dispatch of a
+node takes the next attempt number, which names its trace row (`iteration`), its
+conversation (`workflow:<run_id>:<node_id>:<iteration>`), `DURIN_ITERATION` and the
+running marker, so no attempt ever writes over another attempt's conversation (a
+persistent-session node keeps one conversation across all of them by design). The pass
+number is one more than the node's completed passes; the budget, the "Pass X of Y" note
+and a gate's definitive-verdict check (the `on_fail` target's completed passes against
+its budget) all read passes. Within one walk the two rise together, because a failed
+attempt ends the walk. They part across a resume: an attempt that failed keeps its
+`node_failed` row and its conversation but uses no pass, so a node that failed on its
+last allowed pass is still retried, as that same pass under a new attempt number.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
 within a single node execution. When set on a `WorkNode`, the node runner (1) appends a
@@ -601,7 +614,7 @@ The per-node entries in the manifest's `runs` array carry:
 | Field | Meaning |
 |---|---|
 | `node_id` | the node's id in the graph |
-| `iteration` | how many times this node has executed (loop-back counting) |
+| `iteration` | the attempt number: one more on every dispatch of this node in the run, a retry of a failed attempt included (a failed attempt uses a number but not a pass) |
 | `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, with a `:<worker_index>` suffix for fan-out workers; a persistent-session node's key omits the iteration suffix — one session across its passes) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
@@ -644,8 +657,8 @@ even though its `runs` do not; carried forward on every rewrite.
 resumed). `runs` still covers the last walk only; on a resume the previous `runs`
 are appended to `history`, which keeps at most a fixed number of rows and drops the
 oldest first. `passes` — `{node_id: {reached, completed}}` for the earlier walks:
-`reached` is the highest pass number any row of the step carries, `completed` the
-number of distinct passes with at least one row that did not fail. The counts are
+`reached` is the highest attempt number (`iteration`) any row of the step carries,
+`completed` the number of distinct attempts with at least one row that did not fail. The counts are
 taken from the whole prior record, so they do not depend on `history` being
 complete. Both are carried forward on every rewrite; a record written before they
 existed simply lacks them.
@@ -673,8 +686,13 @@ resumed);
 and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
 `resume_run_id` on such a run retries the failed node with the same input — completed
 nodes never re-run, and no retry framing pollutes the replayed text (a retried script
-parses its stdin). The failed node is always one the walk dispatches, with a
-`node_failed` row for the visit it consumed: a sub-workflow node keeps the input its
+parses its stdin). The resumed walk is seeded from the whole record — the carried
+`passes` plus the last walk's `runs` — so each node's next attempt number is one above
+its `reached` and its bound reads its `completed`: the retry gets a conversation of its
+own (a persistent-session node, whose key carries no attempt number, continues its one
+conversation), and the failed attempt uses up no pass. A record written before `passes` existed
+is seeded from its `runs` alone. The failed node is always one the walk dispatches,
+with a `node_failed` row for the attempt that failed: a sub-workflow node keeps the input its
 child received, and when a `choose`/`union` branch fails the failed node is the
 parallel node, not the branch (see failure isolation below). A record that names a
 unit of a parallel node as its failed node cannot be resumed — the run tool and the
@@ -1005,9 +1023,9 @@ panels (like the web UI's Work panel) can show what is being asked.
 
 **Resuming a needs_input run.** A run that ended needs_input can be resumed
 instead of restarted: the engine re-enters the graph AT the asking node, with
-the same run_id (same shared working folder, same node-session keys), the
-visit counts already consumed, and the user's answers as that node's upstream
-input. The shared-context buffer is not reconstructed across a resume —
+the same run_id (same shared working folder, same node-session keys), each
+node's attempt numbers and completed passes so far over every walk of the run,
+and the user's answers as that node's upstream input. The shared-context buffer is not reconstructed across a resume —
 persistent-session nodes recover their own history, and files live in the
 working folder.
 
@@ -1195,7 +1213,8 @@ path, which builds one explicitly from the finished `WorkflowResult` — so a
 read the run's manifest (§4a) or the global feed (§4f) to learn how it
 actually ended.
 
-Every node entry carries `iteration` (current pass number) and `budget`
+Every node entry carries `iteration` (the attempt number, which equals the pass
+number unless an attempt failed and was retried) and `budget`
 (effective visit limit, `null` where not applicable) so the panels can render
 loop progress live, not just after the run completes; `label` (see **Node
 labels** below) and `description` (the node's role-prompt first sentence, for
