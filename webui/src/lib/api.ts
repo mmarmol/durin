@@ -454,6 +454,9 @@ export type WorkflowRunResult = {
   exhausted_node?: string;
   // set when status=="needs_input": the node that asked
   needs_input_node?: string;
+  // set when status=="aborted" because a step failed: the node that failed
+  // (the step a retry runs again)
+  failed_node?: string | null;
   // relative paths in output_dir (completed runs)
   output_files?: string[];
   // The node currently in flight, while status=="running"; absent once the run

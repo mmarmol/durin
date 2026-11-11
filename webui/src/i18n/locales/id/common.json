@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "Mengakhiri run sekarang — run tidak akan bisa dilanjutkan.",
     "keepWaiting": "Tetap menunggu",
     "abortedTitle": "Run dihentikan",
+    "retryFailedStep": "Coba lagi langkah yang gagal",
     "cancelledTitle": "Run dibatalkan",
     "outputFiles": "file keluaran",
     "outputPruneHint": "dipangkas setelah run lama menumpuk — salin keluar yang Anda perlukan",

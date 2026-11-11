@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "Ends the run now — it cannot be resumed.",
     "keepWaiting": "Keep waiting",
     "abortedTitle": "Run aborted",
+    "retryFailedStep": "Retry the failed step",
     "cancelledTitle": "Run cancelled",
     "outputFiles": "output files",
     "outputPruneHint": "pruned after older runs accumulate — copy out what you need",

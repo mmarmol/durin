@@ -428,6 +428,12 @@ the resume form. Cancelling finalizes the run as `cancelled` in place — its
 trace and working folder stay for the record — and it can no longer be
 resumed, so the dashboard asks you to confirm before it goes through.
 
+A run that ended `aborted` because a step failed shows a **Retry the failed step**
+button in its detail, in the Runs pane and in the editor's test-run panel. It
+resumes the run with no new answer, which re-runs the failed step as described
+above. A run an [automation](automations.md) started has no such button: it is
+retried from the automation.
+
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
 runs) asking for the files — and if you do pass files but one is missing
@@ -494,6 +500,10 @@ same paused run never asks for attention in two places at once; when one
 exists, a small link under the tray takes you there. The same stranded runs,
 with their resume and Cancel controls, also show on the dashboard's
 **Pending** page, next to everything else that waits on you.
+
+Opening an `aborted` run in the Runs pane offers **Retry the failed step**,
+which re-runs the step that failed in the same run. A run an automation started
+is retried from that automation instead.
 
 Each workflow also has a self-improvement mode (`"improvement_mode"`,
 `manual` by default, or `auto`): a

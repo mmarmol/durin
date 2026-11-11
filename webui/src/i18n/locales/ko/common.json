@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "지금 실행을 종료합니다 — 재개할 수 없습니다.",
     "keepWaiting": "계속 기다리기",
     "abortedTitle": "실행 중단됨",
+    "retryFailedStep": "실패한 단계 다시 시도",
     "cancelledTitle": "실행 취소됨",
     "outputFiles": "출력 파일",
     "outputPruneHint": "이전 실행이 쌓이면 정리됩니다 — 필요한 파일은 미리 복사해 두세요",

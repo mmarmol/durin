@@ -225,6 +225,23 @@ describe("WorkflowsView run detail", () => {
     expect(screen.getByText("node 'gate' failed: boom")).toBeInTheDocument();
   });
 
+  it("retries the failed step of an aborted test run", async () => {
+    vi.mocked(api.runWorkflow)
+      .mockResolvedValueOnce({
+        status: "aborted", final_output: "node 'gate' failed: boom", failed_node: "gate",
+        run_id: "run-abort", runs: [],
+      })
+      .mockResolvedValueOnce({
+        status: "completed", final_output: "recovered", run_id: "run-abort", runs: [],
+      });
+    const user = await openRunnerAndRun();
+    await user.click(await screen.findByRole("button", { name: "Retry the failed step" }));
+    await screen.findByText("recovered");
+    expect(api.runWorkflow).toHaveBeenLastCalledWith(
+      "tok", "demo", "", [], "", "", "run-abort",
+    );
+  });
+
   it("shows a cancelled banner", async () => {
     vi.mocked(api.runWorkflow).mockResolvedValue({
       status: "cancelled",

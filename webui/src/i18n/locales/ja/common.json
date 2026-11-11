@@ -1409,6 +1409,7 @@
     "cancelConfirmBody": "今すぐ実行を終了します — 再開できません。",
     "keepWaiting": "待ち続ける",
     "abortedTitle": "実行が中断されました",
+    "retryFailedStep": "失敗したステップを再試行",
     "cancelledTitle": "実行がキャンセルされました",
     "outputFiles": "出力ファイル",
     "outputPruneHint": "古い実行が蓄積すると削除されます — 必要なものはコピーしてください",

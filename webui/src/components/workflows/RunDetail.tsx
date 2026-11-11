@@ -13,6 +13,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText } from "@/components/MarkdownText";
+import { Button } from "@/components/ui/button";
 import { NeedsInputForm } from "@/components/workflows/NeedsInputForm";
 import type { WorkflowGlobalRun, WorkflowRunNode, WorkflowRunResult } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -294,6 +295,7 @@ function continuesSessionFlags(runs: WorkflowRunNode[]): boolean[] {
 export function RunDetail({
   result,
   onResume,
+  onRetry,
   resuming,
   onCancel,
   cancelling = false,
@@ -303,6 +305,9 @@ export function RunDetail({
 }: {
   result: WorkflowRunResult;
   onResume: (answers: string) => void;
+  // Absent leaves the aborted banner with no Retry control. Runs the failed
+  // step again: it cannot ride on onResume, whose callers ignore an empty answer.
+  onRetry?: () => void;
   resuming: boolean;
   // Absent leaves the needs_input banner with no Cancel control (the workflow
   // editor's own inline test-run panel, which has no need to abandon a run it
@@ -386,6 +391,18 @@ export function RunDetail({
             <span className="font-medium">{t("workflows.abortedTitle")}</span>
           </div>
           {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
+          {onRetry && result.failed_node && !isAutomationOrigin && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="mt-1 self-start"
+              disabled={resuming}
+              onClick={onRetry}
+            >
+              {t("workflows.retryFailedStep")}
+            </Button>
+          )}
         </div>
       )}
       {result.status === "cancelled" && (
