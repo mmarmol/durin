@@ -35,19 +35,15 @@ CHAIN = {"name": "w", "start": "a", "nodes": [
 
 _WAIT_S = 10.0
 
-# How a refusal ends that names processes a person may have to end.
-_CHECK = (" Check that they are that script's before ending them; the run can be resumed "
-          "once they have ended.")
-
-
 def _own(node: str, pids) -> str:
     return (f"the script of its step '{node}' from the earlier process is still running "
-            f"(pid {', '.join(str(p) for p in pids)}).{_CHECK}")
+            f"(pid {', '.join(str(p) for p in pids)}). It can be resumed once it has ended.")
 
 
 def _group(node: str, pids) -> str:
     return (f"processes in the former process group of the script of its step '{node}' are "
-            f"still running (pid {', '.join(str(p) for p in pids)}).{_CHECK}")
+            f"still running (pid {', '.join(str(p) for p in pids)}); they may not be that "
+            "script's. It can be resumed once they have ended.")
 
 # The real functions, taken at import: the cleanup must reach the processes a
 # test started even while that test has signals stubbed out.
@@ -392,8 +388,9 @@ def test_a_final_check_that_fails_leaves_the_script_in_scripts_left(
     [left] = rec["scripts_left"]
     assert left["unchecked"] is True
     _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal is not None and "could not be checked" in refusal
-    assert str(proc.pid) in refusal
+    assert refusal == (f"whether the script of its step 'a' from the earlier process left "
+                       f"anything running could not be checked (pid {proc.pid}). It can be "
+                       "resumed once nothing of that script is left.")
 
     monkeypatch.setattr(process_tree, "_process_table", real_table)
     proc.wait(timeout=_WAIT_S)          # it died on SIGTERM; reap it
@@ -499,9 +496,10 @@ def test_a_script_record_that_cannot_be_read_refuses_the_resume_and_names_the_fi
     assert rec["status"] == "crashed" and "scripts_left" not in rec
     assert deep.exists()
     _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal == (f"a record of one of its scripts cannot be read ({deep}), so whether "
-                       "that script still runs cannot be checked. Remove that file once you "
-                       "have made sure nothing of that script is left, then resume.")
+    assert refusal == (f"a record of one of its scripts, {deep}, cannot be read, so whether "
+                       "that script still runs cannot be checked. It can be resumed once a "
+                       "person has made sure nothing of that script is left and has removed "
+                       "that file.")
     deep.unlink()
     assert run_log.settle_dead_run(tmp_path, "w", "r1")[1] is None
 
@@ -682,6 +680,109 @@ def test_a_check_that_finds_the_run_claimed_removes_nothing_and_says_so(
     assert claimed["status"] == "running" and claimed["owner"]["pid"] == os.getpid()
 
 
+_BUSY = "another caller is acting on it right now. Try again in a moment."
+
+
+def _between_observation_and_decision(monkeypatch, name, change):
+    """Run ``change()`` right after the scripts of run ``name`` are observed
+    (holding no lock) and before the decision taken under its lock."""
+    real = run_log._script_checks
+
+    def observe_then_change(workspace, run_name, rec):
+        checks = real(workspace, run_name, rec)
+        if run_name == name:
+            change()
+        return checks
+
+    monkeypatch.setattr(run_log, "_script_checks", observe_then_change)
+
+
+def test_a_script_record_replaced_before_the_decision_is_kept_and_refuses(
+    tmp_path, monkeypatch,
+):
+    """Its process was proven gone; then, before the decision, the file names a
+    new process (the same pid, another start). It is not removed, and the
+    resume is refused until it is checked again."""
+    folder = _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    path = run_log.record_script(folder, "r1", pid=DEAD["pid"], started=DEAD["started"],
+                                 node_id="a")
+    newer = {"pid": DEAD["pid"], "started": "a later start", "node_id": "a"}
+    _between_observation_and_decision(monkeypatch, "w", lambda: run_log.record_script(
+        folder, "r1", pid=newer["pid"], started=newer["started"], node_id="a"))
+
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert refusal == _BUSY
+    assert json.loads(path.read_text(encoding="utf-8")) == newer
+
+
+def test_a_sub_workflow_run_whose_record_changes_before_the_decision_refuses_busy(
+    tmp_path, monkeypatch,
+):
+    _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    child_folder = _dead_run(tmp_path, name="child", run_id="c1", parent_run_id="r1",
+                             position=None)
+    assert run_log.mark_dead_run(tmp_path, "child", "c1")["status"] == "crashed"
+    path = run_log.record_script(child_folder, "c1", pid=DEAD["pid"], started=DEAD["started"],
+                                 node_id="x")
+
+    def rewrite_the_child():
+        changed = {**run_log.read_manifest(tmp_path, "child", "c1"), "ts": 99.0}
+        run_log._write_json(run_log._record_path(tmp_path, "child", "c1"), changed)
+
+    _between_observation_and_decision(monkeypatch, "child", rewrite_the_child)
+
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert refusal == _BUSY
+    assert path.exists()
+
+
+def test_a_run_resumed_and_found_dead_again_before_the_decision_is_refused(
+    tmp_path, monkeypatch,
+):
+    """Between the observation and the decision, another resume claims the run,
+    its walk records a script, its process dies and the run is found dead
+    again: ``crashed`` once more, but another record. Nothing of the new walk
+    is removed, even a record the observation had proven over."""
+    folder = _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    path = run_log.record_script(folder, "r1", pid=DEAD["pid"], started=DEAD["started"],
+                                 node_id="a")
+
+    def resumed_and_dead_again():
+        with cross_process_lock(run_log.run_lock_target(tmp_path, "w", "r1")):
+            claimed = run_log.claim_for_resume(tmp_path, "w", "r1")
+        run_log.record_script(folder, "r1", pid=DEAD["pid"], started=DEAD["started"],
+                              node_id="a")
+        again = {k: v for k, v in claimed.items() if k != "owner"}
+        again.update(status="crashed", ts=2.0, finished_at=2.0,
+                     runs=[run_log._cut_row({"node_id": "a", "iteration": 1})])
+        run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), again)
+
+    _between_observation_and_decision(monkeypatch, "w", resumed_and_dead_again)
+
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert refusal == _TAKEN
+    assert path.exists()
+    assert run_log.read_manifest(tmp_path, "w", "r1")["runs"][-1]["cut"] is True
+
+
+def test_a_run_whose_record_is_removed_before_the_decision_says_so(tmp_path, monkeypatch):
+    folder = _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    run_log.record_script(folder, "r1", pid=DEAD["pid"], started=DEAD["started"], node_id="a")
+    _between_observation_and_decision(
+        monkeypatch, "w", lambda: run_log._record_path(tmp_path, "w", "r1").unlink())
+
+    _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert refusal == "its record no longer exists."
+
+
 def test_a_check_whose_run_lock_stays_busy_says_the_run_is_busy(tmp_path, monkeypatch):
     _dead_run(tmp_path)
     assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
@@ -702,7 +803,7 @@ def test_a_check_whose_run_lock_stays_busy_says_the_run_is_busy(tmp_path, monkey
         release.set()
         holder.join(_WAIT_S)
     assert not holder.is_alive()
-    assert refusal == "another caller is acting on it right now. Try again in a moment."
+    assert refusal == _BUSY
     assert run_log.settle_dead_run(tmp_path, "w", "r1")[1] is None
 
 

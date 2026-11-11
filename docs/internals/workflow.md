@@ -1056,16 +1056,22 @@ two together), after reading that run's record again. Two resumes of one dead ru
 check it at once, and the first one's claim starts a new walk that records scripts of its
 own. So when the run's record is no longer the one the resume read (it was claimed, or
 ended), nothing is removed and the resume gets the words a resume that loses its claim
-gets. A script record file is read again under the lock and removed only when it still
-names the process observed. A lock that stays busy past the conversion's lock timeout,
-or a sub-workflow run's record that changed while it was checked, refuses with the run
-being busy. Nothing that observes a process runs under the lock, so the lock is held only
+gets; when the record was removed meanwhile, it is told the record no longer exists. A
+script record file is read again under the lock and removed only when it still names the
+process observed; one that names something else now was written after the observation
+and refuses with the run being busy. A lock that stays busy past the conversion's lock
+timeout, or a sub-workflow run's record that changed while it was checked, refuses the
+same way. These three race refusals say nothing about what the earlier process left, and
+the `tasks` tool says so: it gives them without telling the model to wait for leftovers. Nothing that observes a process runs under the lock, so the lock is held only
 for those reads and removals. These refusals hold the resume of a dead run only: a paused
 run's answer and a failed step's retry are never held by them. The surface then asks
 `resume_refusal(record, workspace=..., workflow=...)`, which only reads files, before the
 status check, so a `crashed` record it cannot resume gets its own reason; next
 `dead_run_refusal`'s; only then `resumable_kind`. The reasons a dead run is refused, in the
-order they are asked (after the sub-workflow refusal above):
+order they are asked (after the sub-workflow refusal above). People read them on the
+dashboard and the model reads them from its tools, so each states the condition under which
+the run can be resumed and gives the reader no order; what the model may do about it is
+in the workflows skill:
 
 | Case | Reason (after "cannot be resumed — ") |
 |---|---|
@@ -1074,13 +1080,14 @@ order they are asked (after the sub-workflow refusal above):
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
 | its `work_dir` is gone, or no input is stored for its position (or the stored one names another step) | `its working folder was pruned. Start a new run instead.` |
 | a run of the same workflow on the same `work_key` started after it | `run '<id>' on the same key started after it and has taken over its folder.` |
+| its record was removed after the resume read it | `its record no longer exists.` |
 | its record changed after the resume read it (another resume claimed it, or it was ended) | `it was cancelled, or already resumed, before this reached it.` |
-| its lock, or a sub-workflow run's lock, stays busy, or a sub-workflow run's record changed while it was checked | `another caller is acting on it right now. Try again in a moment.` |
+| its lock, or a sub-workflow run's lock, stays busy, or a sub-workflow run's record or a script record changed while it was checked | `another caller is acting on it right now. Try again in a moment.` |
 | it still names an `owner` that is alive or cannot be observed | `it was marked interrupted while the process that was running it (pid <n>) still seems alive. It can be resumed once that process has ended.` |
 | a sub-workflow run under it is still `running` | `its sub-workflow run '<id>' of workflow '<name>' is still recorded as running. It can be resumed once that run has ended or been found dead.` |
-| a script record that cannot be read | `a record of one of its scripts cannot be read (<path>), so whether that script still runs cannot be checked. Remove that file once you have made sure nothing of that script is left, then resume.` |
-| a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, another recorded member is, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>).` for the recorded process itself, or `processes in the former process group of the script of its step '<id>' are still running (pid <pids>).` for the others (being in that group does not prove they are the script's), or both in one sentence; then `Check that they are that script's before ending them; the run can be resumed once they have ended.` |
-| such a script cannot be checked (an observation fails) | `whether the script of its step '<id>' from the earlier process left anything running could not be checked (pid <pids>). Check those processes; the run can be resumed once nothing of that script is left.` |
+| a script record that cannot be read | `a record of one of its scripts, <path>, cannot be read, so whether that script still runs cannot be checked. It can be resumed once a person has made sure nothing of that script is left and has removed that file.` |
+| a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, another recorded member is, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>). It can be resumed once it has ended.` for the recorded process itself; `processes in the former process group of the script of its step '<id>' are still running (pid <pids>); they may not be that script's. It can be resumed once they have ended.` for the others (being in that group does not prove they are the script's); or both in one sentence, ending `It can be resumed once they have all ended.` |
+| such a script cannot be checked (an observation fails) | `whether the script of its step '<id>' from the earlier process left anything running could not be checked (pid <pids>). It can be resumed once nothing of that script is left.` |
 
 The parallel-unit refusal is not asked of a dead run: its step is its position, which
 only ever names a step of the walk, and a run that died between two steps has no row for

@@ -267,7 +267,11 @@ class TasksTool(Tool, ContextAware):
         scripts = run_log.dead_run_refusal(self._workspace, record)
         resumable = (resumable_kind(record) == "dead"
                      and resume_refusal(record, workspace=self._workspace) is None)
-        if scripts and resumable:
+        if scripts in run_log.DEAD_RUN_RACE_REFUSALS:
+            # Another caller acted on the run while it was checked: nothing
+            # the earlier process left is known to be in the way.
+            follow_up = f"It cannot be resumed now: {scripts}"
+        elif scripts and resumable:
             follow_up = f"It cannot be resumed yet: {scripts}"
         elif scripts:
             follow_up = ("Re-run the workflow if the result is still needed, but not "

@@ -449,7 +449,9 @@ the run was marked interrupted while the process that ran the workflow still
 seems alive, while one of its sub-workflow runs is still recorded as running, or
 while a record of one of its scripts cannot be read. That reason names the file:
 the agent never deletes it itself and tells you which file it is; remove it once
-you have made sure nothing of that script is left, then resume. A crashed run is also refused, with
+you have made sure nothing of that script is left, then resume. A resume can also
+be refused because someone else resumed the run, or is acting on it, at the same
+moment, or because its record was removed; the reason says which. A crashed run is also refused, with
 the reason, when it was recorded by an older
 version that did not keep the step it was in, when that step is no longer in
 the workflow, when its working folder has been pruned, or when a later run

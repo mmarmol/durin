@@ -975,9 +975,36 @@ async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path,
         assert "Re-run the workflow if the result is still needed." not in out
         assert "cannot be resumed yet" in out
         assert (f"the script of its step 'a' from the earlier process is still running "
-                f"(pid {proc.pid}). Check that they are that script's before ending them"
-                in out)
+                f"(pid {proc.pid}). It can be resumed once it has ended." in out)
     finally:
         monkeypatch.undo()
         proc.kill()
         proc.wait(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_claimed_during_the_check_is_not_said_to_have_leftovers(
+    tmp_path, monkeypatch,
+):
+    """A resume claims the run while the tool checks it. The refusal is about
+    that race, not about anything the earlier run left: the tool must not tell
+    the model to wait until nothing of the earlier run is left."""
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "qa", "dead8", root_session_key=SESSION,
+                      started_at=time.time())          # no position: not resumable
+    _set_manifest_owner(tmp_path, "qa", "dead8", _DEAD_OWNER)
+    real = run_log.dead_run_refusal
+
+    def claimed_first(workspace, record):
+        with cross_process_lock(run_log.run_lock_target(workspace, "qa", "dead8")):
+            run_log.claim_for_resume(workspace, "qa", "dead8")
+        return real(workspace, record)
+
+    monkeypatch.setattr(run_log, "dead_run_refusal", claimed_first)
+
+    out = await _tool(tmp_path, None).execute(action="status", id="dead8")
+
+    assert "it was cancelled, or already resumed, before this reached it." in out
+    assert "nothing of the earlier run is left" not in out

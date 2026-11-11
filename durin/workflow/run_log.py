@@ -767,10 +767,6 @@ def _descendant_records(workspace: str | Path, run_id: str) -> list[tuple[str, d
     return out
 
 
-_CHECK_BEFORE_ENDING = (" Check that they are that script's before ending them; the run "
-                        "can be resumed once they have ended.")
-
-
 def _pids(pids: list[int]) -> str:
     return ", ".join(str(p) for p in pids)
 
@@ -779,38 +775,46 @@ def _left_script_refusal(node: object, state: str, own: list[int],
                          group: list[int]) -> str | None:
     """The refusal for one script a dead run left, or None when nothing of it
     is left. A process is said to be the script only when that is proven (its
-    recorded identity); others are only in the script's former process group."""
+    recorded identity); others are only in the script's former process group,
+    which may not be the script's. Each states the condition under which the
+    run can be resumed and gives the reader no order: a model reads it too, and
+    must not end processes or remove files on its account."""
     if state == "alive":
         if own and group:
-            what = (f"the script of its step '{node}' from the earlier process is still "
+            return (f"the script of its step '{node}' from the earlier process is still "
                     f"running (pid {_pids(own)}), and so are processes in its former "
-                    f"process group (pid {_pids(group)}).")
-        elif own:
-            what = (f"the script of its step '{node}' from the earlier process is still "
-                    f"running (pid {_pids(own)}).")
-        else:
-            what = (f"processes in the former process group of the script of its step "
-                    f"'{node}' are still running (pid {_pids(group)}).")
-        return what + _CHECK_BEFORE_ENDING
+                    f"process group (pid {_pids(group)}), which may not be that script's. "
+                    "It can be resumed once they have all ended.")
+        if own:
+            return (f"the script of its step '{node}' from the earlier process is still "
+                    f"running (pid {_pids(own)}). It can be resumed once it has ended.")
+        return (f"processes in the former process group of the script of its step "
+                f"'{node}' are still running (pid {_pids(group)}); they may not be that "
+                "script's. It can be resumed once they have ended.")
     if state == "unknown":
         return (f"whether the script of its step '{node}' from the earlier process left "
-                f"anything running could not be checked (pid {_pids(group)}). Check those "
-                "processes; the run can be resumed once nothing of that script is left.")
+                f"anything running could not be checked (pid {_pids(group)}). It can be "
+                "resumed once nothing of that script is left.")
     return None
 
 
 # What a resume is told when the run's record changed after it read it: the
 # same words a resume that loses its claim gets.
 _TAKEN_REFUSAL = "it was cancelled, or already resumed, before this reached it."
+# What it is told when the run's record was removed after it read it.
+_GONE_REFUSAL = "its record no longer exists."
 # What it is told when a run's lock stays busy past DEAD_RUN_LOCK_TIMEOUT_S, or a
-# sub-workflow run's record changed while it was checked.
+# sub-workflow run's record or a script record changed while it was checked.
 _BUSY_REFUSAL = "another caller is acting on it right now. Try again in a moment."
+# The refusals that come from another caller acting on the run while it is
+# checked, not from anything the earlier process left.
+DEAD_RUN_RACE_REFUSALS = frozenset({_TAKEN_REFUSAL, _GONE_REFUSAL, _BUSY_REFUSAL})
 
 
 def _unreadable_script_refusal(path: Path) -> str:
-    return (f"a record of one of its scripts cannot be read ({path}), so whether that "
-            "script still runs cannot be checked. Remove that file once you have made "
-            "sure nothing of that script is left, then resume.")
+    return (f"a record of one of its scripts, {path}, cannot be read, so whether that "
+            "script still runs cannot be checked. It can be resumed once a person has "
+            "made sure nothing of that script is left and has removed that file.")
 
 
 def _script_checks(workspace: str | Path, name: str,
@@ -854,12 +858,17 @@ def _settle_scripts(checks: list[tuple[Path | None, dict | None, str | None]]) -
     """Act on ``_script_checks``, under the run's lock: the first refusal, after
     removing the record files of the scripts before it that were proven over. A
     file is removed only when, read again here, it still names the process
-    observed."""
+    observed. One that names something else now was written after the
+    observation, and nothing is known of it: ``_BUSY_REFUSAL``. One already
+    gone was removed by another check that proved the same."""
     for path, entry, refusal in checks:
         if refusal:
             return refusal
-        if path is not None and _read_script_record(path) == entry:
-            forget_script(path)      # proven over
+        if path is None or not path.exists():
+            continue
+        if _read_script_record(path) != entry:
+            return _BUSY_REFUSAL
+        forget_script(path)      # proven over
     return None
 
 
@@ -901,8 +910,10 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
     time, after reading its record again: when the run's record is no longer
     ``record`` (a resume claimed it, so its new walk may be writing script
     records of its own, or it was ended), nothing is removed and the answer is
-    ``_TAKEN_REFUSAL``; a sub-workflow run's record that changed meanwhile
-    gives ``_BUSY_REFUSAL``, as does a lock that stays busy.
+    ``_TAKEN_REFUSAL`` (``_GONE_REFUSAL`` when the record was removed); a
+    sub-workflow run's record, or a script record, that changed meanwhile gives
+    ``_BUSY_REFUSAL``, as does a lock that stays busy. These three are
+    ``DEAD_RUN_RACE_REFUSALS``.
 
     Observes processes and may wait for a lock, so a caller on an event loop
     runs it off the loop."""
@@ -918,6 +929,8 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
     checks = [] if owner_alive or running else _script_checks(workspace, name, record)
 
     def act_on_run(current: dict | None) -> str | None:
+        if current is None:
+            return _GONE_REFUSAL
         if current != record:
             return _TAKEN_REFUSAL
         if owner_alive:
