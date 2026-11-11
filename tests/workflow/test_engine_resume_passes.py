@@ -157,3 +157,23 @@ def test_progress_frames_of_a_retried_step_carry_its_pass(tmp_path):
     seen = [n for f in frames for n in f["nodes"] if n["id"] == "a"]
     assert {n["status"] for n in seen} == {"running", "done"}
     assert all(n["iteration"] == 2 and n["pass_number"] == 1 and n["budget"] == 1 for n in seen)
+
+
+def test_a_resumed_run_reports_the_files_written_before_it_stopped(tmp_path):
+    wf = parse_workflow({"name": "w", "start": "a",
+                         "output": {"artifacts": [{"path": "a.txt"}, {"path": "b.txt"}]},
+                         "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": "b"},
+                                   {"id": "b", "kind": "work", "tools": "default", "next": None}]})
+
+    class Writing(_Runner):
+        def __call__(self, req):
+            resp = super().__call__(req)                 # raises on a failing attempt
+            Path(req.output_dir, f"{req.node.id}.txt").write_text("x")
+            return resp
+
+    runner = Writing(fail={"b": 1})
+    assert _engine(tmp_path, runner).run(wf, "t").status == "aborted"
+    done = _resume(tmp_path, wf, runner)
+    assert done.status == "completed"
+    assert done.output_files == ["a.txt", "b.txt"]
+    assert done.missing_artifacts == []

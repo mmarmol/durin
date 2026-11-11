@@ -45,7 +45,8 @@ descriptions. The output descriptor may
 additionally declare **`artifacts`** — a list of `{path, description?}` naming the files (relative
 to the run's working folder) the run promises to produce. Declared paths are validated at parse
 time (relative, no `..`, no duplicates), ride in every agent node's framing as the file contract, and
-after a completed run the engine reports the ones not produced as `missing_artifacts` on the
+after a completed run the engine reports the ones not produced (by any walk of the run, so a
+resumed run counts the files written before it stopped) as `missing_artifacts` on the
 result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
 downstream stage learns immediately which promised file is absent instead of failing confusingly
 later. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
@@ -711,7 +712,7 @@ failed (`false` otherwise); `cancelled_by`/`cancelled_at` — who (in the same s
 person cancelled a `needs_input` run through `WorkflowsService.cancel_run` (§4g);
 absent on every other terminal status, including an approval reject/approve, which
 never set either; `output_files`: the relative paths (within the
-run's output folder) a completed run produced, empty for a run that ended any other
+run's output folder) a completed run produced, across every walk of the run, empty for a run that ended any other
 status or produced no files (never includes the engine's own `.provenance.json`
 bookkeeping file — same exclusion as a node's `artifacts`, above); `missing_artifacts` — declared `output.artifacts` paths a
 completed run did not produce (the warning-only file contract, empty otherwise); and

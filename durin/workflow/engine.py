@@ -205,6 +205,10 @@ class ResumeState:
     # nodes wrote. WorkflowEngine.run falls back to this when its own work_key
     # argument is None.
     work_key: str | None = None
+    # The record rows of every earlier walk of the run (``history`` plus ``runs``),
+    # so a resumed walk that completes lists the files and satisfies the declared
+    # artifacts of the steps that ran before it stopped.
+    earlier_rows: list[dict] = field(default_factory=list)
 
 
 def manifest_visit_counts(manifest: dict) -> dict[str, int]:
@@ -254,6 +258,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     completed = manifest_completed_passes(manifest)
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     work_key = manifest.get("work_key")
+    earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     needs_input_node = manifest.get("needs_input_node")
     if needs_input_node:
         questions = manifest.get("final_output") or ""
@@ -269,6 +274,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
             ),
             recorded_outputs=recorded_outputs,
             work_key=work_key,
+            earlier_rows=earlier_rows,
         )
     return ResumeState(
         run_id=manifest["run_id"],
@@ -278,6 +284,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         upstream=manifest.get("resume_upstream"),
         recorded_outputs=recorded_outputs,
         work_key=work_key,
+        earlier_rows=earlier_rows,
     )
 
 
@@ -622,6 +629,7 @@ class WorkflowEngine:
                     initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
+                    earlier_rows=list(resume.earlier_rows) if resume else None,
                     work_dir=work_dir,
                     own_work_dir=work_dir_override is None,
                     # True only for a run that OWNS a work_key folder — the one
@@ -869,6 +877,7 @@ class WorkflowEngine:
         keyed: bool = False,
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
+        earlier_rows: list[dict] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         # Two counters per node. ``visits`` is the attempt number: it names the
@@ -1561,14 +1570,22 @@ class WorkflowEngine:
         # against a write failure: a failed write must still surface as
         # missing, not get credited via status alone.
         produced: set[str] = set()
-        for r in runs:
-            produced.update(r.artifacts)
-            if r.status in ("ok", "reused"):
-                node_spec = workflow.nodes.get(r.node_id)
+
+        def _credit(node_id: str, status: str, artifacts: list[str]) -> None:
+            produced.update(artifacts)
+            if status in ("ok", "reused"):
+                node_spec = workflow.nodes.get(node_id)
                 if (isinstance(node_spec, WorkNode) and node_spec.output_file
                         and terminal_output_dir is not None
                         and (Path(terminal_output_dir) / node_spec.output_file).is_file()):
                     produced.add(node_spec.output_file)
+
+        # A resumed run also credits the rows of its earlier walks (the walk's own
+        # ``runs`` starts empty), so a step that ran before the stop still counts.
+        for row in earlier_rows or []:
+            _credit(row.get("node_id", ""), row.get("status", ""), row.get("artifacts") or [])
+        for r in runs:
+            _credit(r.node_id, r.status, r.artifacts)
         output_files = sorted(produced)
         # The declared file contract (output.artifacts): report promised paths the
         # completed run did not produce. A warning, never a failure — the caller
