@@ -43,8 +43,7 @@ def test_the_step_in_flight_gets_a_cut_row_and_becomes_the_failed_step(tmp_path)
     rec = run_log.mark_dead_run(tmp_path, "w", "r1")
     assert rec["status"] == "crashed" and rec["failed_node"] == "b"
     assert rec["resume_upstream"] == "what b received"
-    # The owner is kept: it names the process found gone, which a resume checks again.
-    assert rec["active_node"] is None and rec["owner"] == DEAD
+    assert rec["active_node"] is None and "owner" not in rec
     cut = rec["runs"][-1]
     assert (cut["node_id"], cut["iteration"], cut["status"], cut["cut"]) == ("b", 1, "node_failed", True)
     assert cut["session_key"] == "workflow:r1:b:1" and "process ended" in cut["error"]
@@ -107,7 +106,7 @@ def test_a_record_from_before_positions_is_only_marked(tmp_path):
     run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), rec)
     out = run_log.mark_dead_run(tmp_path, "w", "r1")
     assert out["status"] == "crashed" and not out.get("failed_node") and out["runs"] == []
-    expected = dict(rec)
+    expected = {k: v for k, v in rec.items() if k != "owner"}
     assert out == {**expected, "status": "crashed", "active_node": None}
 
 
@@ -181,8 +180,8 @@ def test_a_dead_run_that_cannot_be_converted_is_still_marked_crashed(tmp_path, m
     assert rec == run_log.read_manifest(tmp_path, "w", "r1")
     if "runs" in fields or "position" in fields or "detached_active" in fields \
             or "resume_inputs" in fields:
-        # The minimal mark: nothing but status and active_node changes.
-        expected = dict(before)
+        # The minimal mark: nothing but status, active_node and owner changes.
+        expected = {k: v for k, v in before.items() if k != "owner"}
         assert rec == {**expected, "status": "crashed", "active_node": None}
     assert run_log.reconcile_running(tmp_path, now=10.0, max_age_s=1.0) == 0
     assert run_log.reconcile_one(tmp_path, "w", "r1") is False

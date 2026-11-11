@@ -444,11 +444,12 @@ it cannot prove is still the script's, such as a process left in the script's
 former process group after the script itself is gone), the resume is refused
 and names the process ids that are left. The agent never ends them itself. Check
 that they are the script's before ending them (after a restart, a process id can
-belong to something else), then resume. The resume is refused the same way while
-the process that ran the workflow still seems alive, while one of its
-sub-workflow runs is still recorded as running, or while a record of one of its
-scripts cannot be read (the reason names the file to remove once you have made
-sure nothing of that script is left). A crashed run is also refused, with
+belong to something else), then resume. The resume is refused the same way when
+the run was marked interrupted while the process that ran the workflow still
+seems alive, while one of its sub-workflow runs is still recorded as running, or
+while a record of one of its scripts cannot be read. That reason names the file:
+the agent never deletes it itself and tells you which file it is; remove it once
+you have made sure nothing of that script is left, then resume. A crashed run is also refused, with
 the reason, when it was recorded by an older
 version that did not keep the step it was in, when that step is no longer in
 the workflow, when its working folder has been pruned, or when a later run

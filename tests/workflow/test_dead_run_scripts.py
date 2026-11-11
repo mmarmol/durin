@@ -7,12 +7,14 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from durin.utils import process_tree
+from durin.utils.file_lock import cross_process_lock
 from durin.workflow import resume_store, run_log
 from durin.workflow.engine import (
     NodeRunRequest,
@@ -399,38 +401,43 @@ def test_a_final_check_that_fails_leaves_the_script_in_scripts_left(
     assert refusal is None
 
 
-def test_slow_observations_cannot_stretch_the_wait_past_its_bound(groups, monkeypatch):
-    """Every observation after the first table read runs into the full timeout
-    it is given (a hung ps); the whole call still ends within its bound,
-    because each observation is only given the time that is left."""
-    proc = _start(groups, "exec sleep 61")
-    started = _started(proc.pid)          # read before any observation is made slow
-    real_table = process_tree._process_table
-    given: list[float] = []
+_BOUND_S = 1.0
 
-    def hung_observation(timeout):
-        given.append(timeout)
+
+def test_slow_table_reads_while_polling_cannot_stretch_the_wait_past_its_bound(
+    groups, signals, monkeypatch,
+):
+    """SIGTERM goes out to a group whose child ignores it, so the call polls the
+    group. Every table read made while polling runs into the full timeout it is
+    given (a hung ps) and then fails. The whole call still ends within its
+    bound, because each read is only given the time that is left."""
+    proc = _start(groups, "(trap '' TERM; sleep 61) & wait")
+    _until(lambda: len(_members(proc.pid)) >= 2, "the child to start")
+    started = _started(proc.pid)
+    real_table = process_tree._process_table
+    polled: list[float] = []
+    first: list[float] = []
+
+    def table(timeout):
+        if not first:
+            first.append(timeout)
+            return real_table(timeout)          # the first read, at normal speed
+        polled.append(timeout)
         time.sleep(max(0.0, timeout))
         raise process_tree.ObservationError("ps timed out")
 
-    def table(timeout):
-        if not given and not table.done:
-            table.done = True
-            return real_table(timeout)
-        return hung_observation(timeout)
-
-    table.done = False
     monkeypatch.setattr(process_tree, "_process_table", table)
-    monkeypatch.setattr(process_tree, "_observe",
-                        lambda pid, *, timeout=5.0: hung_observation(timeout))
     t0 = time.monotonic()
     [result] = process_tree.end_script_groups(
-        [(proc.pid, started)], term_wait_s=2.0, kill_wait_s=1.0, bound_s=1.0)
+        [(proc.pid, started)], term_wait_s=2 * _BOUND_S, kill_wait_s=_BOUND_S, bound_s=_BOUND_S)
     elapsed = time.monotonic() - t0
 
-    assert elapsed < 1.0 + 0.3
-    assert given and all(t <= 1.0 for t in given)
+    assert [sig for target, sig in signals if target == proc.pid] == [signal.SIGTERM]
+    assert polled, "no table read was made while polling"
+    assert elapsed < _BOUND_S + 0.3, f"the call took {elapsed:.2f} s"
+    assert all(t <= _BOUND_S for t in polled)
     assert result["ended"] is False and result["unchecked"] is True
+    assert _members(proc.pid)                     # the TERM-ignoring child: ``groups`` ends it
 
 
 # ── a script that cannot be ended ──
@@ -566,7 +573,14 @@ def test_a_descendant_still_recorded_running_refuses_the_dead_runs_resume(tmp_pa
     assert run_log.read_manifest(tmp_path, "child", "c1")["status"] == "running"
 
 
+def _owner_alive(pid) -> str:
+    return (f"it was marked interrupted while the process that was running it (pid {pid}) "
+            "still seems alive. It can be resumed once that process has ended.")
+
+
 def _crashed_with_owner(tmp_path, owner):
+    """A ``crashed`` record that still names an owner: flipped by something
+    other than ``mark_dead_run`` (a sweep that only set the status)."""
     _dead_run(tmp_path)
     rec = run_log.mark_dead_run(tmp_path, "w", "r1")
     rec = {**rec, "owner": owner}
@@ -574,16 +588,36 @@ def _crashed_with_owner(tmp_path, owner):
     return rec
 
 
-def test_the_conversion_keeps_the_owner_it_found_gone(tmp_path):
+def test_the_conversion_drops_the_owner_it_found_gone(tmp_path):
     _dead_run(tmp_path)
-    assert run_log.mark_dead_run(tmp_path, "w", "r1")["owner"] == DEAD
+    assert "owner" not in run_log.mark_dead_run(tmp_path, "w", "r1")
+    assert "owner" not in run_log.read_manifest(tmp_path, "w", "r1")
+
+
+def test_a_run_converted_after_a_restart_in_place_is_resumed_from_another_process(
+    tmp_path, monkeypatch,
+):
+    """A gateway restarted in place keeps its pid and start, with a new boot id:
+    it converts the runs its earlier start left. Another process (the TUI)
+    resuming one of them sees that pid alive with the same start, and must
+    still be let through: the conversion was the proof the owner was gone."""
+    _dead_run(tmp_path, owner={**process_tree.process_identity(), "boot": "an-earlier-start"})
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")      # the restarted gateway converts it
+    assert rec is not None and rec["status"] == "crashed" and "owner" not in rec
+
+    # This process now plays another one: the gateway's pid is not its own.
+    monkeypatch.setattr(process_tree, "_own_pid", lambda: os.getpid() + 1)
+    assert process_tree.process_alive(
+        {**process_tree.process_identity(os.getpid()), "boot": "an-earlier-start"}) is True
+    settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    assert refusal is None and resumable_kind(settled) == "dead"
+    assert resume_refusal(settled, workspace=tmp_path) is None
 
 
 def test_a_crashed_run_whose_owner_is_alive_is_not_resumed(tmp_path):
     _crashed_with_owner(tmp_path, process_tree.process_identity())
     _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal == (f"the process that was running it still seems alive (pid {os.getpid()})."
-                       " It can be resumed once that process has ended.")
+    assert refusal == _owner_alive(os.getpid())
 
 
 def test_a_crashed_run_whose_owner_cannot_be_observed_is_not_resumed(tmp_path, monkeypatch):
@@ -594,8 +628,7 @@ def test_a_crashed_run_whose_owner_cannot_be_observed_is_not_resumed(tmp_path, m
 
     monkeypatch.setattr(process_tree, "_observe", cannot_observe)
     _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
-    assert refusal == ("the process that was running it still seems alive (pid 4242). "
-                       "It can be resumed once that process has ended.")
+    assert refusal == _owner_alive(4242)
 
 
 @pytest.mark.parametrize("owner", [
@@ -606,6 +639,71 @@ def test_a_crashed_run_whose_owner_is_gone_is_resumed(tmp_path, owner):
     _crashed_with_owner(tmp_path, owner)
     settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
     assert refusal is None and resumable_kind(settled) == "dead"
+
+
+_TAKEN = "it was cancelled, or already resumed, before this reached it."
+
+
+@pytest.mark.parametrize("live", [True, False], ids=["live-script", "ended-script"])
+def test_a_check_that_finds_the_run_claimed_removes_nothing_and_says_so(
+    tmp_path, groups, monkeypatch, live,
+):
+    """Two resumes of one dead run at once: the second read the record before
+    the first claimed it. When the second checks the scripts, the first's new
+    walk has recorded a script of its own (still running, or just ended and not
+    yet forgotten). The second must neither describe it as left by the earlier
+    process nor remove its record."""
+    folder = _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    if live:
+        proc = _start(groups, "exec sleep 61")
+        pid, started = proc.pid, _started(proc.pid)
+    else:
+        pid, started = DEAD["pid"], DEAD["started"]
+    new_walk: list[Path] = []
+    real_mark_children = run_log._mark_dead_children
+
+    def claimed_meanwhile(*args, **kwargs):
+        real_mark_children(*args, **kwargs)
+        # The first resume claims the run under its lock; its walk starts a script.
+        with cross_process_lock(run_log.run_lock_target(tmp_path, "w", "r1")):
+            run_log.claim_for_resume(tmp_path, "w", "r1")
+        new_walk.append(run_log.record_script(folder, "r1", pid=pid, started=started,
+                                              node_id="a"))
+
+    monkeypatch.setattr(run_log, "_mark_dead_children", claimed_meanwhile)
+    settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+
+    assert settled["status"] == "crashed"                 # what it read first
+    assert refusal == _TAKEN
+    [path] = new_walk
+    assert path.exists()
+    claimed = run_log.read_manifest(tmp_path, "w", "r1")
+    assert claimed["status"] == "running" and claimed["owner"]["pid"] == os.getpid()
+
+
+def test_a_check_whose_run_lock_stays_busy_says_the_run_is_busy(tmp_path, monkeypatch):
+    _dead_run(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
+    monkeypatch.setattr(run_log, "DEAD_RUN_LOCK_TIMEOUT_S", 0.3)
+    held, release = threading.Event(), threading.Event()
+
+    def hold_the_lock():
+        with cross_process_lock(run_log.run_lock_target(tmp_path, "w", "r1")):
+            held.set()
+            release.wait(_WAIT_S)
+
+    holder = threading.Thread(target=hold_the_lock)
+    holder.start()
+    try:
+        assert held.wait(_WAIT_S)
+        _settled, refusal = run_log.settle_dead_run(tmp_path, "w", "r1")
+    finally:
+        release.set()
+        holder.join(_WAIT_S)
+    assert not holder.is_alive()
+    assert refusal == "another caller is acting on it right now. Try again in a moment."
+    assert run_log.settle_dead_run(tmp_path, "w", "r1")[1] is None
 
 
 @pytest.mark.parametrize("fields", [

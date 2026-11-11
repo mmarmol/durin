@@ -617,7 +617,7 @@ a post-run summary:
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, keeps `status: "running"`, and names the step to enter next (`position`), so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
 
-Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. The writes that act on a run from outside its walk — a resume claim, a cancel of a paused run, the crash conversion of a dead one — re-read the record under the per-run lock (`run_lock_target`) instead. The manifest is read while it is rewritten, though — by the runs panel and the `tasks` tool, the crash sweep, the folder pruner deciding which runs are still live, and the run's own next rewrite, which starts from the previous manifest — so every write replaces the file in one step (`atomic_write_text`: a temporary file beside it, renamed over it). A reader sees the previous manifest or the new one, never a torn file, which every reader would take for "no record". The improve pass's cursor (`.cursor.json`) and pending-validation record (`.pending_validation.json`), and a working folder's `.provenance.json`, are written the same way. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
+Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. The writes that act on a run from outside its walk — a resume claim, a cancel of a paused run, the crash conversion of a dead one, the removal of a dead run's script records before its resume — re-read the record under the per-run lock (`run_lock_target`) instead. The manifest is read while it is rewritten, though — by the runs panel and the `tasks` tool, the crash sweep, the folder pruner deciding which runs are still live, and the run's own next rewrite, which starts from the previous manifest — so every write replaces the file in one step (`atomic_write_text`: a temporary file beside it, renamed over it). A reader sees the previous manifest or the new one, never a torn file, which every reader would take for "no record". The improve pass's cursor (`.cursor.json`) and pending-validation record (`.pending_validation.json`), and a working folder's `.provenance.json`, are written the same way. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
 
 The per-node entries in the manifest's `runs` array carry:
 
@@ -835,9 +835,10 @@ ticks since boot (`proc:<boot id>:<ticks>`), neither of which moves while the pr
 lives, even when the wall clock is stepped; elsewhere (macOS) it is the `ps -o lstart`
 string, and a value recorded in that older form is still compared that way. An owner
 counts as gone only on proof: no process with that pid, a process with that pid that has
-exited, or one with another start identity. No process is proven the same way on both
-systems: the system's own view of the pid finds nothing (on Linux `/proc/<pid>/stat` is
-missing, on macOS `ps -p` prints nothing) **and** signal 0 finds no process with that pid.
+exited, or one with another start identity. The absence of a process is proven the same
+way on both systems: the system's own view of the pid finds nothing (on Linux
+`/proc/<pid>/stat` is missing, on macOS `ps -p` prints nothing) **and** signal 0 finds no
+process with that pid.
 When the owner cannot be observed (`ps` fails or times out, `/proc` cannot be read, or the
 two disagree), it counts as alive and the record is left `running` for a later sweep. A restart in place (`execv`) keeps the pid and
 start time but gets a new boot id, so the restarted process sees the runs its earlier
@@ -875,9 +876,10 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   stop file beside the record (see "A stop outlives the process" below), or a
   `stop_requested` the record holds itself;
   `finished_at` and `ts` the time of the conversion (not on a record written before
-  positions existed, below); `active_node` `null`, since it describes a process that
-  no longer exists; `owner` kept, naming the process found gone, so a resume can check
-  again that it is;
+  positions existed, below); `active_node` `null` and `owner` removed, since both
+  describe a process that no longer exists. The conversion is the proof that the owner
+  was gone, and only it can make that proof for a restart in place: the restarted
+  process keeps the pid and start, so any other process would see that owner alive;
 - a **cut row** appended to `runs` for the attempt the death interrupted, when
   `active_node` is the step `position` names: `node_id`, `iteration` and
   `session_key` from `active_node`, `status: "node_failed"`, `cut: true`, `error`
@@ -911,8 +913,8 @@ marked: its status and `active_node` cleared, its `finished_at` and `ts` untouch
 unexpected shape (`runs` not a list, a `position` that names no step, a
 `detached_active` entry without a step, `resume_inputs` that is not a mapping) or a
 stored input whose text is not text — still gets marked, with one warning naming the run
-and the reason: `status: "crashed"`, `active_node` cleared, every other field (`owner`
-included) as it was. The run then reads as ended on every surface and no sweep finds it
+and the reason: `status: "crashed"`, `active_node` cleared, `owner` removed, every other
+field as it was. The run then reads as ended on every surface and no sweep finds it
 again. A run someone had asked to stop is marked `cancelled` instead, with the stop in
 `stop_requested` and `position` `null`, so it is never offered for resume whatever else
 the record carries. A stored input file that cannot be parsed at all is treated as
@@ -1038,13 +1040,27 @@ A record that is still `running` is converted (`mark_dead_run`); when it is not 
 (the owner is alive, or cannot be observed: a run really in flight, or a resume that holds
 the claim), the surface refuses as for any running run. A `crashed` record also gets its
 dead sub-workflow runs converted, which an earlier conversion may have missed, and
-`run_log.dead_run_refusal` is computed. It refuses while the process that was running the
-run (the record's `owner`) is alive or cannot be observed; while any sub-workflow run under
-it, at any depth, is still recorded as `running`; while any script record is present
-beside the run's record or a sub-workflow run's record, readable or not (a readable one is
-checked with its `scripts_left` entry and removed on proof that nothing of the script is
-left); and while a `scripts_left` entry may still run. Both observe processes, which is why
-they run in that off-loop call. These refusals hold the resume of a dead run only: a paused
+`run_log.dead_run_refusal` is computed. It refuses while the record still names an
+`owner` that is alive or cannot be observed: a record the conversion wrote has none, so
+this holds only a `crashed` record marked by something other than the conversion, such as
+anything that only sets the status. It also refuses while any sub-workflow run under it, at
+any depth, is still recorded as `running`; while any script record is present beside the
+run's record or a sub-workflow run's record, readable or not (a readable one is checked
+with its `scripts_left` entry and removed on proof that nothing of the script is left);
+and while a `scripts_left` entry may still run. Both observe processes, which is why they
+run in that off-loop call.
+
+Processes are observed holding no lock; what the check says and removes is decided under
+the per-run lock, one run's lock at a time (the run's, then each sub-workflow run's, never
+two together), after reading that run's record again. Two resumes of one dead run can
+check it at once, and the first one's claim starts a new walk that records scripts of its
+own. So when the run's record is no longer the one the resume read (it was claimed, or
+ended), nothing is removed and the resume gets the words a resume that loses its claim
+gets. A script record file is read again under the lock and removed only when it still
+names the process observed. A lock that stays busy past the conversion's lock timeout,
+or a sub-workflow run's record that changed while it was checked, refuses with the run
+being busy. Nothing that observes a process runs under the lock, so the lock is held only
+for those reads and removals. These refusals hold the resume of a dead run only: a paused
 run's answer and a failed step's retry are never held by them. The surface then asks
 `resume_refusal(record, workspace=..., workflow=...)`, which only reads files, before the
 status check, so a `crashed` record it cannot resume gets its own reason; next
@@ -1058,7 +1074,9 @@ order they are asked (after the sub-workflow refusal above):
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
 | its `work_dir` is gone, or no input is stored for its position (or the stored one names another step) | `its working folder was pruned. Start a new run instead.` |
 | a run of the same workflow on the same `work_key` started after it | `run '<id>' on the same key started after it and has taken over its folder.` |
-| its `owner` is alive or cannot be observed | `the process that was running it still seems alive (pid <n>). It can be resumed once that process has ended.` |
+| its record changed after the resume read it (another resume claimed it, or it was ended) | `it was cancelled, or already resumed, before this reached it.` |
+| its lock, or a sub-workflow run's lock, stays busy, or a sub-workflow run's record changed while it was checked | `another caller is acting on it right now. Try again in a moment.` |
+| it still names an `owner` that is alive or cannot be observed | `it was marked interrupted while the process that was running it (pid <n>) still seems alive. It can be resumed once that process has ended.` |
 | a sub-workflow run under it is still `running` | `its sub-workflow run '<id>' of workflow '<name>' is still recorded as running. It can be resumed once that run has ended or been found dead.` |
 | a script record that cannot be read | `a record of one of its scripts cannot be read (<path>), so whether that script still runs cannot be checked. Remove that file once you have made sure nothing of that script is left, then resume.` |
 | a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, another recorded member is, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>).` for the recorded process itself, or `processes in the former process group of the script of its step '<id>' are still running (pid <pids>).` for the others (being in that group does not prove they are the script's), or both in one sentence; then `Check that they are that script's before ending them; the run can be resumed once they have ended.` |

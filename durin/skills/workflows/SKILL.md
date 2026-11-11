@@ -197,8 +197,11 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
   over — then start a new run. It is also refused while a script the dead process started
-  may still run, while the process that ran it still seems alive, or while one of its
-  sub-workflow runs is still recorded as running. When the reason names process ids, NEVER
+  may still run, when it was marked interrupted while the process that ran it still seems
+  alive, while one of its sub-workflow runs is still recorded as running, or while a record
+  of one of its scripts cannot be read. When the reason names such a file, NEVER delete it
+  yourself: tell the person which file it names; they remove it once they have made sure
+  nothing of that script is left. When the reason names process ids, NEVER
   end those processes yourself: after a restart a pid can belong to something else, and
   the code deliberately does not signal them. Tell the person which process ids are left
   and that they should check these are the script's before ending them; the run can be

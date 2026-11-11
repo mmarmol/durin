@@ -243,6 +243,10 @@ def build_service_registry(
 
 _RECONCILE_PERIOD_S = 600.0
 _reconciler_started = threading.Event()
+# Setting it ends the sweeper thread at its next wait. The thread holds the
+# Event that was here when it started, so replacing this one with a fresh
+# Event before a start gives that sweeper a stop of its own.
+_reconciler_stop = threading.Event()
 
 
 def start_periodic_run_reconciler(
@@ -254,18 +258,19 @@ def start_periodic_run_reconciler(
 
     Daemon thread, file-based sweeps only — dead-owner manifests flip to
     their crashed/error status so the UI and `tasks` never show a ghost for
-    more than one period. Returns False when already started."""
+    more than one period. It runs until ``_reconciler_stop`` (as it was at the
+    start) is set. Returns False when already started."""
     if _reconciler_started.is_set():
         return False
     _reconciler_started.set()
+    stop = _reconciler_stop
 
     def _sweep_forever() -> None:
         import time
 
         from durin.workflow import run_log as wf_run_log
 
-        while True:
-            time.sleep(period_s)
+        while not stop.wait(period_s):
             try:
                 ws = workspace_resolver()
                 wf_run_log.reconcile_running(
