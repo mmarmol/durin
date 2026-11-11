@@ -632,8 +632,9 @@ class AutomationsRuntime:
                 and self._is_shutting_down()):
             # A graceful shutdown (SIGTERM, /restart) cancels no workflow run:
             # a run in flight is left to die with the process, and the next
-            # start finds its workflow record dead (resumable) and this run
-            # in 'running' for the orphan sweep. A result can still reach
+            # start finds its workflow record dead (a dead run an automation
+            # started is not resumed: the resume surfaces refuse it) and this
+            # run in 'running' for the orphan sweep. A result can still reach
             # here while the gateway goes down, though — a run that ended
             # aborted or cancelled between the start of the shutdown and the
             # exit, on its own or because what its steps use was already

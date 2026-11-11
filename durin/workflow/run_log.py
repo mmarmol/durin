@@ -200,7 +200,8 @@ def _drop_resume_files(workspace: str | Path, record: dict) -> None:
 
 
 # The default of ``update_run``'s ``position``: keep the recorded one. An explicit
-# None is a value of its own: the walk ended, so there is no step to enter.
+# None is a value of its own: there is no step to enter — the walk ended, or the
+# input of the step it enters next could not be stored.
 KEEP_POSITION = object()
 
 
@@ -351,7 +352,7 @@ def start_run(
         "shared_session": prior.get("shared_session") if resumed else None,
         # The step to enter next and the sequence number of that position, which
         # names the file holding the step's whole input (resume_store). None once
-        # the walk has ended.
+        # the walk has ended, or while the step it enters has no stored input.
         "position": position,
         # The detached steps launched and not yet in ``runs``: {node_id,
         # iteration, session_key} each. A process that dies leaves them here,
@@ -373,11 +374,26 @@ def update_run(
     """Rewrite the manifest with the run's per-node trace so far, preserving the
     ``root_session_key``/``started_at`` from ``start_run``. Single-writer, full rewrite.
     ``shared_session`` replaces the recorded one when given; ``None`` keeps it.
-    ``position`` replaces the recorded one when given, ``None`` included (the walk
-    ended); left out, the recorded one is kept. ``detached_active`` replaces the
-    recorded list of detached steps still running when given; ``None`` keeps it."""
+    ``position`` replaces the recorded one when given, ``None`` included (no step
+    to enter); left out, the recorded one is kept. ``detached_active`` replaces the
+    recorded list of detached steps still running when given; ``None`` keeps it.
+
+    With no record to carry from (it could not be read, or the workflow was
+    renamed while the run was in flight and its folder moved), the record
+    written names this process as its ``owner`` and now as its start: the walk
+    writing it is alive, so the crash sweep leaves it alone while it runs and
+    finds it dead once this process is gone. What only ``start_run`` knew
+    (``root_session_key``, ``parent_run_id``, ``work_dir``, ``work_key``,
+    ``task``, ``surface``) is not recoverable here and is left empty."""
     path = _record_path(workspace, name, run_id)
-    base = read_manifest(workspace, name, run_id) or {}
+    found = read_manifest(workspace, name, run_id)
+    if found is None:
+        from durin.utils.process_tree import process_identity
+
+        now = time.time()
+        base: dict = {"owner": process_identity(), "started_at": now, "ts": now}
+    else:
+        base = found
     record = {
         "schema": SCHEMA,
         "run_id": run_id,
@@ -1176,16 +1192,20 @@ DEAD_RUN_LOCK_TIMEOUT_S = 15.0
 def _owner_gone(record: dict, now: float, max_age_s: float) -> bool:
     """Whether the process executing a ``running`` record is gone. A record with
     an ``owner`` is dead as soon as that process is not alive; a record without
-    one (written before owners existed) only once it is older than ``max_age_s``."""
+    one (written before owners existed) only once its ``started_at``, a positive
+    time, is older than ``max_age_s``. Without such a start time the record has
+    no age to judge it by, and it is never taken for dead: it may belong to a
+    walk that is still running."""
     from durin.utils.process_tree import process_alive
 
     owner = record.get("owner")
     if owner is not None:
         return not process_alive(owner)
     try:
-        return float(record.get("started_at") or 0.0) < now - max_age_s
+        started = float(record.get("started_at"))
     except (TypeError, ValueError):
-        return False   # an unreadable start time: no age to judge it by
+        return False   # no start time, or an unreadable one
+    return 0.0 < started < now - max_age_s
 
 
 def _cut_row(entry: dict) -> dict:
@@ -1246,8 +1266,10 @@ def _dead_run_record(workspace: str | Path, record: dict, now_ts: float,
             rows.append(_cut_row(entry))
             cut.add(key)
     # A detached step that started is never a step to run again: a resume would
-    # launch its side effect a second time. A record naming one as its position
-    # (only a record from another build can) keeps that position, unnamed as failed.
+    # launch its side effect a second time. The engine never writes one as the
+    # position (a launch whose next input cannot be stored names no step), so a
+    # record naming one comes from another build; it keeps that position, unnamed
+    # as failed.
     started_detached = {e["node_id"] for e in detached}
 
     out = dict(record)
@@ -1317,9 +1339,10 @@ def mark_dead_run(
     """Convert a ``running`` run whose process is gone into the record a failed
     step leaves, so a resume can enter it. Returns the written record, or None
     when nothing was written: the record is not ``running``, its owner is alive
-    (an owner-less one counts as dead once older than ``max_age_s`` before
-    ``now``), the file cannot be read or parsed as a record, the write failed,
-    or its lock stayed busy for ``DEAD_RUN_LOCK_TIMEOUT_S``. Never raises. A
+    (an owner-less one counts as dead once its positive ``started_at`` is older
+    than ``max_age_s`` before ``now``, and never without one), the file cannot
+    be read or parsed as a record, the write failed, or its lock stayed busy for
+    ``DEAD_RUN_LOCK_TIMEOUT_S``. Never raises. A
     dead run whose conversion cannot be built (a field or a resume file of an
     unexpected shape) gets ``_minimal_mark`` instead, with one warning.
 
@@ -1445,9 +1468,10 @@ def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) ->
     dead — no age heuristic, so a gateway that crashes and restarts within
     minutes still clears its ghosts, while a run owned by another LIVE process
     (e.g. the TUI sharing this workspace) is never touched. Ownerless legacy
-    manifests fall back to the ``started_at`` age cutoff. Safe to run at boot
-    AND periodically. Returns how many records were converted; a malformed
-    record, or one whose lock is busy, is skipped, never fatal."""
+    manifests fall back to the ``started_at`` age cutoff; one without a positive
+    ``started_at`` is never converted. Safe to run at boot AND periodically.
+    Returns how many records were converted; a malformed record, or one whose
+    lock is busy, is skipped, never fatal."""
     root = runs_root(workspace)
     if not root.is_dir():
         return 0

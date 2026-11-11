@@ -730,8 +730,10 @@ run was keyed, and its `work_dir` is then the key's working folder.
 `input-<seq>.json` holds the step a position names and its edge text (the composed
 `inputs_from` blocks are not stored: they are built again from the sources). It is
 written before the record that points at it, so a record never names an input that was
-not written. When it cannot be written, the record does not name it: the write after a
-step keeps the earlier position, and the first write records none. Writing one drops
+not written. When it cannot be written, the record names no step (`position: null`),
+neither that one nor the step before it, which has finished; a death before the next
+position is written leaves a run whose resume is refused (see "Resuming a dead run"
+below) instead of one that runs a finished step again. Writing one drops
 every input older than the one before it. The input the record named before therefore
 survives a death between the two writes, and that record still names it.
 `source-<hash>.json` holds the whole last output of every step another step reads by
@@ -775,8 +777,8 @@ enter one again. A detached node leaves the list in the `update_run` write that 
 its row into `runs`; from its start to the end of the run it is in exactly one of the
 two. `mark_node_started` keeps the list as recorded; `finalize_run` writes it empty
 (every detached node was joined first). When the start write cannot store the next
-step's input it keeps the earlier position, which then names the detached node while
-the list holds it; the crash conversion never names such a step as failed (below). A
+step's input, the position is `null`, so this rule holds then too. The crash conversion
+still never names a started detached node as failed (below), whatever record it reads. A
 record written before the field existed lacks it.
 On finalization: `needs_input_node` — the node the run paused at: a multi-way route to
 `__needs_input__`, a sub-workflow node whose child paused, or a `WorkNode.approval`
@@ -788,7 +790,9 @@ resumed);
 and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
 `resume_run_id` on such a run retries the failed node with the same input — completed
 nodes never re-run, and no retry framing pollutes the replayed text (a retried script
-parses its stdin). The resumed walk is seeded from the whole record — the carried
+parses its stdin). That input is the one stored whole for the record's `position` when
+the position and the stored file both name the failed node, else the record's capped
+`resume_upstream`. The resumed walk is seeded from the whole record — the carried
 `passes` plus the last walk's `runs` — so each node's next attempt number is one above
 its `reached` and its bound reads its `completed`: the retry gets a conversation of its
 own (a persistent-session node, whose key carries no attempt number, continues its one
@@ -842,7 +846,8 @@ process with that pid.
 When the owner cannot be observed (`ps` fails or times out, `/proc` cannot be read, or the
 two disagree), it counts as alive and the record is left `running` for a later sweep. A restart in place (`execv`) keeps the pid and
 start time but gets a new boot id, so the restarted process sees the runs its earlier
-start left behind as dead and the sweep finds them. The sweep
+start left behind as dead, and its own sweep finds them when it runs one (a gateway with
+the websocket channel; see "A shutdown is not a stop" below for a process that runs none). The sweep
 (`reconcile_running`) converts any `running` record whose owner is no longer alive
 (preserving its partial trace) into the record a failed step leaves — see "The
 conversion" below. Ownership makes the sweep both immediate
@@ -861,6 +866,13 @@ additionally self-heals a dead-owner run on `status`/`stop` (`reconcile_one`) an
 answers with the truth — that the run crashed, or that it is cancelled when a stop had
 been requested. Manifests written before the owner field existed fall back to a
 generous `started_at` age threshold in the sweep; the `tasks` self-heal leaves them to it.
+A record with neither an owner nor a positive, readable `started_at` has no age to judge
+it by and is never converted. The walk's own rewrite (`update_run`) never writes such a
+record: when it finds no record to carry from (one read failed, or the workflow was
+renamed while the run was in flight, so its folder moved), the record it writes names the
+writing process as its owner and the time of that write as its start, and it carries none
+of what only the first write knew (`root_session_key`, `parent_run_id`, `work_dir`,
+`work_key`, `task`, `surface`).
 
 *The conversion.* Both finders go through one function, `mark_dead_run`. Under the
 per-run lock (`run_lock_target`, the one a resume claim takes) it re-reads the record
@@ -902,11 +914,13 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   one), and the run's resume files removed, like any cancelled run. The cut rows are
   still written, and the stop file is removed once the record is.
 
-A record without a position gets no `failed_node` and no resume fields. There are three
-kinds: a sub-workflow's own run (`position: null` at every write), which still gets its
+A record without a position gets no `failed_node` and no resume fields. Such a record is
+one of these: a sub-workflow's own run (`position: null` at every write), which still gets its
 detached nodes' cut rows; a top-level run whose walk had ended (`position: null`) and
 whose process died while its detached nodes were being joined, which gets their cut rows
-too; and a record written before positions existed (no `position` key), which is only
+too; a top-level run whose next step's input could not be stored (`position: null` until
+a later position is written), which gets the cut rows of its detached nodes but none for
+the step in flight, since no position names it; and a record written before positions existed (no `position` key), which is only
 marked: its status and `active_node` cleared, its `finished_at` and `ts` untouched.
 
 **The minimal mark.** A dead run whose full conversion cannot be built — a field of an
@@ -957,9 +971,16 @@ end with the process (a process with a run still on its thread leaves it rather 
 wait for it; the TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
 the dashboard, since their log line is usually disabled). The run's record stays
-`running` until something finds its process gone: the gateway's crash sweep (at its
-start and periodically, in a gateway with the websocket channel), the `tasks` tool when
-asked about that run, or a resume of it. Each converts it, resumable at the step it was in. A
+`running` until a process that can tell finds its process gone. Once the process has
+exited, any finder can: the gateway's crash sweep (at its start and periodically, in a
+gateway with the websocket channel), the `tasks` tool when asked about that run, or a
+resume of it. Each converts it, resumable at the step it was in. A restart in place
+(`/restart`) keeps the pid and the start time, so only the restarted process itself can
+tell that its earlier start is gone (see "The conversion" below). A gateway with the
+websocket channel restarted in place sweeps at its start and finds the run. A gateway
+without it, the TUI or the REPL restarted in place runs no sweep: the run stays `running`, and a script step it was
+in keeps running, until that process's own `tasks` tool or a resume made from that
+process reaches it, or until that process exits and another finder sees it gone. A
 `durin agent -m` one-shot interrupted with Ctrl+C is the exception: asyncio's own Ctrl+C
 handling cancels its turn with no shutdown marked first, so that run is stopped.
 
@@ -974,10 +995,12 @@ never matches the `*.json` listings. The engine hands the runner the folder of t
 run's record (`NodeRunRequest.record_dir`), so a sub-workflow's script is recorded beside
 the child run's record. The runner removes the file once the process has exited, however
 the step ends: on its own, killed on a timeout or a cancel, or when the wait itself fails
-or the record cannot be written (the runner then kills and reaps the process first). Nothing
-is recorded when the start identity cannot be read, since the pid could not be told from a
-later process given the same one. When that happens to a process still running, the runner
-logs a warning that nothing would end it.
+(the runner then kills and reaps the process first). A record that cannot be written does
+not fail the step: the runner logs a warning and the script runs on, unrecorded, so a death
+of the process while it runs leaves nothing to end it. Nothing is recorded either when the
+start identity cannot be read, since the pid could not be told from a later process given
+the same one. When that happens to a process still running, the runner logs a warning that
+nothing would end it.
 
 The conversion of a dead run (`mark_dead_run`) ends what is left, under the per-run lock,
 before it writes the converted record. A script's group is judged by its members, never by
@@ -1075,8 +1098,9 @@ in the workflows skill:
 
 | Case | Reason (after "cannot be resumed — ") |
 |---|---|
+| an automation started it (`root_session_key` is `automation:<name>`): the automation keeps its own record of the run, which its orphan sweep ends `interrupted` with no replacement once the run's process is gone (while the automation still exists), and nothing in the automation resumes the dead run. Only a dead run is refused on this account; a paused run's answer and a failed step's retry are not | `it was started by an automation, and a run an automation started is not resumed by hand: the automation does not resume it, and its next run starts anew.` |
 | no `position` key (recorded before positions existed) | `it was recorded before a run kept the step it was in. Start a new run instead.` |
-| a `position` of `null`, or one the conversion did not name as `failed_node` (a started detached step, a walk that had ended, the minimal mark) | `the step it was in cannot be entered again. Start a new run instead.` |
+| a `position` of `null`, or one the conversion did not name as `failed_node` (a started detached step, a walk that had ended, a step whose input could not be stored, the minimal mark) | `the step it was in cannot be entered again. Start a new run instead.` |
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
 | its `work_dir` is gone, or no input is stored for its position (or the stored one names another step) | `its working folder was pruned. Start a new run instead.` |
 | a run of the same workflow on the same `work_key` started after it | `run '<id>' on the same key started after it and has taken over its folder.` |
@@ -1110,7 +1134,12 @@ its saved conversation; a shared-context step is given the shared conversation r
 from `shared_session`; a script runs again; a parallel step runs all its branches or
 workers again; a sub-workflow step starts its child again from the child's start step,
 as a new child run, and the dead child stays on record as `crashed`. Steps that finished
-before the death do not run again.
+before the death do not run again. What the cut step did outside durin before the death
+can therefore happen twice. Only a script step's own processes are recorded and ended when
+a run is found dead (see "A dead run's scripts end before its step runs again" above): a
+command an agent step started through its shell tool runs in a session of its own
+(`start_new_session`), is not recorded and is not ended, so a resumed agent step may run
+that command again while the first one is still running.
 
 The workflows service refuses a dead run whose `surface` is `"agent"` when a step names
 `mcps` — a step of the workflow's own definition, or of a workflow a sub-workflow step
@@ -1123,7 +1152,7 @@ live MCP tools and the service has none to give. The check is
 `resume_refusal`. A record without `surface` is never refused on its account.
 
 Only a dead run is refused. A paused run (a question or an approval) and an aborted run
-are resumed through the service as before, whatever their `surface`, so a person can
+are resumed through the service whatever their `surface`, so a person can
 still approve, revise or answer an agent-launched pause from the dashboard. That keeps a
 known limit: such a resume runs the later `mcps` steps of a run the agent started without
 their MCP tools, as a run started from the dashboard or the API always does.

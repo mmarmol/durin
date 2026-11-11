@@ -197,7 +197,9 @@ def test_reconcile_never_touches_live_owner(tmp_path):
 
 
 def test_reconcile_legacy_ownerless_uses_age(tmp_path):
-    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
+    # A positive start time: an ownerless record without one has no age and is
+    # never taken for dead.
+    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=1.0)
     run_log.start_run(tmp_path, "wf", "fresh", root_session_key="s", started_at=1950.0)
     _set_owner(tmp_path, "wf", "stale", None)
     _set_owner(tmp_path, "wf", "fresh", None)

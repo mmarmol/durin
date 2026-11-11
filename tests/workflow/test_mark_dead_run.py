@@ -196,6 +196,44 @@ def test_an_ownerless_record_is_dead_only_when_old(tmp_path):
     assert run_log.mark_dead_run(tmp_path, "w", "r1", now=2100.0, max_age_s=100.0)["status"] == "crashed"
 
 
+@pytest.mark.parametrize("started_at", [None, 0, -5.0, "x"])
+def test_an_ownerless_record_without_a_positive_start_is_never_dead(tmp_path, started_at):
+    rec = _running(tmp_path)
+    rec.pop("owner")
+    rec["started_at"] = started_at
+    run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), rec)
+    assert run_log.reconcile_running(tmp_path, now=10**10, max_age_s=1.0) == 0
+    assert run_log.mark_dead_run(tmp_path, "w", "r1", now=10**10, max_age_s=1.0) is None
+    assert run_log.read_manifest(tmp_path, "w", "r1")["status"] == "running"
+
+
+def test_a_record_written_from_nothing_carries_its_writer_and_a_start(tmp_path, monkeypatch):
+    # The one read update_run makes fails: it has nothing to carry from.
+    monkeypatch.setattr(run_log, "read_manifest", lambda *_a, **_kw: None)
+    before = time.time()
+    run_log.update_run(tmp_path, "w", "r1",
+                       WorkflowResult(status="running", final_output=None, runs=[]),
+                       position={"node": "b", "seq": 2})
+    monkeypatch.undo()
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["owner"] == process_identity()
+    assert before <= rec["started_at"] <= time.time() and rec["ts"] == rec["started_at"]
+    assert (rec["status"], rec["workflow"], rec["run_id"]) == ("running", "w", "r1")
+    assert rec["position"] == {"node": "b", "seq": 2}
+
+
+def test_a_rewrite_keeps_an_ownerless_record_ownerless(tmp_path):
+    # A record that exists without an owner (one a conversion made) is carried
+    # as it is: the rewrite never claims a record it found.
+    rec = _running(tmp_path)
+    rec.pop("owner")
+    run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), rec)
+    run_log.update_run(tmp_path, "w", "r1",
+                       WorkflowResult(status="running", final_output=None, runs=[]))
+    after = run_log.read_manifest(tmp_path, "w", "r1")
+    assert after["owner"] is None and after["started_at"] == 1.0
+
+
 def test_a_record_whose_lock_is_held_is_skipped(tmp_path, monkeypatch):
     _running(tmp_path)
     monkeypatch.setattr(run_log, "DEAD_RUN_LOCK_TIMEOUT_S", 0.2)
@@ -371,3 +409,34 @@ def test_a_started_detached_step_is_never_the_position(tmp_path, monkeypatch):
     # The step after the detached one receives the edge text it passes through,
     # stored before the record named it.
     assert seen["next_input"] == ("b", "a-out")
+
+
+def test_a_detached_step_stays_off_the_position_when_the_next_input_cannot_be_stored(
+    tmp_path, monkeypatch,
+):
+    # The input of b, the step after the detached one, cannot be written: the
+    # record then names no step, never the detached step it launched.
+    record_path = run_log._record_path(tmp_path, "w", "r1")
+    real_write = run_log._write_json
+    real_save = resume_store.save_input
+    writes = []
+
+    def save(store_dir, seq, node_id, upstream):
+        if node_id == "b":
+            raise OSError("disk full")
+        return real_save(store_dir, seq, node_id, upstream)
+
+    def recording_write(path, data):
+        if path == record_path:
+            writes.append(json.loads(json.dumps(data)))
+        real_write(path, data)
+
+    monkeypatch.setattr(resume_store, "save_input", save)
+    monkeypatch.setattr(run_log, "_write_json", recording_write)
+    engine = WorkflowEngine(node_runner=_reply, run_id_factory=lambda: "r1",
+                            workspace=str(tmp_path))
+    assert engine.run(parse_workflow(_SIDE_CHAIN), "t").status == "completed"
+    launch = [w for w in writes if _SIDE_ENTRY in (w.get("detached_active") or [])]
+    assert launch, "no write recorded the detached step"
+    assert all((w.get("position") or {}).get("node") != "side" for w in launch)
+    assert launch[0]["position"] is None

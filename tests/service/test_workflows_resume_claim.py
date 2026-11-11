@@ -321,7 +321,8 @@ async def test_an_aborted_run_resumed_through_the_service_runs_once(tmp_path):
     assert [(r["node_id"], r["iteration"]) for r in rec["runs"]] == [("only", 2)]
 
 
-def _dead_run(tmp_path, node: dict, *, surface: str | None = None) -> dict:
+def _dead_run(tmp_path, node: dict, *, surface: str | None = None,
+              root_session_key: str = "s") -> dict:
     """Run ``dead1`` of workflow ``wf`` left ``running`` by a process that died
     in its only step: its position names that step, whose input is stored, and
     its working folder exists. Returns the record as left."""
@@ -336,8 +337,8 @@ def _dead_run(tmp_path, node: dict, *, surface: str | None = None) -> dict:
     work_dir = artifact_dir(tmp_path, "dead1", "work", None)
     work_dir.mkdir(parents=True, exist_ok=True)
     resume_store.save_input(resume_store.store_dir(tmp_path, "dead1"), 1, "only", "")
-    run_log.start_run(tmp_path, "wf", "dead1", root_session_key="s", started_at=1.0,
-                      task="the task", work_dir=str(work_dir),
+    run_log.start_run(tmp_path, "wf", "dead1", root_session_key=root_session_key,
+                      started_at=1.0, task="the task", work_dir=str(work_dir),
                       position={"node": "only", "seq": 1}, surface=surface)
     f = tmp_path / "workflows-runs" / "wf" / "dead1.json"
     rec = json.loads(f.read_text(encoding="utf-8"))
@@ -358,6 +359,21 @@ async def test_a_run_whose_process_died_is_resumed_at_its_step(tmp_path):
     assert [(r["node_id"], r["iteration"], bool(r.get("cut")))
             for r in rec["history"] + rec["runs"]] == [("only", 1, True), ("only", 2, False)]
     assert rec["surface"] is None          # kept from the first walk, which named none
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_an_automation_started_is_refused(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
+              root_session_key="automation:nightly")
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError) as refused:
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert str(refused.value) == (
+        "run 'dead1' of workflow 'wf' cannot be resumed — it was started by an automation, "
+        "and a run an automation started is not resumed by hand: the automation does not "
+        "resume it, and its next run starts anew.")
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
 
 
 @pytest.mark.asyncio

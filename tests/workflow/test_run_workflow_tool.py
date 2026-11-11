@@ -1048,7 +1048,7 @@ async def test_the_run_tool_gives_the_record_back_when_its_background_resume_is_
 _DEAD_OWNER = {"pid": 2**22 + 54321, "started": "never"}
 
 
-def _dead_doer(tmp_path, node):
+def _dead_doer(tmp_path, node, *, root_session_key=None):
     """Run ``r1`` of workflow ``doer`` left ``running`` by a process that died in
     its only step, with that step's input stored and its folder in place."""
     from durin.workflow import resume_store
@@ -1059,8 +1059,8 @@ def _dead_doer(tmp_path, node):
     work_dir = artifact_dir(tmp_path, "r1", "work", None)
     work_dir.mkdir(parents=True, exist_ok=True)
     resume_store.save_input(resume_store.store_dir(tmp_path, "r1"), 1, "only", "")
-    run_log.start_run(tmp_path, "doer", "r1", root_session_key=None, started_at=1.0,
-                      task="original task", work_dir=str(work_dir),
+    run_log.start_run(tmp_path, "doer", "r1", root_session_key=root_session_key,
+                      started_at=1.0, task="original task", work_dir=str(work_dir),
                       position={"node": "only", "seq": 1}, surface="agent")
     f = tmp_path / "workflows-runs" / "doer" / "r1.json"
     rec = json.loads(f.read_text(encoding="utf-8"))
@@ -1083,6 +1083,20 @@ async def test_the_run_tool_resumes_a_run_whose_process_died(tmp_path):
     assert rec["status"] == "completed" and rec["surface"] == "agent"
     assert [(r["node_id"], r["iteration"], bool(r.get("cut")))
             for r in rec["history"] + rec["runs"]] == [("only", 1, True), ("only", 2, False)]
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_refuses_a_dead_run_an_automation_started(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="automation:nightly")
+    with patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1",
+                                            background=False)
+    assert out == ("Error: run 'r1' cannot be resumed — it was started by an automation, "
+                   "and a run an automation started is not resumed by hand: the automation "
+                   "does not resume it, and its next run starts anew.")
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "doer", "r1")["status"] == "crashed"
 
 
 @pytest.mark.asyncio

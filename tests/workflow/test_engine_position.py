@@ -145,6 +145,40 @@ def test_a_failed_step_is_still_the_position(tmp_path):
     assert resume_store.load_input(_store(tmp_path), rec["position"]["seq"]) == ("b", "a-out")
 
 
+def test_a_failed_steps_retry_receives_its_whole_input(tmp_path):
+    # b's input is longer than the record's capped copy; b fails, and its retry
+    # receives the whole input, the one stored for the position, not the cap.
+    whole = "x" * (run_log.RESUME_UPSTREAM_MAX_CHARS + 4_000)
+    runner = _Runner(fail={"b": 1}, outputs={"a": whole})
+    assert _engine(tmp_path, runner).run(_chain(), "t").status == "aborted"
+    rec = _manifest(tmp_path)
+    assert rec["failed_node"] == rec["position"]["node"] == "b"
+    stored = resume_store.load_input(_store(tmp_path), rec["position"]["seq"])
+    assert stored == ("b", whole)
+    assert stored[1][:run_log.RESUME_UPSTREAM_MAX_CHARS] == rec["resume_upstream"]
+
+    resume = build_resume_state(rec, "", workspace=tmp_path)
+    assert resume.upstream == whole
+    assert _engine(tmp_path, runner).run(_chain(), "t", resume=resume).status == "completed"
+    assert runner.received[-2] == ("b", whole)
+
+
+def test_a_failed_steps_retry_falls_back_to_the_capped_copy(tmp_path):
+    # Without the stored file (no workspace given, the file gone, or a position
+    # that names another step) the retry gets the record's capped copy.
+    whole = "x" * (run_log.RESUME_UPSTREAM_MAX_CHARS + 4_000)
+    assert _engine(tmp_path, _Runner(fail={"b": 1}, outputs={"a": whole})).run(
+        _chain(), "t").status == "aborted"
+    rec = _manifest(tmp_path)
+    capped = rec["resume_upstream"]
+    assert build_resume_state(rec, "").upstream == capped
+    assert build_resume_state({**rec, "position": None}, "", workspace=tmp_path).upstream == capped
+    assert build_resume_state({**rec, "position": {"node": "a", "seq": rec["position"]["seq"]}},
+                              "", workspace=tmp_path).upstream == capped
+    resume_store.discard(_store(tmp_path))
+    assert build_resume_state(rec, "", workspace=tmp_path).upstream == capped
+
+
 def test_a_named_source_is_stored_whole(tmp_path):
     wf = parse_workflow({"name": "w", "start": "plan", "nodes": [
         {"id": "plan", "kind": "work", "next": "mid"},
@@ -208,18 +242,50 @@ def _failing_save_input(monkeypatch, node):
 
 def test_an_input_that_cannot_be_stored_is_never_named(tmp_path, monkeypatch):
     # The input of c cannot be written: the run goes on, and while c runs the
-    # record still names b, whose input is on disk.
+    # record names no step at all — never c, whose input is not on disk, and
+    # never b, which has finished.
     _failing_save_input(monkeypatch, "c")
     seen = {}
 
     def probe(req):
         if req.node.id == "c":
             seen["position"] = _manifest(tmp_path)["position"]
-            seen["input"] = _stored_input(tmp_path)
 
     assert _engine(tmp_path, _Runner(probe=probe)).run(_chain(), "t").status == "completed"
-    assert seen["position"]["node"] == "b"
-    assert seen["input"] == ("b", "a-out")
+    assert seen["position"] is None
+
+
+class _Died(BaseException):
+    """What the walk sees of its process's death: nothing after it runs."""
+
+
+def test_a_death_after_an_input_that_cannot_be_stored_is_refused(tmp_path, monkeypatch):
+    # The input of c cannot be written, then the process dies while c runs. The
+    # record names no step, so the conversion names no finished step as failed
+    # and a resume is refused instead of running b, which finished, again.
+    from durin.workflow.engine import resumable_kind, resume_refusal
+
+    _failing_save_input(monkeypatch, "c")
+
+    def probe(req):
+        if req.node.id == "c":
+            raise _Died()
+
+    try:
+        _engine(tmp_path, _Runner(probe=probe)).run(_chain(), "t")
+    except _Died:
+        pass
+    left = _manifest(tmp_path)
+    assert left["status"] == "running" and left["position"] is None
+    assert left["active_node"]["node_id"] == "c"
+    run_log._write_json(run_log._record_path(tmp_path, "w", "r1"),
+                        {**left, "owner": {"pid": 2**22 + 4242, "started": "never"}})
+
+    rec = run_log.mark_dead_run(tmp_path, "w", "r1")
+    assert rec["status"] == "crashed" and "failed_node" not in rec
+    assert resumable_kind(rec) is None
+    assert resume_refusal(rec, workspace=tmp_path, workflow=_chain()) == (
+        "the step it was in cannot be entered again. Start a new run instead.")
 
 
 def test_a_start_input_that_cannot_be_stored_leaves_no_position(tmp_path, monkeypatch):

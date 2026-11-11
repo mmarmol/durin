@@ -304,6 +304,27 @@ def test_a_crashed_record_whose_step_cannot_be_entered_is_refused(position, fail
     assert reason in resume_refusal(rec)
 
 
+_AUTOMATION_REFUSAL = (
+    "it was started by an automation, and a run an automation started is not resumed by "
+    "hand: the automation does not resume it, and its next run starts anew.")
+
+
+def test_a_dead_run_an_automation_started_is_refused_and_no_other_run_is():
+    dead = {"run_id": "r", "status": "crashed", "position": {"node": "a", "seq": 1},
+            "failed_node": "a", "runs": []}
+    assert resume_refusal(dead) is None
+    assert resume_refusal({**dead, "root_session_key": "s"}) is None
+    assert resume_refusal({**dead, "root_session_key": "automation:nightly"}) == (
+        _AUTOMATION_REFUSAL)
+    # A paused run's answer and a failed step's retry are not dead-run resumes.
+    paused = {"run_id": "p", "status": "needs_input", "needs_input_node": "a", "runs": [],
+              "root_session_key": "automation:nightly"}
+    failed = {"run_id": "f", "status": "aborted", "failed_node": "a",
+              "runs": [{"node_id": "a", "status": "node_failed"}],
+              "root_session_key": "automation:nightly"}
+    assert resume_refusal(paused) is None and resume_refusal(failed) is None
+
+
 def test_a_sub_workflow_run_names_the_surface_of_its_caller(tmp_path):
     from durin.workflow.engine import WorkflowEngine
     from durin.workflow.subworkflow import SubworkflowRunner

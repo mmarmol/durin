@@ -193,7 +193,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   start, with the input it had; finished nodes do not re-run, a parallel node re-runs all its
   branches or workers, and a sub-workflow node starts its child again. So that node's effects
   outside durin (a sent message, a posted comment) can happen twice: before resuming, check
-  whether it already acted, and tell the user when you cannot. The resume is refused, with
+  whether it already acted, and tell the user when you cannot. Only a script node's own
+  processes are ended when a run is found dead: a command an agent node started with its
+  shell tool is not, and may still be running when the node runs it again. The resume is refused, with
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
   over — then start a new run. It is also refused while a script the dead process started
@@ -211,7 +213,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   exists, nothing the old process left is in the way: look at the run's status before
   trying again. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
-  dashboard and API refuse it. A paused or aborted run you started can still be answered or
+  dashboard and API refuse it. A crashed run an automation started is not resumed by hand
+  on any surface: the automation does not resume it, and its next run starts anew. A paused or aborted run you started can still be answered or
   retried from the dashboard, but its later `mcps` steps then run without their MCP tools.
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused

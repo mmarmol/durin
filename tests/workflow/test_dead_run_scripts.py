@@ -368,6 +368,56 @@ def test_an_owner_that_cannot_be_observed_is_not_dead(tmp_path, groups, signals,
     assert len(run_log.script_records(tmp_path, "w", "r1")) == 1
 
 
+@pytest.mark.parametrize("started_at", [None, 0, 0.0, "not a time"])
+def test_an_ownerless_record_without_a_start_time_is_not_dead(
+    tmp_path, groups, signals, started_at,
+):
+    """A ``running`` record with no ``owner`` and no readable, positive start
+    time names no process and no age to judge it by: it may be the record of a
+    walk that is still running (written where nothing was left to carry from),
+    so no sweep converts it and its script is never signalled."""
+    folder = _dead_run(tmp_path)
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    rec.pop("owner")
+    rec["started_at"] = started_at
+    run_log._write_json(run_log._record_path(tmp_path, "w", "r1"), rec)
+    proc = _start(groups, "exec sleep 61")
+    run_log.record_script(folder, "r1", pid=proc.pid, started=_started(proc.pid), node_id="a")
+
+    now = time.time()
+    assert run_log.reconcile_running(tmp_path, now=now, max_age_s=1.0) == 0
+    assert run_log.mark_dead_run(tmp_path, "w", "r1", now=now, max_age_s=1.0) is None
+    assert run_log.reconcile_one(tmp_path, "w", "r1") is False
+
+    assert run_log.read_manifest(tmp_path, "w", "r1")["status"] == "running"
+    assert signals == [] and _exists(proc.pid) and proc.poll() is None
+    assert len(run_log.script_records(tmp_path, "w", "r1")) == 1
+
+
+def test_a_record_rewritten_from_nothing_belongs_to_its_live_writer(tmp_path, groups, signals):
+    """The walk's rewrite finds no record to carry from (one read failed, or the
+    workflow was renamed while the run was in flight): the record it writes
+    names the writer as its owner, so a sweep leaves the live walk and its
+    script alone."""
+    from durin.workflow.result import WorkflowResult
+
+    run_log.start_run(tmp_path, "old", "r1", root_session_key=None, started_at=time.time(),
+                      position={"node": "a", "seq": 1})
+    (run_log.runs_root(tmp_path) / "old").rename(run_log.runs_root(tmp_path) / "new")
+    run_log.update_run(tmp_path, "old", "r1",
+                       WorkflowResult(status="running", final_output=None, runs=[]),
+                       position={"node": "b", "seq": 2})
+    proc = _start(groups, "exec sleep 61")
+    run_log.record_script(run_log.runs_root(tmp_path) / "old", "r1", pid=proc.pid,
+                          started=_started(proc.pid), node_id="b")
+
+    assert run_log.reconcile_running(
+        tmp_path, now=time.time(), max_age_s=run_log.RECONCILE_AGE_S) == 0
+
+    assert run_log.read_manifest(tmp_path, "old", "r1")["status"] == "running"
+    assert signals == [] and _exists(proc.pid) and proc.poll() is None
+
+
 def test_a_final_check_that_fails_leaves_the_script_in_scripts_left(
     tmp_path, groups, monkeypatch,
 ):

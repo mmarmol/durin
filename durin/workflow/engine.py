@@ -292,6 +292,20 @@ def _later_run_on_the_key(workspace: str | Path, manifest: dict) -> str | None:
     return None
 
 
+# The start of the root session key an automation gives every workflow run it
+# starts (``automation:<name>``). The automation keeps its own record of the
+# run: when the run's process dies, its orphan sweep (while the automation
+# exists) ends that record ``interrupted`` and starts no replacement for work
+# that had started, and nothing in it resumes the dead run; each later run it
+# starts is a new one. The refusal names no automation: the key's other
+# sessions under the same prefix (an automation's filter turn) are not named
+# after one.
+AUTOMATION_ROOT_PREFIX = "automation:"
+AUTOMATION_RUN_REFUSAL = ("it was started by an automation, and a run an automation "
+                          "started is not resumed by hand: the automation does not resume "
+                          "it, and its next run starts anew.")
+
+
 def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
                    workflow: Workflow | None = None) -> str | None:
     """Why a run whose status could be resumed (``needs_input`` with a
@@ -317,12 +331,17 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     between two steps has no row for the step it was about to enter.
 
     A dead run is entered again at its position, with the input stored for it,
-    in its working folder. It is refused when it was recorded before records
-    kept a position, when its step cannot be entered again (no position, or one
-    the conversion did not name as failed: a detached step that had started, a
-    walk that had ended), when ``workflow`` (the current definition) no longer
-    has its step, when ``workspace`` shows its working folder or its stored input
-    gone, and when a later run on its ``work_key`` has taken the folder over.
+    in its working folder. It is refused when an automation started it (its
+    ``root_session_key`` is ``automation:<name>``): the automation keeps a record
+    of the run and never resumes it, so a resume by hand would run its steps
+    outside it. A paused run's answer and a failed step's retry are not refused
+    on that account. It is refused when it was recorded before records kept a
+    position, when its step cannot be entered again (no position — a walk that
+    had ended, or one whose next input could not be stored — or one the
+    conversion did not name as failed: a detached step that had started), when
+    ``workflow`` (the current definition) no longer has its step, when
+    ``workspace`` shows its working folder or its stored input gone, and when a
+    later run on its ``work_key`` has taken the folder over.
     A script the dead process left that may still run is a refusal of its own,
     ``run_log.dead_run_refusal``, which observes processes and so is asked
     off the event loop, together with the conversion (``run_log.settle_dead_run``)."""
@@ -351,6 +370,9 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
 def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
                       workflow: Workflow | None) -> str | None:
     """The ``crashed`` part of ``resume_refusal``, asked in this order."""
+    root = manifest.get("root_session_key")
+    if isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX):
+        return AUTOMATION_RUN_REFUSAL
     if "position" not in manifest:
         return ("it was recorded before a run kept the step it was in. Start a new "
                 "run instead.")
@@ -441,9 +463,12 @@ def build_resume_state(manifest: dict, answers: str, *,
     Three upstream contracts: a ``needs_input`` node ASKED, so it receives the
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
-    retry framing may pollute it; a DEAD run's step (its position) receives the
-    input stored whole for that position when ``workspace`` is given and the file
-    is there, else the record's capped ``resume_upstream``. Answers given to a
+    retry framing may pollute it — whole from the input stored for the record's
+    position when ``workspace`` is given and the position and the stored file both
+    name the failed node, else the record's capped ``resume_upstream``; a DEAD
+    run's step (its position) receives the input stored whole for that position
+    when ``workspace`` is given and the file is there, else the record's capped
+    ``resume_upstream``. Answers given to a
     paused run whose resume then died are not replayed: the run is entered at its
     position like any dead run.
 
@@ -496,12 +521,21 @@ def build_resume_state(manifest: dict, answers: str, *,
             earlier_rows=earlier_rows,
             shared_session=shared_session,
         )
+    failed_node = manifest["failed_node"]
+    upstream = manifest.get("resume_upstream")
+    position = manifest.get("position")
+    if (workspace is not None and isinstance(position, dict)
+            and position.get("node") == failed_node):
+        stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                         position.get("seq") or 0)
+        if stored is not None and stored[0] == failed_node:
+            upstream = stored[1]
     return ResumeState(
         run_id=manifest["run_id"],
-        start_at=manifest["failed_node"],
+        start_at=failed_node,
         visits=visits,
         completed=completed,
-        upstream=manifest.get("resume_upstream"),
+        upstream=upstream,
         recorded_outputs=recorded_outputs,
         whole_outputs=whole_outputs,
         work_key=work_key,
@@ -915,8 +949,12 @@ class WorkflowEngine:
                     position = run_log.KEEP_POSITION
                 elif isinstance(position, dict) and store is not None and not self._store_input(
                         workflow, store, position, upstream):
-                    # Never point the record at an input that was not written.
-                    position = run_log.KEEP_POSITION
+                    # Never point the record at an input that was not written,
+                    # nor keep the step before, which has finished (or, for a
+                    # detached launch, has started its side effect): the record
+                    # names no step, and a death before the next position is
+                    # written leaves a run that is refused, not re-entered.
+                    position = None
                 # The detached nodes still running go with the trace: a node
                 # whose row was just drained into `runs` leaves the list in the
                 # same write, and one about to be launched (`starting_detached`)
@@ -1173,7 +1211,8 @@ class WorkflowEngine:
                          position: dict | None | object = run_log.KEEP_POSITION,
                          detached_active: list[dict] | None = None) -> None:
         """Rewrite the live record. ``position`` is the step the walk enters next
-        (None once the walk has ended); left out, the recorded one is kept — the
+        (None once the walk has ended, or when that step's input could not be
+        stored); left out, the recorded one is kept — the
         write that precedes a step's failure, where the failed step stays the
         position. ``detached_active`` is the detached nodes still running."""
         if self._workspace is None:

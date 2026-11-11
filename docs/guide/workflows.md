@@ -433,7 +433,11 @@ sub-workflow step starts its child workflow again from its first step.
 So a step that acts outside durin — sends a message, posts a comment, writes
 to another system — should be safe to run twice. The general way is a script
 that checks before it acts (has this comment already been posted?) and does
-nothing when it has. `reuse: "if-unchanged"` does not skip the step that was
+nothing when it has. Only a script step's own processes are tracked and ended
+when a run is found dead (below). A command an agent step started through its
+shell tool runs in a session of its own and is neither tracked nor ended: when
+that agent step runs again, it may start the command a second time while the
+first one is still running. `reuse: "if-unchanged"` does not skip the step that was
 cut, since a step entered again is never reused, but it does let the steps a
 restarted sub-workflow had already finished skip their work when their input
 is unchanged.
@@ -460,10 +464,16 @@ agent started is resumed only through the agent's `run_workflow` when its
 workflow, or a sub-workflow it calls, has a step with `mcps`: the dashboard
 and the API refuse it, because only the agent can give those steps their MCP
 tools. This applies to crashed runs only. A paused run (a question or an
-approval) and a run that aborted at a step are answered or retried from the
-dashboard or the API as before; when the agent started such a run, its later
-`mcps` steps then run without their MCP tools, as in any run started from
-the dashboard.
+approval) and a run that aborted at a step can be answered or retried from the
+dashboard or the API; when the agent started such a run, its later `mcps`
+steps then run without their MCP tools, as in any run started from the
+dashboard.
+
+A crashed run an [automation](automations.md) started is not resumed by hand:
+the agent's `run_workflow`, the dashboard and the API all refuse it. The
+automation records its own run as interrupted, does not resume the crashed
+one, and its next run starts anew. Only a crashed run is refused on this
+account.
 
 Known limits: a process that dies while a `union` parallel step is
 applying its branches' files can leave the working folder partly applied. A
