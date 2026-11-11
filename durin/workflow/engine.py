@@ -227,30 +227,106 @@ def manifest_completed_passes(manifest: dict) -> dict[str, int]:
     return {node: c["completed"] for node, c in run_log.pass_counts(manifest).items()}
 
 
-def resume_refusal(manifest: dict) -> str | None:
+def _dead_position(manifest: dict) -> dict | None:
+    """The position of a ``crashed`` record that can be entered again: the
+    conversion of the dead run named its step as ``failed_node``. None otherwise."""
+    position = manifest.get("position")
+    if (manifest.get("status") == "crashed" and isinstance(position, dict)
+            and position.get("node") and manifest.get("failed_node") == position["node"]):
+        return position
+    return None
+
+
+def resumable_kind(manifest: dict) -> str | None:
+    """Which kind of resume a run's record allows: ``"paused"`` (``needs_input``
+    with a ``needs_input_node``), ``"failed"`` (``aborted`` with a
+    ``failed_node``), ``"dead"`` (``crashed`` with a ``position`` whose step the
+    dead run's conversion named as ``failed_node``), or None.
+
+    Decided by the status first: a ``crashed`` record can still carry the
+    ``needs_input_node`` or ``failed_node`` of the record a resume had claimed
+    before its own process died, and it is a dead run all the same."""
+    status = manifest.get("status")
+    if status == "crashed":
+        return "dead" if _dead_position(manifest) is not None else None
+    if status == "needs_input" and manifest.get("needs_input_node"):
+        return "paused"
+    if status == "aborted" and manifest.get("failed_node"):
+        return "failed"
+    return None
+
+
+def _later_run_on_the_key(workspace: str | Path, manifest: dict) -> str | None:
+    """The id of a run of the same workflow on the same ``work_key`` that started
+    after this one, or None. Runs on one key are serialized by the key's lock, so
+    a run that started later worked in the folder after this one, which no longer
+    holds what this run left there. This run's own start is the bound, not its
+    ``finished_at``: a dead run's end is the time its death was recorded, which
+    can come after a later run took the key."""
+    work_key = manifest.get("work_key")
+    name = manifest.get("workflow")
+    if not work_key or not name:
+        return None
+    try:
+        started = float(manifest.get("started_at") or 0.0)
+    except (TypeError, ValueError):
+        started = 0.0
+    for entry in run_log.list_runs(workspace, name, limit=10**9):
+        if entry.get("run_id") == manifest.get("run_id"):
+            continue
+        other = run_log.read_manifest(workspace, name, entry.get("run_id") or "") or {}
+        try:
+            other_started = float(other.get("started_at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if other.get("work_key") == work_key and other_started > started:
+            return other.get("run_id")
+    return None
+
+
+def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
+                   workflow: Workflow | None = None) -> str | None:
     """Why a run whose status could be resumed (``needs_input`` with a
-    ``needs_input_node``, or ``aborted`` with a ``failed_node``) still cannot be,
-    or None. Every resume surface asks this before it touches the record.
+    ``needs_input_node``, ``aborted`` with a ``failed_node``, or ``crashed``)
+    still cannot be, or None. Every resume surface asks this before it touches
+    the record. A ``crashed`` record that ``resumable_kind`` does not accept
+    always gets a reason, so a surface can say why instead of only that it
+    cannot. Reads only; never writes.
 
     A sub-workflow step's run (a record with a ``parent_run_id``) is never resumed
-    on its own, paused or failed: it would run its step in its own folder instead
-    of the caller's, end ``completed`` and leave the caller stopped. Resuming the
-    caller re-runs the sub-workflow step, in the caller's folder.
+    on its own, paused, failed or dead: it would run its step in its own folder
+    instead of the caller's, end ``completed`` and leave the caller stopped.
+    Resuming the caller re-runs the sub-workflow step, in the caller's folder.
 
-    A resume re-enters the walk at the failed node, so that node must be one the
-    walk itself dispatched: it has a failed row that belongs to no parallel node.
-    A record that names a branch or a fan-out worker has no such row, and kept no
-    input for it. Re-entering there would run that one unit as if it were a step
-    of the walk — without its input, without reconciling its siblings, without
-    anything that follows the parallel node — and report the run completed."""
-    paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
-    failed = manifest.get("failed_node") if manifest.get("status") == "aborted" else None
-    if not paused and not failed:
+    A resume of a failed run re-enters the walk at the failed node, so that node
+    must be one the walk itself dispatched: it has a failed row that belongs to no
+    parallel node. A record that names a branch or a fan-out worker has no such
+    row, and kept no input for it. Re-entering there would run that one unit as
+    if it were a step of the walk — without its input, without reconciling its
+    siblings, without anything that follows the parallel node — and report the
+    run completed. A dead run needs no such check: its step is the record's
+    position, which only ever names a step of the walk, and a run that died
+    between two steps has no row for the step it was about to enter.
+
+    A dead run is entered again at its position, with the input stored for it,
+    in its working folder. It is refused when it was recorded before records
+    kept a position, when its step cannot be entered again (no position, or one
+    the conversion did not name as failed: a detached step that had started, a
+    walk that had ended), when ``workflow`` (the current definition) no longer
+    has its step, when ``workspace`` shows its working folder or its stored input
+    gone, and when a later run on its ``work_key`` has taken the folder over."""
+    status = manifest.get("status")
+    paused = status == "needs_input" and manifest.get("needs_input_node")
+    failed = manifest.get("failed_node") if status == "aborted" else None
+    crashed = status == "crashed"
+    if not paused and not failed and not crashed:
         return None
     parent = manifest.get("parent_run_id")
     if parent:
         return (f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
                 f"run {parent!r} instead: it runs the sub-workflow step again.")
+    if crashed:
+        return _dead_run_refusal(manifest, workspace=workspace, workflow=workflow)
     if not failed:
         return None
     for r in manifest.get("runs") or []:
@@ -261,25 +337,90 @@ def resume_refusal(manifest: dict) -> str | None:
             "parallel node cannot be retried on its own. Start a new run instead.")
 
 
-def build_resume_state(manifest: dict, answers: str) -> ResumeState:
-    """The ResumeState for re-entering a paused or failed run, built from its manifest.
-    The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
-    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: each
-    node's highest attempt number and completed passes over the whole run, and the
-    re-entry upstream.
+def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
+                      workflow: Workflow | None) -> str | None:
+    """The ``crashed`` part of ``resume_refusal``, asked in this order."""
+    if "position" not in manifest:
+        return ("it was recorded before a run kept the step it was in. Start a new "
+                "run instead.")
+    position = _dead_position(manifest)
+    if position is None:
+        return "the step it was in cannot be entered again. Start a new run instead."
+    step = position["node"]
+    if workflow is not None and step not in workflow.nodes:
+        return (f"its step {step!r} is no longer in the workflow's definition. Start a "
+                "new run instead.")
+    if workspace is not None:
+        work_dir = manifest.get("work_dir")
+        stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                         position.get("seq") or 0)
+        if (work_dir and not Path(work_dir).is_dir()) or stored is None or stored[0] != step:
+            return "its working folder was pruned. Start a new run instead."
+        later = _later_run_on_the_key(workspace, manifest)
+        if later:
+            return (f"run {later!r} on the same key started after it and has taken over "
+                    "its folder.")
+    return None
 
-    Two distinct upstream contracts: a ``needs_input`` node ASKED, so it receives the
+
+def resume_source_outputs(manifest: dict, workspace: str | Path | None) -> dict[str, str]:
+    """What a resumed walk reads for the steps other steps read by name: the
+    record's capped ``resume_inputs``, overlaid with the whole outputs the run
+    stored when ``workspace`` is given."""
+    recorded = dict(manifest.get("resume_inputs") or {})
+    if workspace is not None and manifest.get("run_id"):
+        recorded.update(resume_store.load_sources(
+            resume_store.store_dir_of(workspace, manifest)))
+    return recorded
+
+
+def build_resume_state(manifest: dict, answers: str, *,
+                       workspace: str | Path | None = None) -> ResumeState:
+    """The ResumeState for re-entering a paused, failed or dead run, built from its
+    manifest. The caller validates resumability first (``resumable_kind`` and
+    ``resume_refusal``); this only folds the mechanical parts: each node's highest
+    attempt number and completed passes over the whole run, the outputs of the
+    steps read by name, and the re-entry upstream.
+
+    Three upstream contracts: a ``needs_input`` node ASKED, so it receives the
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
-    retry framing may pollute it."""
+    retry framing may pollute it; a DEAD run's step (its position) receives the
+    input stored whole for that position when ``workspace`` is given and the file
+    is there, else the record's capped ``resume_upstream``. Answers given to a
+    paused run whose resume then died are not replayed: the run is entered at its
+    position like any dead run.
+
+    With ``workspace``, the steps read by name get the whole outputs the run
+    stored, over the record's capped copies, for every kind."""
     visits = manifest_visit_counts(manifest)
     completed = manifest_completed_passes(manifest)
-    recorded_outputs = dict(manifest.get("resume_inputs") or {})
+    recorded_outputs = resume_source_outputs(manifest, workspace)
     work_key = manifest.get("work_key")
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     shared_session = manifest.get("shared_session")
+    kind = resumable_kind(manifest)
+    if kind == "dead":
+        position = manifest["position"]
+        upstream = manifest.get("resume_upstream")
+        if workspace is not None:
+            stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                             position.get("seq") or 0)
+            if stored is not None and stored[0] == position["node"]:
+                upstream = stored[1]
+        return ResumeState(
+            run_id=manifest["run_id"],
+            start_at=position["node"],
+            visits=visits,
+            completed=completed,
+            upstream=upstream,
+            recorded_outputs=recorded_outputs,
+            work_key=work_key,
+            earlier_rows=earlier_rows,
+            shared_session=shared_session,
+        )
     needs_input_node = manifest.get("needs_input_node")
-    if needs_input_node:
+    if kind == "paused" or (kind is None and needs_input_node):
         questions = manifest.get("final_output") or ""
         return ResumeState(
             run_id=manifest["run_id"],
@@ -493,6 +634,7 @@ class WorkflowEngine:
         parallel_script_concurrency: int = 4,
         on_run_end: Callable[[str], None] | None = None,
         shared_context_loader: Callable[[str], list[dict]] | None = None,
+        launch_surface: str | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -546,6 +688,12 @@ class WorkflowEngine:
         # restore the shared-context buffer from the record's ``shared_session``;
         # None means a resumed walk starts with an empty buffer.
         self._shared_context_loader = shared_context_loader
+        # Which surface launched the run ("agent": the run tool, whose steps have
+        # the gateway's live MCP tools; "service": the workflows service), written
+        # on the record by the run's first walk and kept by every resume, so a
+        # surface asked to resume it can tell whether it can give the steps the
+        # tools they had. None when the caller does not say.
+        self._launch_surface = launch_surface
 
     def run(
         self,
@@ -934,7 +1082,8 @@ class WorkflowEngine:
                                   {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
                               durin_version=provenance.durin_version(),
                               resumed=resumed,
-                              position=position)
+                              position=position,
+                              surface=self._launch_surface)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
         return seq

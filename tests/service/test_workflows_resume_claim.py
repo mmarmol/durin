@@ -319,3 +319,106 @@ async def test_an_aborted_run_resumed_through_the_service_runs_once(tmp_path):
     assert result.status == "completed"
     rec = run_log.read_manifest(tmp_path, "wf", "failed1")
     assert [(r["node_id"], r["iteration"]) for r in rec["runs"]] == [("only", 2)]
+
+
+def _dead_run(tmp_path, node: dict, *, surface: str | None = None) -> dict:
+    """Run ``dead1`` of workflow ``wf`` left ``running`` by a process that died
+    in its only step: its position names that step, whose input is stored, and
+    its working folder exists. Returns the record as left."""
+    from durin.workflow import resume_store
+    from durin.workflow.artifacts import artifact_dir
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wf.json").write_text(json.dumps(
+        {"name": "wf", "start": "only", "nodes": [{"id": "only", **node, "next": None}]}),
+        encoding="utf-8")
+    work_dir = artifact_dir(tmp_path, "dead1", "work", None)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    resume_store.save_input(resume_store.store_dir(tmp_path, "dead1"), 1, "only", "")
+    run_log.start_run(tmp_path, "wf", "dead1", root_session_key="s", started_at=1.0,
+                      task="the task", work_dir=str(work_dir),
+                      position={"node": "only", "seq": 1}, surface=surface)
+    f = tmp_path / "workflows-runs" / "wf" / "dead1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, active_node={
+        "node_id": "only", "label": "only", "started_at": 1.0,
+        "iteration": 1, "session_key": None})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    return run_log.read_manifest(tmp_path, "wf", "dead1")
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_process_died_is_resumed_at_its_step(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    rec = run_log.read_manifest(tmp_path, "wf", "dead1")
+    assert [(r["node_id"], r["iteration"], bool(r.get("cut")))
+            for r in rec["history"] + rec["runs"]] == [("only", 1, True), ("only", 2, False)]
+    assert rec["surface"] is None          # kept from the first walk, which named none
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_run_recorded_before_positions_is_refused_and_left_alone(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    f = tmp_path / "workflows-runs" / "wf" / "dead1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.pop("position")
+    rec.pop("owner")
+    rec.update(status="crashed", active_node=None)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    before = f.read_bytes()
+    with _provider():
+        with pytest.raises(ValidationFailedError, match="before a run kept the step"):
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert f.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_an_agent_run_with_mcp_steps_is_left_to_the_agent(tmp_path):
+    _dead_run(tmp_path, {"kind": "work", "mcps": ["tracker"]}, surface="agent")
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError, match="only a run resumed by the agent"):
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_an_agent_run_with_mcp_steps_paused_for_approval_can_still_be_rejected(tmp_path):
+    # A reject runs no step, so the tools the steps had do not matter.
+    _paused_run(tmp_path, {"kind": "work", "mcps": ["tracker"]})
+    f = tmp_path / "workflows-runs" / "wf" / "paused1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(ask_kind="approval", surface="agent")
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "reject", resume_run_id="paused1")
+    assert result.status == "cancelled" and result.rejected
+
+
+@pytest.mark.asyncio
+async def test_a_resume_keeps_the_surface_that_launched_the_run(tmp_path):
+    # Launched by the agent, resumed through the service: no step names MCP
+    # tools, so the service may resume it, and the record still says who launched it.
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent")
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["surface"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_a_run_the_service_launches_is_recorded_as_the_services(tmp_path):
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wf.json").write_text(json.dumps(
+        {"name": "wf", "start": "only",
+         "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}]}),
+        encoding="utf-8")
+    with _provider():
+        result = await _svc(tmp_path).execute("wf", "go", run_id="fresh1")
+    assert result.status == "completed"
+    assert run_log.read_manifest(tmp_path, "wf", "fresh1")["surface"] == "service"

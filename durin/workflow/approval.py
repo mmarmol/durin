@@ -18,7 +18,14 @@ manifest that pause writes is a resume point with three possible replies:
 
 from __future__ import annotations
 
-from durin.workflow.engine import ResumeState, manifest_completed_passes, manifest_visit_counts
+from pathlib import Path
+
+from durin.workflow.engine import (
+    ResumeState,
+    manifest_completed_passes,
+    manifest_visit_counts,
+    resume_source_outputs,
+)
 from durin.workflow.spec import Workflow
 
 # Single-word reply vocabulary (case-insensitive, surrounding punctuation stripped).
@@ -43,7 +50,8 @@ def parse_approval_reply(text: str) -> str | None:
 
 
 def build_approval_resume(
-    workflow: Workflow, manifest: dict, action: str, comment: str,
+    workflow: Workflow, manifest: dict, action: str, comment: str, *,
+    workspace: str | Path | None = None,
 ) -> ResumeState | None:
     """The ``ResumeState`` for acting on an approval-pause reply. ``action`` is
     "approve" or "revise" — "reject" never reaches here; the caller finalizes the
@@ -59,7 +67,8 @@ def build_approval_resume(
     ``comment`` framed as feedback alongside the run's original upstream text.
 
     ``ResumeState.recorded_outputs`` always starts from the manifest's own
-    ``resume_inputs`` (the same seed ``build_resume_state`` uses) — the pause
+    ``resume_inputs`` (the same seed ``build_resume_state`` uses, overlaid with
+    the whole outputs the run stored when ``workspace`` is given) — the pause
     already recorded it, for the SAME reason any other needs_input/aborted pause
     does (``run_log._resume_inputs``): the resumed walk's own in-memory trace
     starts empty, so any node's ``inputs_from`` reference to a source that ran
@@ -78,7 +87,7 @@ def build_approval_resume(
     visits = manifest_visit_counts(manifest)
     completed = manifest_completed_passes(manifest)
     work_key = manifest.get("work_key")
-    recorded_outputs = dict(manifest.get("resume_inputs") or {})
+    recorded_outputs = resume_source_outputs(manifest, workspace)
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     shared_session = manifest.get("shared_session")
     if action == "approve":

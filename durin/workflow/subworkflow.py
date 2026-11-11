@@ -34,6 +34,7 @@ class SubworkflowRunner:
         parallel_script_concurrency: int = 4,
         max_node_visits: int = 1000,
         prune_keep: int = 20,
+        launch_surface: str | None = None,
         _depth: int = 0,
         _stack: tuple[str, ...] = (),
     ) -> None:
@@ -48,6 +49,9 @@ class SubworkflowRunner:
         # run is bound by the same visit ceiling and manifest retention.
         self.max_node_visits = max_node_visits
         self.prune_keep = prune_keep
+        # The surface that launched the caller's run: a nested run's record
+        # names the same one, since its steps run with the caller's tools.
+        self.launch_surface = launch_surface
         self._depth = _depth
         self._stack = _stack
 
@@ -79,6 +83,7 @@ class SubworkflowRunner:
             parallel_script_concurrency=self.parallel_script_concurrency,
             max_node_visits=self.max_node_visits,
             prune_keep=self.prune_keep,
+            launch_surface=self.launch_surface,
             _depth=self._depth + 1, _stack=self._stack + (name,),
         )
 
@@ -117,6 +122,7 @@ class SubworkflowRunner:
             parallel_script_concurrency=self.parallel_script_concurrency,
             max_node_visits=self.max_node_visits,
             prune_keep=self.prune_keep,
+            launch_surface=self.launch_surface,
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).

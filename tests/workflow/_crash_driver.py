@@ -3,11 +3,21 @@ can end this process while a chosen step is running.
 
     python -I tests/workflow/_crash_driver.py <workspace> <definition.json> <task>
 
-Every step records each start as one line in ``<workspace>/marks/<step id>``.
-The step whose id is in ``DURIN_TEST_HANG_IN`` writes ``<workspace>/marks/.hung``
-and then sleeps, which is the moment the test ends the process. ``SIGUSR1``
-makes the process replace its own image (same pid) with an idle interpreter,
-which is what a restart in place looks like from outside.
+Every step records each start as one line in ``<workspace>/marks/<step id>``,
+the attempt number it was given as one line in ``marks/<step id>.iter``, and what
+it was given (the shared conversation and the edge text) as one JSON line in
+``marks/<step id>.seen``. The step whose id is in ``DURIN_TEST_HANG_IN`` (or the
+fan-out worker whose task is ``DURIN_TEST_HANG_TASK``) writes
+``<workspace>/marks/.hung`` and then sleeps, which is the moment the test ends
+the process; when ``DURIN_TEST_HANG_AFTER`` names steps (comma-separated), it
+first waits until each of them has started, so the test knows what ran before
+the end. ``SIGUSR1`` makes the process replace its own image (same pid) with an
+idle interpreter, which is what a restart in place looks like from outside.
+
+Other switches: ``DURIN_TEST_RUN_ID`` gives the run another id than ``r1``;
+``DURIN_TEST_WORK_KEY`` runs it on that work key; ``DURIN_TEST_RESUME=1``
+resumes the dead run with that id instead of starting one, the way a resume
+surface does (convert it, ask why it could not be resumed, enter it).
 
 This module imports nothing from the test suite. The harness imports it for
 ``build_engine`` so that a run continued inside the test process uses exactly
@@ -30,29 +40,71 @@ if __name__ == "__main__":
     # ``durin`` the test process imported, not whatever else is installed.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from durin.workflow.engine import NodeRunResponse, WorkflowEngine  # noqa: E402
+from durin.workflow import run_log  # noqa: E402
+from durin.workflow.engine import (  # noqa: E402
+    NodeRunResponse,
+    WorkflowEngine,
+    build_resume_state,
+    resume_refusal,
+)
 from durin.workflow.script_runner import ScriptNodeRunner  # noqa: E402
 from durin.workflow.spec import parse_workflow  # noqa: E402
 from durin.workflow.subworkflow import SubworkflowRunner  # noqa: E402
 
 RUN_ID = "r1"
 HANG_ENV = "DURIN_TEST_HANG_IN"
+HANG_TASK_ENV = "DURIN_TEST_HANG_TASK"
+HANG_AFTER_ENV = "DURIN_TEST_HANG_AFTER"
+RUN_ID_ENV = "DURIN_TEST_RUN_ID"
+WORK_KEY_ENV = "DURIN_TEST_WORK_KEY"
+RESUME_ENV = "DURIN_TEST_RESUME"
 HANG_SECONDS = 120
+_HANG_AFTER_WAIT_S = 20.0
 
 
 def marks_dir(workspace: str | Path) -> Path:
     return Path(workspace) / "marks"
 
 
-def _hangs(step_id: str) -> bool:
-    return os.environ.get(HANG_ENV) == step_id
+def sessions_dir(workspace: str | Path) -> Path:
+    return Path(workspace) / "stand-in-sessions"
+
+
+def _hangs(step_id: str, task: str | None = None) -> bool:
+    if os.environ.get(HANG_ENV) == step_id:
+        return True
+    hang_task = os.environ.get(HANG_TASK_ENV)
+    return bool(hang_task) and (task or "").strip() == hang_task
+
+
+def _hang(marks: Path) -> None:
+    """Wait until every step named in ``DURIN_TEST_HANG_AFTER`` has started, then
+    flag the hang and sleep until the test ends this process."""
+    after = [s for s in os.environ.get(HANG_AFTER_ENV, "").split(",") if s]
+    deadline = time.monotonic() + _HANG_AFTER_WAIT_S
+    while not all((marks / s).exists() for s in after) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    (marks / ".hung").touch()
+    time.sleep(HANG_SECONDS)
+
+
+def _session_file(workspace: str | Path, key: str) -> Path:
+    return sessions_dir(workspace) / (key.replace(":", "_").replace("/", "_") + ".json")
+
+
+def load_shared_context(workspace: str | Path, key: str) -> list[dict]:
+    """The conversation the stand-in agent saved under session ``key``."""
+    return json.loads(_session_file(workspace, key).read_text(encoding="utf-8"))
 
 
 class StandInAgent:
     """Answers an agent step without a model: records the start, hangs when asked
-    to, and otherwise replies ``<id>-out`` with a two-message conversation."""
+    to, and otherwise replies ``<id>-out`` with a two-message conversation, which
+    it saves under its session key with the shared conversation it was given
+    (what a real step's saved session holds)."""
 
     def __init__(self, workspace: str | Path) -> None:
+        self._workspace = Path(workspace)
         self._marks = marks_dir(workspace)
 
     def __call__(self, req):
@@ -60,19 +112,24 @@ class StandInAgent:
         self._marks.mkdir(parents=True, exist_ok=True)
         with open(self._marks / step, "a", encoding="utf-8") as fh:
             fh.write(step + "\n")
-        if _hangs(step):
-            (self._marks / ".hung").touch()
-            time.sleep(HANG_SECONDS)
+        with open(self._marks / f"{step}.iter", "a", encoding="utf-8") as fh:
+            fh.write(f"{req.iteration}\n")
+        with open(self._marks / f"{step}.seen", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"shared": req.shared_context,
+                                 "upstream": req.upstream_output}) + "\n")
+        if _hangs(step, req.task):
+            _hang(self._marks)
         output = f"{step}-out"
         if getattr(req.node, "tools", "none") == "default" and req.output_dir:
             Path(req.output_dir).mkdir(parents=True, exist_ok=True)
             Path(req.output_dir, f"{step}.txt").write_text(output + "\n", encoding="utf-8")
-        return NodeRunResponse(
-            output=output,
-            session_key=f"workflow:{RUN_ID}:{step}:{req.iteration}",
-            messages=[{"role": "user", "content": req.task},
-                      {"role": "assistant", "content": output}],
-        )
+        messages = [{"role": "user", "content": req.task},
+                    {"role": "assistant", "content": output}]
+        key = f"workflow:{req.run_id}:{step}:{req.iteration}"
+        session = _session_file(self._workspace, key)
+        session.parent.mkdir(parents=True, exist_ok=True)
+        session.write_text(json.dumps(list(req.shared_context) + messages), encoding="utf-8")
+        return NodeRunResponse(output=output, session_key=key, messages=messages)
 
 
 class MarkingScriptRunner:
@@ -100,10 +157,16 @@ class MarkingScriptRunner:
         return self._inner(req)
 
 
-def build_engine(workspace: str | Path) -> WorkflowEngine:
-    """The engine the child runs: stand-in agent, real script runner, run id
-    ``r1``, and a real sub-workflow runner when ``<workspace>/workflows`` holds
-    more than one definition."""
+def _pick_first(_criteria, _outputs, _model) -> int:
+    """The stand-in judge of a ``choose`` step: the first branch wins."""
+    return 0
+
+
+def build_engine(workspace: str | Path, run_id: str = RUN_ID) -> WorkflowEngine:
+    """The engine the child runs: stand-in agent, real script runner, a judge
+    that picks the first branch, run id ``run_id``, a shared conversation read
+    back from the stand-in's saved sessions, and a real sub-workflow runner when
+    ``<workspace>/workflows`` holds more than one definition."""
     workspace = Path(workspace)
     agent = StandInAgent(workspace)
     scripts = MarkingScriptRunner(workspace)
@@ -113,9 +176,11 @@ def build_engine(workspace: str | Path) -> WorkflowEngine:
     return WorkflowEngine(
         node_runner=agent,
         script_runner=scripts,
-        run_id_factory=lambda: RUN_ID,
+        run_id_factory=lambda: run_id,
         workspace=str(workspace),
         subworkflow_runner=nested,
+        pick_runner=_pick_first,
+        shared_context_loader=lambda key: load_shared_context(workspace, key),
     )
 
 
@@ -123,11 +188,29 @@ def _replace_image(_signum, _frame) -> None:
     os.execv(sys.executable, [sys.executable, "-I", "-c", "import time; time.sleep(120)"])
 
 
+def _resume(workspace: Path, workflow, run_id: str, task: str) -> int:
+    """Resume the dead run ``run_id`` the way a resume surface does."""
+    record = (run_log.mark_dead_run(workspace, workflow.name, run_id)
+              or run_log.read_manifest(workspace, workflow.name, run_id))
+    refusal = resume_refusal(record or {}, workspace=workspace, workflow=workflow)
+    if record is None or refusal:
+        print(f"run {run_id!r} cannot be resumed: {refusal}", file=sys.stderr)
+        return 2
+    build_engine(workspace, run_id).run(
+        workflow, record.get("task") or task,
+        resume=build_resume_state(record, "", workspace=workspace))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     workspace, definition, task = Path(argv[1]), Path(argv[2]), argv[3]
     signal.signal(signal.SIGUSR1, _replace_image)
     workflow = parse_workflow(json.loads(definition.read_text(encoding="utf-8")))
-    build_engine(workspace).run(workflow, task)
+    run_id = os.environ.get(RUN_ID_ENV) or RUN_ID
+    if os.environ.get(RESUME_ENV) == "1":
+        return _resume(workspace, workflow, run_id, task)
+    build_engine(workspace, run_id).run(
+        workflow, task, work_key=os.environ.get(WORK_KEY_ENV) or None)
     return 0
 
 

@@ -258,6 +258,7 @@ def start_run(
     durin_version: str | None = None,
     resumed: bool = False,
     position: dict | None = None,
+    surface: str | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -275,7 +276,9 @@ def start_run(
     ``runs`` start empty here, so they never hold the earlier attempts' rows; the
     node ids those attempts walked are kept in ``earlier_nodes`` and their rows in
     ``history`` (bounded), with per-step pass counts in ``passes``.
-    ``position`` is the step the walk enters first, ``{"node", "seq"}``."""
+    ``position`` is the step the walk enters first, ``{"node", "seq"}``.
+    ``surface`` is the surface that launched the run (``"agent"``, ``"service"``
+    or None); a resumed walk keeps the value its record already has instead."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -312,6 +315,9 @@ def start_run(
         # carry these two forward unchanged on every later rewrite.
         "spec_hash": spec_hash,
         "durin_version": durin_version,
+        # The surface that launched the run, from its first walk: a resume keeps
+        # it, since the steps had the tools of the surface that launched them.
+        "surface": prior.get("surface") if resumed else surface,
         # Sticky once set: every later rewrite carries it, and every resume of the
         # run sets it again, so a reader knows ``runs`` covers only the last walk.
         "resumed": resumed,
@@ -380,6 +386,7 @@ def update_run(
         "typical_total_s": base.get("typical_total_s"),
         "spec_hash": base.get("spec_hash"),
         "durin_version": base.get("durin_version"),
+        "surface": base.get("surface"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
         "history": base.get("history") or [],
@@ -467,6 +474,7 @@ def finalize_run(
         "typical_total_s": prior.get("typical_total_s"),
         "spec_hash": prior.get("spec_hash"),
         "durin_version": prior.get("durin_version"),
+        "surface": prior.get("surface"),
         "resumed": prior.get("resumed", False),
         "earlier_nodes": prior.get("earlier_nodes") or [],
         "history": prior.get("history") or [],
@@ -571,8 +579,9 @@ _RUN_CLAIM_LOCK_SUFFIX = ".claim"
 
 def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
     """The cross-process lock target serializing every caller that checks a
-    resumable run's status and then acts on it — a ``needs_input`` run, or an
-    ``aborted`` one with a ``failed_node``: ``WorkflowsService.cancel_run``
+    resumable run's status and then acts on it — a ``needs_input`` run, an
+    ``aborted`` one with a ``failed_node``, or a ``crashed`` one with a
+    position: ``WorkflowsService.cancel_run``
     finalizing a paused run, every resume claiming the run (moving it to
     ``running`` before actually resuming it — ``ResumeClaim``, used by the
     workflows service and the ``run_workflow`` tool alike), and the
@@ -593,8 +602,9 @@ def run_lock_target(workspace: str | Path, name: str, run_id: str) -> Path:
 
 
 def claim_for_resume(workspace: str | Path, name: str, run_id: str) -> dict:
-    """Move a resumable manifest (``needs_input``, or ``aborted`` with a
-    ``failed_node``) to ``running`` IN PLACE, owned by this process, preserving
+    """Move a resumable manifest (``needs_input``, ``aborted`` with a
+    ``failed_node``, or ``crashed`` with a position) to ``running`` IN PLACE,
+    owned by this process, preserving
     every other field — called under ``run_lock_target``'s lock, right before the
     caller releases it and actually resumes the run, so a second resume or a
     ``cancel_run`` (or an approval reject) racing in right behind sees this run
@@ -624,8 +634,8 @@ def release_resume_claim(
 ) -> bool:
     """Undo ``claim_for_resume`` for a resume whose engine never wrote the run's
     own manifest: put back ``prior``, the record exactly as it was before the
-    claim (``needs_input`` or ``aborted``, its original owner), so the run can be
-    resumed — or, when paused, cancelled — again. A claimed manifest owned by
+    claim (``needs_input``, ``aborted`` or ``crashed``, with the owner it had),
+    so the run can be resumed — or, when paused, cancelled — again. A claimed manifest owned by
     this live process is one that neither the crash sweep nor the ``tasks``
     self-heal ever ends, and one ``cancel_run`` and a new resume both refuse.
     Does nothing — returns False — once the manifest differs from ``claimed``:
@@ -970,7 +980,9 @@ def typical_node_durations(
     the number a user reads as "normal". Nodes with no recorded duration — gates
     and routers — are absent rather than zero. A reused row (status "reused",
     duration_s 0) is excluded too: it did not run, so its duration says nothing
-    about the node's real cost.
+    about the node's real cost. So is a cut row (``cut: True``, an attempt the
+    process's death ended): it says how long the step ran before the process
+    died, not how long it takes.
     """
     from statistics import median
 
@@ -987,7 +999,7 @@ def typical_node_durations(
             # A reused row's 0.0 does not describe how long the node takes when it
             # actually runs — counting it would deflate the median toward zero the
             # more often the node gets skipped.
-            if d is None or not nid or r.get("status") == "reused":
+            if d is None or not nid or r.get("status") == "reused" or r.get("cut"):
                 continue
             samples.setdefault(nid, []).append(float(d))
     return {nid: float(median(vals)) for nid, vals in samples.items() if vals}

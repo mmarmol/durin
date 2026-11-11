@@ -3,8 +3,10 @@ step is running, so a test sees exactly what a dead process leaves on disk.
 
 Layout under the test's ``tmp_path``: the workspace is ``ws`` (the definition is
 written to ``ws/workflows/<name>.json``, so a test can place other workflows
-beside it before the run), ``home`` and ``durin-home`` are the child's ``HOME``
-and ``DURIN_HOME``, and ``driver.log`` collects the child's output.
+beside it before the run), ``home``, ``durin-home`` and ``tmp`` are the child's
+``HOME``, ``DURIN_HOME`` and ``TMPDIR`` (the private copies of parallel branches
+a killed child leaves stay there), and ``driver.log`` collects the child's output.
+``env`` adds the driver's switches (``_crash_driver``) to the child's environment.
 
 Every process a test starts here is tracked, and ``reap`` (run after each test
 by the autouse fixture in this package's conftest) kills whatever is still
@@ -62,15 +64,16 @@ def marks(workspace: Path) -> dict[str, int]:
     }
 
 
-def engine(workspace: Path) -> WorkflowEngine:
+def engine(workspace: Path, run_id: str = driver.RUN_ID) -> WorkflowEngine:
     """An engine in THIS process with the same stand-in agent runner and the real
     script runner the child uses, on the same workspace and run id."""
-    return driver.build_engine(workspace)
+    return driver.build_engine(workspace, run_id)
 
 
-def run_to_end(tmp_path: Path, definition: dict, task: str = "t") -> tuple[dict, dict[str, int]]:
+def run_to_end(tmp_path: Path, definition: dict, task: str = "t", *,
+               env: dict[str, str] | None = None) -> tuple[dict, dict[str, int]]:
     """Run `definition` to its end in a child process; returns (record, marks)."""
-    workspace, proc = _launch(Path(tmp_path), definition, task, hang_in=None)
+    workspace, proc = _launch(Path(tmp_path), definition, task, hang_in=None, env=env)
     try:
         proc.wait(timeout=_RUN_WAIT_S)
     except subprocess.TimeoutExpired:
@@ -78,19 +81,21 @@ def run_to_end(tmp_path: Path, definition: dict, task: str = "t") -> tuple[dict,
             f"the run did not end within {_RUN_WAIT_S:.0f}s\n{_log(tmp_path)}") from None
     if proc.returncode != 0:
         raise AssertionError(f"the child exited with {proc.returncode}\n{_log(tmp_path)}")
-    return _record(workspace, definition), marks(workspace)
+    return _record(workspace, definition, _run_id(env)), marks(workspace)
 
 
-def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str,
-                     how: str = "kill", task: str = "t") -> Dead:
+def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
+                     how: str = "kill", task: str = "t",
+                     env: dict[str, str] | None = None) -> Dead:
     """Run `definition` in a child process and end the process while step
-    `stop_in` is running. `how`: "kill" (SIGKILL), "term" (SIGTERM, then wait),
-    "exec" (the child replaces its own image, keeping its pid)."""
+    `stop_in` is running (None: while the step `env` makes hang, such as a
+    fan-out worker by its task). `how`: "kill" (SIGKILL), "term" (SIGTERM, then
+    wait), "exec" (the child replaces its own image, keeping its pid)."""
     if how not in ("kill", "term", "exec"):
         raise ValueError(f"how must be 'kill', 'term' or 'exec', got {how!r}")
     tmp_path = Path(tmp_path)
-    workspace, proc = _launch(tmp_path, definition, task, hang_in=stop_in)
-    _wait_until_hung(tmp_path, workspace, proc, stop_in)
+    workspace, proc = _launch(tmp_path, definition, task, hang_in=stop_in, env=env)
+    _wait_until_hung(tmp_path, workspace, proc, stop_in or "(set by env)")
     # Snapshot before signalling: once the child is gone its orphans are
     # re-parented and can no longer be told apart from anyone else's. A
     # descendant that already exited has no start time and is left out, so a
@@ -108,8 +113,9 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str,
             raise AssertionError(
                 f"the child outlived {how} for {_EXIT_WAIT_S:.0f}s\n{_log(tmp_path)}") from None
         _kill_strays()
-    return Dead(workspace=workspace, run_id=driver.RUN_ID,
-                record=_record(workspace, definition), marks=marks(workspace))
+    run_id = _run_id(env)
+    return Dead(workspace=workspace, run_id=run_id,
+                record=_record(workspace, definition, run_id), marks=marks(workspace))
 
 
 def reap() -> None:
@@ -125,7 +131,12 @@ def reap() -> None:
     _kill_strays()
 
 
-def _launch(tmp_path: Path, definition: dict, task: str, *, hang_in: str | None):
+def _run_id(env: dict[str, str] | None) -> str:
+    return (env or {}).get(driver.RUN_ID_ENV) or driver.RUN_ID
+
+
+def _launch(tmp_path: Path, definition: dict, task: str, *, hang_in: str | None,
+            env: dict[str, str] | None = None):
     workspace = tmp_path / "ws"
     flows = workspace / "workflows"
     flows.mkdir(parents=True, exist_ok=True)
@@ -133,23 +144,25 @@ def _launch(tmp_path: Path, definition: dict, task: str, *, hang_in: str | None)
     path.write_text(json.dumps(definition), encoding="utf-8")
     # A flag left by an earlier child on this workspace must not satisfy the wait.
     (driver.marks_dir(workspace) / ".hung").unlink(missing_ok=True)
-    home, durin_home = tmp_path / "home", tmp_path / "durin-home"
-    home.mkdir(exist_ok=True)
-    durin_home.mkdir(exist_ok=True)
-    env = {
+    home, durin_home, tmp = tmp_path / "home", tmp_path / "durin-home", tmp_path / "tmp"
+    for folder in (home, durin_home, tmp):
+        folder.mkdir(exist_ok=True)
+    child_env = {
         "HOME": str(home),
         "DURIN_HOME": str(durin_home),
+        "TMPDIR": str(tmp),
         "GIT_CONFIG_NOSYSTEM": "1",
         "PYTHONPATH": str(_REPO_ROOT),
         "PATH": os.environ.get("PATH", ""),
+        **(env or {}),
     }
     if hang_in is not None:
-        env[driver.HANG_ENV] = hang_in
+        child_env[driver.HANG_ENV] = hang_in
     with open(tmp_path / "driver.log", "ab") as log:
         proc = subprocess.Popen(
             [sys.executable, "-I", str(_DRIVER), str(workspace), str(path), task],
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            env=env, cwd=str(tmp_path))
+            env=child_env, cwd=str(tmp_path))
     _children.append(proc)
     return workspace, proc
 
@@ -223,9 +236,9 @@ def _kill_strays() -> None:
                 pass
 
 
-def _record(workspace: Path, definition: dict) -> dict:
-    record = run_log.read_manifest(workspace, definition["name"], driver.RUN_ID)
-    assert record is not None, f"no record for run {driver.RUN_ID!r} in {workspace}"
+def _record(workspace: Path, definition: dict, run_id: str = driver.RUN_ID) -> dict:
+    record = run_log.read_manifest(workspace, definition["name"], run_id)
+    assert record is not None, f"no record for run {run_id!r} in {workspace}"
     return record
 
 

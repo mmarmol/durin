@@ -116,12 +116,15 @@ _PARAMETERS = {
             "type": "string",
             "description": (
                 "Optional. The run_id of a prior run of THIS workflow that ended asking for "
-                "more information (needs_input) OR aborted at a named node. For needs_input, "
-                "pass the user's answers as 'task': the run resumes at the node that asked. "
-                "For an aborted run (e.g. a transient API failure), the failed node is "
-                "retried with the exact input it had. Both keep the same working folder, "
-                "sessions and visit counts — nothing completed re-runs. A run paused for a "
-                "person's APPROVAL cannot be resumed from here: that is their decision."
+                "more information (needs_input), aborted at a named node, OR crashed (its "
+                "process died: a gateway restart or crash). For needs_input, pass the "
+                "user's answers as 'task': the run resumes at the node that asked. For an "
+                "aborted run (e.g. a transient API failure), the failed node is retried "
+                "with the exact input it had. For a crashed run, the node that was running "
+                "runs again from its start with the input it had. All keep the same "
+                "working folder, sessions and visit counts — nothing completed re-runs. A "
+                "run paused for a person's APPROVAL cannot be resumed from here: that is "
+                "their decision."
             ),
         },
         "work_key": {
@@ -485,7 +488,9 @@ class RunWorkflowTool(Tool, ContextAware):
             "it ENDED asking for clarification (it did not fail) — get the answers (from the "
             "user when one can be asked) and call this tool again with resume_run_id set to "
             "the run's id and the answers as the task. A run paused for a person's APPROVAL "
-            "is theirs to decide: this tool refuses to resume it. "
+            "is theirs to decide: this tool refuses to resume it. A run that aborted at a "
+            "node, or crashed because its process died, is resumed the same way (no "
+            "answers needed): the node it stopped in runs again with the input it had. "
             "By default it runs in the background and its result is delivered to you "
             "automatically as a follow-up message — do not poll for it; end your turn. "
             "Pass background=false to block and get the result inline only when you need it "
@@ -578,27 +583,35 @@ class RunWorkflowTool(Tool, ContextAware):
         accepted_record: dict | None = None
         if resume_run_id:
             from durin.workflow import run_log
-            from durin.workflow.engine import build_resume_state, resume_refusal
+            from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             if manifest is None:
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
-            paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
-            failed = manifest.get("status") == "aborted" and manifest.get("failed_node")
-            if not paused and not failed:
-                return (f"Error: run '{resume_run_id}' has status "
-                        f"'{manifest.get('status')}' and cannot be resumed — only a "
-                        f"needs_input run (with the answers as task) or an aborted run "
-                        f"(retried at its failed node) can.")
-            refusal = resume_refusal(manifest)
+            if manifest.get("status") == "running":
+                # A run still recorded as running whose process is gone is a dead
+                # run: record it as one first (off the event loop: the conversion
+                # can wait on the run's lock). A run whose owner is alive — in
+                # flight, or claimed by another resume — is refused below.
+                if await asyncio.to_thread(
+                        run_log.mark_dead_run, self._workspace, name, resume_run_id) is not None:
+                    manifest = run_log.read_manifest(self._workspace, name, resume_run_id) or {}
+            kind = resumable_kind(manifest)
+            refusal = resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
             if refusal:
                 return f"Error: run '{resume_run_id}' cannot be resumed — {refusal}"
-            if manifest.get("ask_kind") == "approval":
+            if kind is None:
+                return (f"Error: run '{resume_run_id}' has status "
+                        f"'{manifest.get('status')}' and cannot be resumed — only a "
+                        f"needs_input run (with the answers as task), an aborted run "
+                        f"(retried at its failed node) or a crashed run (entered again "
+                        f"at the step it was in) can.")
+            if kind == "paused" and manifest.get("ask_kind") == "approval":
                 # Approving, revising or rejecting is a person's decision, and a
                 # value in this tool call is the model's claim, never evidence
                 # that anyone agreed. People resume it through the workflows
                 # service (the webui's runs view, or the API).
                 return _approval_refusal(name, resume_run_id, manifest.get("needs_input_node"))
-            resume = build_resume_state(manifest, task)
+            resume = build_resume_state(manifest, task, workspace=self._workspace)
             task = manifest.get("task") or task
             accepted_record = manifest
 
@@ -638,6 +651,7 @@ class RunWorkflowTool(Tool, ContextAware):
             parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
             max_node_visits=app_config.workflow.max_node_visits,
             prune_keep=app_config.workflow.keep_runs,
+            launch_surface="agent",
         )
         bus = self._bus
         run_chat_id = self._chat_id.get()
@@ -704,6 +718,9 @@ class RunWorkflowTool(Tool, ContextAware):
             # A resume restores the shared conversation from the session the node
             # runner saved for the last shared step (same session manager).
             shared_context_loader=lambda key: shared_context_from_session(self._sessions, key),
+            # Its steps get the gateway's live MCP tools: the record says so, and
+            # only a resume through this tool gives them again.
+            launch_surface="agent",
         )
         root_session_key = self._session_key.get()
         inject_target = {

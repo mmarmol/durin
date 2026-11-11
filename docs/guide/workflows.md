@@ -419,6 +419,40 @@ paused or failed: resume the run that called it, which runs the sub-workflow
 step again in its own folder. A resume of the sub-workflow's run is refused
 with the id of that caller.
 
+**A run cut by a crash or a restart.** When the process running a workflow
+dies — the gateway crashed, was restarted, or was killed — the run is marked
+`crashed`, and it can be resumed the same way: ask the agent to call
+`run_workflow` with `resume_run_id`, or send the run's id as `resume_run_id`
+to the run route of the API (no answers needed). The run goes on at the step
+that was running when the process died, with the input that step had, in the
+same folder. Steps that had finished do not run again; the step that was
+running runs again **from its start**, whatever it had done before the
+process died. A parallel step runs all its branches or workers again, and a
+sub-workflow step starts its child workflow again from its first step.
+
+So a step that acts outside durin — sends a message, posts a comment, writes
+to another system — should be safe to run twice. The general way is a script
+that checks before it acts (has this comment already been posted?) and does
+nothing when it has. `reuse: "if-unchanged"` does not skip the step that was
+cut, since a step entered again is never reused, but it does let the steps a
+restarted sub-workflow had already finished skip their work when their input
+is unchanged.
+
+A crashed run is refused, with the reason, when it was recorded by an older
+version that did not keep the step it was in, when that step is no longer in
+the workflow, when its working folder has been pruned, or when a later run
+with the same `work_key` has worked in its folder since. A run the agent
+started whose workflow has a step with `mcps` is resumed only through the
+agent's `run_workflow`: the dashboard and the API refuse it, because only the
+agent can give those steps their MCP tools.
+
+Known limits: a process that dies while a `union` parallel step is
+applying its branches' files can leave the working folder partly applied. A
+run started from a chat and resumed from the dashboard or the API does not
+report its result back to that chat. The private copies a dead run's
+`choose` or `union` branches were working in stay in the system's temporary
+directory.
+
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
 output as the proposal. A reply of `approve`, `yes` or `ok` continues past the

@@ -260,11 +260,21 @@ class TasksTool(Tool, ContextAware):
                 "its partial trace is preserved."
             )
         row["status"] = "crashed"
+        from durin.workflow.engine import resumable_kind, resume_refusal
+        if (resumable_kind(record) == "dead"
+                and resume_refusal(record, workspace=self._workspace) is None):
+            follow_up = (
+                "If the result is still needed, resume it with run_workflow("
+                f"name='{row['label']}', resume_run_id='{row['id']}'): the step it "
+                "was in runs again with the input it had, and the steps that "
+                "finished do not."
+            )
+        else:
+            follow_up = "Re-run the workflow if the result is still needed."
         return (
             f"Workflow run [{row['id']}] was still marked running, but the "
             "process that owned it is gone (a gateway restart or crash killed "
-            "it mid-run). Marked it crashed; its partial trace is preserved. "
-            "Re-run the workflow if the result is still needed."
+            f"it mid-run). Marked it crashed; its partial trace is preserved. {follow_up}"
         )
 
     async def _render_status(self, session_key: str, task_id: str) -> str:

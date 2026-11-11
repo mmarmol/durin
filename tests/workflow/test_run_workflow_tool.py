@@ -1042,3 +1042,97 @@ async def test_the_run_tool_gives_the_record_back_when_its_background_resume_is_
         await asyncio.gather(*pending, return_exceptions=True)
     fake_run.assert_not_called()
     assert run_log.read_manifest(tmp_path, "doer", "r1") == before
+
+
+# A pid far above any real pid_max, so the owner reads as long gone.
+_DEAD_OWNER = {"pid": 2**22 + 54321, "started": "never"}
+
+
+def _dead_doer(tmp_path, node):
+    """Run ``r1`` of workflow ``doer`` left ``running`` by a process that died in
+    its only step, with that step's input stored and its folder in place."""
+    from durin.workflow import resume_store
+    from durin.workflow.artifacts import artifact_dir
+
+    _write_workflow(tmp_path, "doer", {"name": "doer", "start": "only",
+                                       "nodes": [{"id": "only", **node, "next": None}]})
+    work_dir = artifact_dir(tmp_path, "r1", "work", None)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    resume_store.save_input(resume_store.store_dir(tmp_path, "r1"), 1, "only", "")
+    run_log.start_run(tmp_path, "doer", "r1", root_session_key=None, started_at=1.0,
+                      task="original task", work_dir=str(work_dir),
+                      position={"node": "only", "seq": 1}, surface="agent")
+    f = tmp_path / "workflows-runs" / "doer" / "r1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, active_node={
+        "node_id": "only", "label": "only", "started_at": 1.0,
+        "iteration": 1, "session_key": None})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_resumes_a_run_whose_process_died(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"})
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        out = await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1",
+                                            background=False)
+    assert "completed" in out.lower() and "again" in out
+    rec = run_log.read_manifest(tmp_path, "doer", "r1")
+    assert rec["status"] == "completed" and rec["surface"] == "agent"
+    assert [(r["node_id"], r["iteration"], bool(r.get("cut")))
+            for r in rec["history"] + rec["runs"]] == [("only", 1, True), ("only", 2, False)]
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_loses_a_dead_run_to_a_resume_that_claimed_first(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    tool = _tool(tmp_path)
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        # By now this call converted the dead run; another resume claims it.
+        converted = run_log.read_manifest(tmp_path, "doer", "r1")
+        assert converted["status"] == "crashed"
+        ResumeClaim.take(tmp_path, "doer", "r1", expected=converted)
+        fake = MagicMock(spec=LLMProvider)
+        fake.get_default_model.return_value = "m"
+        return fake
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await tool.execute(name="doer", task="", resume_run_id="r1", background=False)
+    assert out.startswith("Error:") and "already resumed" in out
+    fake_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_refuses_a_run_whose_process_is_alive(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    f = tmp_path / "workflows-runs" / "doer" / "r1.json"
+    from durin.utils.process_tree import process_identity
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec["owner"] = process_identity()       # this live process: a run in flight
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    before = f.read_bytes()
+    with patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1",
+                                            background=False)
+    assert "has status 'running' and cannot be resumed" in out
+    fake_run.assert_not_called()
+    assert f.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_a_run_the_tool_launches_is_recorded_as_the_agents(tmp_path):
+    _write_workflow(tmp_path, "scripted", {
+        "name": "scripted", "start": "s",
+        "nodes": [{"id": "s", "kind": "script", "command": "echo tool-ok", "next": None}],
+    })
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        await _tool(tmp_path).execute(name="scripted", task="go", background=False)
+    [entry] = run_log.list_runs(tmp_path, "scripted")
+    assert run_log.read_manifest(tmp_path, "scripted", entry["run_id"])["surface"] == "agent"

@@ -175,7 +175,7 @@ class WorkflowRunCommand(Command):
     task: str
     input_files: list[str] = []
     output_format: str = ""   # optional: how to deliver the result this run (overrides the workflow's output contract)
-    resume_run_id: str = ""   # optional: resume a needs_input run of THIS workflow; task carries the user's answers
+    resume_run_id: str = ""   # optional: resume a paused, failed or crashed run of THIS workflow; for a paused one, task carries the user's answers
 
 
 class WorkflowRunResult(Result):
@@ -788,18 +788,33 @@ class WorkflowsService:
 
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
-        from durin.workflow.engine import WorkflowEngine, build_resume_state, resume_refusal
+        from durin.workflow.engine import (
+            WorkflowEngine,
+            build_resume_state,
+            resumable_kind,
+            resume_refusal,
+        )
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.node_runner import AgentNodeRunner, shared_context_from_session
         from durin.workflow.subworkflow import SubworkflowRunner
 
         resume = None
         # The record this call accepted for its resume (a paused run's as
-        # re-read under the per-run lock, an aborted run's as first read): the
-        # claim below re-checks the run against it.
+        # re-read under the per-run lock, an aborted or crashed run's as read,
+        # a dead one after its conversion): the claim below re-checks the run
+        # against it.
         accepted_record: dict | None = None
         if resume_run_id:
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+            if manifest is not None and manifest.get("status") == "running":
+                # A run still recorded as running whose process is gone is a
+                # dead run: record it as one first (off the event loop: the
+                # conversion can wait on the run's lock). A run whose owner is
+                # alive — in flight, or claimed by another resume — is left as
+                # it is and refused below.
+                if await asyncio.to_thread(
+                        run_log.mark_dead_run, self._workspace, name, resume_run_id) is not None:
+                    manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             # A resume that names no root_session_key of its own (the common case
             # — the webui's answer/resume actions, an automation's resumed answer)
             # must not leave this None: WorkflowEngine.run's _start_manifest
@@ -812,21 +827,20 @@ class WorkflowsService:
             # explicitly.
             if root_session_key is None and manifest is not None:
                 root_session_key = manifest.get("root_session_key")
-            paused = (manifest is not None and manifest.get("status") == "needs_input"
-                      and manifest.get("needs_input_node"))
-            failed = (manifest is not None and manifest.get("status") == "aborted"
-                      and manifest.get("failed_node"))
-            if not paused and not failed:
-                raise ValidationFailedError(
-                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — "
-                    "only a needs_input run (with the answers as task) or an aborted "
-                    "run (retried at its failed node) can."
-                )
-            refusal = resume_refusal(manifest)
+            kind = resumable_kind(manifest) if manifest is not None else None
+            refusal = (resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
+                       if manifest is not None else None)
             if refusal:
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {refusal}")
-            if paused:
+            if kind is None:
+                raise ValidationFailedError(
+                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — "
+                    "only a needs_input run (with the answers as task), an aborted "
+                    "run (retried at its failed node) or a crashed run (entered again "
+                    "at the step it was in) can."
+                )
+            if kind == "paused":
                 # A needs_input run can also be cancelled (WorkflowsService.cancel_run)
                 # racing this same call, or — for an approval pause — rejected right
                 # here: both finalize the SAME manifest this call is about to resume
@@ -870,7 +884,8 @@ class WorkflowsService:
                                 run_id=resume_run_id, rejected=True,
                             )
                         approval_resume = build_approval_resume(
-                            workflow, manifest, action, task if action == "revise" else "")
+                            workflow, manifest, action, task if action == "revise" else "",
+                            workspace=self._workspace)
                         if approval_resume is None:
                             # Approve on a terminal approval node (no `next`): the run
                             # completes now, with the proposal as the final output — again
@@ -886,13 +901,24 @@ class WorkflowsService:
                             )
                         resume = approval_resume
                     else:
-                        resume = build_resume_state(manifest, task)
+                        resume = build_resume_state(manifest, task, workspace=self._workspace)
                     task = manifest.get("task") or task
                     accepted_record = manifest
             else:
-                resume = build_resume_state(manifest, task)
+                resume = build_resume_state(manifest, task, workspace=self._workspace)
                 task = manifest.get("task") or task
                 accepted_record = manifest
+            if (accepted_record.get("surface") == "agent"
+                    and any(getattr(n, "mcps", ()) for n in workflow.nodes.values())):
+                # The agent's run tool gives a run's steps the gateway's live MCP
+                # tools; this service has none to give, so the resumed steps
+                # would run without tools they had. Asked once the resume is
+                # certain to run steps: an approval reject, or an approve that
+                # completes the run, has returned above without running any.
+                raise ValidationFailedError(
+                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — its "
+                    "steps use MCP tools that only a run resumed by the agent has. Ask "
+                    "the agent to resume it with run_workflow.")
 
         app_config = self._live_config()
         preset = app_config.resolve_default_preset()
@@ -961,7 +987,9 @@ class WorkflowsService:
                 parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
                 parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
                 max_node_visits=wf_cfg.max_node_visits,
-                prune_keep=wf_cfg.keep_runs),
+                prune_keep=wf_cfg.keep_runs,
+                launch_surface="service"),
+            launch_surface="service",
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=wf_cfg.max_node_visits,
             prune_keep=wf_cfg.keep_runs,

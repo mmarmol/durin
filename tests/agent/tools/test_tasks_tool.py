@@ -395,6 +395,30 @@ async def test_status_ghost_run_self_heals(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_ghost_run_that_can_be_resumed_says_how(tmp_path):
+    """A dead run whose record names the step it was in can be resumed: the
+    healed answer tells the agent how, instead of to start it over."""
+    _write_manifest(tmp_path, "qa", "ghost789", status="running")
+    f = tmp_path / "workflows-runs" / "qa" / "ghost789.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, position={"node": "n2", "seq": 2})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    from durin.workflow import resume_store
+    resume_store.save_input(resume_store.store_dir(tmp_path, "ghost789"), 2, "n2", "n1 said")
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost789")
+    assert "crashed" in out and "resume_run_id='ghost789'" in out
+    assert "Re-run the workflow" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_ghost_run_recorded_before_positions_is_to_be_run_again(tmp_path):
+    _write_manifest(tmp_path, "qa", "ghost790", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghost790", _DEAD_OWNER)
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost790")
+    assert "Re-run the workflow" in out and "resume_run_id" not in out
+
+
+@pytest.mark.asyncio
 async def test_a_ghost_run_asked_to_stop_is_reported_cancelled(tmp_path):
     """A dead run whose record holds a stop request ends cancelled, and the
     healed answer says so instead of calling it crashed."""

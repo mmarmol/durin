@@ -1,10 +1,11 @@
 """One resume of a run at a time, whichever surface resumes it.
 
 A stopped run is resumable while its record says so: ``needs_input`` (paused
-on a question or an approval) or ``aborted`` with a ``failed_node`` (a step
-failed). Two callers can read that same record at once — the webui, the API,
-an automation's answer, the agent's ``run_workflow`` tool, a cancel — and
-each would go on to act on it. A resume therefore *claims* the record before
+on a question or an approval), ``aborted`` with a ``failed_node`` (a step
+failed) or ``crashed`` with a position (its process died; see
+``engine.resumable_kind``). Two callers can read that same record at once —
+the webui, the API, an automation's answer, the agent's ``run_workflow``
+tool, a cancel — and each would go on to act on it. A resume therefore *claims* the record before
 it starts: under the per-run lock it re-reads the record, refuses unless it
 is still exactly the one the resume accepted, and moves it to ``running``
 owned by this process. A racing resume or cancel then reads ``running`` under

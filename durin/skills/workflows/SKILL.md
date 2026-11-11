@@ -186,7 +186,18 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
   failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
   retries the FAILED node with the exact input it had — completed nodes never re-run
-  (a failed `choose`/`union` branch retries its whole parallel node).
+  (a failed `choose`/`union` branch retries its whole parallel node). **A crashed run
+  resumes the same way too**: a run whose process died (a gateway crash, restart or kill)
+  shows status `crashed` — `run_workflow` with
+  `resume_run_id=<that id>` and no answers enters the node that was running again, from its
+  start, with the input it had; finished nodes do not re-run, a parallel node re-runs all its
+  branches or workers, and a sub-workflow node starts its child again. So that node's effects
+  outside durin (a sent message, a posted comment) can happen twice: before resuming, check
+  whether it already acted, and tell the user when you cannot. The resume is refused, with
+  the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
+  definition, its folder was pruned, or a later run on the same `work_key` took the folder
+  over — then start a new run. A run you started whose workflow has a step with `mcps` can
+  only be resumed by you, through `run_workflow`: the dashboard and API refuse it.
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused
   for a person's approval is not yours to resolve**: the summary says so, and
