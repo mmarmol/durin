@@ -177,3 +177,32 @@ def test_a_resumed_run_reports_the_files_written_before_it_stopped(tmp_path):
     assert done.status == "completed"
     assert done.output_files == ["a.txt", "b.txt"]
     assert done.missing_artifacts == []
+
+
+def test_a_run_resumed_before_the_counts_existed_keeps_its_bound_over_two_more_resumes(tmp_path):
+    # A two-step loop (budget 3) resumed once by an older version: its record has
+    # no ``passes`` and its ``runs`` hold only that last walk, where ``a`` reached
+    # attempt 2 and ``c`` failed its attempt 2. Attempts 1 ran in a walk the
+    # record no longer holds, and completed.
+    from durin.workflow import run_log
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "c"},
+        {"id": "c", "kind": "work", "on_pass": None, "on_fail": "a"}]})
+    run_log.start_run(tmp_path, "w", "r1", root_session_key=None, started_at=1.0)
+    path = Path(tmp_path) / "workflows-runs" / "w" / "r1.json"
+    rec = json.loads(path.read_text())
+    for key in ("passes", "history"):
+        rec.pop(key)
+    rec.update(status="aborted", resumed=True, failed_node="c", resume_upstream="a-out",
+               runs=[{"node_id": "a", "iteration": 2, "status": "ok"},
+                     {"node_id": "c", "iteration": 2, "status": "node_failed"}])
+    path.write_text(json.dumps(rec))
+
+    runner = _Runner(fail={"c": 1}, outputs={"c": "needs work\nFAIL"})
+    assert _resume(tmp_path, wf, runner).status == "aborted"             # c fails again
+    assert "passes" in _manifest(tmp_path)                                # counted normally from here
+    last = _resume(tmp_path, wf, runner)
+    assert last.status == "exhausted" and last.exhausted_node == "a"
+    # a completed attempts 1 and 2 before the upgrade: one pass is left.
+    assert [(it, p) for n, it, p, _b in runner.calls if n == "a"] == [(3, 3)]
+    assert [(it, p) for n, it, p, _b in runner.calls if n == "c"] == [(3, 2), (4, 2), (5, 3)]

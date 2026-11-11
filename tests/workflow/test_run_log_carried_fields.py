@@ -73,3 +73,43 @@ def test_history_is_bounded_and_counts_do_not_depend_on_it(tmp_path):
     assert len(rec["history"]) == run_log.HISTORY_MAX_ROWS
     assert rec["history"][-1]["iteration"] == len(many) + 1          # newest kept
     assert rec["passes"]["a"] == {"reached": len(many) + 1, "completed": len(many)}
+
+
+def test_a_resumed_record_from_before_the_counts_credits_attempts_with_no_row():
+    # Resumed before ``passes`` existed: ``runs`` holds only the last walk, so
+    # every attempt below the highest one ran in a walk the record no longer
+    # holds. An attempt with no row counts as completed; one whose rows all
+    # failed does not.
+    record = {"resumed": True, "runs": [
+        _row("a", 3), _row("b", 2, "node_failed"), _row("c", 4, "node_failed"), _row("c", 2)]}
+    assert run_log.pass_counts(record) == {
+        "a": {"reached": 3, "completed": 3},
+        "b": {"reached": 2, "completed": 1},
+        "c": {"reached": 4, "completed": 3}}
+
+
+def test_an_attempt_with_one_row_that_did_not_fail_is_completed_on_an_old_resumed_record():
+    record = {"resumed": True, "runs": [
+        _row("a", 2, "node_failed", worker_index=0), _row("a", 2, worker_index=1)]}
+    assert run_log.pass_counts(record) == {"a": {"reached": 2, "completed": 2}}
+
+
+def test_a_record_that_carries_counts_is_counted_from_its_rows_even_when_empty():
+    # A resumed record written by this version always has ``passes``, even an
+    # empty one: its rows are then the only evidence, as on a record never resumed.
+    record = {"resumed": True, "passes": {}, "runs": [_row("a", 3)]}
+    assert run_log.pass_counts(record) == {"a": {"reached": 3, "completed": 1}}
+    assert run_log.pass_counts({"resumed": False, "runs": [_row("a", 3)]}) == {
+        "a": {"reached": 3, "completed": 1}}
+
+
+def test_the_first_resume_after_the_upgrade_carries_the_inferred_counts(tmp_path):
+    _start(tmp_path)
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    rec.pop("passes")
+    rec.pop("history")
+    _write(tmp_path, {**rec, "resumed": True, "status": "aborted", "failed_node": "b",
+                      "runs": [_row("a", 2), _row("b", 2, "node_failed")]})
+    _start(tmp_path, resumed=True)
+    assert run_log.read_manifest(tmp_path, "w", "r1")["passes"] == {
+        "a": {"reached": 2, "completed": 2}, "b": {"reached": 2, "completed": 1}}

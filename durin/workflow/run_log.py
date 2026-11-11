@@ -166,15 +166,24 @@ HISTORY_MAX_ROWS = 500
 
 def pass_counts(record: dict) -> dict[str, dict[str, int]]:
     """Per-step pass counts of a run: ``{node_id: {"reached", "completed"}}``.
-    ``reached`` is the highest pass number any row of the step carries;
-    ``completed`` is how many distinct pass numbers of the step have at least one
-    row that did not fail. Counts carried in ``passes`` (earlier walks) are added
-    to those of ``runs`` (the current walk), so they never depend on ``history``."""
+    ``reached`` is the highest attempt number (``iteration``) any row of the step
+    carries; ``completed`` is how many distinct attempt numbers of the step have
+    at least one row that did not fail. Counts carried in ``passes`` (earlier
+    walks) are added to those of ``runs`` (the current walk), so they never
+    depend on ``history``.
+
+    A record resumed before ``passes`` existed (``resumed`` set, no ``passes``
+    key) holds only its last walk in ``runs``, while attempt numbers ran on over
+    every walk: the attempts below a step's lowest row ran in walks the record no
+    longer holds. Counting only the rows would forget every pass those walks
+    completed and loosen the step's bound, so on such a record every attempt
+    from 1 to ``reached`` counts as completed unless its rows show it failed."""
     counts = {
         node: {"reached": int(c.get("reached", 0)), "completed": int(c.get("completed", 0))}
         for node, c in (record.get("passes") or {}).items()
     }
     reached: dict[str, int] = {}
+    seen: dict[str, set[int]] = {}
     done: dict[str, set[int]] = {}
     for row in record.get("runs") or []:
         node = row.get("node_id")
@@ -182,14 +191,20 @@ def pass_counts(record: dict) -> dict[str, dict[str, int]]:
             continue
         it = int(row.get("iteration") or 0)
         reached[node] = max(reached.get(node, 0), it)
+        seen.setdefault(node, set()).add(it)
         if row.get("status") != "node_failed":
             done.setdefault(node, set()).add(it)
         else:
             done.setdefault(node, set())
+    unrecorded_walks = bool(record.get("resumed")) and "passes" not in record
     for node, top in reached.items():
         entry = counts.setdefault(node, {"reached": 0, "completed": 0})
         entry["reached"] = max(entry["reached"], top)
-        entry["completed"] += len(done[node])
+        if unrecorded_walks:
+            failed = seen[node] - done[node]
+            entry["completed"] += top - len({it for it in failed if 1 <= it <= top})
+        else:
+            entry["completed"] += len(done[node])
     return counts
 
 
