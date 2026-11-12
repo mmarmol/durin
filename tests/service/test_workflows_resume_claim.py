@@ -29,6 +29,7 @@ from durin.workflow.loader import workflows_dir
 from durin.workflow.resume_claim import ResumeClaim
 from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
 from tests.workflow.telemetry_capture import assert_clean, payloads, recorded
+from tests.workflow.telemetry_capture import log_lines_fixture as _log_lines  # noqa: F401
 from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 # A pid far above any real pid_max, so the owner reads as long gone: a pause
@@ -944,12 +945,15 @@ async def test_a_resume_whose_caller_stops_waiting_after_its_walk_started_report
 # ── what a resume and a refusal leave in telemetry ──
 
 @pytest.mark.asyncio
-async def test_a_claimed_resume_is_counted_with_its_kind_and_surface(tmp_path, telemetry_dir):
+async def test_a_claimed_resume_is_counted_with_its_kind_and_surface(
+        tmp_path, telemetry_dir, log_lines):
     _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
     with _provider():
         await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
     assert payloads(telemetry_dir, "workflow.run_resumed") == [
         {"workflow": "wf", "run_id": "dead1", "kind": "dead", "surface": "service"}]
+    assert [line for line in log_lines if "resumed (" in line] == [
+        "run dead1 of workflow 'wf': resumed (dead run) through the service"]
     assert payloads(telemetry_dir, "workflow.resume_refused") == []
     # the conversion the resume was owed is counted too
     assert [p["run_id"] for p in payloads(telemetry_dir, "workflow.run_found_dead")] == ["dead1"]
@@ -957,13 +961,16 @@ async def test_a_claimed_resume_is_counted_with_its_kind_and_surface(tmp_path, t
 
 
 @pytest.mark.asyncio
-async def test_a_refused_resume_is_counted_with_a_word_not_the_text(tmp_path, telemetry_dir):
+async def test_a_refused_resume_is_counted_with_a_word_not_the_text(
+        tmp_path, telemetry_dir, log_lines):
     _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
               root_session_key="automation:nightly")
     with _provider(), pytest.raises(ValidationFailedError):
         await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
     assert payloads(telemetry_dir, "workflow.resume_refused") == [
         {"workflow": "wf", "run_id": "dead1", "surface": "service", "reason": "automation"}]
+    assert [line for line in log_lines if "was refused" in line] == [
+        "run dead1 of workflow 'wf': a resume through the service was refused (automation)"]
     assert payloads(telemetry_dir, "workflow.run_resumed") == []
     assert_clean(recorded(telemetry_dir), "nightly", "automation:")
 

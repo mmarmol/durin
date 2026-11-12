@@ -818,7 +818,8 @@ def _unreadable_script_refusal(path: Path) -> str:
     return Refusal(
         f"a record of one of its scripts, {path}, cannot be read, so whether that "
         "script still runs cannot be checked. It can be resumed once a person has "
-        "made sure nothing of that script is left and has removed that file.")
+        "made sure nothing of that script is left and has removed that file.",
+        "script_alive")
 
 
 def _script_checks(workspace: str | Path, name: str,
@@ -1451,7 +1452,7 @@ def mark_dead_run(
                                "cannot be converted ({}); marked {} only",
                                run_id, name, exc, "cancelled" if stop else "crashed")
                 out = _minimal_mark(record, stop)
-            scripts_recorded = len(script_records(workspace, name, run_id))
+            scripts_recorded = _count_script_records(workspace, name, run_id)
             _write_json(_record_path(workspace, name, run_id), out)
             _drop_stop_request(stop_path)
     except TimeoutError:
@@ -1466,13 +1467,23 @@ def mark_dead_run(
     step = position.get("node") if isinstance(position, dict) else None
     logger.info("run {} of workflow {!r}: its process is gone; recorded as {} at step {!r} "
                 "({} script record(s) left)", run_id, name, out["status"], step,
-                scripts_recorded)
+                "an uncounted number of" if scripts_recorded is None else scripts_recorded)
     resume_events.found_dead(name, run_id, status=out["status"], step=step,
                              scripts_recorded=scripts_recorded)
     if out["status"] in UNRESUMABLE_ENDS:
         _drop_resume_files(workspace, out)
     _mark_dead_children(workspace, run_id, now=now, max_age_s=max_age_s)
     return out
+
+
+def _count_script_records(workspace: str | Path, name: str, run_id: str) -> int | None:
+    """How many script records the run left, for its conversion's log line and
+    event; None when the folder cannot be listed. Only a count: it never keeps
+    the conversion from being written."""
+    try:
+        return len(script_records(workspace, name, run_id))
+    except OSError:
+        return None
 
 
 def _mark_dead_children(workspace: str | Path, run_id: str, *, now: float,

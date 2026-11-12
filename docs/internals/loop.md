@@ -397,7 +397,8 @@ replayed message carries nothing that says so. A fresh `run_workflow` launch
 names the runs of that workflow the same conversation had started and the
 process ending cut short: the tool's reply ends with a note about each. Giving the
 note only reads the run records, and a conversation that launches again after being
-told is not told again. The launch that carries the note has already started a new
+told is not told again about the same runs, unless the run the told launch started was
+itself cut: the next launch then names that run and the earlier cut runs with it. The launch that carries the note has already started a new
 run (unless it was refused), so the workflows skill instructs the model to tell the
 person and to leave the cut run alone unless the person asks to resume it, since the
 new run does or has done the same work. A cut run on the launch's own work key cannot

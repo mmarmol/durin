@@ -1136,8 +1136,9 @@ quitting; a `/restart` without a gateway — first marks itself as shutting down
 flight. A foreground `run_workflow` call whose turn is cancelled while the process is
 shutting down asks nothing of its run: no cancel flag, no stop file. The run is left to
 end with the process (a process with a run still on its thread leaves it rather than
-wait for it, and ends the run's scripts right before it exits, as described below; the
-TUI and the REPL also write one line to stderr naming how many runs
+wait for it, and ends the run's scripts right before it exits, as described below; its
+warning log line names the runs it leaves and how many workflow scripts the process still
+holds as it ends them; the TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
 the dashboard, since their log line is usually disabled). The run's record stays
 `running` until a process that can tell finds its process gone. Once the process has
@@ -1171,7 +1172,11 @@ When that happens to a process still running, the runner logs a warning that a r
 could not wait for it.
 
 The script runner also keeps, in memory, the scripts this process started and has not
-reaped, under one lock. The process ends them where it ends or replaces itself, as the
+reaped, under one lock. A script's thread holds the lock only to read whether the
+process is ending and to add its script to the set or remove it, and a script starts
+outside it, so a start that blocks (a working folder on a stalled mount) holds back
+neither the call below nor any other run's script. The call below holds it while it
+signals, up to `_REAP_LOCK_WAIT_S` for each script. The process ends them where it ends or replaces itself, as the
 last thing before it does: `run_threads.leave_unfinished_runs` calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
 TUI or the REPL quitting while a run is still on its thread; with no run on a thread it
 returns without calling it; the call runs even when the log flush before it is
@@ -1191,7 +1196,11 @@ inherits them as children and does not reap them) until that process ends. A res
 treats a defunct process as gone. From then on, under the same lock:
 
 - no script is started: a script step entered after the call waits for the process to
-  end, so a script is either started before the call (and ended by it) or not at all;
+  end. A script whose start was in progress when the call ran is not among the scripts
+  it signalled; once started, its own thread sees that the process is ending, kills and
+  reaps it, records nothing and waits for the process to end. If the process ends before
+  that thread gets there, that script outlives the process with no record of it, so a
+  resume does not wait for it;
 - a thread whose script has been reaped waits for the process to end instead of
   returning, raising or removing the script's record. A script the exit ended (exit code
   -9) is never a failed step, never a gate's `FAIL` and never a route taken, and its
@@ -1205,7 +1214,11 @@ but which has not reached that point yet is held like the others, and so is one 
 script ends by itself between the call and the exit: neither outcome is recorded, and
 the step runs again on a resume. A stop or a restart in place thus leaves the run as a crash
 does: recorded `running` at the step it was in, found dead later and resumable there,
-with no script of it running.
+with no script of it running. That holds because the process ends its scripts itself, as
+its last act. A supervisor that sends the stop signal to every process of the service
+(systemd's default `KillMode=control-group`, for one), not only to the gateway's main
+process, reaches a script before that: a script that ends on it before the last act is
+recorded as its outcome, a failed step, or `FAIL` for a gate.
 
 Nothing else ever signals a script: a conversion of a dead run (`mark_dead_run`), a sweep,
 a `tasks` call, a resume and a launch only observe processes (signal 0 is an existence
@@ -1302,7 +1315,7 @@ only reads; the record stays byte for byte as it was.
 **What is logged and counted.** Each refusal above is a `refusal.Refusal`: a `str` equal
 to its sentence, with a `kind` fixed where the sentence is made. The word is
 never worked out from the sentence's wording. The words are `owner_alive` (the process
-recorded as running it still seems alive), `script_alive` (a script may still run),
+recorded as running it still seems alive), `script_alive` (a script may still run, or its record cannot be read),
 `folder_pruned`, `step_gone`, `superseded` (a later run took the
 key's folder), `automation`, `mcp_tools`, `child_running`, `lost_race` (the record
 changed, was removed, or a lock stayed busy; a lost claim is a `ResumeLostError` whose
@@ -1314,9 +1327,9 @@ payloads holds a path, a process id or task text, and none sets a session key of
 
 | Event | Payload | Emitted |
 |---|---|---|
-| `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count) | once per conversion, with one info log line |
-| `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume |
-| `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`) |
+| `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count; `null` when the folder could not be listed, which does not hold back the conversion) | once per conversion, with one info log line |
+| `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume, with one info log line (the same words) |
+| `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`), with one info log line (the same words) |
 | `workflow.writeback_restored` | `workflow`, `run_id`, `step` | when a write-back a dead process left cut was put back before the walk used the folder (`step` is the step it resumes at, `null` for a run that was not resumed) or before a parallel step ran (that step) |
 
 `build_resume_state(record, answers, workspace=...)` enters a dead run at its position's
@@ -1493,7 +1506,9 @@ and matches a record by `launch.session_key` (a record without `launch`, one
 written before launches were kept, by `root_session_key`; a sub-workflow's own
 run is never matched), newest first. `run_workflow.cut_runs_notice` walks those
 records and stops at the first one that is not cut, so a conversation that launches
-again after being told is not told again. A run is cut when its record is `crashed`,
+again after being told is not told again about the same runs, unless the run the told
+launch started was itself cut: the next launch then names that run and the earlier cut
+runs with it. A run is cut when its record is `crashed`,
 or `running` with an owner that is proven gone (`run_log.owner_gone`, the same
 judgement the crash conversion uses; an owner that cannot be observed counts as
 alive). At most the newest few cut runs are examined (`_CUT_RUNS_EXAMINED`). The notice

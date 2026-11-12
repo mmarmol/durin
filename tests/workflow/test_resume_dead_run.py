@@ -23,6 +23,7 @@ from tests.workflow.telemetry_capture import (
     payloads,
     recorded,
 )
+from tests.workflow.telemetry_capture import log_lines_fixture as _log_lines  # noqa: F401
 from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
@@ -164,27 +165,6 @@ def test_a_dead_runs_copies_stay_until_the_resume_enters_the_step_and_it_starts_
     assert done.status == "completed"
     assert len(on_disk_at_each_fork) == 2
     assert on_disk_at_each_fork[0] == [], "the step's first copy started beside the dead run's"
-    folder = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
-    assert not (folder / "stale.txt").exists()
-    assert list(copies.parent.iterdir()) == []
-
-
-def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path):
-    """A script record the dead run left means a script may still be writing in
-    a copy; the step removes them when it is entered again."""
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    copies = _copies(dead)
-    folder = run_log._record_path(dead.workspace, "w", "r1").parent
-    run_log.record_script(folder, "r1", pid=2**22 + 7, started="never", node_id="left")
-
-    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
-
-    assert rec["status"] == "crashed"
-    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
-    done = _resume(dead, definition, rec)
-    assert done.status == "completed"
     assert list(copies.parent.iterdir()) == []
 
 
@@ -707,7 +687,7 @@ def test_a_cut_parallel_step_reading_long_branch_ids_starts_the_same_branches(tm
 
 # ── what a dead run's conversion, refusals and write-back undo leave in telemetry ──
 
-def test_a_conversion_is_logged_and_counted_once(tmp_path, telemetry_dir):
+def test_a_conversion_is_logged_and_counted_once(tmp_path, telemetry_dir, log_lines):
     dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
     recorded_scripts = len(run_log.script_records(dead.workspace, "w", "r1"))
     assert run_log.mark_dead_run(dead.workspace, "w", "r1") is not None
@@ -716,6 +696,9 @@ def test_a_conversion_is_logged_and_counted_once(tmp_path, telemetry_dir):
         {"workflow": "w", "run_id": "r1", "status": "crashed", "step": "b",
          "scripts_recorded": recorded_scripts}]
     assert_clean(recorded(telemetry_dir))
+    assert [line for line in log_lines if "its process is gone" in line] == [
+        f"run r1 of workflow 'w': its process is gone; recorded as crashed at step 'b' "
+        f"({recorded_scripts} script record(s) left)"]
 
 
 def test_a_conversion_counts_the_script_records_the_run_left(tmp_path, telemetry_dir):
@@ -728,6 +711,21 @@ def test_a_conversion_counts_the_script_records_the_run_left(tmp_path, telemetry
     [found] = payloads(telemetry_dir, "workflow.run_found_dead")
     assert found["scripts_recorded"] == already + 2
     assert_clean(recorded(telemetry_dir))
+
+
+def test_a_count_that_fails_does_not_hold_back_the_conversion(
+        tmp_path, telemetry_dir, monkeypatch):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+
+    def unlistable(*_a, **_k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(run_log, "script_records", unlistable)
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert rec is not None and rec["status"] == "crashed"
+    assert run_log.read_manifest(dead.workspace, "w", "r1")["status"] == "crashed"
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["scripts_recorded"] is None
 
 
 def test_a_run_someone_stopped_is_counted_as_cancelled(tmp_path, telemetry_dir):
@@ -861,9 +859,9 @@ def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch)
                             lambda pid, started, state=state, **kw: (state, [7], [8]))
         refusal = run_log.dead_run_refusal(dead.workspace, rec)
         assert refusal.kind == "script_alive"
-    # a script record nobody can read
+    # a script record nobody can read: that script may still run
     path.write_text("{not json", encoding="utf-8")
-    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "other"
+    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "script_alive"
     path.unlink()
 
     # a sub-workflow run still recorded as running

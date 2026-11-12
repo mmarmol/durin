@@ -457,7 +457,9 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
     It only reads: no record is written, no lock is taken or waited on, and no
     process is ended. The runs the conversation launched are walked newest first
     and the walk stops at the first one that is not cut, so a conversation that
-    launched again after being told is not told again. A run is cut when it is
+    launched again after being told is not told again about the same runs, unless
+    the run the told launch started was itself cut: the next launch then names
+    that run and the earlier cut runs with it. A run is cut when it is
     recorded ``crashed``, or ``running`` with an owner that is proven gone (one
     that cannot be observed counts as alive). A ``crashed`` run that a resume
     would refuse is cut but not named. The text promises nothing a later check

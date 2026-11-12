@@ -298,3 +298,149 @@ def test_a_script_step_entered_after_the_pass_starts_no_process(tmp_path, exit_p
     assert run_log.script_records(workspace, "w", "r1") == []
     record = run_log.read_manifest(workspace, "w", "r1")
     assert record["status"] == "running" and record["runs"] == []
+
+
+# ── a script start does not hold the pass, nor other runs ──
+
+class _HeldStarts:
+    """``subprocess.Popen`` with the start of any script whose command holds
+    ``HOLD`` kept waiting until the test releases it; every other start goes
+    straight through. ``started`` collects the held scripts once started; a
+    held start raises ``fails_with`` instead when the test sets it."""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.started: list[subprocess.Popen] = []
+        self.fails_with: Exception | None = None
+        self.real = subprocess.Popen
+
+    def __call__(self, args, *a, **kw):
+        held = isinstance(args, list) and args[:1] == ["bash"] and "HOLD" in args[-1]
+        if held:
+            self.entered.set()
+            self.release.wait(_WAIT_S)
+            if self.fails_with is not None:
+                raise self.fails_with
+        proc = self.real(args, *a, **kw)
+        if held:
+            self.started.append(proc)
+        return proc
+
+
+@pytest.fixture
+def held_starts(monkeypatch):
+    held = _HeldStarts()
+    monkeypatch.setattr(subprocess, "Popen", held)
+    yield held
+    held.release.set()
+
+
+def _in_thread(target, *args) -> threading.Thread:
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_a_script_start_in_progress_never_holds_the_pass(tmp_path, exit_pass, held_starts):
+    """The pass returns while a script is still starting; the script that then
+    starts is ended by its own thread, which records nothing."""
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    wf = parse_workflow(_flow(_ROUTING["linear"], "echo HOLD; exec sleep 61"))
+    thread = exit_pass.start(engine(workspace).run, wf, "t")
+    assert held_starts.entered.wait(_WAIT_S)
+
+    passed = _in_thread(script_runner.end_scripts_for_exit)
+    passed.join(2.0)
+    try:
+        assert not passed.is_alive(), "the pass waited for a script start"
+    finally:
+        held_starts.release.set()
+
+    _until(lambda: exit_pass.held() == 1, "the starting thread to wait for the process end")
+    [proc] = held_starts.started
+    assert proc.returncode == -signal.SIGKILL           # ended and reaped by its own thread
+    assert thread.is_alive()
+    assert script_runner._children == set()
+    assert run_log.script_records(workspace, "w", "r1") == []
+    record = run_log.read_manifest(workspace, "w", "r1")
+    assert record["status"] == "running" and record["runs"] == []
+    assert "after" not in marks(workspace)
+
+
+def test_a_restart_reaches_its_exec_while_a_script_is_starting(
+        tmp_path, exit_pass, held_starts, monkeypatch):
+    from durin.utils import restart
+
+    execs: list[bool] = []
+    monkeypatch.setattr("durin.utils.restart.os.execv", lambda *a, **k: execs.append(True))
+    monkeypatch.setattr("durin.utils.restart.os._exit", lambda code: None)
+    exit_pass.start(ScriptNodeRunner(str(tmp_path)),
+                    _request(tmp_path, "echo HOLD; exec sleep 61"))
+    assert held_starts.entered.wait(_WAIT_S)
+
+    restarting = _in_thread(restart.reexec)
+    restarting.join(2.0)
+    try:
+        assert not restarting.is_alive(), "the restart waited for a script start"
+        assert execs == [True]
+    finally:
+        held_starts.release.set()
+    _until(lambda: exit_pass.held() == 1, "the starting thread to wait for the process end")
+    [proc] = held_starts.started
+    assert proc.returncode == -signal.SIGKILL
+
+
+def test_a_script_start_in_one_run_holds_back_no_other_run(tmp_path, held_starts):
+    held_ws, free_ws = tmp_path / "held", tmp_path / "free"
+    for ws in (held_ws, free_ws):
+        (ws / "workflows").mkdir(parents=True)
+    held_done: list = []
+    held = _in_thread(lambda: held_done.append(engine(held_ws).run(
+        parse_workflow(_flow(_ROUTING["linear"], "echo HOLD")), "t")))
+    try:
+        assert held_starts.entered.wait(_WAIT_S)
+        free_done: list = []
+        free = _in_thread(lambda: free_done.append(engine(free_ws).run(
+            parse_workflow(_flow(_ROUTING["linear"], "echo free")), "t")))
+        free.join(_WAIT_S)
+        assert not free.is_alive(), "the other run waited for the held script start"
+        assert free_done[0].status == "completed"
+        assert run_log.read_manifest(free_ws, "w", "r1")["status"] == "completed"
+        assert held.is_alive()
+    finally:
+        held_starts.release.set()
+        held.join(_WAIT_S)
+    assert held_done[0].status == "completed"
+
+
+def test_a_script_start_that_fails_after_the_pass_is_no_outcome(
+        tmp_path, exit_pass, held_starts):
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    wf = parse_workflow(_flow(_ROUTING["linear"], "echo HOLD"))
+    thread = exit_pass.start(engine(workspace).run, wf, "t")
+    assert held_starts.entered.wait(_WAIT_S)
+    assert script_runner.end_scripts_for_exit() == 0
+    held_starts.fails_with = OSError(5, "Input/output error")
+    held_starts.release.set()
+
+    _until(lambda: exit_pass.held() == 1, "the starting thread to wait for the process end")
+    assert thread.is_alive()
+    record = run_log.read_manifest(workspace, "w", "r1")
+    assert record["status"] == "running" and record["runs"] == []
+
+
+def test_a_script_start_that_fails_with_no_pass_is_a_failed_step(tmp_path, held_starts):
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    held_starts.fails_with = OSError(5, "Input/output error")
+    held_starts.release.set()
+
+    done = engine(workspace).run(parse_workflow(_flow(_ROUTING["linear"], "echo HOLD")), "t")
+
+    assert done.status == "aborted"
+    record = run_log.read_manifest(workspace, "w", "r1")
+    assert record["status"] == "aborted"
+    assert [(r["node_id"], r["status"]) for r in record["runs"]] == [("s", "node_failed")]

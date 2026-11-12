@@ -137,9 +137,12 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     if not unfinished:
         return
     try:
+        from durin.workflow import script_runner
+
         logger.warning(
-            "Shutdown: exiting with {} workflow run(s) unfinished: {}",
-            len(unfinished), ", ".join(unfinished))
+            "Shutdown: exiting with {} workflow run(s) unfinished: {}; ending the {} "
+            "workflow script(s) this process still holds",
+            len(unfinished), ", ".join(unfinished), script_runner.scripts_held())
         if tell_user:
             count = len(unfinished)
             with suppress(Exception):

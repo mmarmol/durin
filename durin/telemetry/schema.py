@@ -1978,7 +1978,7 @@ class WorkflowRunFoundDeadEvent(TypedDict):
     run_id: str
     status: str  # "crashed" | "cancelled"
     step: str | None  # the step it was in
-    scripts_recorded: int  # script records it left beside its record
+    scripts_recorded: int | None  # script records it left beside its record; None when they could not be counted
 
 
 class WorkflowRunResumedEvent(TypedDict):
