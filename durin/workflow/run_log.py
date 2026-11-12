@@ -1202,6 +1202,41 @@ def runs_for_session(workspace: str | Path, root_session_key: str) -> list[dict]
     return out
 
 
+def runs_launched_by(workspace: str | Path, name: str, session_key: str) -> list[dict]:
+    """The full records of workflow ``name`` that the conversation ``session_key``
+    launched, newest first. A record says so by its ``launch`` (a session launch
+    names the conversation; any other launch names none); a record written before
+    launches were kept says so by its ``root_session_key``. A sub-workflow's own
+    run is never one. Reads only that workflow's folder and skips a file that
+    cannot be read; blocking, so an event loop calls it through a thread."""
+    folder = _wf_dir(workspace, name)
+    if not session_key or not folder.is_dir():
+        return []
+    out: list[dict] = []
+    for f in folder.glob("*.json"):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        if not isinstance(rec, dict) or not isinstance(rec.get("run_id"), str):
+            continue
+        if rec.get("parent_run_id"):
+            continue
+        launch = rec.get("launch")
+        if launch is None:
+            launched_from = rec.get("root_session_key")
+        elif isinstance(launch, dict) and launch.get("kind") == "session":
+            launched_from = launch.get("session_key")
+        else:
+            launched_from = None
+        if launched_from == session_key:
+            out.append(rec)
+    out.sort(key=lambda r: r.get("started_at") or r.get("ts") or 0.0, reverse=True)
+    return out
+
+
 # The error of the row a dead run's conversion writes for an attempt that was cut.
 DEAD_RUN_ERROR = "the process ended while this step was running"
 

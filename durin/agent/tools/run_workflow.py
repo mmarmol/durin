@@ -437,6 +437,65 @@ def result_summary(result: Any, *, output_files: bool, session_key: str | None) 
     )
 
 
+def _with_notice(text: str, notice: str) -> str:
+    return f"{text}\n\n{notice}" if notice else text
+
+
+# How many cut runs a launch names; the rest are counted.
+_CUT_RUNS_NAMED = 3
+
+
+def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any) -> str:
+    """What a fresh launch tells about the runs of ``name`` that the conversation
+    ``session_key`` started and that a process ending cut short, or "" when there
+    is nothing to say. A run recorded as running whose process is gone is
+    converted first, as a resume does. Named: a cut run that can be resumed, and
+    one that can be once something of it ends (a script or a sub-workflow run
+    the dead process left), with that reason. Not named: a run whose process is
+    alive, one that ended or paused, one that cannot be resumed at all (its step
+    or folder is gone, its record is incomplete, an automation started it) and
+    one another caller is acting on. Observes processes and waits on locks: an
+    event loop calls it through a thread."""
+    from durin.workflow import run_log
+    from durin.workflow.engine import resumable_kind, resume_refusal
+
+    def cannot_be_resumed(record: dict) -> bool:
+        return (resumable_kind(record) != "dead"
+                or resume_refusal(record, workspace=workspace, workflow=workflow) is not None)
+
+    paragraphs: list[str] = []
+    for record in run_log.runs_launched_by(workspace, name, session_key):
+        run_id = record.get("run_id")
+        status = record.get("status")
+        if status == "crashed":
+            # Settled only when it can be resumed: a run that never can is left alone.
+            if cannot_be_resumed(record):
+                continue
+        elif status != "running":
+            continue
+        record, reason = run_log.settle_dead_run(workspace, name, run_id)
+        if not isinstance(record, dict) or record.get("status") != "crashed":
+            continue
+        if cannot_be_resumed(record) or reason in run_log.DEAD_RUN_RACE_REFUSALS:
+            continue
+        if reason:
+            paragraphs.append(
+                f"Note: run {run_id} of '{name}', started from this conversation, was cut "
+                f"short when its process ended, and {reason} This call started a new run "
+                "beside it.")
+        else:
+            paragraphs.append(
+                f"Note: run {run_id} of '{name}', started from this conversation, was cut "
+                "short when its process ended and has not been resumed. It can be resumed "
+                f"with resume_run_id='{run_id}' (it enters node '{record.get('failed_node')}' "
+                "again; finished nodes do not run again). This call started a new run; it "
+                "did not resume that one.")
+    shown = paragraphs[:_CUT_RUNS_NAMED]
+    if len(paragraphs) > len(shown):
+        shown.append(f"and {len(paragraphs) - len(shown)} more.")
+    return "\n\n".join(shown)
+
+
 @tool_parameters(_PARAMETERS)
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
@@ -632,6 +691,21 @@ class RunWorkflowTool(Tool, ContextAware):
             resume = build_resume_state(manifest, task, workspace=self._workspace)
             task = manifest.get("task") or task
             accepted_record = manifest
+
+        # A fresh launch from a conversation tells about the runs of this workflow
+        # that conversation had started and a process ending cut short: a turn
+        # replayed after a restart would otherwise start the workflow a second
+        # time without knowing. Off the event loop (it observes processes); a
+        # failure only means no notice.
+        cut_notice = ""
+        calling_session = self._session_key.get()
+        if not resume_run_id and calling_session:
+            try:
+                cut_notice = await asyncio.to_thread(
+                    cut_runs_notice, self._workspace, name, calling_session, workflow)
+            except Exception:  # noqa: BLE001 - the launch goes on without the notice
+                logger.opt(exception=True).warning(
+                    "workflow {}: looking for the runs {} had cut failed", name, calling_session)
 
         # Snapshot the current definitions into the workflow version history (captures
         # any edit since the last run). Best-effort: never blocks the run.
@@ -849,7 +923,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 resume_claim = claim
                 task_handle.add_done_callback(
                     lambda t: resume_claim.drop() if t.cancelled() else None)
-            return _background_launch_message(name, run_id)
+            return _with_notice(_background_launch_message(name, run_id), cut_notice)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         # Paced: the calling turn waits on this run, and a chat turn keeps its
@@ -896,7 +970,10 @@ class RunWorkflowTool(Tool, ContextAware):
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))
         await _report_to_launch(result)
-        return _format_result(
-            result, output_files=output_files,
-            human_reachable=is_interactive(root_session_key),
+        return _with_notice(
+            _format_result(
+                result, output_files=output_files,
+                human_reachable=is_interactive(root_session_key),
+            ),
+            cut_notice,
         )

@@ -503,6 +503,13 @@ running runs again **from its start**, whatever it had done before the
 process died. A parallel step runs all its branches or workers again, and a
 sub-workflow step starts its child workflow again from its first step.
 
+When a restart replays the message that had started a workflow, the agent that
+launches the workflow again is told about the cut run: the reply to a new launch
+names the runs of that workflow started from the same conversation that a
+process ending cut short (up to three, newest first), and the agent offers to
+resume the cut run rather than leave two. When something of a cut run is still
+running, the note says so and the new run starts beside it.
+
 So a step that acts outside durin — sends a message, posts a comment, writes
 to another system — should be safe to run twice. The general way is a script
 that checks before it acts (has this comment already been posted?) and does

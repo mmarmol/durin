@@ -862,3 +862,47 @@ def test_a_record_written_from_nothing_has_no_launch(tmp_path, monkeypatch):
     monkeypatch.undo()
     rec = run_log.read_manifest(tmp_path, "wf", "r1")
     assert rec["incomplete"] is True and rec.get("launch") is None
+
+
+def _started(tmp_path, name, run_id, *, started_at, launch=..., root=None, parent=None):
+    run_log.start_run(tmp_path, name, run_id, root_session_key=root, started_at=started_at,
+                      parent_run_id=parent, launch=None if launch is ... else launch)
+
+
+def test_runs_launched_by_matches_the_launch_session_newest_first(tmp_path):
+    here = {"kind": "session", "session_key": "websocket:a", "channel": "websocket", "chat_id": "a"}
+    other = {**here, "session_key": "websocket:b"}
+    _started(tmp_path, "wf", "old", started_at=1.0, launch=here, root="websocket:a")
+    _started(tmp_path, "wf", "new", started_at=3.0, launch=here, root="websocket:a")
+    _started(tmp_path, "wf", "else", started_at=2.0, launch=other, root="websocket:b")
+    got = run_log.runs_launched_by(tmp_path, "wf", "websocket:a")
+    assert [r["run_id"] for r in got] == ["new", "old"]
+
+
+def test_runs_launched_by_follows_the_launch_not_the_root_the_resume_restamped(tmp_path):
+    here = {"kind": "session", "session_key": "websocket:a", "channel": "websocket", "chat_id": "a"}
+    _started(tmp_path, "wf", "r1", started_at=1.0, launch=here, root="websocket:b")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["r1"]
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:b") == []
+
+
+def test_runs_launched_by_matches_a_record_without_launch_by_its_root(tmp_path):
+    _started(tmp_path, "wf", "old", started_at=1.0, root="websocket:a")
+    service = {"kind": "service", "subject": "tok"}
+    _started(tmp_path, "wf", "svc", started_at=2.0, launch=service, root="websocket:a")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["old"]
+
+
+def test_runs_launched_by_excludes_child_runs_and_reads_only_that_workflow(tmp_path):
+    _started(tmp_path, "wf", "kid", started_at=1.0, root="websocket:a", parent="top")
+    _started(tmp_path, "other", "r9", started_at=1.0, root="websocket:a")
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:a") == []
+
+
+def test_runs_launched_by_skips_unreadable_files_and_a_missing_folder(tmp_path):
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:a") == []
+    _started(tmp_path, "wf", "ok", started_at=1.0, root="websocket:a")
+    folder = tmp_path / "workflows-runs" / "wf"
+    (folder / "bad.json").write_text("{not json", encoding="utf-8")
+    (folder / "list.json").write_text("[1]", encoding="utf-8")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["ok"]

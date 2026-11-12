@@ -1514,3 +1514,224 @@ async def test_a_process_that_serves_the_launch_channel_reports_there(tmp_path):
     assert msg.content.startswith(
         "[Workflow 'doer' run r1, started from this conversation, was resumed from another "
         "conversation and finished]")
+
+
+# ---------------------------------------------------------------------------
+# A fresh launch names the runs of that workflow the same conversation had cut.
+# ---------------------------------------------------------------------------
+
+_HERE = {"kind": "session", "session_key": "websocket:chatA",
+         "channel": "websocket", "chat_id": "chatA"}
+
+
+def _cut(tmp_path, run_id, *, started_at, launch=_HERE, root="websocket:chatA", node="build",
+         parent=None, owner=_DEAD_OWNER, status="running", keep_folder=True, incomplete=False):
+    """Run ``run_id`` of workflow ``qa``, started from a conversation and left by
+    a process that died in step ``node`` (``status`` ``running`` with a dead
+    owner, or settled to ``crashed`` already)."""
+    from durin.workflow import resume_store
+    from durin.workflow.artifacts import artifact_dir
+
+    _write_workflow(tmp_path, "qa", {"name": "qa", "start": "build", "nodes": [
+        {"id": "build", "kind": "script", "command": "echo ok", "next": None}]})
+    work_dir = artifact_dir(tmp_path, run_id, "work", None)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    resume_store.save_input(resume_store.store_dir(tmp_path, run_id), 1, node, "")
+    run_log.start_run(tmp_path, "qa", run_id, root_session_key=root, started_at=started_at,
+                      task="t", work_dir=str(work_dir), position={"node": node, "seq": 1},
+                      surface="agent", launch=launch, parent_run_id=parent)
+    f = tmp_path / "workflows-runs" / "qa" / f"{run_id}.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=owner, active_node={
+        "node_id": node, "label": node, "started_at": started_at,
+        "iteration": 1, "session_key": None})
+    if incomplete:
+        rec["incomplete"] = True
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    if not keep_folder:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)
+    if status == "crashed":
+        run_log.mark_dead_run(tmp_path, "qa", run_id)
+
+
+def _fresh_result(*_a, **_kw):
+    return WorkflowResult(status="completed", run_id="fresh", final_output="ok", runs=[])
+
+
+async def _launch(tmp_path, *, session="websocket:chatA", background=True, resume_run_id=""):
+    import asyncio
+
+    from durin.agent.tools.context import RequestContext
+
+    tool = _tool(tmp_path)
+    if session is not None:
+        channel, chat_id = session.split(":", 1)
+        tool.set_context(RequestContext(channel=channel, chat_id=chat_id, session_key=session))
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None, work_dir_override=None, parent_run_id=None,
+                 work_key=None, launch=None):
+        return _fresh_result()
+
+    with patch("durin.providers.factory.make_provider", return_value=fake), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        out = await tool.execute(name="qa", task="go", background=background,
+                                 resume_run_id=resume_run_id)
+        async with asyncio.timeout(60):
+            await asyncio.gather(*tool._bg_tasks)
+    return out
+
+
+def _resumable_text(run_id, node="build"):
+    return (f"Note: run {run_id} of 'qa', started from this conversation, was cut short when "
+            f"its process ended and has not been resumed. It can be resumed with "
+            f"resume_run_id='{run_id}' (it enters node '{node}' again; finished nodes do not "
+            "run again). This call started a new run; it did not resume that one.")
+
+
+@pytest.mark.asyncio
+async def test_a_launch_names_a_run_this_conversation_had_cut(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    reply = await _launch(tmp_path)
+    assert ("Note: run r-cut of 'qa', started from this conversation, was cut short when its "
+            "process ended and has not been resumed.") in reply
+    assert "resume_run_id='r-cut'" in reply and "it enters node 'build' again" in reply
+    assert reply.rstrip().endswith("This call started a new run; it did not resume that one.")
+    assert reply.count("\n\nNote: run r-cut") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_launch_with_nothing_cut_is_the_plain_launch_reply(tmp_path):
+    from durin.agent.tools.run_workflow import _background_launch_message
+    _write_workflow(tmp_path, "qa", {"name": "qa", "start": "build", "nodes": [
+        {"id": "build", "kind": "script", "command": "echo ok", "next": None}]})
+    reply = await _launch(tmp_path)
+    run_id = reply.split("run id: ")[1].split(")")[0]
+    assert reply == _background_launch_message("qa", run_id)
+
+
+@pytest.mark.asyncio
+async def test_a_running_record_whose_process_is_gone_is_settled_and_named(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0)
+    assert run_log.read_manifest(tmp_path, "qa", "r-cut")["status"] == "running"
+    reply = await _launch(tmp_path)
+    assert _resumable_text("r-cut") in reply
+    assert run_log.read_manifest(tmp_path, "qa", "r-cut")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_a_run_another_conversation_started_is_not_named(tmp_path):
+    other = {**_HERE, "session_key": "websocket:chatB", "chat_id": "chatB"}
+    _cut(tmp_path, "r-cut", started_at=1.0, launch=other, root="websocket:chatB",
+         status="crashed")
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_live_run_a_finished_run_and_a_child_run_are_not_named(tmp_path):
+    from durin.utils.process_tree import process_identity
+    _cut(tmp_path, "r-live", started_at=1.0, owner=process_identity())
+    _cut(tmp_path, "r-kid", started_at=2.0, parent="r-top", status="crashed")
+    _cut(tmp_path, "r-done", started_at=3.0, status="crashed")
+    f = tmp_path / "workflows-runs" / "qa" / "r-done.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(status="completed", failed_node=None)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    reply = await _launch(tmp_path)
+    assert "Note:" not in reply
+    assert run_log.read_manifest(tmp_path, "qa", "r-live")["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_with_a_sub_run_still_running_is_named_with_that_reason(tmp_path):
+    from durin.utils.process_tree import process_identity
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    run_log.start_run(tmp_path, "kid", "r-kid", root_session_key="websocket:chatA",
+                      started_at=2.0, parent_run_id="r-cut")
+    assert run_log.read_manifest(tmp_path, "kid", "r-kid")["owner"] == process_identity()
+    reply = await _launch(tmp_path)
+    reason = run_log.settle_dead_run(tmp_path, "qa", "r-cut")[1]
+    assert reason and "r-kid" in reason
+    assert (f"Note: run r-cut of 'qa', started from this conversation, was cut short when its "
+            f"process ended, and {reason} This call started a new run beside it.") in reply
+    assert "resume_run_id" not in reply.split("Note:")[1]
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_whose_check_answers_with_a_race_refusal_is_not_named(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    busy = sorted(run_log.DEAD_RUN_RACE_REFUSALS)[0]
+    with patch.object(run_log, "dead_run_refusal", return_value=busy):
+        reply = await _launch(tmp_path)
+    assert "Note:" not in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["step_gone", "folder_pruned", "incomplete"])
+async def test_a_cut_run_refused_for_another_reason_is_not_named(tmp_path, how):
+    kwargs = {"step_gone": {"node": "removed"}, "folder_pruned": {"keep_folder": False},
+              "incomplete": {"incomplete": True}}[how]
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", **kwargs)
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_an_automation_root_names_is_not_named(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, launch=None, root="automation:nightly",
+         status="crashed")
+    assert "Note:" not in await _launch(tmp_path, session="automation:nightly")
+
+
+@pytest.mark.asyncio
+async def test_at_most_three_are_named_newest_first(tmp_path):
+    for i in range(1, 6):
+        _cut(tmp_path, f"r{i}", started_at=float(i), status="crashed")
+    reply = await _launch(tmp_path)
+    notes = reply.split("\n\nNote: ")[1:]
+    assert [n.split(" ")[1] for n in notes[:3]] == ["r5", "r4", "r3"]
+    assert len(notes) == 3
+    assert "run r2 of" not in reply and "run r1 of" not in reply
+    assert reply.endswith("\n\nand 2 more.")
+
+
+@pytest.mark.asyncio
+async def test_a_resume_call_carries_no_notice(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-other", started_at=2.0, status="crashed")
+    reply = await _launch(tmp_path, resume_run_id="r-cut")
+    assert "Note:" not in reply
+
+
+@pytest.mark.asyncio
+async def test_the_foreground_result_carries_the_notice_too(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    out = await _launch(tmp_path, background=False)
+    assert out.startswith("Workflow run ")
+    assert out.endswith("\n\n" + _resumable_text("r-cut"))
+
+
+@pytest.mark.asyncio
+async def test_an_old_record_without_launch_is_matched_by_its_root(tmp_path):
+    _cut(tmp_path, "r-old", started_at=1.0, launch=None, status="crashed")
+    assert _resumable_text("r-old") in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_launch_with_no_calling_session_gets_no_notice(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, launch=None, root=None, status="crashed")
+    assert "Note:" not in await _launch(tmp_path, session=None)
+
+
+@pytest.mark.asyncio
+async def test_a_failure_building_the_notice_does_not_stop_the_launch(tmp_path, monkeypatch):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(run_log, "runs_launched_by", boom)
+    reply = await _launch(tmp_path)
+    assert reply.startswith("Workflow 'qa' started in the background") and "Note:" not in reply
