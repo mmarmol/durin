@@ -441,52 +441,56 @@ def _with_notice(text: str, notice: str) -> str:
     return f"{text}\n\n{notice}" if notice else text
 
 
-# How many cut runs a launch names; the rest are counted.
+# How many cut runs a launch looks at (the newest), and how many of them it names.
+_CUT_RUNS_EXAMINED = 10
 _CUT_RUNS_NAMED = 3
 
 
 def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any) -> str:
     """What a fresh launch tells about the runs of ``name`` that the conversation
     ``session_key`` started and that a process ending cut short, or "" when there
-    is nothing to say. A run recorded as running whose process is gone is
-    converted first, as a resume does. Named: a cut run that can be resumed, and
-    one that can be once something of it ends (a script or a sub-workflow run
-    the dead process left), with that reason. Not named: a run whose process is
-    alive, one that ended or paused, one that cannot be resumed at all (its step
-    or folder is gone, its record is incomplete, an automation started it) and
-    one another caller is acting on. Observes processes and waits on locks: an
-    event loop calls it through a thread."""
+    is nothing to say. Only the newest few that are recorded ``crashed`` or
+    ``running`` are looked at. A run recorded as running whose process is gone is
+    converted first, as a resume does (which also ends the scripts that run left).
+    What decides a run is named, in order: something of it may still be there (a
+    script, a sub-workflow run, a process that seems alive) - named whether or
+    not it could ever be resumed, since the new run starts beside it; else it
+    can be resumed - named with the way to do it. Not named: a run nothing of
+    which is left and that can never be resumed (its step is gone, its folder
+    was pruned, its record is incomplete, an automation started it), one another
+    caller is acting on, one whose process is alive, and one that ended, paused
+    or aborted. Observes processes and waits on locks: an event loop calls it
+    through a thread."""
     from durin.workflow import run_log
     from durin.workflow.engine import resumable_kind, resume_refusal
 
-    def cannot_be_resumed(record: dict) -> bool:
-        return (resumable_kind(record) != "dead"
-                or resume_refusal(record, workspace=workspace, workflow=workflow) is not None)
-
+    candidates = [r for r in run_log.runs_launched_by(workspace, name, session_key)
+                  if r.get("status") in ("crashed", "running")][:_CUT_RUNS_EXAMINED]
     paragraphs: list[str] = []
-    for record in run_log.runs_launched_by(workspace, name, session_key):
-        run_id = record.get("run_id")
-        status = record.get("status")
-        if status == "crashed":
-            # Settled only when it can be resumed: a run that never can is left alone.
-            if cannot_be_resumed(record):
-                continue
-        elif status != "running":
-            continue
+    for candidate in candidates:
+        run_id = candidate.get("run_id")
         record, reason = run_log.settle_dead_run(workspace, name, run_id)
         if not isinstance(record, dict) or record.get("status") != "crashed":
             continue
-        if cannot_be_resumed(record) or reason in run_log.DEAD_RUN_RACE_REFUSALS:
+        if reason in run_log.DEAD_RUN_RACE_REFUSALS:
             continue
+        resumable = (resumable_kind(record) == "dead"
+                     and resume_refusal(record, workspace=workspace, workflow=workflow) is None)
+        head = (f"Note: run {run_id} of '{name}', started from this conversation, was cut "
+                "short")
         if reason:
+            fact = getattr(reason, "fact", "something of it may still be there")
+            if resumable:
+                paragraphs.append(
+                    f"{head} and {fact}. It can be resumed once that is gone. This call "
+                    "started a new run beside it.")
+            else:
+                paragraphs.append(
+                    f"{head} and cannot be resumed, and {fact}. This call started a new "
+                    "run beside it.")
+        elif resumable:
             paragraphs.append(
-                f"Note: run {run_id} of '{name}', started from this conversation, was cut "
-                f"short when its process ended, and {reason} This call started a new run "
-                "beside it.")
-        else:
-            paragraphs.append(
-                f"Note: run {run_id} of '{name}', started from this conversation, was cut "
-                "short when its process ended and has not been resumed. It can be resumed "
+                f"{head} when its process ended and has not been resumed. It can be resumed "
                 f"with resume_run_id='{run_id}' (it enters node '{record.get('failed_node')}' "
                 "again; finished nodes do not run again). This call started a new run; it "
                 "did not resume that one.")

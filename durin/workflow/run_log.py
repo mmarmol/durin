@@ -808,6 +808,20 @@ def _pids(pids: list[int]) -> str:
     return ", ".join(str(p) for p in pids)
 
 
+class LeftBehind(str):
+    """A refusal that names something the dead process left. It reads as its
+    text everywhere a refusal is used; ``fact`` is the same thing as a clause
+    that is true on its own (what is still there), for a caller that says it in
+    words of its own."""
+
+    fact: str
+
+    def __new__(cls, text: str, fact: str) -> "LeftBehind":
+        out = super().__new__(cls, text)
+        out.fact = fact
+        return out
+
+
 def _left_script_refusal(node: object, state: str, own: list[int],
                          group: list[int]) -> str | None:
     """The refusal for one script a dead run left, or None when nothing of it
@@ -818,20 +832,32 @@ def _left_script_refusal(node: object, state: str, own: list[int],
     must not end processes or remove files on its account."""
     if state == "alive":
         if own and group:
-            return (f"the script of its step '{node}' from the earlier process is still "
-                    f"running (pid {_pids(own)}), and so are processes in its former "
-                    f"process group (pid {_pids(group)}), which may not be that script's. "
-                    "It can be resumed once they have all ended.")
+            return LeftBehind(
+                f"the script of its step '{node}' from the earlier process is still "
+                f"running (pid {_pids(own)}), and so are processes in its former "
+                f"process group (pid {_pids(group)}), which may not be that script's. "
+                "It can be resumed once they have all ended.",
+                f"the script of its step '{node}' is still running (pid {_pids(own)}), "
+                f"and so are processes in its former process group (pid {_pids(group)}), "
+                "which may not be that script's")
         if own:
-            return (f"the script of its step '{node}' from the earlier process is still "
-                    f"running (pid {_pids(own)}). It can be resumed once it has ended.")
-        return (f"processes in the former process group of the script of its step "
-                f"'{node}' are still running (pid {_pids(group)}); they may not be that "
-                "script's. It can be resumed once they have ended.")
+            return LeftBehind(
+                f"the script of its step '{node}' from the earlier process is still "
+                f"running (pid {_pids(own)}). It can be resumed once it has ended.",
+                f"the script of its step '{node}' is still running (pid {_pids(own)})")
+        return LeftBehind(
+            f"processes in the former process group of the script of its step "
+            f"'{node}' are still running (pid {_pids(group)}); they may not be that "
+            "script's. It can be resumed once they have ended.",
+            f"processes in the former process group of the script of its step '{node}' "
+            f"are still running (pid {_pids(group)}), which may not be that script's")
     if state == "unknown":
-        return (f"whether the script of its step '{node}' from the earlier process left "
-                f"anything running could not be checked (pid {_pids(group)}). It can be "
-                "resumed once nothing of that script is left.")
+        return LeftBehind(
+            f"whether the script of its step '{node}' from the earlier process left "
+            f"anything running could not be checked (pid {_pids(group)}). It can be "
+            "resumed once nothing of that script is left.",
+            f"whether the script of its step '{node}' ended could not be checked "
+            f"(pid {_pids(group)})")
     return None
 
 
@@ -849,9 +875,12 @@ DEAD_RUN_RACE_REFUSALS = frozenset({_TAKEN_REFUSAL, _GONE_REFUSAL, _BUSY_REFUSAL
 
 
 def _unreadable_script_refusal(path: Path) -> str:
-    return (f"a record of one of its scripts, {path}, cannot be read, so whether that "
-            "script still runs cannot be checked. It can be resumed once a person has "
-            "made sure nothing of that script is left and has removed that file.")
+    return LeftBehind(
+        f"a record of one of its scripts, {path}, cannot be read, so whether that "
+        "script still runs cannot be checked. It can be resumed once a person has "
+        "made sure nothing of that script is left and has removed that file.",
+        f"a record of one of its scripts, {path}, cannot be read, so whether that "
+        "script still runs cannot be checked")
 
 
 def _script_checks(workspace: str | Path, name: str,
@@ -950,7 +979,8 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
     ``_TAKEN_REFUSAL`` (``_GONE_REFUSAL`` when the record was removed); a
     sub-workflow run's record, or a script record, that changed meanwhile gives
     ``_BUSY_REFUSAL``, as does a lock that stays busy. These three are
-    ``DEAD_RUN_RACE_REFUSALS``.
+    ``DEAD_RUN_RACE_REFUSALS``. Every other answer is a ``LeftBehind``: the
+    refusal text, with the fact it rests on in ``fact``.
 
     Observes processes and may wait for a lock, so a caller on an event loop
     runs it off the loop."""
@@ -972,14 +1002,19 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
             return _TAKEN_REFUSAL
         if owner_alive:
             pid = owner.get("pid") if isinstance(owner, dict) else owner
-            return (f"it was marked interrupted while the process that was running it "
-                    f"(pid {pid}) still seems alive. It can be resumed once that process "
-                    "has ended.")
+            return LeftBehind(
+                f"it was marked interrupted while the process that was running it "
+                f"(pid {pid}) still seems alive. It can be resumed once that process "
+                "has ended.",
+                f"the process that was running it (pid {pid}) still seems alive")
         if running:
             child_name, child = running
-            return (f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
-                    "is still recorded as running. It can be resumed once that run has ended "
-                    "or been found dead.")
+            return LeftBehind(
+                f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
+                "is still recorded as running. It can be resumed once that run has ended "
+                "or been found dead.",
+                f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
+                "is still recorded as running")
         return _settle_scripts(checks)
 
     refusal = _with_run_lock(workspace, name, run_id, act_on_run)

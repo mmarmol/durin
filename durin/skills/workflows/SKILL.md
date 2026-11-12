@@ -222,9 +222,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   conversation, was cut short…`: a run of that workflow this conversation had started was
   cut short by a restart, and the call you just made started a new one. Tell the person, and
   resume the cut run with `resume_run_id` rather than leave two, unless the person wanted a
-  new run. When the note instead says something of the cut run is still running (a script,
-  a sub-workflow run, a process that seems alive), tell the person; do not treat the new run
-  as safe to repeat work beside it, and do not end processes or delete files yourself. When the reason is that
+  new run. When the note instead says something of the cut run is still there (a script, a
+  sub-workflow run, a process that seems alive), with or without saying the run cannot be
+  resumed, tell the person; do not treat the new run as safe to repeat work beside it, and
+  do not end processes or delete files yourself. When the reason is that
   another caller is acting on it, that it was already resumed, or that its record no longer
   exists, nothing the old process left is in the way: look at the run's status before
   trying again. A run can also stop because a write of a `choose`/`union` result into

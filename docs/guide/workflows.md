@@ -508,7 +508,9 @@ launches the workflow again is told about the cut run: the reply to a new launch
 names the runs of that workflow started from the same conversation that a
 process ending cut short (up to three, newest first), and the agent offers to
 resume the cut run rather than leave two. When something of a cut run is still
-running, the note says so and the new run starts beside it.
+running, the note says so, even when the run could never be resumed, and the new
+run starts beside it. With unified sessions all chats share one conversation, so
+the note can name a run that was started from another chat.
 
 So a step that acts outside durin — sends a message, posts a comment, writes
 to another system — should be safe to run twice. The general way is a script

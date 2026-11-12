@@ -1451,25 +1451,35 @@ workflow the conversation had started: `run_log.runs_launched_by(workspace,
 name, session_key)` reads only that workflow's folder under `workflows-runs/`
 and matches a record by `launch.session_key` (a record without `launch`, one
 written before launches were kept, by `root_session_key`; a sub-workflow's own
-run is never matched). `run_workflow.cut_runs_notice` settles each candidate
-the way a resume does (`run_log.settle_dead_run`, so a `running` record whose
-process is gone becomes `crashed`) and checks `engine.resumable_kind` and
-`engine.resume_refusal`. All of it runs in one worker-thread call, since it
-observes processes and waits on run locks; a failure is logged and the launch
-goes on without a note. It only reads records and converts dead ones through
-the existing conversion; it writes nothing else.
+run is never matched). `run_workflow.cut_runs_notice` looks at the ten newest of those records that are
+`crashed` or `running`, and settles each the way a resume does
+(`run_log.settle_dead_run`: a `running` record whose process is gone becomes
+`crashed`, which also ends the scripts that run left, and the dead-run check
+says whether something of it may still be there). All of it runs in one
+worker-thread call, since it observes processes and waits on run locks; a
+failure is logged and the launch goes on without a note. The notice reads
+records and converts dead runs through the existing conversion, which is the
+only writer it reaches.
 
-A run is named when it can be resumed, and when it can be once something the
-dead process left has ended (a script, a sub-workflow run still recorded as
-running, an owner that still seems alive), with that reason. It is not named
-when it can never be resumed (its step is gone from the definition, its folder
-was pruned, its record is incomplete, an automation started it), when another
-caller is acting on it, when its process is alive, or when it finished, paused
-or aborted. At most three runs are named, newest first, then `and {n} more.`.
-The note is appended after a blank line to the background launch reply and to
-the foreground result; with nothing to name the reply is unchanged. Its texts
-state a condition and the way to resume; they tell the reader to end no process
-and delete no file.
+What decides a run is named: first, whether something of it may still be there
+(the dead-run check's answer when it is not a race answer: a script, a
+sub-workflow run still recorded as running, a process that seems alive); such a
+run is named whether or not it could ever be resumed, since the new run starts
+beside it. The check exposes that fact alone (`run_log.LeftBehind.fact`, a
+refusal string that also carries the clause it rests on), and the note says it
+in its own words. Otherwise a run that `engine.resume_refusal` accepts is named
+with the way to resume it. A run with nothing left that can never be resumed
+(its step is gone from the definition, its folder was pruned, its record is
+incomplete, an automation started it), one another caller is acting on, one
+whose process is alive, and one that finished, paused or aborted are not named.
+At most three runs are named, newest first, then `and {n} more.` counting the
+further runs among the ten looked at that qualify. The note is appended after a
+blank line to the background launch reply and to the foreground result; with
+nothing to name the reply is unchanged. Its texts state what is there and, for a
+resumable run, the condition for resuming it; they tell the reader to end no
+process and delete no file. Under unified sessions every chat shares one session
+key, so a launch from one chat can name a run cut in another and call it started
+from this conversation.
 
 **Missing script file.** When a `ScriptNode` names a `script` file, its existence is
 checked in the same pre-flight pass as input-file validation (§2), before any node

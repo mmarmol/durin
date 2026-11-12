@@ -1646,21 +1646,6 @@ async def test_a_live_run_a_finished_run_and_a_child_run_are_not_named(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_a_cut_run_with_a_sub_run_still_running_is_named_with_that_reason(tmp_path):
-    from durin.utils.process_tree import process_identity
-    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
-    run_log.start_run(tmp_path, "kid", "r-kid", root_session_key="websocket:chatA",
-                      started_at=2.0, parent_run_id="r-cut")
-    assert run_log.read_manifest(tmp_path, "kid", "r-kid")["owner"] == process_identity()
-    reply = await _launch(tmp_path)
-    reason = run_log.settle_dead_run(tmp_path, "qa", "r-cut")[1]
-    assert reason and "r-kid" in reason
-    assert (f"Note: run r-cut of 'qa', started from this conversation, was cut short when its "
-            f"process ended, and {reason} This call started a new run beside it.") in reply
-    assert "resume_run_id" not in reply.split("Note:")[1]
-
-
-@pytest.mark.asyncio
 async def test_a_cut_run_whose_check_answers_with_a_race_refusal_is_not_named(tmp_path):
     _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
     busy = sorted(run_log.DEAD_RUN_RACE_REFUSALS)[0]
@@ -1676,6 +1661,163 @@ async def test_a_cut_run_refused_for_another_reason_is_not_named(tmp_path, how):
               "incomplete": {"incomplete": True}}[how]
     _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", **kwargs)
     assert "Note:" not in await _launch(tmp_path)
+
+
+def _still_there_text(fact, *, resumable, run_id="r-cut"):
+    head = f"Note: run {run_id} of 'qa', started from this conversation, was cut short and "
+    if resumable:
+        return (head + f"{fact}. It can be resumed once that is gone. "
+                "This call started a new run beside it.")
+    return head + f"cannot be resumed, and {fact}. This call started a new run beside it."
+
+
+def _leave_a_script_record(tmp_path, monkeypatch, state, own, group, *, run_id="r-cut"):
+    from durin.utils import process_tree
+    run_log.record_script(tmp_path / "workflows-runs" / "qa", run_id, pid=424242,
+                          started="x", node_id="build")
+    monkeypatch.setattr(process_tree, "left_script_state",
+                        lambda pid, started, members, **kw: (state, own, group))
+
+
+def _leave_a_sub_run(tmp_path, monkeypatch):
+    run_log.start_run(tmp_path, "kid", "r-kid", root_session_key="websocket:chatA",
+                      started_at=2.0, parent_run_id="r-cut")
+    return "its sub-workflow run 'r-kid' of workflow 'kid' is still recorded as running"
+
+
+def _leave_a_live_owner(tmp_path, monkeypatch):
+    from durin.utils.process_tree import process_identity
+    f = tmp_path / "workflows-runs" / "qa" / "r-cut.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec["owner"] = process_identity()
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    return f"the process that was running it (pid {process_identity()['pid']}) still seems alive"
+
+
+def _leave_an_unreadable_record(tmp_path, monkeypatch):
+    path = tmp_path / "workflows-runs" / "qa" / "r-cut.script.9"
+    path.write_text("{not json", encoding="utf-8")
+    return (f"a record of one of its scripts, {path}, cannot be read, so whether that "
+            "script still runs cannot be checked")
+
+
+def _script_fact(state, own, group, fact):
+    def leave(tmp_path, monkeypatch):
+        _leave_a_script_record(tmp_path, monkeypatch, state, own, group)
+        return fact
+    return leave
+
+
+_LEFT_BEHIND = {
+    "script_and_group": _script_fact(
+        "alive", [111], [222],
+        "the script of its step 'build' is still running (pid 111), and so are processes "
+        "in its former process group (pid 222), which may not be that script's"),
+    "script": _script_fact("alive", [111], [],
+                           "the script of its step 'build' is still running (pid 111)"),
+    "group": _script_fact(
+        "alive", [], [222],
+        "processes in the former process group of the script of its step 'build' are still "
+        "running (pid 222), which may not be that script's"),
+    "unknown": _script_fact(
+        "unknown", [], [222],
+        "whether the script of its step 'build' ended could not be checked (pid 222)"),
+    "unreadable": _leave_an_unreadable_record,
+    "owner": _leave_a_live_owner,
+    "sub_run": _leave_a_sub_run,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resumable", [True, False])
+@pytest.mark.parametrize("kind", sorted(_LEFT_BEHIND))
+async def test_a_cut_run_with_something_still_there_is_named_with_that_fact(
+        tmp_path, monkeypatch, kind, resumable):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed",
+         **({} if resumable else {"node": "removed"}))
+    fact = _LEFT_BEHIND[kind](tmp_path, monkeypatch)
+    reply = await _launch(tmp_path)
+    assert _still_there_text(fact, resumable=resumable) in reply
+    assert "resume_run_id" not in reply.split("Note:")[1]
+    # the refusal a resume gets keeps its own words
+    reason = run_log.settle_dead_run(tmp_path, "qa", "r-cut")[1]
+    assert reason.fact == fact and "It can be resumed once" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resumable", [True, False])
+async def test_a_cut_run_whose_script_is_really_still_running_is_named(tmp_path, resumable):
+    import os
+    import signal
+    import subprocess
+
+    from durin.utils.process_tree import process_identity
+
+    _cut(tmp_path, "r-cut", started_at=1.0, **({} if resumable else {"node": "removed"}))
+    proc = subprocess.Popen(["sh", "-c", "sleep 61 & echo $!; read _"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True, start_new_session=True)
+    member = None
+    try:
+        member = int(proc.stdout.readline())
+        run_log.record_script(tmp_path / "workflows-runs" / "qa", "r-cut", pid=proc.pid,
+                              started=process_identity(proc.pid)["started"], node_id="build")
+        proc.stdin.close()
+        proc.wait(timeout=10)         # the leader is gone; its member stays in the group
+        reply = await _launch(tmp_path)
+        fact = ("processes in the former process group of the script of its step 'build' are "
+                f"still running (pid {member}), which may not be that script's")
+        assert _still_there_text(fact, resumable=resumable) in reply
+        os.kill(member, 0)            # the note did not end it
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+        if member is not None:
+            try:
+                os.kill(member, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_that_can_never_be_resumed_and_has_nothing_left_is_not_named(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", node="removed")
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_at_most_ten_cut_runs_are_looked_at(tmp_path, monkeypatch):
+    for i in range(40):
+        _cut(tmp_path, f"r{i:02d}", started_at=float(i + 1), status="crashed")
+    calls = []
+    real = run_log.settle_dead_run
+    monkeypatch.setattr(run_log, "settle_dead_run",
+                        lambda ws, name, run_id: calls.append(run_id) or real(ws, name, run_id))
+    reply = await _launch(tmp_path)
+    assert len(calls) == 10 and calls[0] == "r39" and calls[-1] == "r30"
+    notes = reply.split("\n\nNote: ")[1:]
+    assert [n.split(" ")[1] for n in notes] == ["r39", "r38", "r37"]
+    assert reply.endswith("\n\nand 7 more.")
+
+
+@pytest.mark.asyncio
+async def test_finished_runs_do_not_use_up_the_ten(tmp_path):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
+    for i in range(12):
+        _cut(tmp_path, f"d{i:02d}", started_at=float(10 + i), status="crashed")
+        f = tmp_path / "workflows-runs" / "qa" / f"d{i:02d}.json"
+        rec = json.loads(f.read_text(encoding="utf-8"))
+        rec.update(status="completed", failed_node=None)
+        f.write_text(json.dumps(rec), encoding="utf-8")
+    assert _resumable_text("r-cut") in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_the_foreground_result_with_nothing_cut_is_the_plain_result(tmp_path):
+    _write_workflow(tmp_path, "qa", {"name": "qa", "start": "build", "nodes": [
+        {"id": "build", "kind": "script", "command": "echo ok", "next": None}]})
+    out = await _launch(tmp_path, background=False)
+    assert out == _format_result(_fresh_result(), output_files=False, human_reachable=True)
 
 
 @pytest.mark.asyncio
