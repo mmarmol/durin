@@ -14,6 +14,7 @@ the run or of the resume that produced the result.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -65,14 +66,27 @@ def result_message(launch: Any, *, name: str, run_id: str, summary: str,
 
 
 async def deliver(bus: Any, launch: Any, *, name: str, run_id: str, summary: str,
-                  resumed_from: str | None = None) -> bool:
+                  resumed_from: str | None = None,
+                  serves: Callable[[str], bool] | None = None) -> bool:
     """Publish the result message on ``bus``. False, with a warning in the log,
-    when there is no bus, the launch names no conversation, or the publish fails."""
+    when there is no bus, the launch names no conversation, the publish fails,
+    or ``serves`` says this process does not serve the conversation's channel.
+
+    ``serves`` is given when the conversation may belong to another process (a
+    resume made outside the launch conversation): only a process that serves
+    the channel may run a turn in it. It is None for the conversation the
+    calling turn itself runs in."""
     msg = result_message(launch, name=name, run_id=run_id, summary=summary,
                          resumed_from=resumed_from)
     if msg is None:
         logger.warning("workflow {} run {}: its launch names no conversation; "
                        "the result is not delivered", name, run_id)
+        return False
+    channel = launch.get("channel") or "websocket"
+    if serves is not None and not serves(channel):
+        logger.warning("workflow {} run {}: the result is not delivered to {}: this process "
+                       "does not serve channel {!r}; it stays in the run's record",
+                       name, run_id, msg.session_key_override, channel)
         return False
     if bus is None:
         logger.warning("workflow {} run {}: no message bus on this surface; the result "

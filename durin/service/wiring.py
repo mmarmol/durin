@@ -18,6 +18,19 @@ from loguru import logger
 from durin.service.registry import ServiceRegistry
 
 
+def channel_server(channel_manager: Any) -> Callable[[str], bool] | None:
+    """Whether this process serves a channel: its channel manager runs a channel
+    of that name. A message meant for a conversation on a channel this process
+    does not serve — a terminal UI session (``cli:``) owned by another process,
+    or a chat the gateway runs while this is the terminal UI — is not this
+    process's to post: running a turn in it here would write to that
+    conversation behind its owner's back. None when there is no channel
+    manager: such a process serves no channel."""
+    if channel_manager is None:
+        return None
+    return lambda name: channel_manager.get_channel(name) is not None
+
+
 def build_service_registry(
     *,
     config: Any,
@@ -186,9 +199,7 @@ def build_service_registry(
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
     registry.register("approvals", ApprovalsService(
         workspace_resolver=_workspace, exec_deps=approval_deps, bus=bus,
-        serves_channel=(
-            (lambda name: channel_manager.get_channel(name) is not None)
-            if channel_manager is not None else None)))
+        serves_channel=channel_server(channel_manager)))
     registry.register("pending", PendingService(workspace_resolver=_workspace))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural

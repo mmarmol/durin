@@ -74,3 +74,14 @@ async def test_deliver_never_raises():
     assert await delivery.deliver(bus, {"kind": "automation", "name": "n"}, name="qa",
                                   run_id="r1", summary="done") is False
     assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_deliver_publishes_nothing_for_a_channel_this_process_does_not_serve():
+    bus = _Bus()
+    assert await delivery.deliver(bus, LAUNCH, name="qa", run_id="r1", summary="done",
+                                  serves=lambda name: name == "slack") is False
+    assert bus.inbound == []
+    assert await delivery.deliver(bus, LAUNCH, name="qa", run_id="r1", summary="done",
+                                  serves=lambda name: name == "websocket") is True
+    assert len(bus.inbound) == 1

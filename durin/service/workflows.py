@@ -874,6 +874,8 @@ class WorkflowsService:
                 # cancel_run just finalized (or the reverse). A resume wins by its
                 # claim, taken under the same lock once the engine is built (below),
                 # after re-checking that nothing touched the run since this read.
+                # A person's approval decision that ends the run here, with no walk.
+                decided: WorkflowResult | None = None
                 with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
                     manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
                     if manifest is None or manifest.get("status") != "needs_input":
@@ -900,32 +902,38 @@ class WorkflowsService:
                                 status="cancelled", final_output=manifest.get("final_output"),
                                 rejected=True,
                             )
-                            return WorkflowResult(
+                            decided = WorkflowResult(
                                 status="cancelled", ask_kind=None,
                                 final_output=manifest.get("final_output"),
                                 run_id=resume_run_id, rejected=True,
                             )
-                        approval_resume = build_approval_resume(
-                            workflow, manifest, action, task if action == "revise" else "",
-                            workspace=self._workspace)
-                        if approval_resume is None:
-                            # Approve on a terminal approval node (no `next`): the run
-                            # completes now, with the proposal as the final output — again
-                            # no engine call, there is nowhere left for it to resume into.
-                            run_log.finalize_short_circuit(
-                                self._workspace, name, resume_run_id,
-                                status="completed", final_output=manifest.get("final_output"),
-                            )
-                            return WorkflowResult(
-                                status="completed", final_output=manifest.get("final_output"),
-                                final_output_node=manifest.get("needs_input_node"),
-                                run_id=resume_run_id,
-                            )
-                        resume = approval_resume
+                        else:
+                            approval_resume = build_approval_resume(
+                                workflow, manifest, action, task if action == "revise" else "",
+                                workspace=self._workspace)
+                            if approval_resume is None:
+                                # Approve on a terminal approval node (no `next`): the run
+                                # completes now, with the proposal as the final output — again
+                                # no engine call, there is nowhere left for it to resume into.
+                                run_log.finalize_short_circuit(
+                                    self._workspace, name, resume_run_id,
+                                    status="completed", final_output=manifest.get("final_output"),
+                                )
+                                decided = WorkflowResult(
+                                    status="completed", final_output=manifest.get("final_output"),
+                                    final_output_node=manifest.get("needs_input_node"),
+                                    run_id=resume_run_id,
+                                )
+                            resume = approval_resume
                     else:
                         resume = build_resume_state(manifest, task, workspace=self._workspace)
                     task = manifest.get("task") or task
                     accepted_record = manifest
+                if decided is not None:
+                    # The decision is the run's end: the conversation that
+                    # launched it hears it as it would the end of a walk.
+                    await self._report_resume(manifest, workflow, resume_run_id, decided)
+                    return decided
             else:
                 resume = build_resume_state(manifest, task, workspace=self._workspace)
                 task = manifest.get("task") or task
@@ -1063,8 +1071,9 @@ class WorkflowsService:
         except Exception as exc:
             if claim is not None:
                 claim.drop()
-                await self._report_resume(claim, accepted_record, workflow, rid,
-                                          f"Workflow run failed: {exc}")
+                if claim.took_over:
+                    await self._report_resume(accepted_record, workflow, rid,
+                                              f"Workflow run failed: {exc}")
             raise
         except BaseException:
             if claim is not None:
@@ -1075,25 +1084,25 @@ class WorkflowsService:
             # a run that never reached _finalize_manifest at all (no workspace,
             # or a wiring error before the walk starts).
             _clear_cancel(rid)
-        if claim is not None:
-            await self._report_resume(claim, accepted_record, workflow, rid, result)
+        if claim is not None and claim.took_over:
+            await self._report_resume(accepted_record, workflow, rid, result)
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return result
 
-    async def _report_resume(self, claim: ResumeClaim, record: dict | None, workflow: Any,
+    async def _report_resume(self, record: dict | None, workflow: Any,
                              run_id: str, result: Any) -> None:
-        """Report a resume's result to the conversation that launched the run.
+        """Report how a resume came out to the conversation that launched the run.
 
-        Only a resume whose walk ran reports — one the engine took over. A
-        resume refused or lost to another resumer never gets here; one given up
-        before its walk, or ended by the engine before it wrote the run's record
-        (a rejected input or script, a busy work_key), left the run as it was.
-        A run launched by an automation or by this service names no
-        conversation. Best-effort: a failing delivery never changes the resume's
-        own outcome."""
+        Called once a resume is over: after a walk the engine took over, or
+        after an approval decision that ends the run with no walk (a
+        rejection, an approval of a last step). A resume refused or lost to another
+        resumer never gets here; one given up before its walk, or ended by the
+        engine before it wrote the run's record (a rejected input or script, a
+        busy work_key), left the run as it was and is not reported. A run
+        launched by an automation or by this service names no conversation.
+        Best-effort: a failing delivery never changes the resume's own outcome."""
         launch = (record or {}).get("launch")
-        if (self._deliver_result is None or not claim.took_over
-                or delivery.launch_session_key(launch) is None):
+        if self._deliver_result is None or delivery.launch_session_key(launch) is None:
             return
         output_files = bool((workflow.output or {}).get("file"))
         try:

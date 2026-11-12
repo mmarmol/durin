@@ -1241,12 +1241,14 @@ _RESUMED_ELSEWHERE = ("[Workflow 'doer' run r1, started from this conversation, 
                       "from another conversation and finished]\n\n")
 
 
-def _tool_on_bus(tmp_path, bus, *, channel, chat_id, session_key):
+def _tool_on_bus(tmp_path, bus, *, channel, chat_id, session_key, serves=("websocket", "slack")):
+    """A tool in a process that serves the channels named in ``serves``."""
     sessions = SessionManager(workspace=tmp_path)
     app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(),
                                  workflow=WorkflowConfig())
     tool = RunWorkflowTool.create(SimpleNamespace(
-        workspace=str(tmp_path), sessions=sessions, app_config=app_config, bus=bus))
+        workspace=str(tmp_path), sessions=sessions, app_config=app_config, bus=bus,
+        serves_channel=lambda name: name in serves))
     _context(tool, channel, chat_id, session_key)
     return tool
 
@@ -1470,3 +1472,45 @@ async def test_a_background_walk_that_raises_reports_the_failure_to_both_convers
     assert "Workflow run failed in background: no runner for it" in by_session["websocket:chatB"]
     assert by_session["websocket:chatA"].startswith(
         _RESUMED_ELSEWHERE + "Workflow run failed: no runner for it")
+
+
+_LAUNCHED_IN_SLACK = {"kind": "session", "session_key": "slack:C1:1700.1", "channel": "slack",
+                      "chat_id": "C1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+async def test_a_process_that_does_not_serve_the_launch_channel_reports_nothing_there(
+        tmp_path, background):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="slack:C1:1700.1", launch=_LAUNCHED_IN_SLACK)
+    bus = _RecordingBus()
+    # The terminal UI's process: it runs no slack channel.
+    tool = _tool_on_bus(tmp_path, bus, channel="cli", chat_id="direct", session_key="cli:direct",
+                        serves=())
+    out = await _resume_through_the_tool(tool, background=background)
+
+    assert all(m.session_key_override != "slack:C1:1700.1" for m in bus.inbound)
+    if background:
+        [msg] = bus.inbound
+        assert msg.session_key_override == "cli:direct"
+        assert msg.content.startswith("[Background workflow 'doer' finished]")
+    else:
+        assert "completed" in out.lower()
+        assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_serves_the_launch_channel_reports_there(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="slack:C1:1700.1", launch=_LAUNCHED_IN_SLACK)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB", serves=("websocket", "slack"))
+    await _resume_through_the_tool(tool, background=False)
+
+    [msg] = bus.inbound
+    assert (msg.chat_id, msg.session_key_override) == ("slack:C1", "slack:C1:1700.1")
+    assert msg.content.startswith(
+        "[Workflow 'doer' run r1, started from this conversation, was resumed from another "
+        "conversation and finished]")

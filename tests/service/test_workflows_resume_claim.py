@@ -877,26 +877,37 @@ async def test_an_approval_answered_through_the_service_reports_the_walk_that_fo
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_approval_ends_the_run_without_a_report(tmp_path):
+async def test_a_rejected_approval_reports_the_end_of_the_run_once(tmp_path):
     _agent_approval_pause(tmp_path, _APPROVE_THEN_SCRIPT)
     deliveries = _Deliveries()
-    with _provider(), patch("durin.agent.approval_notify.notify_origin") as note:
+    with _provider():
         result = await _svc(tmp_path, deliveries).execute("wf", "reject", resume_run_id="agent1")
     assert result.status == "cancelled" and result.rejected
-    assert deliveries.calls == []
-    note.assert_not_called()
+    assert deliveries.calls == [(_AGENT_LAUNCH, "wf", "agent1", result, False)]
+    assert run_log.read_manifest(tmp_path, "wf", "agent1")["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
-async def test_an_approved_last_step_ends_the_run_without_a_report(tmp_path):
+async def test_an_approved_last_step_reports_the_end_of_the_run_once(tmp_path):
     _agent_approval_pause(tmp_path, {"name": "wf", "start": "ask", "nodes": [
         {"id": "ask", "kind": "work", "approval": True, "next": None}]})
     deliveries = _Deliveries()
-    with _provider(), patch("durin.agent.approval_notify.notify_origin") as note:
+    with _provider():
         result = await _svc(tmp_path, deliveries).execute("wf", "approve", resume_run_id="agent1")
     assert result.status == "completed" and result.final_output == "the proposal"
+    assert deliveries.calls == [(_AGENT_LAUNCH, "wf", "agent1", result, False)]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_approval_of_a_run_the_service_launched_reports_nowhere(tmp_path):
+    _agent_record(tmp_path, _APPROVE_THEN_SCRIPT, status="needs_input", needs_input_node="ask",
+                  ask_kind="approval", final_output="the proposal",
+                  launch={"kind": "service", "subject": "tok"})
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "reject", resume_run_id="agent1")
+    assert result.rejected
     assert deliveries.calls == []
-    note.assert_not_called()
 
 
 @pytest.mark.asyncio

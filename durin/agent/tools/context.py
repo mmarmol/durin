@@ -137,3 +137,8 @@ class ToolContext:
     # top-level name (``workflows/``, ``memory/``, ...) still resolves from the
     # workspace root. None: the session work area, else the workspace root.
     work_dir: str | None = None
+    # Whether this process serves a channel (the gateway's live channels).
+    # ``run_workflow`` posts a resumed run's result into the conversation that
+    # launched it only when this says the process serves its channel. None:
+    # the process serves no channel.
+    serves_channel: Callable[[str], bool] | None = None

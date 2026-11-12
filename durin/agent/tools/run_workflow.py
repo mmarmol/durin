@@ -341,6 +341,16 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
                 f"\nTo continue, call run_workflow again with "
                 f"resume_run_id='{result.run_id}' and the answers as the task."
             )
+    elif getattr(result, "rejected", False):
+        # A person declined the proposal at an approval step: the run ended
+        # there by their decision, which is not a failure.
+        lines.append(
+            "A person REJECTED the proposal at the workflow's approval step, so the run "
+            "ended there — it did not fail. Tell the user; do not resume it or reach the "
+            "same effect another way."
+        )
+        if result.final_output:
+            outcome.append(f"\nRejected proposal:\n{bounded(result.final_output)}")
     elif result.status != "completed":
         if result.status == "aborted" and getattr(result, "failed_node", None):
             lines.append(
@@ -436,13 +446,18 @@ class RunWorkflowTool(Tool, ContextAware):
     _scopes = {"core"}
 
     def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None,
-                 bus: Any = None, config_loader: Callable[[], Any] | None = None) -> None:
+                 bus: Any = None, config_loader: Callable[[], Any] | None = None,
+                 serves_channel: Callable[[str], bool] | None = None) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
         self._config_loader = config_loader
         self._live_tool_registry = live_tool_registry
         self._bus = bus
+        # Whether this process serves a channel: a resume made outside the
+        # conversation that launched the run reports there only when it does.
+        # None serves none.
+        self._serves_channel = serves_channel
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
         self._chat_id: ContextVar[str | None] = ContextVar("run_workflow_chat_id", default=None)
         self._channel: ContextVar[str | None] = ContextVar("run_workflow_channel", default=None)
@@ -475,6 +490,7 @@ class RunWorkflowTool(Tool, ContextAware):
             live_tool_registry=getattr(ctx, "live_tool_registry", None),
             bus=getattr(ctx, "bus", None),
             config_loader=config_loader,
+            serves_channel=getattr(ctx, "serves_channel", None),
         )
 
     def _live_config(self) -> Any:
@@ -791,7 +807,8 @@ class RunWorkflowTool(Tool, ContextAware):
                            else result_summary(result, output_files=output_files,
                                                session_key=launch_key))
                 await delivery.deliver(self._bus, launch_record, name=name, run_id=run_id,
-                                       summary=summary, resumed_from="another conversation")
+                                       summary=summary, resumed_from="another conversation",
+                                       serves=self._serves_channel or (lambda _channel: False))
             except Exception:  # noqa: BLE001 - best-effort; never changes the resume's outcome
                 logger.opt(exception=True).warning(
                     "workflow {} run {}: reporting the resume to {} failed", name, run_id, launch_key)

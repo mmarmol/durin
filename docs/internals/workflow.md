@@ -1328,12 +1328,13 @@ Known limits: files a cut `read` parallel step's branches or a cut fan-out's wor
 wrote in the shared folder are still there when the step runs again. A process that
 dies after a `choose`/`union`
 write-back finished but before the record named the next step runs the step again on
-the folder that already holds its result. A run started from a chat whose approval
-pause is rejected from the dashboard or the API, or whose approved step is the last
-one, ends without a walk, and that chat is not told (§4g). Nor is it told when the
-call that resumed the run stops waiting before the walk ends (a foreground
-`run_workflow` turn stopped with `/stop`, a cancelled `execute()`): the report is made
-by that call, and the walk finishes on its thread unreported.
+the folder that already holds its result. A run started from a chat is not reported
+to that chat when the call that resumed it stops waiting before the walk ends (a
+foreground `run_workflow` turn stopped with `/stop`, a cancelled `execute()`): the
+report is made by that call, and the walk finishes on its thread unreported. Nor is it
+reported when the process that resumed it does not serve that chat's channel, such as a
+run started from a chat the gateway serves and resumed from the terminal UI; its result
+is in the run's record and in the conversation that resumed it (§4g).
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -1669,19 +1670,33 @@ only when the launch conversation has one, and the same closing instruction.
   runtime's to report.
 - The report is made by the call that waits on the walk, after it ends; a call
   cancelled while the walk runs makes none.
-- Only a resume whose walk ran reports (`ResumeClaim.took_over`). A resume that is
+- Only a process that serves the launch conversation's channel posts there: running
+  a turn in a conversation another process owns would write to it behind its owner's
+  back. Both callers use the fact the approval note uses, `channel_server` in
+  `durin/service/wiring.py` (the process's channel manager runs a channel of that
+  name): the gateway's callback checks it directly, and the gateway hands it to its
+  agent loop (`AgentLoop.serves_channel`), whose `run_workflow` tool gets it through
+  `ToolContext.serves_channel`. A process with no channel manager, such as the
+  terminal UI, serves no channel. When the channel is not served, nothing is posted
+  and the log says the result was not delivered and why; the conversation that
+  resumed the run still gets what it gets from the tool.
+- Of the resumes that reach the engine, only one whose walk ran reports (`ResumeClaim.took_over`). A resume that is
   refused, that loses its claim to another resumer, that is given up before its
   walk, or that the engine ends before writing the run's record (a preflight
   rejection, a busy `work_key`) leaves the run as it was and reports nothing. The
   claim allows one resumer per run, so each resumed walk reports once.
 - An approval pause answered through the service is such a resume: the launch
   conversation receives the result of the walk that followed. A rejection, or an
-  approval of a last step, ends the run without a walk and reports nothing.
+  approval of a last step, ends the run without a walk; that end is reported the
+  same way, through the same callback, with the result the decision produced: a
+  `cancelled` run marked `rejected` (its summary says a person rejected the proposal
+  and shows it) or a `completed` run whose final output is the approved proposal.
 - A fresh run through the service reports nothing this way, and neither does a run
   launched by an automation or by the service, nor a record that has no `launch`.
 
-Delivery is best-effort: no bus, a launch naming no conversation, or a failed
-publish is logged, and the resume's own outcome is unchanged.
+Delivery is best-effort: no bus, a launch naming no conversation, a channel this
+process does not serve, or a failed publish is logged, and the resume's own outcome is
+unchanged.
 
 The waiting contract is push, not poll: because the result is injected on
 completion, the launching agent is told (in the launch reply, the tool

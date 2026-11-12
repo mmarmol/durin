@@ -1715,17 +1715,20 @@ def _run_gateway(
     async def _deliver_resumed_workflow_result(launch, name, run_id, result, output_files) -> None:
         """Report a workflow run resumed from the dashboard or the API to the
         conversation that launched it: one system message on the bus, as a
-        background run's result arrives. ``result`` is the run's result, or the
-        failure text when its walk raised. Handed to the workflows service the
+        background run's result arrives, when this gateway serves that
+        conversation's channel. ``result`` is the run's result, or the failure
+        text when its walk raised. Handed to the workflows service the
         dashboard and the API are served from."""
         from durin.agent.tools.run_workflow import result_summary
+        from durin.service.wiring import channel_server
         from durin.workflow import delivery
 
         summary = result if isinstance(result, str) else result_summary(
             result, output_files=output_files,
             session_key=delivery.launch_session_key(launch))
         await delivery.deliver(bus, launch, name=name, run_id=run_id, summary=summary,
-                               resumed_from="the dashboard or the API")
+                               resumed_from="the dashboard or the API",
+                               serves=channel_server(channels))
 
     async def _on_automation_outcome(outcome) -> None:
         """Deliver a terminal run's outcome to whoever should hear about it.
@@ -1877,6 +1880,10 @@ def _run_gateway(
         webui_session_turn_key=getattr(agent, "bus_turn_key", None),
     )
     _startup_phase("channels setup")
+    from durin.service.wiring import channel_server as _channel_server
+    # The run tool delivers a resumed run's result to the conversation that
+    # launched it only when this process serves that conversation's channel.
+    agent.serves_channel = _channel_server(channels)
     if isinstance(message_tool, MessageTool):
         message_tool.set_known_channels(channels.enabled_channels)
 
