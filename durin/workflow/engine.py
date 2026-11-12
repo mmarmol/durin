@@ -722,15 +722,32 @@ UNUSABLE_FOLDER_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
     "undone ({path}). It can run once a person has checked the folder and removed "
     "that file.")
+UNDONE_YET_ABORT = (
+    "the working folder holds changes of an earlier parallel step that could not be "
+    "undone yet ({path}): {error}. A retry undoes them once the cause is gone.")
 
 
-def _unusable_folder_failure(runs: list, step: str, attempt: int, upstream: str | None,
-                             exc: "workspace_fork.PendingApplyError") -> NodeExecutionError:
-    """The failure of ``step`` when the working folder holds a cut write-back whose
-    journal cannot be used: a ``node_failed`` row of the step's attempt joins the
+def _journal_abort_text(exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError") -> str:
+    """Why the working folder cannot be used: its write-back journal cannot be used
+    (a person must look), or undoing it stopped (a later attempt undoes it)."""
+    if isinstance(exc, workspace_fork.UndoError):
+        return UNDONE_YET_ABORT.format(path=exc.path, error=exc.cause)
+    return UNUSABLE_FOLDER_ABORT.format(path=exc.path)
+
+
+class _FolderNotReadyError(Exception):
+    """A fresh run cannot start: its working folder holds a cut write-back that
+    cannot be undone now. The message is the abort text."""
+
+
+def _folder_failure(runs: list, step: str, attempt: int, upstream: str | None,
+                    exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError",
+                    ) -> NodeExecutionError:
+    """The failure of ``step`` when the working folder holds a cut write-back that
+    cannot be undone now: a ``node_failed`` row of the step's attempt joins the
     trace, and the error carries the step's input, so the run aborts naming the step
-    and a retry made once the journal is gone enters it with that input."""
-    detail = UNUSABLE_FOLDER_ABORT.format(path=exc.path)
+    and a retry made once the cause is gone enters it with that input."""
+    detail = _journal_abort_text(exc)
     runs.append(NodeRun(node_id=step, iteration=attempt, output="",
                         status="node_failed", error=detail))
     failure = NodeExecutionError(step, attempt, None, RuntimeError(detail))
@@ -999,16 +1016,20 @@ class WorkflowEngine:
                 if work_dir is not None and not nested:
                     # Whoever holds the folder puts back a write-back a dead run
                     # left cut before the walk uses the folder (a keyed run holds
-                    # its key's lock from here). A journal that cannot be used
-                    # aborts the run at the step it would enter, with its input.
+                    # its key's lock from here). When that cannot be done now, a
+                    # resumed run aborts at the step it would enter, with its
+                    # input, so a retry enters it once the cause is gone; a fresh
+                    # run aborts naming no step: it is not retried, and a new run,
+                    # which copies its input files again, starts once the cause
+                    # is gone.
                     try:
                         workspace_fork.restore_pending(work_dir)
-                    except workspace_fork.PendingApplyError as exc:
-                        step = resume.start_at if resume else workflow.start
-                        attempt = (resume.visits.get(step, 0) if resume else 0) + 1
-                        raise _unusable_folder_failure(
-                            runs, step, attempt, resume.upstream if resume else None,
-                            exc) from exc
+                    except (workspace_fork.PendingApplyError, workspace_fork.UndoError) as exc:
+                        if resume is None:
+                            raise _FolderNotReadyError(_journal_abort_text(exc)) from exc
+                        step = resume.start_at
+                        raise _folder_failure(runs, step, resume.visits.get(step, 0) + 1,
+                                              resume.upstream, exc) from exc
                 result = self._walk(
                     workflow, self._frame_task(workflow, task, output_format), run_id, runs,
                     raw_task=task,
@@ -1066,6 +1087,9 @@ class WorkflowEngine:
                         failed_node=exc.node_id, failed_iteration=exc.iteration,
                         resume_upstream=getattr(exc, "resume_upstream", None),
                     )
+            except _FolderNotReadyError as exc:
+                result = WorkflowResult(status="aborted", final_output=str(exc),
+                                        runs=runs, run_id=run_id)
             except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
                 result = WorkflowResult(
                     status="aborted", final_output=f"workflow error: {exc}",
@@ -2020,13 +2044,14 @@ class WorkflowEngine:
                         exc.cause if self._is_cancel(exc) else RuntimeError(detail))
                     failure.resume_upstream = upstream_output
                     raise failure from exc
-                except workspace_fork.PendingApplyError as exc:
-                    # The folder holds a cut write-back that cannot be undone: the
-                    # step does not run on it. The run aborts at this step with the
-                    # input it received, so a retry made once the journal is gone
+                except (workspace_fork.PendingApplyError, workspace_fork.UndoError) as exc:
+                    # The folder holds a cut write-back that cannot be undone now
+                    # (found at this step's entry, or left by its own write-back):
+                    # the step does not run on it. The run aborts at this step with
+                    # the input it received, so a retry made once the cause is gone
                     # enters it. Nothing else is written into the folder.
-                    raise _unusable_folder_failure(runs, node.id, iteration,
-                                                   upstream_output, exc) from exc
+                    raise _folder_failure(runs, node.id, iteration,
+                                          upstream_output, exc) from exc
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 # Branches/workers run concurrently in their own (possibly forked,
                 # possibly shared) folders, so a per-branch diff here would be racy or
@@ -2716,8 +2741,8 @@ class WorkflowEngine:
         # A write-back an earlier attempt of a parallel step left cut (its process
         # died while writing the result into the folder) is undone before anything
         # here reads the folder, so this attempt starts from what that one started
-        # from. A journal that cannot be used raises PendingApplyError, which ends
-        # the run at this step with the folder untouched.
+        # from. A journal that cannot be used (PendingApplyError) or an undo that
+        # cannot finish (UndoError) ends the run at this step.
         workspace_fork.restore_pending(fork_root)
         copies_dir = workspace_fork.branches_root(fork_root) / run_id
         # Whatever an earlier attempt of this step left (its process died before
@@ -2735,19 +2760,17 @@ class WorkflowEngine:
         def _write_back(changesets):
             # The result goes into the real folder only through the undo journal.
             # A failure after the journal was written is undone at once, so the
-            # aborted run leaves the folder as the step found it; when the undo
-            # fails too, the journal stays for whoever uses the folder next. A
-            # journal already present was not written by this call and is left
-            # as it is.
+            # aborted run leaves the folder as the step found it. An undo that
+            # cannot finish raises UndoError, keeping the journal: the run then
+            # aborts at this step, and a retry undoes it once the cause is gone. A
+            # journal already present was not written by this call and is left as
+            # it is.
             try:
                 workspace_fork.apply_all(changesets, fork_root, run_id=run_id, node_id=node.id)
             except workspace_fork.PendingApplyError:
                 raise
             except Exception:
-                try:
-                    workspace_fork.restore_pending(fork_root)
-                except Exception:  # noqa: BLE001 - the journal stays; the original failure is raised
-                    logger.exception("undoing the write-back of parallel node {} failed", node.id)
+                workspace_fork.restore_pending(fork_root)
                 raise
 
         def _run(bid):

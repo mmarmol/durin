@@ -239,8 +239,8 @@ def _hang_in_apply(workspace: Path, after: int) -> None:
     real = workspace_fork._write_file
     written = [0]
 
-    def write(target, content):
-        real(target, content)
+    def write(target, content, *rest):
+        real(target, content, *rest)
         written[0] += 1
         if written[0] == after:
             _hang(marks_dir(workspace))

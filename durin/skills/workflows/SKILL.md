@@ -211,7 +211,16 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   telling the person that the old script may still be working. When the reason is that
   another caller is acting on it, that it was already resumed, or that its record no longer
   exists, nothing the old process left is in the way: look at the run's status before
-  trying again. A crashed run you started whose workflow (or a sub-workflow it
+  trying again. A run can also stop with `the working folder holds changes of an earlier
+  parallel step that could not be undone (<path>). It can run once a person has checked
+  the folder and removed that file.` or `… could not be undone yet (<path>): <error>. A
+  retry undoes them once the cause is gone.` (a write of a `choose`/`union` result into
+  the folder was cut, and putting the folder back cannot be done now). NEVER remove that
+  file or touch the folder yourself: tell the person which file the reason names and what
+  stopped it. When the run names a failed step (it stopped at a parallel step, or while it
+  was being resumed), retry it with `resume_run_id` once the person says the cause is
+  gone. When it names none (it stopped before its first step), it cannot be resumed: start
+  a new run once the person says the cause is gone. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A crashed run an automation started is not resumed by hand
   on any surface: the automation does not resume it, and its next run starts anew. A

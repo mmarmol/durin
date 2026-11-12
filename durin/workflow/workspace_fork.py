@@ -29,6 +29,7 @@ step entered again starts from what its first attempt started from.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -36,9 +37,11 @@ import re
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 
@@ -50,11 +53,13 @@ _AREA = ".workflow"
 _BRANCHES = "branches"
 # What a copy's parent name may look like: a run id is a plain name, never a path.
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-# The undo journal of a write-back: `pending-apply/journal.json`, and the earlier
-# content of entry n in `pending-apply/pre/<n>`.
+# The undo journal of a write-back: `pending-apply/journal.json`, the earlier
+# content of entry n in `pending-apply/pre/<n>`, and `pending-apply/tmp` where each
+# new file is staged before it is renamed into the working folder.
 _PENDING = "pending-apply"
 _JOURNAL = "journal.json"
 _PRE = "pre"
+_TMP = "tmp"
 _STORED_NAME = re.compile(r"[0-9]+")
 
 
@@ -223,6 +228,16 @@ class PendingApplyError(Exception):
         self.path = Path(path)
 
 
+class UndoError(Exception):
+    """An undo of a write-back that could not finish: ``path`` is the journal file,
+    which stays so the undo can run again; ``cause`` is what stopped it."""
+
+    def __init__(self, path: str | Path, cause: BaseException) -> None:
+        super().__init__(f"undoing the write-back recorded in {str(path)!r} stopped: {cause}")
+        self.path = Path(path)
+        self.cause = cause
+
+
 def pending_dir(work_dir: str | Path) -> Path:
     """Where the undo journal of a write-back into *work_dir* lives:
     ``pending-apply`` beside the working folder. It belongs to the folder, not to
@@ -246,11 +261,58 @@ def _plain_relative(path: object) -> bool:
     return all(part not in ("", ".", "..") for part in path.split("/"))
 
 
-def _write_file(target: Path, content: bytes) -> None:
-    """Write one file of a write-back into the real folder, replacing it in one
-    step (a symlinked file is written through its link, an existing file keeps
-    its mode). The only function ``apply_all`` writes a real file through."""
-    atomic_write_bytes(target, content)
+def _is_mode(mode: object) -> bool:
+    return isinstance(mode, int) and not isinstance(mode, bool) and 0 <= mode <= 0o7777
+
+
+def _within(work: Path, path: Path) -> bool:
+    """Whether the folder holding *path* resolves inside the working folder: what
+    the undo may remove there is the folder's, never what a link leads to."""
+    root = os.path.realpath(work)
+    parent = os.path.realpath(path.parent)
+    return parent == root or parent.startswith(root + os.sep)
+
+
+def _place(real: Path, fill: Callable[[BinaryIO], object], mode: int, staging: Path,
+           content: Callable[[], bytes]) -> None:
+    """Put a new file at *real* in one step. It is filled (``fill``) in *staging*,
+    inside ``pending-apply`` and never in the working folder, so a process that
+    dies meanwhile leaves no stray file there; it gets *mode* and is renamed into
+    place. A rename onto another device cannot work: the project's atomic write
+    (a temporary file beside the target) then writes ``content()`` instead."""
+    real.parent.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=staging, prefix=".stage.")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            fill(out)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except OSError as exc:
+        with suppress(OSError):
+            os.unlink(tmp)
+        if exc.errno != errno.EXDEV:
+            raise
+        atomic_write_bytes(real, content(), mode=mode)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _write_file(target: Path, content: bytes, staging: Path) -> None:
+    """Write one file of a write-back into the real folder in one step, staged in
+    *staging* (a symlinked file is written through its link; an existing file keeps
+    its mode, a new one gets 0644). The only function ``apply_all`` writes a real
+    file through."""
+    real = Path(os.path.realpath(target)) if target.is_symlink() else target
+    try:
+        mode = stat.S_IMODE(real.stat().st_mode)
+    except OSError:
+        mode = 0o644
+    _place(real, lambda out: out.write(content), mode, staging, lambda: content)
 
 
 def _store_copy(source: Path, stored: Path) -> None:
@@ -262,24 +324,39 @@ def _store_copy(source: Path, stored: Path) -> None:
         os.fsync(out.fileno())
 
 
-def _put_back(target: Path, stored: Path, mode: int) -> None:
-    """Replace *target* in one step with the bytes kept in *stored* (streamed, never
-    read whole) and give it *mode*. A symlinked target is written through its link,
-    as the write-back wrote it."""
+def _put_back(target: Path, stored: Path, mode: int, staging: Path) -> None:
+    """Give *target* back the bytes kept in *stored* (streamed, never read whole)
+    and *mode*, in one step. A symlinked target is written through its link, as the
+    write-back wrote it."""
     real = Path(os.path.realpath(target)) if target.is_symlink() else target
-    real.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=real.parent, prefix=f".{real.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as out, open(stored, "rb") as src:
+
+    def fill(out: BinaryIO) -> None:
+        with open(stored, "rb") as src:
             shutil.copyfileobj(src, out)
-            out.flush()
-            os.fsync(out.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, real)
-    except BaseException:
+
+    _place(real, fill, mode, staging, stored.read_bytes)
+
+
+def _put_link(target: Path, text: str, staging: Path) -> None:
+    """Make *target* the link it was (pointing at *text*), in one step; nothing to
+    do when it already is."""
+    if target.is_symlink() and os.readlink(target) == text:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=staging, prefix=".link.")
+    os.close(fd)
+    os.unlink(tmp)
+    os.symlink(text, tmp)
+    try:
+        os.replace(tmp, target)
+    except OSError as exc:
         with suppress(OSError):
             os.unlink(tmp)
-        raise
+        if exc.errno != errno.EXDEV:
+            raise
+        target.unlink(missing_ok=True)
+        os.symlink(text, target)
 
 
 def _fsync_dir(folder: Path) -> None:
@@ -293,22 +370,30 @@ def _fsync_dir(folder: Path) -> None:
 
 def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
               node_id: str) -> None:
-    """Write the changes of *changesets*, in order (each one's writes, then its
-    deletes), into the real working folder *root*: the only way a ``choose``
-    winner or a ``union`` is written there.
+    """Write the changes of *changesets* into the real working folder *root*: the
+    only way a ``choose`` winner or a ``union`` is written there.
 
-    The write-back can be undone. Before anything in the folder changes, the
-    earlier content of every path it touches is copied to ``pre/<n>`` in
-    ``pending_dir(root)`` (a path that did not exist is noted as such, every
-    directory it will create too), and ``journal.json`` is written last: the
-    journal file existing is what says a write-back is pending. Then the files are
-    written and deleted, and the journal and its folder removed. A process that dies
-    in between leaves the journal, and ``restore_pending`` puts the folder back as
-    it was before the write-back started.
+    Order: every delete of every changeset first, then every write, each
+    changeset's in turn. No conflict reaches a write-back, so the order only
+    matters for paths that contain one another: a file a branch turned into a
+    folder is deleted before a file inside it is written, and a write whose target
+    is an existing folder removes that folder first (it must be empty by then).
+
+    The write-back can be undone. Before anything in the folder changes, every
+    path it touches is recorded in ``pending_dir(root)``: a file's bytes are copied
+    to ``pre/<n>`` (streamed) with its mode, a link that is deleted (or leads
+    nowhere) keeps its target text, a folder at a write target keeps its mode, and
+    a path that did not exist is noted as such, as is every folder the write-back
+    creates (a file deleted here that a written path passes through counts as one).
+    ``journal.json`` is written last: the journal file existing is what says a
+    write-back is pending. Then the deletes and writes run, each write staged in
+    ``pending-apply/tmp`` and renamed into place, and the journal and its folder go.
+    A process that dies in between leaves the journal, and ``restore_pending``
+    puts the folder back as it was before the write-back started.
 
     Raises ``PendingApplyError`` when a journal is already present (it is undone
     first, by ``restore_pending``), and ``ValueError`` for a folder ``pending_dir``
-    refuses or a changeset path that breaks the path rule or names a directory,
+    refuses, or a path that breaks the path rule or a delete that names a folder,
     checked before anything is stored. Any other exception leaves the journal for
     ``restore_pending``."""
     work = Path(root)
@@ -316,48 +401,58 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
     journal = pending / _JOURNAL
     if journal.exists() or journal.is_symlink():
         raise PendingApplyError(journal, "a write-back is already pending in this folder")
-    steps: list[tuple[str, bytes | None]] = []
-    for cs in changesets:
-        steps.extend({**cs.created, **cs.modified}.items())
-        steps.extend((rel, None) for rel in cs.deleted)
-    paths = list(dict.fromkeys(rel for rel, _ in steps))
+    deletes = [rel for cs in changesets for rel in cs.deleted]
+    writes = [item for cs in changesets for item in {**cs.created, **cs.modified}.items()]
+    paths = list(dict.fromkeys([*deletes, *(rel for rel, _ in writes)]))
+    deleted = set(deletes)
     for rel in paths:
         if not _plain_relative(rel):
             raise ValueError(f"{rel!r} is not a plain relative path inside the folder")
-        if (work / rel).is_dir():
+    for rel in deleted:
+        if (work / rel).is_dir() and not (work / rel).is_symlink():
             raise ValueError(f"{rel!r} is a directory in the folder")
 
     shutil.rmtree(pending, ignore_errors=True)     # a leftover with no journal
     pre = pending / _PRE
     pre.mkdir(parents=True)
+    _fsync_dir(pending.parent)                     # the run area now names pending-apply
     entries: list[dict] = []
     for n, rel in enumerate(paths):
         target = work / rel
-        if target.is_file():
+        if target.is_symlink() and (rel in deleted or not target.is_file()):
+            entries.append({"path": rel, "pre": None, "mode": None,
+                            "link": os.readlink(target)})
+        elif target.is_dir():
+            entries.append({"path": rel, "pre": None,
+                            "mode": stat.S_IMODE(target.stat().st_mode), "dir": True})
+        elif target.is_file():
             _store_copy(target, pre / str(n))
             entries.append({"path": rel, "pre": str(n),
                             "mode": stat.S_IMODE(target.stat().st_mode)})
         else:
             entries.append({"path": rel, "pre": None, "mode": None})
     new_dirs: list[str] = []
-    for rel, content in steps:
-        if content is None:
-            continue
+    for rel, _ in writes:
         parts = rel.split("/")[:-1]
         for depth in range(1, len(parts) + 1):
             folder = "/".join(parts[:depth])
-            if folder not in new_dirs and not (work / folder).exists():
+            here = work / folder
+            if folder not in new_dirs and (not os.path.lexists(here)
+                                           or (folder in deleted and not here.is_dir())):
                 new_dirs.append(folder)
     _fsync_dir(pre)
     atomic_write_text(journal, json.dumps({"run_id": run_id, "node_id": node_id,
                                            "entries": entries, "new_dirs": new_dirs}),
                       fsync_dir=True)
 
-    for rel, content in steps:
-        if content is None:
-            (work / rel).unlink(missing_ok=True)
-        else:
-            _write_file(work / rel, content)
+    staging = pending / _TMP
+    for rel in deletes:
+        (work / rel).unlink(missing_ok=True)
+    for rel, content in writes:
+        target = work / rel
+        if target.is_dir() and not target.is_symlink() and _within(work, target):
+            target.rmdir()
+        _write_file(target, content, staging)
     journal.unlink()
     shutil.rmtree(pending, ignore_errors=True)
 
@@ -380,23 +475,71 @@ def _read_journal(pending: Path) -> dict | None:
     if not isinstance(entries, list) or not isinstance(new_dirs, list):
         raise PendingApplyError(journal, "it has no list of entries or of new directories")
     pre = pending / _PRE
+    for folder in (pre, pending / _TMP):
+        if folder.is_symlink():
+            raise PendingApplyError(journal, f"{str(folder)!r} is a symlink")
     for entry in entries:
         if not isinstance(entry, dict) or not _plain_relative(entry.get("path")):
             raise PendingApplyError(journal, f"entry {entry!r} names no path inside the folder")
-        stored, mode = entry.get("pre"), entry.get("mode")
+        stored, mode, link = entry.get("pre"), entry.get("mode"), entry.get("link")
+        was_dir = entry.get("dir", False)
+        if link is not None:
+            if not isinstance(link, str) or not link or stored is not None or was_dir:
+                raise PendingApplyError(journal, f"entry {entry!r} names no link target")
+            continue
+        if was_dir is not False:
+            if was_dir is not True or stored is not None or not _is_mode(mode):
+                raise PendingApplyError(journal, f"entry {entry!r} names no directory mode")
+            continue
         if stored is None:
             continue
         if not isinstance(stored, str) or not _STORED_NAME.fullmatch(stored):
             raise PendingApplyError(journal, f"entry {entry!r} names no stored copy")
-        if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+        if not _is_mode(mode):
             raise PendingApplyError(journal, f"entry {entry!r} has no file mode")
         copy = pre / stored
-        if pre.is_symlink() or copy.is_symlink() or not copy.is_file():
+        if copy.is_symlink() or not copy.is_file():
             raise PendingApplyError(journal, f"the stored copy {str(copy)!r} is missing")
     for folder in new_dirs:
         if not _plain_relative(folder):
             raise PendingApplyError(journal, f"new directory {folder!r} is not inside the folder")
     return data
+
+
+def _undo(work: Path, pending: Path, data: dict) -> None:
+    """Put the folder back from a checked journal. First what did not exist before
+    goes: each such file (or a file standing where a folder was), then the folders
+    the write-back created, deepest first. Then what was there comes back, making
+    folders as needed: each folder at a write target with its mode, each link with
+    its target, each file with its bytes and mode. Nothing is removed through a
+    folder that leads outside the working folder: such a path stays where it is.
+    Anything that is not already as it should be and cannot be made so raises."""
+    staging = pending / _TMP
+    entries = data["entries"]
+    for entry in entries:
+        if entry.get("pre") is not None or entry.get("link") is not None:
+            continue
+        path = work / entry["path"]
+        if entry.get("dir") and path.is_dir() and not path.is_symlink():
+            continue
+        if _within(work, path):
+            with suppress(FileNotFoundError, NotADirectoryError):
+                path.unlink()
+    for folder in sorted(data["new_dirs"], key=lambda f: f.count("/"), reverse=True):
+        path = work / folder
+        if path.is_dir() and not path.is_symlink() and _within(work, path):
+            path.rmdir()
+    for entry in entries:
+        if entry.get("dir"):
+            path = work / entry["path"]
+            path.mkdir(parents=True, exist_ok=True)
+            os.chmod(path, entry["mode"])
+    for entry in entries:
+        path = work / entry["path"]
+        if entry.get("link") is not None:
+            _put_link(path, entry["link"], staging)
+        elif entry.get("pre") is not None:
+            _put_back(path, pending / _PRE / entry["pre"], entry["mode"], staging)
 
 
 def restore_pending(work_dir: str | Path) -> bool:
@@ -406,12 +549,12 @@ def restore_pending(work_dir: str | Path) -> bool:
 
     The journal is checked whole before anything is touched: when any of it
     cannot be used (unreadable, a path outside the folder, a stored copy missing,
-    or a symlink at the journal or where its folder should be) ``PendingApplyError``
-    is raised and nothing changes. Then each path gets its stored bytes and mode
-    back (a path that did not exist is removed), each directory the write-back
-    created is removed when empty, deepest first, and the journal goes before its
-    stored copies. Running it twice, or again after it was cut halfway, ends in the
-    same folder. Raises ``ValueError`` for a folder ``run_area`` refuses."""
+    or a symlink at the journal, at ``pending-apply`` or at its ``pre`` or ``tmp``
+    folder) ``PendingApplyError`` is raised and nothing changes. The undo itself is
+    ``_undo``; one that cannot finish raises ``UndoError`` and keeps the journal, and
+    running it again once the cause is gone ends in the folder as it was before the
+    write-back. The journal goes before its stored copies. Raises ``ValueError``
+    for a folder ``run_area`` refuses."""
     work = Path(work_dir)
     link = run_area(work) / _PENDING
     if link.is_symlink():
@@ -421,18 +564,12 @@ def restore_pending(work_dir: str | Path) -> bool:
     if data is None:
         shutil.rmtree(pending, ignore_errors=True)
         return False
-    for entry in data["entries"]:
-        target = work / entry["path"]
-        if entry.get("pre") is None:
-            # The path itself goes, never what a link there points at: that may
-            # lie outside the run's area.
-            target.unlink(missing_ok=True)
-        else:
-            _put_back(target, pending / _PRE / entry["pre"], entry["mode"])
-    for folder in sorted(data["new_dirs"], key=lambda f: f.count("/"), reverse=True):
-        with suppress(OSError):
-            (work / folder).rmdir()
-    (pending / _JOURNAL).unlink()
+    journal = pending / _JOURNAL
+    try:
+        _undo(work, pending, data)
+        journal.unlink()
+    except Exception as exc:
+        raise UndoError(journal, exc) from exc
     shutil.rmtree(pending, ignore_errors=True)
     return True
 
