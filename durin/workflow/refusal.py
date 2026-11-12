@@ -10,6 +10,7 @@ from __future__ import annotations
 
 # The words a refusal can carry; ``other`` for one that fits none of them.
 KINDS = frozenset({
+    "owner_alive",     # the process recorded as running it still seems alive
     "script_alive",    # something of a script the dead process started may still run
     "folder_pruned",   # the run's working folder or stored input is gone
     "step_gone",       # the step it was in is no longer in the workflow

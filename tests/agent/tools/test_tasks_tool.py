@@ -941,11 +941,10 @@ async def test_a_stop_is_kept_even_when_the_turn_asking_for_it_is_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path, monkeypatch):
+async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path):
     """With a script of the dead process still running, resuming or re-running
     the run now would run that script twice: the tool says why it cannot be
-    resumed yet instead of inviting a second run."""
-    import os
+    resumed yet instead of inviting a second run, and leaves the script alone."""
     import subprocess
 
     from durin.utils.process_tree import process_identity
@@ -963,21 +962,14 @@ async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path,
             time.sleep(0.02)
         run_log.record_script(run_log.runs_root(tmp_path) / "qa", "dead7", pid=proc.pid,
                               started=process_identity(proc.pid)["started"], node_id="a")
-        # Signals reach nothing, as if the script belonged to another user.
-        real_kill, real_killpg = os.kill, os.killpg
-        monkeypatch.setattr(os, "kill", lambda p, s: real_kill(p, s) if not s else None)
-        monkeypatch.setattr(os, "killpg", lambda p, s: real_killpg(p, s) if not s else None)
-        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_TERM_WAIT_S", 0.2)
-        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_KILL_WAIT_S", 0.2)
-
         out = await _tool(tmp_path, None).execute(action="status", id="dead7")
 
         assert "Re-run the workflow if the result is still needed." not in out
         assert "cannot be resumed yet" in out
         assert (f"the script of its step 'a' from the earlier process is still running "
                 f"(pid {proc.pid}). It can be resumed once it has ended." in out)
+        assert proc.poll() is None
     finally:
-        monkeypatch.undo()
         proc.kill()
         proc.wait(timeout=10)
 

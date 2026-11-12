@@ -203,9 +203,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   start, with the input it had; finished nodes do not re-run, a parallel node re-runs all its
   branches or workers, and a sub-workflow node starts its child again. So that node's effects
   outside durin (a sent message, a posted comment) can happen twice: before resuming, check
-  whether it already acted, and tell the user when you cannot. Only a script node's own
-  processes are ended when a run is found dead: a command an agent node started with its
-  shell tool is not, and may still be running when the node runs it again. The resume is refused, with
+  whether it already acted, and tell the user when you cannot. A stop or restart of durin
+  ends a script node's own processes, and a resume waits for any a hard kill left: a command
+  an agent node started with its shell tool is neither ended nor waited for, and may still
+  be running when the node runs it again. The resume is refused, with
   the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
   definition, its folder was pruned, or a later run on the same `work_key` took the folder
   over — then start a new run. It is also refused while a script the dead process started

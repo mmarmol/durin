@@ -1996,7 +1996,7 @@ class WorkflowResumeRefusedEvent(TypedDict):
     workflow: str
     run_id: str
     surface: str  # "service" | "agent"
-    reason: str  # script_alive | folder_pruned | step_gone | superseded | automation | mcp_tools | child_running | lost_race | other
+    reason: str  # owner_alive | script_alive | folder_pruned | step_gone | superseded | automation | mcp_tools | child_running | lost_race | other
 
 
 class WorkflowWritebackRestoredEvent(TypedDict):

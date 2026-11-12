@@ -681,15 +681,6 @@ def _drop_stop_request(path: Path) -> None:
 # file. No ``*.json`` listing matches the name.
 _SCRIPT_INFIX = ".script."
 
-# How long the conversion of a dead run waits for a script it signalled: first
-# after SIGTERM, then after SIGKILL. ``DEAD_RUN_SCRIPT_BOUND_S`` bounds the whole
-# of it, observations included, and sits well under ``DEAD_RUN_LOCK_TIMEOUT_S``
-# since it runs under the run's lock, which other finders wait for.
-DEAD_RUN_SCRIPT_TERM_WAIT_S = 2.0
-DEAD_RUN_SCRIPT_KILL_WAIT_S = 1.0
-DEAD_RUN_SCRIPT_BOUND_S = 5.0
-
-
 def record_script(record_dir: str | Path, run_id: str, *, pid: int, started: str,
                   node_id: str) -> Path:
     """Record a script process a run started, in ``record_dir`` (the folder of
@@ -738,42 +729,6 @@ def _read_script_record(path: Path) -> dict | None:
             or not isinstance(started, str) or not started):
         return None
     return entry
-
-
-def _end_recorded_scripts(workspace: str | Path, name: str,
-                          run_id: str) -> tuple[list[dict], list[Path]]:
-    """End the script processes a dead run left (``process_tree.end_script_groups``)
-    and return ``(left, ended)``: an entry per script of which something may
-    still run, ``{"pid", "started", "node_id", "members", "unchecked"}``, and the
-    record files of the scripts proven to be over (removed by the caller once
-    the converted record is written). A file that cannot be read is skipped
-    and left where it is: it proves nothing either way."""
-    from durin.utils.process_tree import end_script_groups
-
-    readable: list[tuple[Path, dict]] = []
-    for path in script_records(workspace, name, run_id):
-        entry = _read_script_record(path)
-        if entry is None:
-            logger.warning("run {} of workflow {!r}: script record {} cannot be read; "
-                           "skipped", run_id, name, path.name)
-            continue
-        readable.append((path, entry))
-    if not readable:
-        return [], []
-    outcomes = end_script_groups(
-        [(e["pid"], e["started"]) for _path, e in readable],
-        term_wait_s=DEAD_RUN_SCRIPT_TERM_WAIT_S, kill_wait_s=DEAD_RUN_SCRIPT_KILL_WAIT_S,
-        bound_s=DEAD_RUN_SCRIPT_BOUND_S)
-    left: list[dict] = []
-    ended: list[Path] = []
-    for (path, entry), outcome in zip(readable, outcomes):
-        if outcome["ended"]:
-            ended.append(path)
-        else:
-            left.append({"pid": entry["pid"], "started": entry["started"],
-                         "node_id": entry.get("node_id"), "members": outcome["members"],
-                         "unchecked": outcome["unchecked"]})
-    return left, ended
 
 
 def _descendant_records(workspace: str | Path, run_id: str) -> list[tuple[str, dict]]:
@@ -895,43 +850,34 @@ def _unreadable_script_refusal(path: Path) -> str:
 
 
 def _script_checks(workspace: str | Path, name: str,
-                   rec: dict) -> list[tuple[Path | None, dict | None, str | None]]:
-    """Observe the scripts one run left, holding no lock, in the order they are
-    reported: ``(path, entry, refusal)`` per script record file (``entry`` None
-    when the file cannot be read), then ``(None, entry, refusal)`` per
-    ``scripts_left`` entry without a file. ``refusal`` is None on proof that
-    nothing of that script is left. Stops at the first refusal: nothing after
-    it is acted on."""
+                   rec: dict) -> list[tuple[Path, dict | None, str | None]]:
+    """Observe the scripts one run left, holding no lock: ``(path, entry,
+    refusal)`` per script record file, in order (``entry`` None when the file
+    cannot be read). The recorded script is the only member its group is
+    known by, and the group it led is looked at too. ``refusal`` is None on
+    proof that nothing of that script is left. Stops at the first refusal:
+    nothing after it is acted on."""
     from durin.utils.process_tree import left_script_state
 
     rec_id = rec.get("run_id")
     if not isinstance(rec_id, str):
         return []
-    left = {e.get("pid"): e for e in rec.get("scripts_left") or [] if isinstance(e, dict)}
-    checks: list[tuple[Path | None, dict | None, str | None]] = []
+    checks: list[tuple[Path, dict | None, str | None]] = []
     for path in script_records(workspace, name, rec_id):
         entry = _read_script_record(path)
         if entry is None:
             checks.append((path, None, _unreadable_script_refusal(path)))
             return checks
-        known = left.pop(entry["pid"], None) or {}
-        members = known.get("members") or [{"pid": entry["pid"], "started": entry["started"]}]
-        state, own, group = left_script_state(entry["pid"], entry["started"], members)
+        state, own, group = left_script_state(
+            entry["pid"], entry["started"], [{"pid": entry["pid"], "started": entry["started"]}])
         refusal = _left_script_refusal(entry.get("node_id"), state, own, group)
         checks.append((path, entry, refusal))
-        if refusal:
-            return checks
-    for entry in left.values():
-        state, own, group = left_script_state(
-            entry.get("pid"), entry.get("started"), entry.get("members") or [])
-        refusal = _left_script_refusal(entry.get("node_id"), state, own, group)
-        checks.append((None, entry, refusal))
         if refusal:
             return checks
     return checks
 
 
-def _settle_scripts(checks: list[tuple[Path | None, dict | None, str | None]]) -> str | None:
+def _settle_scripts(checks: list[tuple[Path, dict | None, str | None]]) -> str | None:
     """Act on ``_script_checks``, under the run's lock: the first refusal, after
     removing the record files of the scripts before it that were proven over. A
     file is removed only when, read again here, it still names the process
@@ -941,7 +887,7 @@ def _settle_scripts(checks: list[tuple[Path | None, dict | None, str | None]]) -
     for path, entry, refusal in checks:
         if refusal:
             return refusal
-        if path is None or not path.exists():
+        if not path.exists():
             continue
         if _read_script_record(path) != entry:
             return _BUSY_REFUSAL
@@ -977,10 +923,8 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
       record or one of its sub-workflow runs' records: something of that
       script may still run. A record that cannot be read refuses with its
       path. One that can is checked with ``process_tree.left_script_state``
-      (together with the record's ``scripts_left`` entry for it, which names
-      the members seen in its group) and removed on proof that nothing of the
-      script is left;
-    - a ``scripts_left`` entry whose script may still run.
+      (the recorded process, and the group it led) and removed on proof that
+      nothing of the script is left.
 
     Processes are observed holding no lock. What is said and removed is
     decided under each run's lock (``run_lock_target``), one run's lock at a
@@ -1017,7 +961,8 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
                 f"it was marked interrupted while the process that was running it "
                 f"(pid {pid}) still seems alive. It can be resumed once that process "
                 "has ended.",
-                f"the process that was running it (pid {pid}) still seems alive")
+                f"the process that was running it (pid {pid}) still seems alive",
+                kind="owner_alive")
         if running:
             child_name, child = running
             return LeftBehind(
@@ -1055,7 +1000,7 @@ def settle_dead_run(workspace: str | Path, name: str,
     (``dead_run_refusal``), or None. A ``running`` record whose
     process is gone is converted (``mark_dead_run``); a ``crashed`` one also
     gets its dead sub-workflow runs converted, which a conversion made before
-    may have missed, so their scripts are ended and counted too; the refusal
+    may have missed, so their scripts are checked and counted too; the refusal
     is ``dead_run_refusal``'s. Takes the per-run locks one at a time and
     observes processes: run it off an event loop."""
     record = read_manifest(workspace, name, run_id)
@@ -1502,23 +1447,9 @@ def mark_dead_run(
     when it cannot be observed, the record is left ``running`` for the next
     sweep and nothing is signalled.
 
-    Before the record is written, the script processes the run recorded
-    (``record_script``) are ended (``process_tree.end_script_groups``): a group
-    is signalled only after its leader is verified to be the recorded process
-    and to lead its group, SIGTERM then SIGKILL, and a group counts as ended
-    only when no member that has not exited is left. Otherwise a resume would
-    run the step again while its earlier script still runs. This happens under
-    the lock: a resume claims the run under the same lock, so no resume can
-    start the step again between the check that the run's process is gone and
-    the end of its scripts; the whole of it is bounded by
-    ``DEAD_RUN_SCRIPT_BOUND_S``, well under the lock's timeout. A script of
-    which something may still run (members left after SIGKILL, members of a
-    group whose leader was already gone, which are never signalled, or an
-    observation that failed) is named in the record's ``scripts_left``
-    (``{"pid", "started", "node_id", "members", "unchecked"}``, ``members`` the
-    identities seen in its group), and ``dead_run_refusal`` refuses the
-    resume until nothing of it is left. Only the records of scripts proven over
-    are removed, once the converted record is written.
+    Nothing is signalled: the script processes the run recorded
+    (``record_script``) are left as they are, and so are their record files.
+    ``dead_run_refusal`` refuses the resume while one of them may still run.
 
     The private copies the run's parallel step (``choose``/``union``) was
     writing in are removed with the conversion, in two moves: under the lock
@@ -1526,13 +1457,12 @@ def mark_dead_run(
     and once the lock is released the renamed directory is deleted. The delete
     cannot take the copies of a resume that claimed the run right after the
     conversion, since those are made under the run's name. Copies stay when
-    ``scripts_left`` is set: a script may still be writing in one, and the step
-    removes them when it is entered again. Each run id handles its own copies,
+    the run left a script record: a script may still be writing in one, and the
+    step removes them when it is entered again. Each run id handles its own copies,
     so a converted sub-workflow run (below) clears its own.
 
     Then the dead sub-workflow runs under this run (``running`` records whose
-    ``parent_run_id`` leads back to it) are converted the same way, so their
-    scripts end too before a resume runs the sub-workflow step again.
+    ``parent_run_id`` leads back to it) are converted the same way.
 
     A step listed in ``detached_active`` is never written as ``failed_node``:
     a record naming one as its position keeps that position and gets no
@@ -1561,17 +1491,9 @@ def mark_dead_run(
                                run_id, name, exc, "cancelled" if stop else "crashed")
                 out = _minimal_mark(record, stop)
             scripts_recorded = len(script_records(workspace, name, run_id))
-            left, ended = _end_recorded_scripts(workspace, name, run_id)
-            if left:
-                logger.warning("run {} of workflow {!r}: {} script(s) of the dead run may "
-                               "still run: {}", run_id, name, len(left),
-                               ", ".join(str(m["pid"]) for e in left for m in e["members"]))
-                out["scripts_left"] = left
             _write_json(_record_path(workspace, name, run_id), out)
             _drop_stop_request(stop_path)
-            for path in ended:
-                forget_script(path)
-            retired = _retire_copies(out, record, run_id)
+            retired = None if scripts_recorded else _retire_copies(out, record, run_id)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
@@ -1600,11 +1522,9 @@ def _retire_copies(out: dict, record: dict, run_id: str) -> Path | None:
     step (``branches/<run_id>`` beside its working folder) out of the run's name,
     and return the new path. The caller deletes it once the lock is released: a
     resume claims the run under the same lock and its step makes new copies under
-    ``branches/<run_id>``, so a delete after the claim would remove those. With
-    ``scripts_left`` a script may still be writing in a copy, so they stay (the
-    step removes them when it is entered again)."""
+    ``branches/<run_id>``, so a delete after the claim would remove those."""
     work_dir = out.get("work_dir") or record.get("work_dir")
-    if not work_dir or out.get("scripts_left"):
+    if not work_dir:
         return None
     return workspace_fork.retire_branches(work_dir, run_id)
 

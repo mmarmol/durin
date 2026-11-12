@@ -205,11 +205,10 @@ def build_service_registry(
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died
     # before finalizing them. Best-effort — a sweep failure must not block startup.
-    # The sweep can wait on run locks, end a dead run's scripts and observe
-    # processes, so it never runs on an event loop: a build made on one (a
-    # channel started or restarted while the gateway runs) hands it to a thread
-    # of its own. A caller that knows another build already swept passes
-    # reconcile_runs=False.
+    # The sweep can wait on run locks and observe processes, so it never runs
+    # on an event loop: a build made on one (a channel started or restarted
+    # while the gateway runs) hands it to a thread of its own. A caller that
+    # knows another build already swept passes reconcile_runs=False.
     if reconcile_runs:
         def _boot_sweep() -> None:
             try:

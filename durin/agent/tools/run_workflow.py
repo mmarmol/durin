@@ -452,8 +452,8 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
     ``name`` that the conversation ``session_key`` started and that a process
     ending cut short, or "" when there is nothing to say. Only the newest few that
     are recorded ``crashed`` or ``running`` are looked at. A run recorded as
-    running whose process is gone is converted first, as a resume does (which
-    also ends the scripts that run left). What decides a run is named, in order:
+    running whose process is gone is converted first, as a resume does. What
+    decides a run is named, in order:
     something of it may still be there (a script, a sub-workflow run, a process
     that seems alive) - named whether or not it could ever be resumed, since a
     new run works beside it; else it can be resumed - named with the way to do

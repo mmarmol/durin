@@ -541,22 +541,27 @@ started from another chat.
 So a step that acts outside durin — sends a message, posts a comment, writes
 to another system — should be safe to run twice. The general way is a script
 that checks before it acts (has this comment already been posted?) and does
-nothing when it has. Only a script step's own processes are tracked and ended
-when a run is found dead (below). A command an agent step started through its
-shell tool runs in a session of its own and is neither tracked nor ended: when
+nothing when it has. Only a script step's own processes are tracked: ended when
+durin stops or restarts, and waited for when a crash left them (below). A command
+an agent step started through its shell tool runs in a session of its own and is
+neither tracked nor ended: when
 that agent step runs again, it may start the command a second time while the
 first one is still running. `reuse: "if-unchanged"` does not skip the step that was
 cut, since a step entered again is never reused, but it does let the steps a
 restarted sub-workflow had already finished skip their work when their input
 is unchanged.
 
-A script that was running when the process died is ended before its step runs
-again. If something of it may still run (a process durin may not signal, or one
-it cannot prove is still the script's, such as a process left in the script's
-former process group after the script itself is gone), the resume is refused
-and names the process ids that are left. The agent never ends them itself. Check
-that they are the script's before ending them (after a restart, a process id can
-belong to something else), then resume. The resume is refused the same way when
+When durin stops (`durin gateway stop`, quitting the terminal UI) or restarts in
+place (`/restart`), it ends the scripts its runs were running, right before it
+exits, and those runs resume at the step they were in. A process killed outright
+(a `kill -9`, a stop that had to force it, the system running out of memory, a
+power loss) cannot do that: its
+scripts keep running, and nothing in durin ever ends them. The resume of such a run
+is refused while something of a script may still run, and the reason names the
+process ids: the script itself, or processes in the script's former process group
+(which may not be the script's). The agent never ends them itself. Either wait for
+them to finish, or check that they are the script's before ending them yourself
+(after a restart, a process id can belong to something else); then resume. The resume is refused the same way when
 the run was marked interrupted while the process that ran the workflow still
 seems alive, while one of its sub-workflow runs is still recorded as running, or
 while a record of one of its scripts cannot be read. That reason names the file:

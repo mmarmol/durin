@@ -75,7 +75,7 @@ def test_format_restart_completed_message_with_elapsed(monkeypatch):
     assert format_restart_completed_message("100.0") == "Restart completed in 2.0s."
 
 
-def test_reexec_exits_hard_when_execv_fails(monkeypatch):
+def test_reexec_exits_hard_when_execv_fails(monkeypatch, end_scripts_calls):
     """A restart running on the watchdog's own thread that hits a failing
     os.execv must not just quietly end that thread — nothing else would
     ever retry it. It logs and exits hard so a supervisor (systemd,
@@ -90,7 +90,8 @@ def test_reexec_exits_hard_when_execv_fails(monkeypatch):
     assert exit_calls == [1]
 
 
-def test_reexec_flushes_the_log_sink_before_exiting_on_execv_failure(monkeypatch):
+def test_reexec_flushes_the_log_sink_before_exiting_on_execv_failure(
+        monkeypatch, end_scripts_calls):
     """os._exit skips atexit hooks entirely, and the gateway's file sink
     queues writes (enqueue=True, durin/cli/gateway_logging.py) — without an
     explicit flush first, the ``logger.exception`` call recording the
@@ -130,7 +131,8 @@ def test_reexec_blocks_instead_of_returning_when_it_loses_the_race(monkeypatch):
     assert not returned.is_set()
 
 
-def test_a_stuck_loser_does_not_hold_the_lock_for_a_later_reexec_call(monkeypatch):
+def test_a_stuck_loser_does_not_hold_the_lock_for_a_later_reexec_call(
+        monkeypatch, end_scripts_calls):
     """The bug this guards: the loser used to decide-and-block inside
     ``with _reexec_lock:``, so it never released the lock. ``conftest.py``'s
     ``_reset_reexec_guard`` resets the flag between tests, but a loser
@@ -173,6 +175,47 @@ def test_a_stuck_loser_does_not_hold_the_lock_for_a_later_reexec_call(monkeypatc
         "a later reexec() call hung — the first loser's lock was still held"
     )
     assert exec_calls == [True]
+
+
+def test_reexec_ends_the_scripts_of_the_process_right_before_the_exec(
+        monkeypatch, end_scripts_calls):
+    """The scripts this process's workflow runs started go with its image:
+    the winner ends them as its last act before ``os.execv``."""
+    monkeypatch.setattr("durin.utils.restart.os.execv",
+                        lambda *a, **k: end_scripts_calls.append("execv"))
+
+    reexec()
+
+    assert end_scripts_calls == ["end_scripts", "execv"]
+
+
+def test_the_loser_of_the_reexec_race_ends_no_script(monkeypatch, end_scripts_calls):
+    monkeypatch.setattr("durin.utils.restart._reexeced", True)  # the winner "already" ran
+    thread = threading.Thread(target=reexec, daemon=True)
+    thread.start()
+    thread.join(timeout=0.3)
+
+    assert thread.is_alive()
+    assert end_scripts_calls == []
+
+
+def test_a_failing_end_of_the_scripts_still_exits(monkeypatch):
+    """Nothing on the way to the exec may keep the process from ending: an
+    error there lands on the hard exit, as a failing ``os.execv`` does."""
+    from durin.workflow import script_runner
+
+    def broken() -> int:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(script_runner, "end_scripts_for_exit", broken)
+    execs: list[bool] = []
+    monkeypatch.setattr("durin.utils.restart.os.execv", lambda *a, **k: execs.append(True))
+    exits: list[int] = []
+    monkeypatch.setattr("durin.utils.restart.os._exit", exits.append)
+
+    reexec()
+
+    assert execs == [] and exits == [1]
 
 
 def test_should_show_cli_restart_notice():

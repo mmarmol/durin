@@ -6,8 +6,8 @@ macOS without psutil. Intended for coarse waypoints (dream pass
 boundaries, a supervisor watchdog tick) — not per-allocation profiling.
 
 Also the identity of a process (pid plus a start identity that does not move
-while it lives), deciding that a process is gone only on proof, and ending a
-recorded script's process group only while that is proven to be the script.
+while it lives), and deciding that a process is gone only on proof. Nothing
+here signals a process other than with signal 0, which only observes.
 """
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ __all__ = [
     "BOOT_ID",
     "available_memory_mb",
     "ObservationError",
-    "end_script_groups",
     "left_script_state",
     "memory_snapshot",
     "process_alive",
@@ -353,17 +352,6 @@ def _reorder(rest: str) -> str:
     return f"{state} {pgid} {started}"
 
 
-def _protected(pid: int) -> bool:
-    """A pid nothing here may ever signal, as a process or as a group: 0 and
-    1, this process, and the group this process belongs to."""
-    if pid <= 1 or pid == _own_pid():
-        return True
-    try:
-        return pid == os.getpgrp()
-    except OSError:
-        return True
-
-
 def _group_empty(pgid: int, members: list[Seen]) -> bool:
     """Proof that group ``pgid`` has no member that has not exited. ``members``
     are the group's members in one table read (zombies included). Raises
@@ -385,181 +373,6 @@ def _group_empty(pgid: int, members: list[Seen]) -> bool:
     if members:
         return True    # every member has exited; their parents have not reaped them
     raise ObservationError(f"group {pgid} exists but no member of it is visible")
-
-
-def _reap_group(pgid: int) -> None:
-    """Collect the exit status of this process's own children in group
-    ``pgid`` (a process restarted in place still has its earlier start's
-    children), so none lingers as a zombie. Others' children are left to
-    their parents."""
-    while True:
-        try:
-            pid, _status = os.waitpid(-pgid, os.WNOHANG)
-        except (ChildProcessError, OSError):
-            return
-        if pid == 0:
-            return
-
-
-def _verify_and_signal(pid: int, started: str, sig: int, timeout: float) -> bool:
-    """Send ``sig`` to the group ``pid`` leads, only after checking, right here,
-    that ``pid`` is alive, is the process started at ``started`` and leads its
-    own group. Returns whether the signal was sent."""
-    if _protected(pid):
-        return False
-    try:
-        seen = _observe(pid, timeout=timeout)
-        if seen is None or seen.zombie or not _same_start(seen, started, timeout=timeout):
-            return False
-        if os.getpgid(pid) != pid:
-            return False
-        os.killpg(pid, sig)
-    except (ObservationError, OSError):
-        return False
-    return True
-
-
-def end_script_groups(scripts: list[tuple[int, str]], *, term_wait_s: float,
-                      kill_wait_s: float, bound_s: float,
-                      poll_s: float = 0.05) -> list[dict]:
-    """End the process groups that recorded script processes lead, and say for
-    each whether nothing of it is left. ``scripts`` are ``(pid, started)``
-    pairs, each a process started in a session of its own (its pid is its
-    group id). Returns, per script, ``{"ended", "members", "unchecked"}``:
-    ``ended`` only on proof that the group has no member that has not exited;
-    otherwise ``members`` are the identities still seen in it (``{"pid",
-    "started"}``) and ``unchecked`` says an observation failed.
-
-    A group is signalled only when its leader was verified, in the same call
-    as the signal, to be alive, to be the recorded process and to lead its own
-    group: SIGTERM first, SIGKILL after ``term_wait_s`` to a group that still
-    has members, then up to ``kill_wait_s`` more. SIGKILL goes to the group
-    only when the poll made right before it observed the group and saw in it a
-    member seen before SIGTERM, which proves the group never emptied (an
-    emptied group's id can be given to another process); when that poll could
-    not observe the group, nothing is sent and the script is reported. Never signalled: a pid of 0 or 1, this process or its group; a
-    leader that is gone, has exited, or left its group (its members are
-    reported, not signalled: nothing proves they are still the script's); a
-    pid now held by another process (then nothing of the script is left: a pid
-    is never reused while a group with its id has members).
-
-    Everything, observations included, happens within ``bound_s`` of the
-    call: each observation's own timeout is cut to the time left, and a
-    script still undecided at the bound is reported ``unchecked``."""
-    import signal
-    import time
-
-    start = time.monotonic()
-    deadline = start + bound_s
-
-    def left_s() -> float:
-        return deadline - time.monotonic()
-
-    results = [{"ended": False, "unchecked": True,
-                "members": [{"pid": pid, "started": started}]} for pid, started in scripts]
-    try:
-        table = _process_table(left_s())
-    except ObservationError:
-        return results
-
-    # Groups this call signalled: index -> (pgid, identities seen before SIGTERM).
-    followed: dict[int, tuple[int, set[tuple[int, str]]]] = {}
-    # Per followed group, the live members the latest poll saw, or None when the
-    # latest poll could not observe the group: SIGKILL needs a fresh observation.
-    fresh: dict[int, set[tuple[int, str]] | None] = {}
-    for i, (pid, started) in enumerate(scripts):
-        members = [m for m in table if m.pgid == pid]
-        live = [m for m in members if not m.zombie]
-        leader = next((m for m in table if m.pid == pid), None)
-        try:
-            if leader is not None and not leader.zombie:
-                if not _same_start(leader, started, timeout=left_s()):
-                    # The pid now belongs to another process, so the script's
-                    # group had emptied before it was given out.
-                    results[i] = {"ended": True, "unchecked": False, "members": []}
-                    continue
-                if _protected(pid) or leader.pgid != pid:
-                    # Never signalled: this process or its group, or a leader
-                    # that left its group (the group is no longer what it led).
-                    results[i] = {"ended": False, "unchecked": False,
-                                  "members": [leader.identity(),
-                                              *(m.identity() for m in live if m.pid != pid)]}
-                    continue
-                if _verify_and_signal(pid, started, signal.SIGTERM, left_s()):
-                    followed[i] = (pid, {(m.pid, m.started) for m in live})
-                    fresh[i] = None
-                else:
-                    results[i] = {"ended": False, "unchecked": True,
-                                  "members": [m.identity() for m in live] or results[i]["members"]}
-                continue
-            if live:
-                # The leader is gone and members remain: nothing proves they are
-                # still the script's, so they are reported and never signalled.
-                results[i] = {"ended": False, "unchecked": False,
-                              "members": [m.identity() for m in live]}
-            elif _group_empty(pid, members):
-                results[i] = {"ended": True, "unchecked": False, "members": []}
-        except ObservationError:
-            results[i] = {"ended": False, "unchecked": True,
-                          "members": [m.identity() for m in live] or results[i]["members"]}
-
-    for sig, wait_s in ((None, term_wait_s), (signal.SIGKILL, kill_wait_s)):
-        if not followed:
-            break
-        if sig is not None:
-            for i, (pgid, before) in list(followed.items()):
-                still = fresh.get(i)
-                if still is None:
-                    # The latest poll could not observe the group: nothing
-                    # proves it is still the script's, so nothing is sent.
-                    results[i]["unchecked"] = True
-                    del followed[i]
-                    continue
-                if not (still & before) or _protected(pgid):
-                    # The group may have emptied and its id been given out:
-                    # nothing here signals it again.
-                    results[i]["unchecked"] = False
-                    del followed[i]
-                    continue
-                try:
-                    os.killpg(pgid, sig)
-                except ProcessLookupError:
-                    pass
-                except OSError:
-                    results[i]["unchecked"] = False
-                    del followed[i]
-        phase_end = min(time.monotonic() + wait_s, deadline)
-        while followed:
-            for pgid, _before in followed.values():
-                _reap_group(pgid)
-            try:
-                table = _process_table(left_s())
-            except ObservationError:
-                for i in followed:
-                    results[i]["unchecked"] = True
-                followed.clear()
-                break
-            for i, (pgid, _before) in list(followed.items()):
-                members = [m for m in table if m.pgid == pgid]
-                try:
-                    empty = _group_empty(pgid, members)
-                except ObservationError:
-                    results[i]["unchecked"] = True
-                    fresh[i] = None
-                    continue
-                if empty:
-                    results[i] = {"ended": True, "unchecked": False, "members": []}
-                    del followed[i]
-                else:
-                    live = [m for m in members if not m.zombie]
-                    results[i] = {"ended": False, "unchecked": False,
-                                  "members": [m.identity() for m in live]}
-                    fresh[i] = {(m.pid, m.started) for m in live}
-            remaining = phase_end - time.monotonic()
-            if not followed or remaining <= 0:
-                break
-            time.sleep(min(poll_s, remaining))
-    return results
 
 
 def left_script_state(pid: int, started: str, members: list[dict], *,

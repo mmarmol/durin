@@ -23,9 +23,15 @@ agent node's. A non-zero exit on a NON-gate node is an error (NodeExecutionError
 and messages are empty.
 
 While the subprocess runs it is recorded beside the run's record
-(``run_log.record_script``), and the record is removed once it has exited, so
-that if this process dies the conversion of the dead run can end the script
-before its step runs again.
+(``run_log.record_script``), and the record is removed once it has exited. A
+record left by a process that died tells a resume of the run that the script
+may still run: the resume is refused until nothing of it is left.
+
+This process keeps the scripts it started and has not reaped, and ends them
+all only at the point it ends or replaces itself (``end_scripts_for_exit``,
+called right before ``os._exit`` or ``os.execv``). Apart from that, a script's
+group is signalled only by the thread that started it, before that thread
+reaps it, on a timeout or a cancel.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -67,6 +74,100 @@ _CLEAN_ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
     "DURIN_HOME",
 )
+
+# The scripts this process started and has not reaped, and whether this process
+# is ending. One lock covers both, so a script is either started before the
+# end-of-process pass (and ended by it) or not started at all, and a thread
+# whose script was reaped learns under it whether the pass has run.
+_children_lock = threading.Lock()
+_children: set[subprocess.Popen] = set()
+_exiting = False
+
+# How long the end-of-process pass waits to hold a script's reap lock. The
+# thread that started the script takes it only for an instant per poll, except
+# right after it has killed the script's group itself, while it reaps it; a
+# script whose lock stays busy past this is that one, already ended.
+_REAP_LOCK_WAIT_S = 1.0
+
+
+def _wait_for_exit() -> None:
+    """Hold this thread until the process ends: it has nothing left to do,
+    since anything it did now could record the outcome of a script the
+    process's own exit ended."""
+    threading.Event().wait()
+
+
+def _signal_unreaped(proc: subprocess.Popen) -> bool:
+    """Send SIGKILL to the group ``proc`` leads while ``proc`` is not reaped;
+    return whether it was sent. ``Popen`` reaps a child, and sets its
+    ``returncode``, only while holding its own reap lock (``_waitpid_lock``):
+    holding it here means the child cannot be reaped between the check and
+    the signal, so its pid, which is the group's id, is still this script's."""
+    reap_lock = proc._waitpid_lock
+    if not reap_lock.acquire(timeout=_REAP_LOCK_WAIT_S):
+        return False
+    try:
+        if proc.returncode is not None:
+            return False
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            return False
+        return True
+    finally:
+        reap_lock.release()
+
+
+def end_scripts_for_exit() -> int:
+    """End every script this process started and has not reaped, and mark the
+    process as ending; returns how many groups were signalled. Called only
+    where the next statement ends or replaces the process (``os._exit``,
+    ``os.execv``).
+
+    From then on no script is started, and a thread whose script has been
+    reaped waits until the process ends instead of returning, raising or
+    removing the script's record: a script this pass ended (exit code -9) is
+    never a failed step, a gate's ``FAIL`` or a route taken, and its record
+    stays for whoever checks the run next. Never raises."""
+    global _exiting
+    ended = 0
+    with _children_lock:
+        _exiting = True
+        for proc in _children:
+            try:
+                if _signal_unreaped(proc):
+                    ended += 1
+            except Exception:  # noqa: BLE001 - the process must still end
+                continue
+    return ended
+
+
+def _start(argv: list[str], cwd: str | None, env: dict[str, str]) -> subprocess.Popen:
+    """Start a script and keep it among this process's children; wait for the
+    process to end instead when the process is ending."""
+    with _children_lock:
+        exiting = _exiting
+        if not exiting:
+            proc = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd=cwd, env=env, text=True,
+                errors="replace",   # a script emitting non-UTF-8 bytes must degrade, not crash the runner
+                start_new_session=True,   # own process group, so a timeout kill reaps children too
+            )
+            _children.add(proc)
+    if exiting:
+        _wait_for_exit()
+    return proc
+
+
+def _release(proc: subprocess.Popen) -> None:
+    """Forget a reaped script; wait for the process to end instead when the
+    process is ending, so nothing of the script's outcome leaves the runner."""
+    with _children_lock:
+        _children.discard(proc)
+        exiting = _exiting
+    if exiting:
+        _wait_for_exit()
 
 
 class ScriptNodeRunner:
@@ -203,12 +304,7 @@ class ScriptNodeRunner:
         if cwd:
             env["DURIN_WORK_DIR"] = cwd
         try:
-            proc = subprocess.Popen(
-                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, cwd=cwd or None, env=env, text=True,
-                errors="replace",   # a script emitting non-UTF-8 bytes must degrade, not crash the runner
-                start_new_session=True,   # own process group, so a timeout kill reaps children too
-            )
+            proc = _start(argv, cwd or None, env)
         except (FileNotFoundError, PermissionError, OSError) as exc:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
         record = None
@@ -221,16 +317,17 @@ class ScriptNodeRunner:
                 # broke the wait: end the script here, so it never outlives
                 # its step unrecorded.
                 self._end(proc)
+            _release(proc)
             run_log.forget_script(record)
 
     @staticmethod
     def _record_child(req: NodeRunRequest, proc: subprocess.Popen) -> Path | None:
         """Record the script process beside the run's record while it runs, so
-        that if this process dies, the conversion of the dead run can end the
-        script before its step runs again. Nothing is recorded when the engine
-        keeps no record, or when the start time cannot be read (the process
-        could not be told from a later one with the same pid). A failed write
-        does not fail the step."""
+        that if this process dies, a resume of the run waits until nothing of
+        the script is left before its step runs again. Nothing is recorded when
+        the engine keeps no record, or when the start time cannot be read (the
+        process could not be told from a later one with the same pid). A failed
+        write does not fail the step."""
         if not req.record_dir:
             return None
         from durin.utils.process_tree import process_identity
@@ -241,7 +338,8 @@ class ScriptNodeRunner:
                 return None     # it already exited: nothing left to record
             logger.warning("script of step {!r} in run {}: its start could not be read, "
                            "so its process (pid {}) is not recorded; if this process dies "
-                           "while it runs, nothing ends it", req.node.id, req.run_id, proc.pid)
+                           "while it runs, a resume of the run cannot wait for it",
+                           req.node.id, req.run_id, proc.pid)
             return None
         try:
             return run_log.record_script(req.record_dir, req.run_id, pid=proc.pid,

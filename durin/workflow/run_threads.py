@@ -125,8 +125,9 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     the process. Leaving instead ends the run where a crash would: its manifest
     stays ``running`` until a sweep, a ``tasks`` call about it or a resume
     finds its process gone and marks it ``crashed``, resumable at the step it
-    was in. With no run executing this returns and the interpreter exits as
-    usual.
+    was in. The scripts the runs started are ended right before the exit
+    (``script_runner.end_scripts_for_exit``). With no run executing this
+    returns and the interpreter exits as usual.
 
     ``tell_user`` also writes one line to stderr naming how many runs were left
     and how to resume them: the terminal UI and the REPL, where a person is
@@ -147,8 +148,15 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
                 f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
                 "(resume_run_id) or from the dashboard.",
                 file=sys.stderr, flush=True)
-    _flush_logs_before_exit()
-    with suppress(Exception):
-        sys.stdout.flush()
-        sys.stderr.flush()
-    os._exit(0)
+    try:
+        _flush_logs_before_exit()
+        with suppress(Exception):
+            sys.stdout.flush()
+            sys.stderr.flush()
+        # The scripts the runs started go with the process, as its last act:
+        # none outlives it, and none of their ends is recorded as an outcome.
+        from durin.workflow import script_runner
+
+        script_runner.end_scripts_for_exit()
+    finally:
+        os._exit(0)

@@ -511,9 +511,9 @@ attempt), and when the run's folder or the key's folder is pruned, which removes
 `branches/` folder with it. The conversion first renames the run's copies, under the
 run's lock, to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
 resume that claims the run right after makes its new copies under `branches/<run id>`),
-and once the lock is released that renamed directory is deleted. A conversion that leaves
-`scripts_left` keeps the copies, since a script may still be writing in one; the step
-removes them when it is entered again.
+and once the lock is released that renamed directory is deleted. A conversion of a run
+that left a script record beside its record keeps the copies, since that script may
+still be writing in one; the step removes them when it is entered again.
 
 The reconciled result — a `choose` winner's changes, or every branch's for a `union` —
 is written into the real folder only by `workspace_fork.apply_all`, which keeps an undo
@@ -1031,7 +1031,7 @@ gateway restart. Only a gateway with the websocket channel builds the registry (
 or when that channel is first started while the gateway runs); a gateway without it has
 neither sweep, and its dead runs are found by the `tasks` tool or a resume. A build made
 on the gateway's event loop (a channel started or restarted while it runs) hands its sweep
-to a thread of its own, since a sweep can wait on run locks and on a dead run's scripts.
+to a thread of its own, since a sweep can wait on run locks and observes processes.
 The `tasks` tool
 additionally self-heals a dead-owner run on `status`/`stop` (`reconcile_one`) and
 answers with the truth — that the run crashed, or that it is cancelled when a stop had
@@ -1082,8 +1082,6 @@ off the event loop, so that wait never blocks the gateway. The written record ha
   `detached_active` is never written as `failed_node`: a record that holds one as its
   position keeps that position and gets no `failed_node` and no resume fields, since a
   resume would launch the detached side effect again;
-- `scripts_left`, only when something of a script the run had started may still run
-  (see "A dead run's scripts end before its step runs again" below);
 - when it ends `cancelled`: `position` `null`, no `failed_node`, the stop written to
   the record's `stop_requested` (`{"at", "hard"}`, from the stop file when there is
   one), and the run's resume files removed, like any cancelled run. The cut rows are
@@ -1143,7 +1141,8 @@ quitting; a `/restart` without a gateway — first marks itself as shutting down
 flight. A foreground `run_workflow` call whose turn is cancelled while the process is
 shutting down asks nothing of its run: no cancel flag, no stop file. The run is left to
 end with the process (a process with a run still on its thread leaves it rather than
-wait for it; the TUI and the REPL also write one line to stderr naming how many runs
+wait for it, and ends the run's scripts right before it exits, as described below; the
+TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
 the dashboard, since their log line is usually disabled). The run's record stays
 `running` until a process that can tell finds its process gone. Once the process has
@@ -1153,75 +1152,73 @@ resume of it. Each converts it, resumable at the step it was in. A restart in pl
 (`/restart`) keeps the pid and the start time, so only the restarted process itself can
 tell, by its boot id, that its earlier start is gone. A gateway with the
 websocket channel restarted in place sweeps at its start and finds the run. A gateway
-without it, the TUI or the REPL restarted in place runs no sweep: the run stays `running`, and a script step it was
-in keeps running, until that process's own `tasks` tool or a resume made from that
-process reaches it, or until that process exits and another finder sees it gone. A
+without it, the TUI or the REPL restarted in place runs no sweep: the run stays `running`
+until that process's own `tasks` tool or a resume made from that process reaches it, or
+until that process exits and another finder sees it gone. A
 `durin agent -m` one-shot interrupted with Ctrl+C is the exception: asyncio's own Ctrl+C
 handling cancels its turn with no shutdown marked first, so that run is stopped.
 
-**A dead run's scripts end before its step runs again.** A script step runs in a
-process group of its own, and nothing outlives a crash to end it: a process killed, or
-one that leaves its runs on the way out, leaves the script running. So while a script
-process runs, the script runner records it beside the run's record, in a file of its own
-named `<run_id>.script.<pid>`: `{"pid", "started", "node_id"}`, the pid (also its process
-group) and its start identity. One file per process, so the script branches of a parallel
-step, started at once from several threads, never share a file; the `.script.` name
-never matches the `*.json` listings. The engine hands the runner the folder of the
-run's record (`NodeRunRequest.record_dir`), so a sub-workflow's script is recorded beside
-the child run's record. The runner removes the file once the process has exited, however
-the step ends: on its own, killed on a timeout or a cancel, or when the wait itself fails
-(the runner then kills and reaps the process first). A record that cannot be written does
-not fail the step: the runner logs a warning and the script runs on, unrecorded, so a death
-of the process while it runs leaves nothing to end it. Nothing is recorded either when the
-start identity cannot be read, since the pid could not be told from a later process given
-the same one. When that happens to a process still running, the runner logs a warning that
-nothing would end it.
+**A process ends its own scripts; a resume waits for any a crash left.** A script step
+runs in a process group of its own. While a script process runs, the script runner
+records it beside the run's record, in a file of its own named `<run_id>.script.<pid>`:
+`{"pid", "started", "node_id"}`, the pid (also its process group) and its start
+identity. One file per process, so the script branches of a parallel step, started at
+once from several threads, never share a file; the `.script.` name never matches the
+`*.json` listings. The engine hands the runner the folder of the run's record
+(`NodeRunRequest.record_dir`), so a sub-workflow's script is recorded beside the child
+run's record. The runner removes the file once the process has exited, however the step
+ends: on its own, killed on a timeout or a cancel, or when the wait itself fails (the
+runner then kills and reaps the process first). A record that cannot be written does not
+fail the step: the runner logs a warning and the script runs on, unrecorded, so a resume
+after a crash cannot wait for it. Nothing is recorded either when the start identity
+cannot be read, since the pid could not be told from a later process given the same one.
+When that happens to a process still running, the runner logs a warning that a resume
+could not wait for it.
 
-The conversion of a dead run (`mark_dead_run`) ends what is left, under the per-run lock,
-before it writes the converted record. A script's group is judged by its members, never by
-its leader alone: every command step runs as `bash -c`, and a child that ignores SIGTERM
-outlives a leader that dies on it. Each conversion reads the process table once and then:
+The script runner also keeps, in memory, the scripts this process started and has not
+reaped, under one lock. The process ends them at the two points where it ends or
+replaces itself, as the last thing before it does: `run_threads.leave_unfinished_runs`
+calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
+TUI or the REPL quitting while a run is still on its thread; with no run on a thread it
+returns without calling it), and `restart.reexec` calls it right before `os.execv` (a
+restart in place; a failure there ends in `os._exit` too). The call marks the process as
+ending and sends SIGKILL to the group of every kept script that has not been reaped. It
+checks and signals while holding that child's own reap lock (`Popen` reaps a child and
+sets its `returncode` only under it), so a script reaped at that moment, whose pid could
+then be given to another process, is never signalled. From then on, under the same lock:
 
-- signals a group only on proof that it is the script's: right before the first signal it
-  checks that the recorded pid is alive, has the recorded start identity and leads its own
-  group (its process group id is its pid). It sends SIGTERM to the group and waits. It
-  sends SIGKILL to the group only when the poll made right before it observed the group and
-  saw in it a member seen before SIGTERM: that proves the group never emptied, so its id was
-  never given to another process. When that poll could not observe the group, nothing is
-  sent and the script goes to `scripts_left`. It then waits again. Each poll reads the
-  table once (`ps -A` on macOS, `/proc` where it exists) and reaps the converting process's
-  own children in the group. In a `/proc` read, a process that exits while it is read
-  counts as gone and another user's process (its `stat` cannot be read) is skipped; any
-  other read error makes the whole table "could not observe";
-- counts a group as ended only when no member that has not exited is left (a group of
-  zombies is ended);
-- forgets a record whose pid now belongs to another process (another start identity): a pid
-  is never given out while a group with its id has members, so nothing of the script is
-  left;
-- never signals pid 0 or 1, the converting process or its group, a leader that has exited
-  or left its group, or the members of a group whose leader is already gone (after a long
-  downtime nothing proves they are still the script's);
-- treats a failed or timed-out observation as "could not observe", never as proof.
+- no script is started: a script step entered after the call waits for the process to
+  end, so a script is either started before the call (and ended by it) or not at all;
+- a thread whose script has been reaped waits for the process to end instead of
+  returning, raising or removing the script's record. A script the exit ended (exit code
+  -9) is never a failed step, never a gate's `FAIL` and never a route taken, and its
+  record stays for whoever checks the run next.
 
-The whole of it, observations included, is bounded by `DEAD_RUN_SCRIPT_BOUND_S`, well under
-the lock's timeout: every observation's own timeout is cut to the time left. It happens
-under the lock because a resume claims the run under the same lock: no resume can run the
-step again between the check that the run's process is gone and the end of its scripts.
+A script that ends by itself before the call is recorded as usual, whether or not the
+process has begun shutting down: the shutdown flag (`cancellation.begin_shutdown`) plays
+no part here. One that ends by itself between the call and the exit is not recorded; its
+step runs again on a resume. A stop or a restart in place thus leaves the run as a crash
+does: recorded `running` at the step it was in, found dead later and resumable there,
+with no script of it running.
 
-A script of which something may still run is named in the record's `scripts_left`, and
-the conversion still completes. That covers members left after SIGKILL or a permission
-error, the members of a group whose leader was already gone, and any script decided by an
-observation that failed. Each entry is `{"pid", "started", "node_id", "members",
-"unchecked"}`: the recorded leader, the identities of the members still seen
-(`{"pid", "started"}`), and whether an observation failed. The record file of such a script
-stays, and only the files of scripts proven over are removed, once the converted record is
-written. A file that cannot be read as a record is skipped by the conversion and left where
-it is; it then refuses the resume (below). After the
-run itself, the conversion converts the dead sub-workflow runs under it, at any depth, one
-run's lock at a time, so their scripts end too. A run that ends by itself
-(`finalize_run`, `finalize_short_circuit`) removes any script file left beside its record,
-and pruning a record removes them with it. No exit path ends scripts itself: the conversion
-covers every way a process can die, a kill included.
+Nothing else ever signals a script: a conversion of a dead run (`mark_dead_run`), a sweep,
+a `tasks` call, a resume and a launch only observe processes (signal 0 is an existence
+probe). A process killed outright (SIGKILL, the out-of-memory killer, a power loss) leaves
+its scripts running, and their record files stay beside the run's record. So does a script
+whose own process was reaped while a process it started still holds its output open: that
+process is not signalled at the exit. The conversion of a dead run writes the converted
+record and leaves the script record files where they are; the resume of the run is
+refused, naming what may still run, until nothing of those scripts is left (below). Each
+check reads a record file, observes the recorded process and the group it led, and removes
+the file on proof that nothing of the script is left. A group is judged by its members,
+never by its leader alone: every command step runs as `bash -c`, and what it started can
+outlive it. The group is read from the process table (`ps -A` on macOS, `/proc` where it
+exists); in a `/proc` read a process that exits while it is read counts as gone and
+another user's process (its `stat` cannot be read) is skipped. Any other read error, and
+any failed or timed-out observation, is "could not be checked", never proof. A file that
+cannot be read as a record also refuses the resume, naming the file. A run that ends by itself (`finalize_run`,
+`finalize_short_circuit`) removes any script file left beside its record, and pruning a
+record removes them with it.
 
 **Resuming a dead run.** A `crashed` run is resumed like an aborted one, with
 `resume_run_id`, on both surfaces (the workflows service and the `run_workflow` tool).
@@ -1242,11 +1239,10 @@ dead sub-workflow runs converted, which an earlier conversion may have missed, a
 `owner` that is alive or cannot be observed: a record the conversion wrote has none, so
 this holds only a `crashed` record marked by something other than the conversion, such as
 anything that only sets the status. It also refuses while any sub-workflow run under it, at
-any depth, is still recorded as `running`; while any script record is present beside the
-run's record or a sub-workflow run's record, readable or not (a readable one is checked
-with its `scripts_left` entry and removed on proof that nothing of the script is left);
-and while a `scripts_left` entry may still run. Both observe processes, which is why they
-run in that off-loop call.
+any depth, is still recorded as `running`; and while any script record is present beside
+the run's record or a sub-workflow run's record, readable or not (a readable one is
+checked and removed on proof that nothing of the script is left). Both observe processes,
+which is why they run in that off-loop call.
 
 Processes are observed holding no lock; what the check says and removes is decided under
 the per-run lock, one run's lock at a time (the run's, then each sub-workflow run's, never
@@ -1286,7 +1282,7 @@ in the workflows skill:
 | it still names an `owner` that is alive or cannot be observed | `it was marked interrupted while the process that was running it (pid <n>) still seems alive. It can be resumed once that process has ended.` |
 | a sub-workflow run under it is still `running` | `its sub-workflow run '<id>' of workflow '<name>' is still recorded as running. It can be resumed once that run has ended or been found dead.` |
 | a script record that cannot be read | `a record of one of its scripts, <path>, cannot be read, so whether that script still runs cannot be checked. It can be resumed once a person has made sure nothing of that script is left and has removed that file.` |
-| a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, another recorded member is, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>). It can be resumed once it has ended.` for the recorded process itself; `processes in the former process group of the script of its step '<id>' are still running (pid <pids>); they may not be that script's. It can be resumed once they have ended.` for the others (being in that group does not prove they are the script's); or both in one sentence, ending `It can be resumed once they have all ended.` |
+| a script of the run or of a sub-workflow run may still run: the recorded script process is still that process, or the group the script led still has a member (unless its pid now belongs to another process). Checked each time it is asked | `the script of its step '<id>' from the earlier process is still running (pid <pids>). It can be resumed once it has ended.` for the recorded process itself; `processes in the former process group of the script of its step '<id>' are still running (pid <pids>); they may not be that script's. It can be resumed once they have ended.` for the others (being in that group does not prove they are the script's); or both in one sentence, ending `It can be resumed once they have all ended.` |
 | such a script cannot be checked (an observation fails) | `whether the script of its step '<id>' from the earlier process left anything running could not be checked (pid <pids>). It can be resumed once nothing of that script is left.` |
 
 The parallel-unit refusal is not asked of a dead run: its step is its position, which
@@ -1300,8 +1296,9 @@ only reads; the record stays byte for byte as it was.
 **What is logged and counted.** Each refusal above is a `refusal.Refusal`: a `str` equal
 to its sentence, with a `kind` fixed where the sentence is made (`LeftBehind`, the
 refusal that names what the earlier process left, is one, with its `fact`). The word is
-never worked out from the sentence's wording. The words are `script_alive` (a script
-may still run), `folder_pruned`, `step_gone`, `superseded` (a later run took the
+never worked out from the sentence's wording. The words are `owner_alive` (the process
+recorded as running it still seems alive), `script_alive` (a script may still run),
+`folder_pruned`, `step_gone`, `superseded` (a later run took the
 key's folder), `automation`, `mcp_tools`, `child_running`, `lost_race` (the record
 changed, was removed, or a lock stayed busy; a lost claim is a `ResumeLostError` whose
 `kind` is the same word) and `other` for the rest. The events go through
@@ -1332,11 +1329,12 @@ workers again, and a `choose`/`union` write-back the death cut is undone before 
 walk starts, so the step starts from the folder its first attempt started from; a sub-workflow step starts its child again from the child's start step,
 as a new child run, and the dead child stays on record as `crashed`. Steps that finished
 before the death do not run again. What the cut step did outside durin before the death
-can therefore happen twice. Only a script step's own processes are recorded and ended when
-a run is found dead (see "A dead run's scripts end before its step runs again" above): a
-command an agent step started through its shell tool runs in a session of its own
-(`start_new_session`), is not recorded and is not ended, so a resumed agent step may run
-that command again while the first one is still running.
+can therefore happen twice. Only a script step's own processes are recorded, ended by a
+stop or a restart in place, and waited for by a resume (see "A process ends its own
+scripts; a resume waits for any a crash left" above): a command an agent step started
+through its shell tool runs in a session of its own (`start_new_session`), is neither
+recorded nor ended, so a resumed agent step may run that command again while the first
+one is still running.
 
 The workflows service refuses a dead run whose `surface` is `"agent"` when a step names
 `mcps` — a step of the workflow's own definition, or of a workflow a sub-workflow step
@@ -1491,15 +1489,15 @@ written before launches were kept, by `root_session_key`; a sub-workflow's own
 run is never matched). `run_workflow.cut_runs_notice` examines only the most recent of those records
 that are `crashed` or `running` (`_CUT_RUNS_EXAMINED`), and settles each the way a resume does
 (`run_log.settle_dead_run`: a `running` record whose process is gone becomes
-`crashed`, which also ends the scripts that run left, and the dead-run check
-says whether something of it may still be there). All of it runs in one
+`crashed`, and the dead-run check says whether something of it may still be
+there). All of it runs in one
 worker-thread call, since it observes processes and waits on run locks; a
 failure is logged and the launch goes on without a note. The notice writes no
 record of its own; through the existing settling it can convert a dead run and
-its dead sub-workflow runs, end the scripts they left, remove script records
-proven over, remove each converted run's private copies of a parallel step (kept
-when something of a script is left) and its stop request file, and, for a run
-that ends not resumable (`cancelled`), its resume files.
+its dead sub-workflow runs, remove script records proven over, remove each
+converted run's private copies of a parallel step (kept when the run left a
+script record) and its stop request file, and, for a run that ends not
+resumable (`cancelled`), its resume files.
 
 What decides a run is named: first, whether something of it may still be there
 (the dead-run check's answer when it is not a race answer: a script, a
@@ -2225,9 +2223,9 @@ process was running carries `cut: true` in its trace row, and the row reads
 "interrupted" instead of "failed". When the record names a `failed_node`, the banner
 offers **Resume at the interrupted step**, which sends the same resume request as the
 retry above. It is left out under the same conditions (an automation's run, a
-sub-workflow step's own run) and when the record names no `failed_node`. A leftover
-`scripts_left` list does not hide it: the server decides whether the run can be
-resumed, and a refusal is shown as an error message carrying the server's reason, like a refused
+sub-workflow step's own run) and when the record names no `failed_node`. A script of
+the dead process that may still run does not hide it: the server decides whether the run
+can be resumed, and a refusal is shown as an error message carrying the server's reason, like a refused
 retry.
 
 **The node detail panel.** A node's identity in that trace — and a node row in
@@ -2305,7 +2303,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `resumable_kind`, `resume_refusal`, `mcp_tools_refusal`, `build_resume_state`, `resume_source_outputs`, `whole_source_outputs` | `durin/workflow/engine.py` | What a stopped run's record allows (paused, failed, dead), why a resume is refused (on any surface, and on one without the gateway's MCP tools), and the `ResumeState` a resume enters with — the one set both resume surfaces use (§4a, "Resuming a dead run"). |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes; the node's tools resolve relative paths in its working folder), persisted as a lineage'd node session, checkpointed every round. |
-| `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. Records the command and both redacted streams on every exit path — a script node keeps no session, so this is its only record. |
+| `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. Records the command and both redacted streams on every exit path — a script node keeps no session, so this is its only record. Keeps the scripts it started and has not reaped; `end_scripts_for_exit` ends them where the process exits or re-execs, and no outcome of a script is recorded after it. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |
 | `running_frame`, `finished_frames`, `pending_frames`, `tool_target` | `durin/workflow/progress.py` | The single builder for every node-frame shape the engine emits (running, finished, the certain-pending tail) and the tool reuses for the terminal frame — a field added to a frame is added here once. |
 | `node_session_key`, `is_persistent_session` | `durin/workflow/session_keys.py` | The single derivation of the key a node's conversation persists under, shared by the runner that saves the session and the engine that advertises it on `active_node`. Deriving it twice would drift on exactly the cases that matter (a persistent session omits the iteration suffix; a fan-out worker adds one). |

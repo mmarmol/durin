@@ -111,6 +111,9 @@ def reexec() -> None:
     takes effect. Blocking costs nothing, since the winner's ``execv``
     replaces this thread along with everything else in the process the
     instant it succeeds.
+
+    The winner ends the scripts of this process's workflow runs right before
+    the exec (``script_runner.end_scripts_for_exit``).
     """
     global _reexeced
     with _reexec_lock:
@@ -126,6 +129,12 @@ def reexec() -> None:
         threading.Event().wait()
         return  # pragma: no cover - unreachable; the winner's execv ends this process first
     try:
+        # The scripts this process's workflow runs started go with this image,
+        # as its last act: none outlives it, and none of their ends is
+        # recorded as an outcome.
+        from durin.workflow import script_runner
+
+        script_runner.end_scripts_for_exit()
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
     except Exception:
         # execv failing (a bad interpreter path, a resource limit) is rare,

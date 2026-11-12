@@ -210,18 +210,24 @@ def test_the_copies_are_renamed_while_the_lock_is_held_and_the_record_already_re
     assert seen == {"lock_free": False, "status": "crashed"}
 
 
-def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monkeypatch):
+def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path):
+    """A script record the dead run left means a script may still be writing in
+    a copy: the conversion leaves the copies, and the step removes them when it
+    is entered again."""
     definition = _writing_fan("union")
     dead = run_until_killed(tmp_path, definition, stop_in="right",
                             env={driver.HANG_AFTER_ENV: "left"})
     copies = _copies(dead)
-    still = {"pid": 1, "started": "x", "node_id": "left", "members": [], "unchecked": False}
-    monkeypatch.setattr(run_log, "_end_recorded_scripts", lambda *a, **k: ([still], []))
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    run_log.record_script(folder, "r1", pid=2**22 + 7, started="never", node_id="left")
 
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
 
-    assert rec["scripts_left"] == [still]
+    assert rec["status"] == "crashed"
     assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
+    done = _resume(dead, definition, rec)
+    assert done.status == "completed"
+    assert list(copies.parent.iterdir()) == []
 
 
 def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):
@@ -878,9 +884,18 @@ def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch)
     dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    # the record of the killed script, whose process the harness ended
+    assert run_log.dead_run_refusal(dead.workspace, rec) is None
 
     # a record that changed since it was read: another caller got there first
     assert run_log.dead_run_refusal(dead.workspace, dict(rec, task="other")).kind == "lost_race"
+
+    # a crashed record that still names a live process as the one running it
+    marked = dict(rec, owner=process_tree.process_identity())
+    run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), marked)
+    refusal = run_log.dead_run_refusal(dead.workspace, marked)
+    assert refusal.kind == "owner_alive" and refusal.fact
+    run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), rec)
 
     # a script that may still run
     path = run_log.record_script(folder, "r1", pid=2**22 + 5, started="x", node_id="b")

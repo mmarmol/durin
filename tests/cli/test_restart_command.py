@@ -75,6 +75,7 @@ async def _wait_until(predicate, *, timeout: float = 0.2, interval: float = 0.01
 class TestRestartCommand:
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("end_scripts_calls")
     async def test_restart_sends_message_and_calls_execv(self):
         from durin.command.builtin import cmd_restart
         from durin.command.router import CommandContext
@@ -117,6 +118,7 @@ class TestRestartCommand:
             mock_execv.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("end_scripts_calls")
     async def test_a_restart_without_a_gateway_begins_the_shutdown_before_stopping_turns(self):
         """The turns the restart cancels are cancelled by a shutdown, not by
         anyone stopping their runs: the process says so before it stops them."""
@@ -150,6 +152,7 @@ class TestRestartCommand:
         assert seen == [True]
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("end_scripts_calls")
     async def test_restart_journals_the_turns_in_flight_before_exec(self, tmp_path):
         """os.execv discards everything in memory. /restart must journal the
         turns in flight first, like a graceful shutdown, or a turn waiting on
