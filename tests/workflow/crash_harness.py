@@ -4,8 +4,9 @@ step is running, so a test sees exactly what a dead process leaves on disk.
 Layout under the test's ``tmp_path``: the workspace is ``ws`` (the definition is
 written to ``ws/workflows/<name>.json``, so a test can place other workflows
 beside it before the run), ``home``, ``durin-home`` and ``tmp`` are the child's
-``HOME``, ``DURIN_HOME`` and ``TMPDIR`` (the private copies of parallel branches
-a killed child leaves stay there), and ``driver.log`` collects the child's output.
+``HOME``, ``DURIN_HOME`` and ``TMPDIR`` (a killed child leaves the private
+copies of its parallel branches in its run's folder under ``ws/.workflow/``, not
+in ``tmp``), and ``driver.log`` collects the child's output.
 ``env`` adds the driver's switches (``_crash_driver``) to the child's environment.
 
 Every process a test starts here is tracked, and ``reap`` (run after each test

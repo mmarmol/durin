@@ -489,21 +489,24 @@ the same path — identical incidental files reconcile cleanly). The fork copies
 folder ONLY — never the durin workspace around it: state dirs (sessions, memory, run
 manifests) are not branch output, and copying them per branch would be ruinous on a real
 workspace. A copy lives in the run's own area, beside the working folder:
-`branches/<run id>/<branch id>-XXXX` under `.workflow/<run id>/` (a keyed run: under the
+`branches/<run id>/b-XXXX` under `.workflow/<run id>/` (a keyed run: under the
 key's folder, with `<run id>` telling the key's runs apart; a sub-workflow run uses its
-own run id under its parent's folder). `workspace_fork.run_area` is the one place that
+own run id under its parent's folder). The copy's name carries no branch id: its path
+is quoted in shell commands, whose deny rules match words in it, so a branch id like
+`reboot-check` must not end up there. A symlink at `branches` or at `branches/<run id>`
+is refused: the copy functions raise or do nothing. `workspace_fork.run_area` is the one place that
 derives the area, and it refuses a folder that does not lie under `.workflow/`: the copy
 functions raise for such a folder, and a `choose`/`union` step without a working folder
 under `.workflow/` aborts (`reconcile='…' needs the run's working folder`) rather than
 copy anywhere else, so nothing outside a run's area is ever created or removed. The
 copies go when the step ends, on every path (`clear_branches` removes the run's whole
 `branches/<run id>` folder, so a copy whose creation failed midway goes too). A process
-that dies mid-step leaves them in the run's area; they are removed in three places: the
-conversion of the dead run (`mark_dead_run`, which every surface and the sweep use, and
-which also converts a dead sub-workflow run, each clearing its own run id), the entry of
-the step (it removes everything under `branches/`, retired leftovers included, before it
+that dies mid-step leaves them in the run's area, and they are removed when the dead run
+is converted (`mark_dead_run`, which every surface and the sweep use, and which also
+converts a dead sub-workflow run, each clearing its own run id), when the step is entered
+again (it removes everything under `branches/`, retired leftovers included, before it
 copies the folder, so private copies of an unfinished step never outlive its next
-attempt), and the pruning of the run's folder or the key's folder, which removes the
+attempt), and when the run's folder or the key's folder is pruned, which removes the
 `branches/` folder with it. The conversion works in two moves: under the run's lock the
 run's copies are renamed to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
 resume that claims the run right after makes its new copies under `branches/<run id>`),

@@ -15,9 +15,9 @@ def _work(tmp_path, run="r1"):
 def test_a_copy_is_made_beside_the_working_folder_under_the_runs_name(tmp_path):
     work = _work(tmp_path)
     (work / "a.txt").write_text("a")
-    copy = workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1", label="left")
+    copy = workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1")
     assert copy.parent == tmp_path / ".workflow" / "r1" / "branches" / "r1"
-    assert copy.name.startswith("left-") and (copy / "a.txt").read_text() == "a"
+    assert copy.name.startswith("b-") and (copy / "a.txt").read_text() == "a"
 
 
 def test_a_keyed_runs_copies_live_beside_the_key_folders_work(tmp_path):
@@ -98,8 +98,8 @@ def test_a_copy_does_not_contain_other_copies_or_the_resume_store(tmp_path):
     resume.mkdir()
     (resume / "state.json").write_text("{}")
     root = workspace_fork.branches_root(work)
-    first = workspace_fork.fork(work, into=root / "r1", label="one")
-    second = workspace_fork.fork(work, into=root / "r1", label="two")
+    first = workspace_fork.fork(work, into=root / "r1")
+    second = workspace_fork.fork(work, into=root / "r1")
     for copy in (first, second):
         assert sorted(p.name for p in copy.iterdir()) == ["a.txt"]
     assert workspace_fork.snapshot(work) == {"a.txt": workspace_fork._hash(b"a")}
@@ -118,3 +118,45 @@ def test_retiring_a_runs_copies_renames_them_out_of_the_runs_name(tmp_path):
     assert workspace_fork.retire_branches(tmp_path / "project" / "work", "r1") is None
     workspace_fork.cleanup(retired)
     assert not retired.exists()
+
+
+def test_a_copy_is_made_exactly_under_branches_and_a_plain_run_id(tmp_path):
+    work = _work(tmp_path)
+    root = workspace_fork.branches_root(work)
+    for bad in (root, root / "a" / "b", root / ".hidden", root / "bad name", root / ".."):
+        with pytest.raises(ValueError):
+            workspace_fork.fork(work, into=bad)
+    assert not root.exists()
+
+
+def _link_case(tmp_path, link_at):
+    """A work folder whose `branches` (or `branches/r1`) is a symlink to an outside
+    directory holding a sentinel; returns (work, outside, sentinel)."""
+    work = _work(tmp_path)
+    outside = tmp_path / "outside"
+    (outside / "r1" / "left").mkdir(parents=True)
+    sentinel = outside / "r1" / "left" / "keep.txt"
+    sentinel.write_text("x")
+    root = workspace_fork.branches_root(work)
+    if link_at == "branches":
+        root.symlink_to(outside, target_is_directory=True)
+    else:
+        root.mkdir()
+        (root / "r1").symlink_to(outside / "r1", target_is_directory=True)
+    return work, outside, sentinel
+
+
+def _tree(path):
+    return sorted(p.relative_to(path).as_posix() for p in path.rglob("*"))
+
+
+@pytest.mark.parametrize("link_at", ["branches", "run"])
+def test_a_symlink_at_branches_or_the_runs_copies_is_never_followed(tmp_path, link_at):
+    work, outside, sentinel = _link_case(tmp_path, link_at)
+    before = _tree(outside)
+    with pytest.raises(ValueError):
+        workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1")
+    workspace_fork.clear_branches(work, "r1")
+    workspace_fork.clear_branches(work)
+    assert workspace_fork.retire_branches(work, "r1") is None
+    assert sentinel.read_text() == "x" and _tree(outside) == before

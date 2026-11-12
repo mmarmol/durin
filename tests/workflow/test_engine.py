@@ -532,7 +532,7 @@ def test_a_branch_copy_lives_under_the_runs_folder_and_not_in_the_system_temp(tm
             copy = Path(req.workspace_override)
             seen[req.node.id] = copy
             assert copy.parent == tmp_path / ".workflow" / "r1" / "branches" / "r1"
-            assert copy.name.startswith(f"{req.node.id}-")
+            assert copy.name.startswith("b-")
             (copy / f"{req.node.id}.txt").write_text(req.node.id)
         return NodeRunResponse(output="o", session_key=None, messages=[])
 
@@ -638,23 +638,16 @@ def test_entering_the_step_removes_what_an_earlier_attempt_left(tmp_path):
 def test_a_branchs_file_tools_work_inside_its_copy(tmp_path):
     """The real tool set a branch gets, run on a copy whose path contains `.workflow`."""
     import asyncio
-    from unittest.mock import MagicMock
 
-    from durin.agent.runner import AgentRunner  # noqa: F401 - completes the config models
-    from durin.session.manager import SessionManager
     from durin.workflow import workspace_fork
-    from durin.workflow.node_runner import AgentNodeRunner
 
     work = tmp_path / "ws" / ".workflow" / "r1" / "work"
     work.mkdir(parents=True)
     (work / "seed.txt").write_text("seeded")
-    copy = workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1", label="left")
+    copy = workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1")
     assert ".workflow" in copy.parts
 
-    runner = AgentNodeRunner(MagicMock(), SessionManager(workspace=tmp_path / "ws"),
-                             default_model="test-model")
-    registry = runner._build_tools(parse_workflow({"name": "d", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "tools": "default"}]}).nodes["a"], str(copy), str(copy))
+    registry = _branch_tools(tmp_path, copy)
 
     async def use():
         wrote = await registry.execute("write_file", {"path": "made.txt", "content": "needle-42"})
@@ -672,24 +665,74 @@ def test_a_branchs_file_tools_work_inside_its_copy(tmp_path):
 
 @pytest.mark.parametrize("where", ["none", "outside"])
 def test_a_writing_parallel_step_without_a_run_folder_aborts(tmp_path, where):
-    keep = tmp_path / "branches" / "mine.txt"
-    keep.parent.mkdir()
-    keep.write_text("x")
-    work_dir = None if where == "none" else str(tmp_path / "project" / "work")
+    # Where a fallback to the workspace root would act: a `branches` beside the workspace.
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sentinels = [tmp_path / "branches" / "mine.txt"]
+    work_dir = None
+    if where == "outside":
+        work_dir = str(tmp_path / "project" / "work")
+        sentinels.append(tmp_path / "project" / "branches" / "mine.txt")
+    for keep in sentinels:
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_text("x")
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
     ran = []
 
     def node_runner(req):
         ran.append(req.node.id)
         return NodeRunResponse(output="o", session_key=None, messages=[])
 
-    eng = _copy_engine(tmp_path, node_runner)
+    eng = _copy_engine(workspace, node_runner)
     wf = _writing_wf("union")
     merged, abort = eng._run_parallel(wf, wf.nodes["fan"], "t", "r1", 1, None, "", [],
                                       work_dir=work_dir)
     assert merged == ""
     assert abort == "parallel node 'fan': reconcile='union' needs the run's working folder"
-    assert ran == [] and keep.read_text() == "x"
-    assert not (tmp_path / "project").exists()
+    assert ran == [] and all(k.read_text() == "x" for k in sentinels)
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == before
+
+
+def _branch_tools(tmp_path, copy):
+    from unittest.mock import MagicMock
+
+    from durin.agent.runner import AgentRunner  # noqa: F401 - completes the config models
+    from durin.session.manager import SessionManager
+    from durin.workflow.node_runner import AgentNodeRunner
+
+    runner = AgentNodeRunner(MagicMock(), SessionManager(workspace=tmp_path / "ws"),
+                             default_model="test-model")
+    node = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "tools": "default"}]}).nodes["a"]
+    return runner._build_tools(node, str(copy), str(copy))
+
+
+def test_a_branch_id_never_reaches_its_copys_path_or_the_shell_deny_rules(tmp_path):
+    import asyncio
+
+    wf = parse_workflow({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "tools": "default", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["reboot-check", "shutdown"],
+         "reconcile": "union", "next": None},
+        {"id": "reboot-check", "kind": "work", "tools": "default"},
+        {"id": "shutdown", "kind": "work", "tools": "default"}]})
+    paths: dict[str, str] = {}
+
+    def node_runner(req):
+        if req.workspace_override:
+            paths[req.node.id] = req.workspace_override
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(wf, "t")
+    assert res.status == "completed" and set(paths) == {"reboot-check", "shutdown"}
+    for bid, path in paths.items():
+        assert bid not in path.replace(str(tmp_path), "")
+
+    copy = Path(paths["reboot-check"])
+    copy.mkdir(parents=True, exist_ok=True)
+    out = asyncio.run(_branch_tools(tmp_path, copy).execute(
+        "exec", {"command": f"ls {copy}"}))
+    assert "blocked" not in str(out).lower() and "denied" not in str(out).lower(), out
 
 
 def test_pruning_a_runs_folder_removes_its_copies(tmp_path):

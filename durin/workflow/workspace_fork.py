@@ -12,7 +12,7 @@ Copy-based (no git requirement, works whether or not the workspace is a repo) an
 (no LLM, no threads), so the reconcile logic is fully unit-testable on its own.
 
 A branch's copy lives in the run's own area, beside its working folder:
-``<run area>/branches/<run id>/<label>-XXXX``. The run area is the folder that
+``<run area>/branches/<run id>/b-XXXX``. The run area is the folder that
 holds the working folder (``<workspace>/.workflow/<run id>`` for an unkeyed run,
 the key's folder for a keyed one), so whatever removes the run's area removes its
 copies, and a process that dies mid-step leaves them where the next entry of the
@@ -96,23 +96,34 @@ def branches_root(work_dir: str | Path) -> Path:
     return run_area(work_dir) / _BRANCHES
 
 
-def _safe_label(label: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", label).lstrip(".-") or "b"
+def _runs_copies(work_dir: str | Path, run_id: str) -> Path:
+    """``branches/<run_id>`` for a working folder, or ``ValueError`` when the folder
+    is refused, the run id is not a plain name, or ``branches`` or
+    ``branches/<run_id>`` is a symlink (anything done through it would act on its
+    target, outside the run's area)."""
+    if not _PLAIN_NAME.fullmatch(run_id):
+        raise ValueError(f"{run_id!r} is not a plain run id")
+    root = branches_root(work_dir)
+    copies = root / run_id
+    if root.is_symlink() or copies.is_symlink():
+        raise ValueError(f"{str(root)!r} must not be reached through a symlink")
+    return copies
 
 
-def fork(root: str | Path, *, into: str | Path, label: str = "") -> Path:
-    """Copy the working folder *root* (excluding heavy dirs) into a fresh directory
-    made inside *into*, so a branch can write there in isolation. *into* must lie
-    under ``branches_root(root)``, otherwise ``ValueError`` and nothing is created.
-    The caller owns removal (``clear_branches``, or ``cleanup`` for one copy)."""
+def fork(root: str | Path, *, into: str | Path) -> Path:
+    """Copy the working folder *root* (excluding heavy dirs) into a fresh ``b-XXXX``
+    directory made inside *into*, so a branch can write there in isolation. The
+    name carries no branch id: the path is quoted in shell commands, whose deny
+    rules match words in it. *into* must be exactly ``branches_root(root) / <run id>``
+    (a plain run id, no symlink on the way), otherwise ``ValueError`` and nothing is
+    created. The caller owns removal (``clear_branches``, or ``cleanup`` for one
+    copy)."""
     src = Path(root)
-    base = branches_root(src)
     target_parent = Path(os.path.abspath(into))
-    if target_parent != base and base not in target_parent.parents:
-        raise ValueError(f"{str(into)!r} is not under {str(base)!r}")
+    if _runs_copies(src, target_parent.name) != target_parent:
+        raise ValueError(f"{str(into)!r} is not {str(branches_root(src))!r}/<run id>")
     target_parent.mkdir(parents=True, exist_ok=True)
-    safe = _safe_label(label)
-    dst = Path(tempfile.mkdtemp(prefix=f"{safe}-" if label else "b-", dir=target_parent))
+    dst = Path(tempfile.mkdtemp(prefix="b-", dir=target_parent))
     for rel, p in _walk(src).items():
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -123,13 +134,16 @@ def fork(root: str | Path, *, into: str | Path, label: str = "") -> Path:
 def clear_branches(work_dir: str | Path, run_id: str | None = None) -> None:
     """Remove one run's copies (``branches/<run_id>``), or every run's and every
     retired leftover (the whole ``branches`` folder) when *run_id* is None.
-    Best-effort and never raises; a folder ``run_area`` refuses is left alone."""
+    Best-effort and never raises; a folder ``run_area`` refuses, a run id that is
+    not a plain name and a symlink at ``branches`` or ``branches/<run_id>`` are
+    left alone."""
     try:
-        root = branches_root(work_dir)
         if run_id is None:
-            shutil.rmtree(root, ignore_errors=True)
-        elif _PLAIN_NAME.fullmatch(run_id):
-            shutil.rmtree(root / run_id, ignore_errors=True)
+            root = branches_root(work_dir)
+            if not root.is_symlink():
+                shutil.rmtree(root, ignore_errors=True)
+        else:
+            shutil.rmtree(_runs_copies(work_dir, run_id), ignore_errors=True)
     except Exception:  # noqa: BLE001 - a clean-up never stops the caller
         pass
 
@@ -137,17 +151,17 @@ def clear_branches(work_dir: str | Path, run_id: str | None = None) -> None:
 def retire_branches(work_dir: str | Path, run_id: str) -> Path | None:
     """Rename one run's copies to a name nothing else uses
     (``branches/.dead-<run_id>-XXXX``) and return it, or None when there is
-    nothing to rename or the folder is refused. A rename is fast, so it can be done
-    under a lock; the caller removes the returned directory afterwards (``cleanup``)
-    without racing a new attempt that makes copies under ``branches/<run_id>``.
-    Never raises."""
+    nothing to rename or the folder is refused (see ``clear_branches``). A rename
+    is fast, so it can be done under a lock; the caller removes the returned
+    directory afterwards (``cleanup``) without racing a new attempt that makes
+    copies under ``branches/<run_id>``. Never raises."""
     try:
-        root = branches_root(work_dir)
-        if not _PLAIN_NAME.fullmatch(run_id) or not (root / run_id).is_dir():
+        copies = _runs_copies(work_dir, run_id)
+        if not copies.is_dir():
             return None
-        retired = Path(tempfile.mkdtemp(prefix=f".dead-{run_id}-", dir=root))
+        retired = Path(tempfile.mkdtemp(prefix=f".dead-{run_id}-", dir=copies.parent))
         retired.rmdir()                       # mkdtemp only reserves the unique name
-        (root / run_id).rename(retired)
+        copies.rename(retired)
         return retired
     except Exception:  # noqa: BLE001 - a clean-up never stops the caller
         return None

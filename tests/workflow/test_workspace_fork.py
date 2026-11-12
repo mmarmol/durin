@@ -19,8 +19,8 @@ def _work(tmp_path: Path) -> Path:
     return work
 
 
-def _fork(work: Path, label: str = "") -> Path:
-    return fork(work, into=wf.branches_root(work) / "r1", label=label)
+def _fork(work: Path) -> Path:
+    return fork(work, into=wf.branches_root(work) / "r1")
 
 
 def test_fork_of_a_working_folder_roundtrips_edits(tmp_path):
@@ -121,8 +121,8 @@ def test_choose_applies_one_branch_discards_others(tmp_path):
     isolation; 'choose' applies only the winner's changes to the real workspace."""
     work = _work(tmp_path)
     base = wf.snapshot(work)
-    fork_a = _fork(work, "a")
-    fork_b = _fork(work, "b")
+    fork_a = _fork(work)
+    fork_b = _fork(work)
     try:
         _write(fork_a, "result.txt", "approach A")
         _write(fork_b, "result.txt", "approach B")
@@ -138,8 +138,8 @@ def test_choose_applies_one_branch_discards_others(tmp_path):
 def test_union_applies_disjoint_branches(tmp_path):
     work = _work(tmp_path)
     base = wf.snapshot(work)
-    fork_a = _fork(work, "a")
-    fork_b = _fork(work, "b")
+    fork_a = _fork(work)
+    fork_b = _fork(work)
     try:
         _write(fork_a, "module_x.py", "X")
         _write(fork_b, "module_y.py", "Y")

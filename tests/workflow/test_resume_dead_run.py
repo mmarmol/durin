@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
@@ -130,7 +131,7 @@ def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversi
     # The dead process's copies are in its run's folder, none in its temporary directory.
     assert not list((tmp_path / "tmp").glob("durin_wf_branch_*"))
     assert list((tmp_path / "tmp").iterdir()) == []
-    assert sorted(p.name.split("-")[0] for p in copies.iterdir()) == ["left", "right"]
+    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
 
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert rec["status"] == "crashed"
@@ -167,6 +168,36 @@ def test_a_directory_made_for_the_run_after_the_conversion_survives_the_delayed_
     assert (copies / "left-new" / "x.txt").read_text() == "fresh"
 
 
+def test_the_copies_are_renamed_while_the_lock_is_held_and_the_record_already_reads_crashed(
+        tmp_path, monkeypatch):
+    import threading
+
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    real_retire = workspace_fork.retire_branches
+    seen: dict = {}
+
+    def at_the_rename(work_dir, run_id):
+        def try_the_lock():
+            try:
+                with cross_process_lock(run_log.run_lock_target(dead.workspace, "w", "r1"),
+                                        timeout=0.3):
+                    seen["lock_free"] = True
+            except TimeoutError:
+                seen["lock_free"] = False
+        # A lock is held per thread, so another thread tells whether it is held at all.
+        other = threading.Thread(target=try_the_lock)
+        other.start()
+        other.join()
+        seen["status"] = run_log.read_manifest(dead.workspace, "w", "r1")["status"]
+        return real_retire(work_dir, run_id)
+
+    monkeypatch.setattr(workspace_fork, "retire_branches", at_the_rename)
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+    assert seen == {"lock_free": False, "status": "crashed"}
+
+
 def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monkeypatch):
     definition = _writing_fan("union")
     dead = run_until_killed(tmp_path, definition, stop_in="right",
@@ -178,7 +209,7 @@ def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monk
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
 
     assert rec["scripts_left"] == [still]
-    assert sorted(p.name.split("-")[0] for p in copies.iterdir()) == ["left", "right"]
+    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
 
 
 def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):

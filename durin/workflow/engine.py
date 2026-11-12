@@ -2689,7 +2689,7 @@ class WorkflowEngine:
         def _run(bid):
             # Each branch gets a private copy of the working folder: its file tools
             # anchor there (workspace override) and its writes diff against the base.
-            fork_dir = workspace_fork.fork(fork_root, into=copies_dir, label=bid)
+            fork_dir = workspace_fork.fork(fork_root, into=copies_dir)
             t0 = time.monotonic()
             try:
                 resp = self._run_one_branch(
