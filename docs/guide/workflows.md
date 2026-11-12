@@ -477,7 +477,9 @@ account.
 
 A crashed run whose record lost what the run was started with (its folder,
 its task, where it was started from) is refused as incomplete on every
-surface; start a new run instead.
+surface; start a new run instead. That refusal does not say whether a script
+of the old run is still working, so check before the new run repeats its
+work.
 
 Known limits: a process that dies while a `union` parallel step is
 applying its branches' files can leave the working folder partly applied. A

@@ -216,7 +216,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   dashboard and API refuse it. A crashed run an automation started is not resumed by hand
   on any surface: the automation does not resume it, and its next run starts anew. A
   crashed run whose reason says its record is incomplete cannot be resumed either: start a
-  new run. A paused or aborted run you started can still be answered or
+  new run, and tell the person that a script of the old run may still be working (this
+  reason does not say whether one is). A paused or aborted run you started can still be answered or
   retried from the dashboard, but its later `mcps` steps then run without their MCP tools.
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused
