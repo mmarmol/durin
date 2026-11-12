@@ -136,19 +136,26 @@ def reexec() -> None:
 
         script_runner.end_scripts_for_exit()
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
-    except BaseException:
+    except BaseException as exc:
         # execv failing (a bad interpreter path, a resource limit) is rare,
         # but nothing else here will retry it — this can be running on the
         # watchdog's own thread, where just returning ends that thread
         # silently and leaves the process running stale code with no
         # gateway restarted. Exit hard so a supervisor (systemd, launchd)
         # restarts the process instead of it limping on unrestarted. Any
-        # interruption counts (a Ctrl+C on the main thread too): once the
-        # scripts were ended, threads wait for the process to end, so it
-        # must end here.
-        logger.exception("reexec: os.execv failed; exiting so the supervisor restarts us")
-        _flush_logs_before_exit()
-        os._exit(1)
+        # interruption counts (a Ctrl+C on the main thread too), and the
+        # exit runs whatever the logging does: once the scripts were ended,
+        # threads wait for the process to end, so it must end here.
+        try:
+            if isinstance(exc, Exception):
+                logger.exception("reexec: the re-exec failed; exiting so the supervisor "
+                                 "restarts us")
+            else:
+                logger.warning("reexec: interrupted ({}) before the re-exec; exiting so "
+                               "the supervisor restarts us", type(exc).__name__)
+            _flush_logs_before_exit()
+        finally:
+            os._exit(1)
 
 
 def arm_restart_deadline(deadline_s: float | None = None) -> threading.Timer:

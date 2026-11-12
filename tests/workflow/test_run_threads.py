@@ -313,6 +313,18 @@ def test_with_no_run_left_no_script_is_ended(monkeypatch, end_scripts_calls):
     assert end_scripts_calls == []
 
 
+def test_an_interrupted_flush_still_ends_the_scripts_and_then_exits(
+        monkeypatch, end_scripts_calls):
+    """A second Ctrl+C during the log flush must not skip the end of the
+    scripts: they would outlive a graceful stop."""
+    def interrupted(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(run_threads, "_flush_logs_before_exit", interrupted)
+    assert _left_with_a_run_thread(monkeypatch, end_scripts_calls) == 0
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
 def test_a_failing_end_of_the_scripts_still_exits(monkeypatch):
     from durin.workflow import script_runner
 

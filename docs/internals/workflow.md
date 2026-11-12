@@ -1176,16 +1176,21 @@ When that happens to a process still running, the runner logs a warning that a r
 could not wait for it.
 
 The script runner also keeps, in memory, the scripts this process started and has not
-reaped, under one lock. The process ends them at the two points where it ends or
-replaces itself, as the last thing before it does: `run_threads.leave_unfinished_runs`
-calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
+reaped, under one lock. The process ends them where it ends or replaces itself, as the
+last thing before it does: `run_threads.leave_unfinished_runs` calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
 TUI or the REPL quitting while a run is still on its thread; with no run on a thread it
-returns without calling it), and `restart.reexec` calls it right before `os.execv` (a
-restart in place; a failure there ends in `os._exit` too). The call marks the process as
-ending and sends SIGKILL to the group of every kept script that has not been reaped. It
-checks and signals while holding that child's own reap lock (`Popen` reaps a child and
-sets its `returncode` only under it), so a script reaped at that moment, whose pid could
-then be given to another process, is never signalled. From then on, under the same lock:
+returns without calling it; the call runs even when the log flush before it is
+interrupted, and the exit follows whatever the call does), and `restart.reexec` calls it
+right before `os.execv` (a restart in place; a failure or an interruption there ends in
+`os._exit` too). The call marks the process as ending and sends SIGKILL to the group of
+every kept script that has not been reaped. It checks and signals while holding that
+child's own reap lock (`Popen` reaps a child and sets its `returncode` only under it), so
+a script reaped at that moment, whose pid could then be given to another process, is
+never signalled; a script whose reap lock stays busy past `_REAP_LOCK_WAIT_S` is skipped
+(only its own thread holds it that long, while it reaps a script it has killed itself).
+The call then waits, up to `_REAP_WAIT_S` for all of them together, for the scripts it
+killed to be reaped, so none is left a zombie that the image `os.execv` starts would
+inherit and never reap. From then on, under the same lock:
 
 - no script is started: a script step entered after the call waits for the process to
   end, so a script is either started before the call (and ended by it) or not at all;
@@ -1194,10 +1199,13 @@ then be given to another process, is never signalled. From then on, under the sa
   -9) is never a failed step, never a gate's `FAIL` and never a route taken, and its
   record stays for whoever checks the run next.
 
-A script that ends by itself before the call is recorded as usual, whether or not the
-process has begun shutting down: the shutdown flag (`cancellation.begin_shutdown`) plays
-no part here. One that ends by itself between the call and the exit is not recorded; its
-step runs again on a resume. A stop or a restart in place thus leaves the run as a crash
+What decides whether a script's outcome is recorded is where its thread is when the call
+runs. A thread already past the point where it forgets its reaped script records the
+outcome as usual, whether or not the process has begun shutting down: the shutdown flag
+(`cancellation.begin_shutdown`) plays no part here. A thread whose script ended by itself
+but which has not reached that point yet is held like the others, and so is one whose
+script ends by itself between the call and the exit: neither outcome is recorded, and
+the step runs again on a resume. A stop or a restart in place thus leaves the run as a crash
 does: recorded `running` at the step it was in, found dead later and resumable there,
 with no script of it running.
 

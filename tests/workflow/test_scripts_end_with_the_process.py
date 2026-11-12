@@ -9,6 +9,7 @@ not end here, so the test releases the threads it held once it has looked."""
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -166,16 +167,73 @@ def test_end_scripts_for_exit_ends_a_running_script_and_its_children(
         f"r1.script.{leader}"]
 
 
+def _kept(proc: subprocess.Popen) -> None:
+    with script_runner._children_lock:
+        script_runner._children.add(proc)
+
+
+def _forget(proc: subprocess.Popen) -> None:
+    with script_runner._children_lock:
+        script_runner._children.discard(proc)
+
+
 def test_end_scripts_for_exit_never_signals_a_script_that_already_exited(
-        tmp_path, exit_pass, killpg_calls):
-    resp = ScriptNodeRunner(str(tmp_path))(_request(tmp_path, "echo $$"))
-    pid = int(resp.output.strip())
-    assert script_runner._children == set()
+        exit_pass, killpg_calls):
+    """A script reaped but not yet forgotten (its thread has not reached its
+    release point): its pid may already belong to another process, so it is
+    never signalled."""
+    proc = subprocess.Popen(["true"], start_new_session=True)
+    proc.wait(timeout=_WAIT_S)
+    assert proc.returncode == 0
+    _kept(proc)
+    try:
+        assert script_runner.end_scripts_for_exit() == 0
+    finally:
+        _forget(proc)
 
-    assert script_runner.end_scripts_for_exit() == 0
-
-    assert [c for c in killpg_calls if c[0] == pid] == []
     assert killpg_calls == []
+
+
+def test_a_script_whose_reap_lock_stays_busy_is_skipped(
+        exit_pass, groups, killpg_calls, monkeypatch):
+    """The lock is busy only while the script's own thread reaps a script it
+    has killed itself: the pass does not wait past its bound, and sends
+    nothing."""
+    proc = subprocess.Popen(["sleep", "61"], start_new_session=True)
+    groups.append(proc.pid)
+    monkeypatch.setattr(script_runner, "_REAP_LOCK_WAIT_S", 0.05)
+    _kept(proc)
+    try:
+        with proc._waitpid_lock:
+            assert script_runner.end_scripts_for_exit() == 0
+    finally:
+        _forget(proc)
+        proc.kill()
+        proc.wait(timeout=_WAIT_S)
+
+    assert killpg_calls == []
+
+
+def test_a_script_the_pass_kills_is_reaped_before_it_returns(tmp_path, exit_pass, groups):
+    """After a restart in place nothing reaps what the old image left: the
+    pass reaps the scripts it killed itself. The script's own thread cannot
+    do it here, since a process outside the script's group still holds the
+    script's output open."""
+    leader_file, holder_file = tmp_path / "leader", tmp_path / "holder"
+    holder_code = "import os, time; os.setsid(); time.sleep(30)"
+    command = (f'"{sys.executable}" -c "{holder_code}" & echo $! > "{holder_file}"; '
+               f'echo $$ > "{leader_file}"; exec sleep 61')
+    exit_pass.start(ScriptNodeRunner(str(tmp_path)), _request(tmp_path, command))
+    leader, holder = _pid_in(leader_file), _pid_in(holder_file)
+    groups.append(leader)
+    try:
+        _until(lambda: os.getpgid(holder) == holder, "the holder to leave the group")
+
+        assert script_runner.end_scripts_for_exit() == 1
+
+        assert process_tree._observe(leader) is None      # reaped, not a zombie
+    finally:
+        os.kill(holder, signal.SIGKILL)
 
 
 def test_a_script_that_exits_at_the_moment_of_the_pass_has_only_its_own_group_signalled(

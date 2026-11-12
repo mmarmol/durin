@@ -153,10 +153,14 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
         with suppress(Exception):
             sys.stdout.flush()
             sys.stderr.flush()
-        # The scripts the runs started go with the process, as its last act:
-        # none outlives it, and none of their ends is recorded as an outcome.
-        from durin.workflow import script_runner
-
-        script_runner.end_scripts_for_exit()
     finally:
-        os._exit(0)
+        # The scripts the runs started go with the process, as its last act,
+        # even when the flush was interrupted: none outlives it, and none of
+        # their ends is recorded as an outcome. The exit follows whatever the
+        # pass does.
+        try:
+            from durin.workflow import script_runner
+
+            script_runner.end_scripts_for_exit()
+        finally:
+            os._exit(0)

@@ -1755,7 +1755,7 @@ def _leave_a_script_record(tmp_path, monkeypatch, state, own, group, *, run_id="
     run_log.record_script(tmp_path / "workflows-runs" / "qa", run_id, pid=424242,
                           started="x", node_id="build")
     monkeypatch.setattr(process_tree, "left_script_state",
-                        lambda pid, started, members, **kw: (state, own, group))
+                        lambda pid, started, **kw: (state, own, group))
 
 
 def _leave_a_sub_run(tmp_path, monkeypatch):

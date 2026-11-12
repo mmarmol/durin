@@ -853,10 +853,9 @@ def _script_checks(workspace: str | Path, name: str,
                    rec: dict) -> list[tuple[Path, dict | None, str | None]]:
     """Observe the scripts one run left, holding no lock: ``(path, entry,
     refusal)`` per script record file, in order (``entry`` None when the file
-    cannot be read). The recorded script is the only member its group is
-    known by, and the group it led is looked at too. ``refusal`` is None on
-    proof that nothing of that script is left. Stops at the first refusal:
-    nothing after it is acted on."""
+    cannot be read). The recorded script is looked at, and the group it led.
+    ``refusal`` is None on proof that nothing of that script is left. Stops at
+    the first refusal: nothing after it is acted on."""
     from durin.utils.process_tree import left_script_state
 
     rec_id = rec.get("run_id")
@@ -868,8 +867,7 @@ def _script_checks(workspace: str | Path, name: str,
         if entry is None:
             checks.append((path, None, _unreadable_script_refusal(path)))
             return checks
-        state, own, group = left_script_state(
-            entry["pid"], entry["started"], [{"pid": entry["pid"], "started": entry["started"]}])
+        state, own, group = left_script_state(entry["pid"], entry["started"])
         refusal = _left_script_refusal(entry.get("node_id"), state, own, group)
         checks.append((path, entry, refusal))
         if refusal:

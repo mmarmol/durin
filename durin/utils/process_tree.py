@@ -140,9 +140,6 @@ class Seen:
     def __init__(self, pid: int, pgid: int, zombie: bool, started: str) -> None:
         self.pid, self.pgid, self.zombie, self.started = pid, pgid, zombie, started
 
-    def identity(self) -> dict:
-        return {"pid": self.pid, "started": self.started}
-
 
 def _ps(args: list[str], timeout: float) -> subprocess.CompletedProcess:
     try:
@@ -375,37 +372,30 @@ def _group_empty(pgid: int, members: list[Seen]) -> bool:
     raise ObservationError(f"group {pgid} exists but no member of it is visible")
 
 
-def left_script_state(pid: int, started: str, members: list[dict], *,
+def left_script_state(pid: int, started: str, *,
                       timeout: float = _PS_TIMEOUT_S) -> tuple[str, list[int], list[int]]:
     """Whether a script a dead run left could still be running, as
     ``(state, own, group)``:
 
     - ``"alive"`` while the recorded script process itself (``pid`` with
-      ``started``) is still that process (its pid is in ``own``), or another
-      recorded member is still that process, or the group the script led still
-      has a member, unless the script's pid is now another process's, which
-      proves the group emptied (those pids are in ``group``: they are in the
-      script's former process group, which does not prove they are its);
-    - ``"unknown"`` when that cannot be observed (``group`` holds the recorded
-      pids);
+      ``started``) is still that process (its pid is in ``own``), or the group
+      the script led still has a member, unless the script's pid is now
+      another process's, which proves the group emptied (those pids are in
+      ``group``: they are in the script's former process group, which does
+      not prove they are its);
+    - ``"unknown"`` when that cannot be observed (``group`` holds ``pid``);
     - ``"gone"`` on proof that nothing of it is left.
 
-    Only the recorded identities and the group are looked at, so a reused pid
+    Only the recorded identity and the group are looked at, so a reused pid
     never keeps it alive."""
     own: list[int] = []
     group: list[int] = []
     unknown = False
-    for m in members:
-        if not isinstance(m, dict):
-            continue
-        state = process_state(m.get("pid"), m.get("started"))
-        if state == "alive":
-            if m.get("pid") == pid and m.get("started") == started:
-                own.append(pid)
-            else:
-                group.append(m["pid"])
-        elif state == "unknown":
-            unknown = True
+    state = process_state(pid, started)
+    if state == "alive":
+        own.append(pid)
+    elif state == "unknown":
+        unknown = True
     try:
         leader = _observe(pid, timeout=timeout)
         reused = (leader is not None and not leader.zombie
@@ -423,9 +413,7 @@ def left_script_state(pid: int, started: str, members: list[dict], *,
     if own or group:
         return "alive", sorted(set(own)), sorted(set(group) - set(own))
     if unknown:
-        recorded = {m["pid"] for m in members
-                    if isinstance(m, dict) and isinstance(m.get("pid"), int)} or {pid}
-        return "unknown", [], sorted(recorded)
+        return "unknown", [], [pid]
     return "gone", [], []
 
 

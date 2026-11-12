@@ -901,7 +901,7 @@ def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch)
     path = run_log.record_script(folder, "r1", pid=2**22 + 5, started="x", node_id="b")
     for state in ("alive", "unknown"):
         monkeypatch.setattr(process_tree, "left_script_state",
-                            lambda pid, started, members, state=state, **kw: (state, [7], [8]))
+                            lambda pid, started, state=state, **kw: (state, [7], [8]))
         refusal = run_log.dead_run_refusal(dead.workspace, rec)
         assert refusal.kind == "script_alive" and refusal.fact
     # a script record nobody can read

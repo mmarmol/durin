@@ -481,7 +481,12 @@ which ends it `"interrupted"` with no replacement, since work had started. The d
 workflow run itself is not resumed: nothing in the runtime resumes it, and the
 `run_workflow` tool and the workflows service (the dashboard and the API) refuse to
 resume a dead run whose `root_session_key` is `automation:<name>`. The automation's
-next run is a new one. A paused run's answer and a failed step's retry are not
+next run is a new one. A graceful shutdown ends the run's scripts right before the
+process exits (see the workflow doc's section on a process ending its own scripts). A
+process killed outright leaves a running script running: nothing ends it, and nothing in
+the runtime waits for it, so the automation's next run can work while it still runs.
+Only a resume of the dead workflow run waits for such a script, and an automation's dead
+run is never resumed. A paused run's answer and a failed step's retry are not
 refused on that account. A run can still end `aborted` or
 `cancelled` between the start of the shutdown and the exit — on its own, or because
 what its steps use is already being closed — and such a result reaches

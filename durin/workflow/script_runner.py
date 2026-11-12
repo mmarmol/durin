@@ -89,6 +89,12 @@ _exiting = False
 # script whose lock stays busy past this is that one, already ended.
 _REAP_LOCK_WAIT_S = 1.0
 
+# How long the end-of-process pass waits, for all of them together, for the
+# scripts it killed to be reaped. Killed with SIGKILL they go at once; the wait
+# is what keeps them from being left as zombies an image started by
+# ``os.execv`` inherits and never reaps.
+_REAP_WAIT_S = 1.0
+
 
 def _wait_for_exit() -> None:
     """Hold this thread until the process ends: it has nothing left to do,
@@ -128,18 +134,26 @@ def end_scripts_for_exit() -> int:
     reaped waits until the process ends instead of returning, raising or
     removing the script's record: a script this pass ended (exit code -9) is
     never a failed step, a gate's ``FAIL`` or a route taken, and its record
-    stays for whoever checks the run next. Never raises."""
+    stays for whoever checks the run next. The scripts it killed are then
+    reaped, within ``_REAP_WAIT_S`` for all of them, so none is left a zombie
+    for an image started by ``os.execv``. Never raises."""
     global _exiting
-    ended = 0
+    signalled: list[subprocess.Popen] = []
     with _children_lock:
         _exiting = True
         for proc in _children:
             try:
                 if _signal_unreaped(proc):
-                    ended += 1
+                    signalled.append(proc)
             except Exception:  # noqa: BLE001 - the process must still end
                 continue
-    return ended
+    deadline = time.monotonic() + _REAP_WAIT_S
+    for proc in signalled:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except Exception:  # noqa: BLE001 - TimeoutExpired, or anything: the process must still end
+            continue
+    return len(signalled)
 
 
 def _start(argv: list[str], cwd: str | None, env: dict[str, str]) -> subprocess.Popen:

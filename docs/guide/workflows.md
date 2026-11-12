@@ -553,7 +553,7 @@ is unchanged.
 
 When durin stops (`durin gateway stop`, quitting the terminal UI) or restarts in
 place (`/restart`), it ends the scripts its runs were running, right before it
-exits, and those runs resume at the step they were in. A process killed outright
+exits, and those runs can be resumed at the step they were in. A process killed outright
 (a `kill -9`, a stop that had to force it, the system running out of memory, a
 power loss) cannot do that: its
 scripts keep running, and nothing in durin ever ends them. The resume of such a run
@@ -561,7 +561,10 @@ is refused while something of a script may still run, and the reason names the
 process ids: the script itself, or processes in the script's former process group
 (which may not be the script's). The agent never ends them itself. Either wait for
 them to finish, or check that they are the script's before ending them yourself
-(after a restart, a process id can belong to something else); then resume. The resume is refused the same way when
+(after a restart, a process id can belong to something else); then resume. Only a
+resume waits: a new run of the workflow does not, and neither does an automation's next
+run (an automation never resumes a dead run), so either can work while such a script
+still runs. The resume is refused the same way when
 the run was marked interrupted while the process that ran the workflow still
 seems alive, while one of its sub-workflow runs is still recorded as running, or
 while a record of one of its scripts cannot be read. That reason names the file:

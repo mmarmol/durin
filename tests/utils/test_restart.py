@@ -6,6 +6,8 @@ import os
 import threading
 from unittest.mock import MagicMock
 
+import pytest
+
 from durin.utils.restart import (
     RestartNotice,
     consume_restart_notice_from_env,
@@ -232,6 +234,54 @@ def test_an_interruption_on_the_way_to_the_exec_still_exits(monkeypatch, end_scr
     reexec()
 
     assert end_scripts_calls == ["end_scripts"] and exits == [1]
+
+
+class _ExitedError(Exception):
+    """Stands for ``os._exit``: raised by its stub, it replaces any exception
+    still on its way out, as the real exit would end the process."""
+
+
+def test_an_interruption_while_the_failure_is_logged_still_exits(
+        monkeypatch, end_scripts_calls):
+    monkeypatch.setattr("durin.utils.restart.os.execv", MagicMock(side_effect=OSError("boom")))
+
+    def interrupted(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("durin.utils.restart._flush_logs_before_exit", interrupted)
+    exits: list[int] = []
+
+    def _exit(code):
+        exits.append(code)
+        raise _ExitedError
+
+    monkeypatch.setattr("durin.utils.restart.os._exit", _exit)
+
+    with pytest.raises(_ExitedError):
+        reexec()
+
+    assert end_scripts_calls == ["end_scripts"] and exits == [1]
+
+
+@pytest.mark.parametrize("raised,said", [
+    (OSError("boom"), "the re-exec failed"),
+    (KeyboardInterrupt(), "interrupted (KeyboardInterrupt) before the re-exec"),
+])
+def test_the_log_says_what_ended_the_re_exec(monkeypatch, end_scripts_calls, raised, said):
+    def execv(*_a, **_k):
+        raise raised
+
+    monkeypatch.setattr("durin.utils.restart.os.execv", execv)
+    monkeypatch.setattr("durin.utils.restart.os._exit", lambda code: None)
+    lines: list[str] = []
+    monkeypatch.setattr("durin.utils.restart.logger.exception",
+                        lambda msg, *a: lines.append(msg.format(*a)))
+    monkeypatch.setattr("durin.utils.restart.logger.warning",
+                        lambda msg, *a: lines.append(msg.format(*a)))
+
+    reexec()
+
+    assert len(lines) == 1 and said in lines[0]
 
 
 def test_should_show_cli_restart_notice():
