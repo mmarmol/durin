@@ -419,6 +419,75 @@ paused or failed: resume the run that called it, which runs the sub-workflow
 step again in its own folder. A resume of the sub-workflow's run is refused
 with the id of that caller.
 
+**A run cut by a crash or a restart.** When the process running a workflow
+dies — the gateway crashed, was restarted, or was killed — the run is marked
+`crashed`, and it can be resumed the same way: ask the agent to call
+`run_workflow` with `resume_run_id`, or send the run's id as `resume_run_id`
+to the run route of the API (no answers needed). The run goes on at the step
+that was running when the process died, with the input that step had, in the
+same folder. Steps that had finished do not run again; the step that was
+running runs again **from its start**, whatever it had done before the
+process died. A parallel step runs all its branches or workers again, and a
+sub-workflow step starts its child workflow again from its first step.
+
+So a step that acts outside durin — sends a message, posts a comment, writes
+to another system — should be safe to run twice. The general way is a script
+that checks before it acts (has this comment already been posted?) and does
+nothing when it has. Only a script step's own processes are tracked and ended
+when a run is found dead (below). A command an agent step started through its
+shell tool runs in a session of its own and is neither tracked nor ended: when
+that agent step runs again, it may start the command a second time while the
+first one is still running. `reuse: "if-unchanged"` does not skip the step that was
+cut, since a step entered again is never reused, but it does let the steps a
+restarted sub-workflow had already finished skip their work when their input
+is unchanged.
+
+A script that was running when the process died is ended before its step runs
+again. If something of it may still run (a process durin may not signal, or one
+it cannot prove is still the script's, such as a process left in the script's
+former process group after the script itself is gone), the resume is refused
+and names the process ids that are left. The agent never ends them itself. Check
+that they are the script's before ending them (after a restart, a process id can
+belong to something else), then resume. The resume is refused the same way when
+the run was marked interrupted while the process that ran the workflow still
+seems alive, while one of its sub-workflow runs is still recorded as running, or
+while a record of one of its scripts cannot be read. That reason names the file:
+the agent never deletes it itself and tells you which file it is; remove it once
+you have made sure nothing of that script is left, then resume. A resume can also
+be refused because someone else resumed the run, or is acting on it, at the same
+moment, or because its record was removed; the reason says which. A crashed run is also refused, with
+the reason, when it was recorded by an older
+version that did not keep the step it was in, when that step is no longer in
+the workflow, when its working folder has been pruned, or when a later run
+with the same `work_key` has worked in its folder since. A crashed run the
+agent started is resumed only through the agent's `run_workflow` when its
+workflow, or a sub-workflow it calls, has a step with `mcps`: the dashboard
+and the API refuse it, because only the agent can give those steps their MCP
+tools. This applies to crashed runs only. A paused run (a question or an
+approval) and a run that aborted at a step can be answered or retried from the
+dashboard or the API; when the agent started such a run, its later `mcps`
+steps then run without their MCP tools, as in any run started from the
+dashboard.
+
+A crashed run an [automation](automations.md) started is not resumed by hand:
+the agent's `run_workflow`, the dashboard and the API all refuse it. The
+automation records its own run as interrupted, does not resume the crashed
+one, and its next run starts anew. Only a crashed run is refused on this
+account.
+
+A crashed run whose record lost what the run was started with (its folder,
+its task, where it was started from) is refused as incomplete on every
+surface; start a new run instead. That refusal does not say whether a script
+of the old run is still working, so check before the new run repeats its
+work.
+
+Known limits: a process that dies while a `union` parallel step is
+applying its branches' files can leave the working folder partly applied. A
+run started from a chat and resumed from the dashboard or the API does not
+report its result back to that chat. The private copies a dead run's
+`choose` or `union` branches were working in stay in the system's temporary
+directory.
+
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
 output as the proposal. A reply of `approve`, `yes` or `ok` continues past the
@@ -441,6 +510,15 @@ resumes the run with no new answer, which re-runs the failed step as described
 above. A run an [automation](automations.md) started has no such button: the
 dashboard offers no retry for it, and running the automation again starts a new
 run. A sub-workflow step's own run has none either: retry the run that called it.
+
+A run cut short because the process running it died (status `crashed`) says so
+in its detail: the banner reads "Run interrupted" and the step that was running is
+labelled "interrupted" rather than "failed". The detail offers **Resume at the
+interrupted step**, which picks the run up at that step. The button is left out
+for an automation's run, for a sub-workflow step's own run (resume the run that
+called it), and for a run recorded without its step. If the run cannot be resumed
+(for example, a script the dead process started is still running), the dashboard
+shows the reason and the run stays as it is.
 
 If a workflow declares `input: {file: true}` and you run it with no
 `input_files`, the run ends `needs_input` immediately (before any node
@@ -495,6 +573,12 @@ Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.
 
+Renaming a workflow moves its run history, the workflows that call it and the
+automations that run it to the new name. A workflow with a run in progress
+cannot be renamed: the editor shows an error saying that the workflow has a
+run in progress and can be renamed once that run has ended. A run whose
+process died does not hold the rename.
+
 The Workflows section's **Runs** pane is where to look across *all* workflows
 and origins (sessions, HTTP, cron, the editor) at once: a global, filterable
 run feed, with any run stranded on `needs_input` surfaced in a tray up top —
@@ -513,6 +597,9 @@ Opening an `aborted` run in the Runs pane offers **Retry the failed step**,
 which re-runs the step that failed in the same run. A run an automation started
 has no retry: running the automation again starts a new run. A sub-workflow
 step's own run has no retry either; retry the run that called it.
+
+A `crashed` run shows an interrupted banner and offers **Resume at the interrupted
+step** under the same conditions; see above.
 
 Each workflow also has a self-improvement mode (`"improvement_mode"`,
 `manual` by default, or `auto`): a

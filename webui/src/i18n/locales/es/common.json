@@ -2477,6 +2477,9 @@
     "keepWaiting": "Seguir esperando",
     "abortedTitle": "Ejecución abortada",
     "retryFailedStep": "Reintentar el paso fallido",
+    "crashedTitle": "Ejecución interrumpida",
+    "crashedBody": "El proceso que la ejecutaba terminó antes de que acabara. El paso que estaba en curso no se completó.",
+    "retryCutStep": "Reanudar en el paso interrumpido",
     "cancelledTitle": "Ejecución cancelada",
     "outputFiles": "archivos de salida",
     "outputPruneHint": "se eliminan cuando se acumulan ejecuciones más nuevas — copia lo que necesites",
@@ -2502,6 +2505,7 @@
       "exhausted": "reintentos agotados",
       "aborted": "abortada",
       "crashed": "caída",
+      "cut": "interrumpido",
       "cancelled": "cancelada"
     },
     "seedBanner": {

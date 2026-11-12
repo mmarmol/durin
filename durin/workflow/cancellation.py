@@ -22,6 +22,18 @@ already in flight. The registry is a module-level singleton (mirrors
 running the workflow — can signal a run by id. ``run_workflow`` registers a run
 id before the walk and ``clear``s it when the run ends, so the map does not grow
 without bound.
+
+The registry lives in memory and goes away with the process. A stop that must
+outlive it (so a run someone stopped is never offered for resume after its
+process died) is also kept beside the run's record: see
+``durin.workflow.run_log.request_stop``.
+
+A process that is going down says so with :func:`begin_shutdown` before it
+cancels the turns in flight. A turn cancelled by that shutdown is not anyone
+stopping the run it waits on: the run is left to die with the process, to be
+found dead, and resumable, by the gateway's crash sweep, the ``tasks`` tool or a
+resume of it. :func:`shutting_down` is how the code
+that cancels a run on a cancelled turn tells the two apart.
 """
 
 from __future__ import annotations
@@ -30,6 +42,22 @@ import threading
 
 _lock = threading.Lock()
 _cancelled: dict[str, str] = {}  # run_id -> "graceful" | "hard"
+
+# Set once this process has begun shutting down (a signal, a restart, a quit).
+# Never cleared: a process that began shutting down does not stop doing so.
+_shutting_down = False
+
+
+def begin_shutdown() -> None:
+    """Mark this process as shutting down. Call it before the turns in flight
+    are cancelled, so a cancelled turn is not taken for a stop of its run."""
+    global _shutting_down
+    _shutting_down = True
+
+
+def shutting_down() -> bool:
+    """Whether this process has begun shutting down."""
+    return _shutting_down
 
 
 def request_cancel(run_id: str, *, hard: bool = False) -> None:

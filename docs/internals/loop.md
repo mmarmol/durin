@@ -360,8 +360,11 @@ again, and no channel redelivers (Telegram confirms its offset before the
 handler runs, Slack acks the envelope before publishing, email marks the
 message seen inside the fetch), so a restart with a turn in flight would
 discard the follow-ups queued behind it. The gateway's shutdown therefore calls
-`drain_inbound_for_shutdown()`: it records and cancels every turn in flight
-first, across every session key, before awaiting any of them — awaiting one
+`drain_inbound_for_shutdown()`, after marking the process as shutting down
+(`cancellation.begin_shutdown`, so a turn it cancels does not stop the workflow
+run that turn waits on; see [workflow.md](workflow.md)): it records and
+cancels every turn in flight first, across every session key, before awaiting
+any of them — awaiting one
 would let the others run, and a turn whose own wait (an ask_user answer, an
 approval) gets cancelled by that window ends before the drain reaches it,
 losing its message instead of journaling it. With each session's turns it

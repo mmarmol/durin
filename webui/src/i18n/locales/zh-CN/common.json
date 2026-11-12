@@ -1410,6 +1410,9 @@
     "keepWaiting": "继续等待",
     "abortedTitle": "运行已中止",
     "retryFailedStep": "重试失败的步骤",
+    "crashedTitle": "运行因进程结束而中断",
+    "crashedBody": "运行它的进程在完成前已结束。正在运行的步骤未完成。",
+    "retryCutStep": "从中断的步骤继续",
     "cancelledTitle": "运行已取消",
     "outputFiles": "输出文件",
     "outputPruneHint": "旧运行积累后会被清理——请提前复制出你需要的内容",
@@ -1435,6 +1438,7 @@
       "exhausted": "重试已耗尽",
       "aborted": "已中止",
       "crashed": "崩溃",
+      "cut": "已中断",
       "cancelled": "已取消"
     },
     "seedBanner": {

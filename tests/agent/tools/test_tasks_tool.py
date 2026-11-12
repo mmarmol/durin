@@ -395,6 +395,84 @@ async def test_status_ghost_run_self_heals(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_ghost_run_that_can_be_resumed_says_how(tmp_path):
+    """A dead run whose record names the step it was in can be resumed: the
+    healed answer tells the agent how, instead of to start it over."""
+    _write_manifest(tmp_path, "qa", "ghost789", status="running")
+    f = tmp_path / "workflows-runs" / "qa" / "ghost789.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, position={"node": "n2", "seq": 2})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    from durin.workflow import resume_store
+    resume_store.save_input(resume_store.store_dir(tmp_path, "ghost789"), 2, "n2", "n1 said")
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost789")
+    assert "crashed" in out and "resume_run_id='ghost789'" in out
+    assert "Re-run the workflow" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_ghost_run_recorded_before_positions_is_to_be_run_again(tmp_path):
+    _write_manifest(tmp_path, "qa", "ghost790", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghost790", _DEAD_OWNER)
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost790")
+    assert "Re-run the workflow" in out and "resume_run_id" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_ghost_run_asked_to_stop_is_reported_cancelled(tmp_path):
+    """A dead run whose record holds a stop request ends cancelled, and the
+    healed answer says so instead of calling it crashed."""
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghost789", status="running")
+    f = Path(tmp_path) / "workflows-runs" / "qa" / "ghost789.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(owner=_DEAD_OWNER, stop_requested={"at": 5.0, "hard": False})
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost789")
+    assert "cancelled" in out and "crashed" not in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghost789")["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "stop"])
+async def test_healing_a_ghost_run_waits_for_its_lock_off_the_event_loop(tmp_path, action):
+    """The heal takes the run's lock; while another caller holds it, the wait
+    happens off the event loop, and the heal completes once it is released."""
+    import asyncio
+    import threading
+
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghostlck", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghostlck", _DEAD_OWNER)
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with cross_process_lock(run_log.run_lock_target(tmp_path, "qa", "ghostlck")):
+            held.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        held.wait(10)
+        heal = asyncio.create_task(_tool(tmp_path, None).execute(action=action, id="ghostlck"))
+        ticks = 0
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            ticks += 1
+        assert ticks == 20 and not heal.done()   # the loop kept running while the heal waited
+    finally:
+        release.set()
+        holder.join()
+    out = await asyncio.wait_for(heal, 10)
+    assert "crashed" in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghostlck")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
 async def test_stop_live_owner_run_still_cancels(tmp_path):
     """A running manifest owned by a LIVE process keeps the normal cancel path."""
     import os
@@ -410,6 +488,26 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
         # No engine consumes this flag in the test — drop it so the global
         # cancellation registry stays empty for later tests.
         cancellation.clear("alive789")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_through_the_tool_is_kept_beside_the_record(tmp_path):
+    """The live flag is lost with the process; the stop kept beside the record
+    is what makes a run that dies afterwards end cancelled, not resumable."""
+    import os
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "alive790", status="running")
+    _set_manifest_owner(tmp_path, "qa", "alive790", process_identity(os.getpid()))
+    try:
+        await _tool(tmp_path, None).execute(action="stop", id="alive790")
+        assert run_log.stop_requested(tmp_path, "qa", "alive790")["hard"] is False
+        await _tool(tmp_path, None).execute(action="stop", id="alive790", force=True)
+        assert run_log.stop_requested(tmp_path, "qa", "alive790")["hard"] is True
+    finally:
+        cancellation.clear("alive790")
 
 
 @pytest.mark.asyncio
@@ -792,3 +890,121 @@ async def test_force_parameter_is_declared_and_documented(tmp_path):
     force = tool.parameters["properties"]["force"]
     assert "boolean" in force["type"]
     assert "force" in tool.description
+
+
+@pytest.mark.asyncio
+async def test_a_stop_is_kept_even_when_the_turn_asking_for_it_is_cancelled(
+    tmp_path, monkeypatch,
+):
+    """A shutdown drain cancels the turn that asked for the stop. The write of
+    the stop must not be dropped with it, even while it still waits for an
+    executor thread."""
+    import asyncio
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "alive791", status="running")
+    _set_manifest_owner(tmp_path, "qa", "alive791", process_identity(os.getpid()))
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    gate = threading.Event()
+    real_request_cancel = cancellation.request_cancel
+
+    def cancel_then_hold_the_only_thread(run_id, *, hard=False):
+        real_request_cancel(run_id, hard=hard)
+        # The write of the stop now waits in the executor's queue.
+        loop.run_in_executor(None, gate.wait, 10)
+
+    monkeypatch.setattr(cancellation, "request_cancel", cancel_then_hold_the_only_thread)
+    try:
+        stop = asyncio.create_task(_tool(tmp_path, None).execute(action="stop", id="alive791"))
+        while not cancellation.is_cancelled("alive791"):
+            await asyncio.sleep(0)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        gate.set()
+        deadline = time.monotonic() + 5
+        while (run_log.stop_requested(tmp_path, "qa", "alive791") is None
+               and time.monotonic() < deadline):
+            await asyncio.sleep(0.01)
+        assert run_log.stop_requested(tmp_path, "qa", "alive791") is not None
+    finally:
+        gate.set()
+        cancellation.clear("alive791")
+        executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_whose_script_still_runs_is_not_offered_again(tmp_path, monkeypatch):
+    """With a script of the dead process still running, resuming or re-running
+    the run now would run that script twice: the tool says why it cannot be
+    resumed yet instead of inviting a second run."""
+    import os
+    import subprocess
+
+    from durin.utils.process_tree import process_identity
+    from durin.workflow import resume_store, run_log
+
+    resume_store.save_input(resume_store.store_dir(tmp_path, "dead7"), 1, "a", "in")
+    run_log.start_run(tmp_path, "qa", "dead7", root_session_key=SESSION,
+                      started_at=time.time(), position={"node": "a", "seq": 1})
+    _set_manifest_owner(tmp_path, "qa", "dead7", _DEAD_OWNER)
+    proc = subprocess.Popen(["sleep", "61"], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while process_identity(proc.pid)["started"] is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        run_log.record_script(run_log.runs_root(tmp_path) / "qa", "dead7", pid=proc.pid,
+                              started=process_identity(proc.pid)["started"], node_id="a")
+        # Signals reach nothing, as if the script belonged to another user.
+        real_kill, real_killpg = os.kill, os.killpg
+        monkeypatch.setattr(os, "kill", lambda p, s: real_kill(p, s) if not s else None)
+        monkeypatch.setattr(os, "killpg", lambda p, s: real_killpg(p, s) if not s else None)
+        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_TERM_WAIT_S", 0.2)
+        monkeypatch.setattr(run_log, "DEAD_RUN_SCRIPT_KILL_WAIT_S", 0.2)
+
+        out = await _tool(tmp_path, None).execute(action="status", id="dead7")
+
+        assert "Re-run the workflow if the result is still needed." not in out
+        assert "cannot be resumed yet" in out
+        assert (f"the script of its step 'a' from the earlier process is still running "
+                f"(pid {proc.pid}). It can be resumed once it has ended." in out)
+    finally:
+        monkeypatch.undo()
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_claimed_during_the_check_is_not_said_to_have_leftovers(
+    tmp_path, monkeypatch,
+):
+    """A resume claims the run while the tool checks it. The refusal is about
+    that race, not about anything the earlier run left: the tool must not tell
+    the model to wait until nothing of the earlier run is left."""
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "qa", "dead8", root_session_key=SESSION,
+                      started_at=time.time())          # no position: not resumable
+    _set_manifest_owner(tmp_path, "qa", "dead8", _DEAD_OWNER)
+    real = run_log.dead_run_refusal
+
+    def claimed_first(workspace, record):
+        with cross_process_lock(run_log.run_lock_target(workspace, "qa", "dead8")):
+            run_log.claim_for_resume(workspace, "qa", "dead8")
+        return real(workspace, record)
+
+    monkeypatch.setattr(run_log, "dead_run_refusal", claimed_first)
+
+    out = await _tool(tmp_path, None).execute(action="status", id="dead8")
+
+    assert "it was cancelled, or already resumed, before this reached it." in out
+    assert "nothing of the earlier run is left" not in out

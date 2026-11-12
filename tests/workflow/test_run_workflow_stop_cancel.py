@@ -212,3 +212,94 @@ async def test_the_engine_is_wired_with_both_cancel_polls(tmp_path):
         assert hard() is False
     finally:
         cancellation.clear("probe-run")
+
+
+def _fake_run_that_records(tmp_path, started, released, saw_cancel):
+    """An engine stand-in that writes a running record, as the real walk does,
+    and returns once the test releases it."""
+    from durin.workflow import run_log
+
+    def fake_engine_run(self, workflow, task, *, root_session_key=None,
+                        input_files=None, output_format=None, resume=None, work_key=None):
+        run_id = self._run_id_factory()
+        run_log.start_run(tmp_path, workflow.name, run_id, root_session_key=None,
+                          started_at=time.time(), position={"node": "a", "seq": 1})
+        started.append(run_id)
+        released.wait(5)
+        saw_cancel.append(cancellation.is_cancelled(run_id))
+        return WorkflowResult(status="cancelled", final_output=None, run_id=run_id)
+
+    return fake_engine_run
+
+
+async def _cancel_a_foreground_turn(tmp_path, *, then):
+    """Start a foreground run, cancel the turn waiting on it, run ``then(run_id)``
+    and release the engine. Returns whether the engine saw a cancel."""
+    _write_workflow(tmp_path, "slow", {
+        "name": "slow", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    started: list[str] = []
+    released = threading.Event()
+    saw_cancel: list[bool] = []
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch.object(WorkflowEngine, "run",
+                      _fake_run_that_records(tmp_path, started, released, saw_cancel)):
+        turn = asyncio.create_task(tool.execute(name="slow", task="t", background=False))
+        deadline = time.time() + 5
+        while not started and time.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert started, "engine never started"
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        try:
+            await then(started[0])
+        finally:
+            released.set()
+            # Return only once the run's thread is gone: a thread left behind
+            # would be taken for an unfinished run by a later test.
+            from durin.workflow.run_threads import runs_in_flight
+            deadline = time.time() + 5
+            while ((not saw_cancel or started[0] in runs_in_flight())
+                   and time.time() < deadline):
+                await asyncio.sleep(0.01)
+            assert started[0] not in runs_in_flight()
+            cancellation.clear(started[0])
+    return saw_cancel[0]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_by_a_shutdown_leaves_its_run_alone(tmp_path, monkeypatch):
+    """The gateway going down cancels every turn; that is not anyone stopping
+    the run. Nothing is asked of it, so it dies with the process and is found
+    dead and resumable."""
+    from durin.workflow import run_log
+
+    monkeypatch.setattr(cancellation, "_shutting_down", False)
+    cancellation.begin_shutdown()
+
+    async def nothing_asked(run_id):
+        assert not cancellation.is_cancelled(run_id)
+        assert run_log.stop_requested(tmp_path, "slow", run_id) is None
+
+    assert await _cancel_a_foreground_turn(tmp_path, then=nothing_asked) is False
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_otherwise_stops_its_run_hard_and_keeps_the_stop(tmp_path):
+    from durin.workflow import run_log
+
+    assert cancellation.shutting_down() is False
+
+    async def stopped_hard(run_id):
+        assert cancellation.is_hard_cancelled(run_id)
+        deadline = time.time() + 5
+        while run_log.stop_requested(tmp_path, "slow", run_id) is None and time.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert run_log.stop_requested(tmp_path, "slow", run_id)["hard"] is True
+
+    assert await _cancel_a_foreground_turn(tmp_path, then=stopped_hard) is True

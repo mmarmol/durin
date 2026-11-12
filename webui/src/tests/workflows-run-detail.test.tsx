@@ -32,13 +32,6 @@ beforeEach(() => {
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
-  if (!navigator.clipboard) {
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: () => Promise.resolve() },
-      configurable: true,
-    });
-  }
-  vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   vi.mocked(api.listWorkflows).mockResolvedValue(["demo"]);
   vi.mocked(api.listPersonas).mockResolvedValue({ personas: [], default: null });
   vi.mocked(api.listSeedSuggestions).mockResolvedValue([]);
@@ -150,11 +143,15 @@ describe("WorkflowsView run detail", () => {
     const user = await openRunnerAndRun();
 
     await screen.findByText("research#0");
+    // userEvent.setup() puts its own clipboard on navigator the first time it
+    // runs in this file, and user-event replaces that clipboard after every
+    // test. So the spy goes on the clipboard in place now, after setup: one
+    // taken before it (in a beforeEach) is on an object the component never
+    // reaches whenever this is the first test of the file to call setup().
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
     const first = screen.getAllByRole("button", { name: /copy session key/i })[0];
     await user.click(first);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "workflow:run-abc123:research",
-    );
+    expect(writeText).toHaveBeenCalledWith("workflow:run-abc123:research");
   });
 
   it("keeps a run history that re-shows a past run's detail when clicked", async () => {
@@ -240,6 +237,18 @@ describe("WorkflowsView run detail", () => {
     expect(api.runWorkflow).toHaveBeenLastCalledWith(
       "tok", "demo", "", [], "", "", "run-abort",
     );
+  });
+
+  it("shows why a crashed test run's resume was refused", async () => {
+    vi.mocked(api.runWorkflow)
+      .mockResolvedValueOnce({
+        status: "crashed", final_output: "", failed_node: "gate", run_id: "run-dead", runs: [],
+      })
+      .mockRejectedValueOnce(new Error("the process that ran it still seems alive"));
+    const user = await openRunnerAndRun();
+    await user.click(await screen.findByRole("button", { name: "Resume at the interrupted step" }));
+    await screen.findByText(/still seems alive/);
+    expect(screen.getByRole("button", { name: "Resume at the interrupted step" })).toBeEnabled();
   });
 
   it("shows a cancelled banner", async () => {

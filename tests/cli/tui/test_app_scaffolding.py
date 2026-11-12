@@ -35,3 +35,16 @@ async def test_app_carries_workspace_routing_context() -> None:
     async with app.run_test():
         assert app._cli_channel == "cli"
         assert app._cli_chat_id == "my-session"
+
+
+@pytest.mark.asyncio
+async def test_quitting_the_app_begins_the_shutdown() -> None:
+    """Quitting cancels the turns in flight; the process says it is shutting
+    down first, so a workflow run a turn waits on is not taken as stopped."""
+    from durin.workflow import cancellation
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        assert cancellation.shutting_down() is False
+        await pilot.press("ctrl+q")
+    assert cancellation.shutting_down() is True

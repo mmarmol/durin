@@ -3,8 +3,11 @@
 Reduces a list of per-run records (from run_log) into per-node trouble counts: how often
 a node loops back (ran more than once in a run), how often a decision gate fails, and how
 often a script node's run raised (node_failed), plus a few sample error strings for that
-last case. A node crosses into a *candidate* for improvement only when a symptom recurs
-across runs (a single bad run is noise). No LLM, no IO — fully unit-testable.
+last case. A row the crash conversion wrote for an attempt the process's death cut short
+(``cut: True``) is a failed row, but not a failure of the step's own, so it is no
+evidence against the step and is left out of both. A node crosses into a *candidate*
+for improvement only when a symptom recurs across runs (a single bad run is noise).
+No LLM, no IO — fully unit-testable.
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ def compute_diagnostics(records: list[dict]) -> Diagnostics:
             max_iter[nid] = max(max_iter.get(nid, 0), r.get("iteration", 1))
             if r.get("passed") is False:   # a routing node whose verdict routed to on_fail
                 failed_gates.add(nid)
-            if r.get("status") == "node_failed":
+            if r.get("status") == "node_failed" and not r.get("cut"):
                 failed_scripts.add(nid)
         for nid, mi in max_iter.items():
             if mi > 1:                     # the node ran more than once → a loop-back
@@ -62,7 +65,7 @@ def compute_diagnostics(records: list[dict]) -> Diagnostics:
     # so walk them in reverse to fill each node's sample list newest-first).
     for rec in reversed(records):
         for r in rec.get("runs", []):
-            if r.get("status") != "node_failed":
+            if r.get("status") != "node_failed" or r.get("cut"):
                 continue
             nid = r.get("node_id")
             error = r.get("error")

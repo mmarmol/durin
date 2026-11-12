@@ -186,7 +186,39 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
   failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
   retries the FAILED node with the exact input it had — completed nodes never re-run
-  (a failed `choose`/`union` branch retries its whole parallel node).
+  (a failed `choose`/`union` branch retries its whole parallel node). **A crashed run
+  resumes the same way too**: a run whose process died (a gateway crash, restart or kill)
+  shows status `crashed` — `run_workflow` with
+  `resume_run_id=<that id>` and no answers enters the node that was running again, from its
+  start, with the input it had; finished nodes do not re-run, a parallel node re-runs all its
+  branches or workers, and a sub-workflow node starts its child again. So that node's effects
+  outside durin (a sent message, a posted comment) can happen twice: before resuming, check
+  whether it already acted, and tell the user when you cannot. Only a script node's own
+  processes are ended when a run is found dead: a command an agent node started with its
+  shell tool is not, and may still be running when the node runs it again. The resume is refused, with
+  the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
+  definition, its folder was pruned, or a later run on the same `work_key` took the folder
+  over — then start a new run. It is also refused while a script the dead process started
+  may still run, when it was marked interrupted while the process that ran it still seems
+  alive, while one of its sub-workflow runs is still recorded as running, or while a record
+  of one of its scripts cannot be read. When the reason names such a file, NEVER delete it
+  yourself: tell the person which file it names; they remove it once they have made sure
+  nothing of that script is left. When the reason names process ids, NEVER
+  end those processes yourself: after a restart a pid can belong to something else, and
+  the code deliberately does not signal them. Tell the person which process ids are left
+  and that they should check these are the script's before ending them; the run can be
+  resumed once they have ended. Do not start a new run of the workflow meanwhile without
+  telling the person that the old script may still be working. When the reason is that
+  another caller is acting on it, that it was already resumed, or that its record no longer
+  exists, nothing the old process left is in the way: look at the run's status before
+  trying again. A crashed run you started whose workflow (or a sub-workflow it
+  calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
+  dashboard and API refuse it. A crashed run an automation started is not resumed by hand
+  on any surface: the automation does not resume it, and its next run starts anew. A
+  crashed run whose reason says its record is incomplete cannot be resumed either: start a
+  new run, and tell the person that a script of the old run may still be working (this
+  reason does not say whether one is). A paused or aborted run you started can still be answered or
+  retried from the dashboard, but its later `mcps` steps then run without their MCP tools.
   When nobody can be asked (a cron or workflow context), the summary says so: answer from
   what you were given, or stop and report that the run waits for input. **A run paused
   for a person's approval is not yours to resolve**: the summary says so, and

@@ -1410,6 +1410,9 @@
     "keepWaiting": "Keep waiting",
     "abortedTitle": "Run aborted",
     "retryFailedStep": "Retry the failed step",
+    "crashedTitle": "Run interrupted",
+    "crashedBody": "The process running it ended before it finished. The step that was running did not complete.",
+    "retryCutStep": "Resume at the interrupted step",
     "cancelledTitle": "Run cancelled",
     "outputFiles": "output files",
     "outputPruneHint": "pruned after older runs accumulate — copy out what you need",
@@ -1435,6 +1438,7 @@
       "exhausted": "retries exhausted",
       "aborted": "aborted",
       "crashed": "crashed",
+      "cut": "interrupted",
       "cancelled": "cancelled"
     },
     "seedBanner": {

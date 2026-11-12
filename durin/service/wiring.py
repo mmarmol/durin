@@ -35,6 +35,7 @@ def build_service_registry(
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
     approval_deps: Callable[[], Any] | None = None,
+    reconcile_runs: bool = True,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -186,15 +187,32 @@ def build_service_registry(
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died
     # before finalizing them. Best-effort — a sweep failure must not block startup.
-    try:
-        import time
+    # The sweep can wait on run locks, end a dead run's scripts and observe
+    # processes, so it never runs on an event loop: a build made on one (a
+    # channel started or restarted while the gateway runs) hands it to a thread
+    # of its own. A caller that knows another build already swept passes
+    # reconcile_runs=False.
+    if reconcile_runs:
+        def _boot_sweep() -> None:
+            try:
+                import time
 
-        from durin.workflow import run_log
+                from durin.workflow import run_log
 
-        run_log.reconcile_running(
-            _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
-    except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
-        pass
+                run_log.reconcile_running(
+                    _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
+            except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
+                logger.exception("run reconciliation at registry build failed")
+
+        try:
+            import asyncio
+
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _boot_sweep()
+        else:
+            threading.Thread(target=_boot_sweep, daemon=True,
+                             name="run-reconciler-build").start()
 
     # Automation-run reconciliation is NOT here: an orphaned run has to be
     # reported to whoever fired it and, when no work had started, relaunched —
@@ -225,6 +243,10 @@ def build_service_registry(
 
 _RECONCILE_PERIOD_S = 600.0
 _reconciler_started = threading.Event()
+# Setting it ends the sweeper thread at its next wait. The thread holds the
+# Event that was here when it started, so replacing this one with a fresh
+# Event before a start gives that sweeper a stop of its own.
+_reconciler_stop = threading.Event()
 
 
 def start_periodic_run_reconciler(
@@ -236,18 +258,19 @@ def start_periodic_run_reconciler(
 
     Daemon thread, file-based sweeps only — dead-owner manifests flip to
     their crashed/error status so the UI and `tasks` never show a ghost for
-    more than one period. Returns False when already started."""
+    more than one period. It runs until ``_reconciler_stop`` (as it was at the
+    start) is set. Returns False when already started."""
     if _reconciler_started.is_set():
         return False
     _reconciler_started.set()
+    stop = _reconciler_stop
 
     def _sweep_forever() -> None:
         import time
 
         from durin.workflow import run_log as wf_run_log
 
-        while True:
-            time.sleep(period_s)
+        while not stop.wait(period_s):
             try:
                 ws = workspace_resolver()
                 wf_run_log.reconcile_running(

@@ -428,6 +428,9 @@ export type WorkflowRunNode = {
   // before this field existed, where `iteration` is the pass.
   pass_number?: number | null;
   status: string;
+  // True on the row of the step a dead process was running when the run was cut
+  // short; the row then reads "interrupted" rather than "failed".
+  cut?: boolean;
   route_label: string | null;
   // Seconds this node took, once finished; absent/null for a row recorded before
   // this field shipped.
@@ -454,8 +457,9 @@ export type WorkflowRunResult = {
   exhausted_node?: string;
   // set when status=="needs_input": the node that asked
   needs_input_node?: string;
-  // set when status=="aborted" because a step failed: the node that failed
-  // (the step a retry runs again)
+  // set when status=="aborted" because a step failed, or "crashed" because the
+  // process running it died: the node that failed or was cut (the step a retry
+  // or resume runs again)
   failed_node?: string | null;
   // relative paths in output_dir (completed runs)
   output_files?: string[];

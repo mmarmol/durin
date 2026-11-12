@@ -64,6 +64,16 @@ const ABORTED: api.WorkflowGlobalRun = {
   needs_input_node: null,
 };
 
+const CRASHED: api.WorkflowGlobalRun = {
+  workflow: "onboarding",
+  run_id: "run-dead",
+  status: "crashed",
+  started_at: 3000,
+  finished_at: 3100,
+  task: "migrate the data",
+  needs_input_node: null,
+};
+
 const COMPLETED: api.WorkflowGlobalRun = {
   workflow: "digest",
   run_id: "run-done",
@@ -249,13 +259,45 @@ describe("RunsView", () => {
     vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
       status: "aborted", final_output: "boom", failed_node: "build", run_id: "run-failed", runs: [],
     });
-    vi.mocked(api.runWorkflow).mockRejectedValue(new Error("cannot be resumed — already resumed"));
+    vi.mocked(api.runWorkflow).mockRejectedValueOnce(new Error("cannot be resumed — already resumed"));
     const user = userEvent.setup();
     render(wrap(<RunsView />));
     await user.click(await screen.findByRole("button", { name: /provision the workspace/ }));
     await user.click(await screen.findByRole("button", { name: "Retry the failed step" }));
     await screen.findByText(/already resumed/);
     expect(screen.getByRole("button", { name: "Retry the failed step" })).toBeEnabled();
+  });
+
+  it("resumes a crashed run from its detail", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([CRASHED]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "crashed", final_output: "", failed_node: "build", run_id: "run-dead",
+      runs: [{ node_id: "build", iteration: 1, status: "node_failed", passed: null, route_label: null,
+               session_key: null, worker_index: null, cut: true }],
+    });
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "completed", final_output: "done", run_id: "run-dead", runs: [],
+    });
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+    await user.click(await screen.findByRole("button", { name: /migrate the data/ }));
+    await user.click(await screen.findByRole("button", { name: "Resume at the interrupted step" }));
+    await waitFor(() =>
+      expect(api.runWorkflow).toHaveBeenCalledWith("tok", "onboarding", "", [], "", "", "run-dead"));
+  });
+
+  it("shows why a crashed run's resume was refused and keeps the button", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([CRASHED]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "crashed", final_output: "", failed_node: "build", run_id: "run-dead", runs: [],
+    });
+    vi.mocked(api.runWorkflow).mockRejectedValueOnce(new Error("a script it started is still running"));
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+    await user.click(await screen.findByRole("button", { name: /migrate the data/ }));
+    await user.click(await screen.findByRole("button", { name: "Resume at the interrupted step" }));
+    await screen.findByText(/a script it started is still running/);
+    expect(screen.getByRole("button", { name: "Resume at the interrupted step" })).toBeEnabled();
   });
 
   it("shows a Cancel control only for a needs_input run, not a completed one", async () => {
@@ -886,6 +928,52 @@ describe("RunDetail", () => {
     renderAborted({ failed_node: "build", parent_run_id: "caller-1" }, () => {});
     await screen.findByText("Run aborted");
     expect(screen.queryByRole("button", { name: "Retry the failed step" })).toBeNull();
+  });
+
+  function renderCrashed(over: Partial<api.WorkflowRunResult>, retry: () => void = () => {}) {
+    const result: api.WorkflowRunResult = {
+      status: "crashed", final_output: "", run_id: "r-dead", runs: [], ...over,
+    };
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <RunDetail result={result} onResume={() => {}} onRetry={retry} resuming={false} />
+      </I18nextProvider>,
+    );
+  }
+
+  it("says a crashed run was interrupted and offers to resume it", async () => {
+    const onRetry = vi.fn();
+    renderCrashed(
+      {
+        failed_node: "build",
+        runs: [{ node_id: "build", iteration: 1, status: "node_failed", passed: null, route_label: null,
+                 session_key: null, worker_index: null, cut: true }],
+      },
+      onRetry,
+    );
+    await screen.findByText("Run interrupted");
+    expect(screen.getByText("interrupted")).toBeInTheDocument();
+    expect(screen.queryByText("failed")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Resume at the interrupted step" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no resume for a crashed run recorded without its step", async () => {
+    renderCrashed({});
+    await screen.findByText("Run interrupted");
+    expect(screen.queryByRole("button", { name: "Resume at the interrupted step" })).toBeNull();
+  });
+
+  it("leaves a crashed child run to its parent", async () => {
+    renderCrashed({ failed_node: "build", parent_run_id: "p1" });
+    await screen.findByText("Run interrupted");
+    expect(screen.queryByRole("button", { name: "Resume at the interrupted step" })).toBeNull();
+  });
+
+  it("leaves an automation's crashed run to the automation", async () => {
+    renderCrashed({ failed_node: "build", root_session_key: "automation:nightly" });
+    await screen.findByText("Run interrupted");
+    expect(screen.queryByRole("button", { name: "Resume at the interrupted step" })).toBeNull();
   });
 
   it("disables the retry while a resume is in flight", async () => {

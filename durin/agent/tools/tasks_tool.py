@@ -32,6 +32,8 @@ Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import time
 from pathlib import Path
 from typing import Any
@@ -191,7 +193,7 @@ class TasksTool(Tool, ContextAware):
         if action == "status":
             if not id:
                 return "Error: 'id' is required for status."
-            return self._render_status(session_key, id)
+            return await self._render_status(session_key, id)
         if action == "stop":
             if not id:
                 return "Error: 'id' is required for stop."
@@ -240,21 +242,56 @@ class TasksTool(Tool, ContextAware):
         2026-07-18 ghost); when the user pokes it before the periodic sweep
         does, flip it here and answer with the truth instead of describing a
         process that no longer exists. Returns the healed message, or None
-        when the row is genuinely alive."""
+        when the row is genuinely alive. It takes the run's lock and may wait
+        for it, so both callers run it off the event loop."""
         if row["kind"] != "workflow" or row["status"] != "running":
             return None
         from durin.workflow import run_log
         if not run_log.reconcile_one(self._workspace, row["label"], row["id"]):
             return None
+        record = run_log.read_manifest(self._workspace, row["label"], row["id"]) or {}
+        if record.get("status") == "cancelled":
+            # A stop had been asked for before the process died: the run ends
+            # cancelled rather than crashed.
+            row["status"] = "cancelled"
+            return (
+                f"Workflow run [{row['id']}] was still marked running, but the "
+                "process that owned it is gone (a gateway restart or crash killed "
+                "it mid-run). A stop had been requested, so it is marked cancelled; "
+                "its partial trace is preserved."
+            )
         row["status"] = "crashed"
+        from durin.workflow.engine import resumable_kind, resume_refusal
+        # A script the dead process started may still run: resuming or
+        # re-running now would run it a second time beside the first.
+        scripts = run_log.dead_run_refusal(self._workspace, record)
+        resumable = (resumable_kind(record) == "dead"
+                     and resume_refusal(record, workspace=self._workspace) is None)
+        if scripts in run_log.DEAD_RUN_RACE_REFUSALS:
+            # Another caller acted on the run while it was checked: nothing
+            # the earlier process left is known to be in the way.
+            follow_up = f"It cannot be resumed now: {scripts}"
+        elif scripts and resumable:
+            follow_up = f"It cannot be resumed yet: {scripts}"
+        elif scripts:
+            follow_up = ("Re-run the workflow if the result is still needed, but not "
+                         f"before nothing of the earlier run is left: {scripts}")
+        elif resumable:
+            follow_up = (
+                "If the result is still needed, resume it with run_workflow("
+                f"name='{row['label']}', resume_run_id='{row['id']}'): the step it "
+                "was in runs again with the input it had, and the steps that "
+                "finished do not."
+            )
+        else:
+            follow_up = "Re-run the workflow if the result is still needed."
         return (
             f"Workflow run [{row['id']}] was still marked running, but the "
             "process that owned it is gone (a gateway restart or crash killed "
-            "it mid-run). Marked it crashed; its partial trace is preserved. "
-            "Re-run the workflow if the result is still needed."
+            f"it mid-run). Marked it crashed; its partial trace is preserved. {follow_up}"
         )
 
-    def _render_status(self, session_key: str, task_id: str) -> str:
+    async def _render_status(self, session_key: str, task_id: str) -> str:
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
         if row is None:
             return f"Error: unknown task id {task_id!r} in this session."
@@ -262,7 +299,7 @@ class TasksTool(Tool, ContextAware):
             return self._render_subagent_status(session_key, task_id, row)
         if row["kind"] == "job":
             return self._render_job_status(row)
-        healed = self._heal_orphaned_workflow(row)
+        healed = await asyncio.to_thread(self._heal_orphaned_workflow, row)
         if healed:
             return healed
         return self._render_workflow_status(row)
@@ -454,7 +491,7 @@ class TasksTool(Tool, ContextAware):
                 f"if you need to confirm it stopped.{dropped}"
             )
         # workflow
-        healed = self._heal_orphaned_workflow(row)
+        healed = await asyncio.to_thread(self._heal_orphaned_workflow, row)
         if healed:
             return healed
         if row["status"] not in ("running", "stopping"):
@@ -464,6 +501,16 @@ class TasksTool(Tool, ContextAware):
         # once, the run is still going — "stop it" now means "stop it NOW".
         hard = force or is_cancelled(task_id)
         request_cancel(task_id, hard=hard)
+        # The flag above stops the run but dies with this process. Kept beside
+        # the record too, a run that dies before the stop takes effect ends
+        # cancelled instead of being offered for resume. It takes the run's
+        # lock and writes a file, so it runs off the event loop: handed to the
+        # executor here and now, and only the wait is shielded, so a cancel of
+        # this call (a shutdown drain cancelling the turn) cannot drop it.
+        from durin.workflow import run_log
+        await asyncio.shield(asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(
+                run_log.request_stop, self._workspace, row["label"], task_id, hard=hard)))
         if hard:
             return (
                 f"Workflow run [{task_id}] force-stopped: the node currently "

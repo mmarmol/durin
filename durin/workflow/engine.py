@@ -30,7 +30,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import provenance, run_log, workspace_fork
+from durin.workflow import provenance, resume_store, run_log, workspace_fork
 from durin.workflow.artifacts import (
     EVIDENCE_DIRNAME,
     artifact_dir,
@@ -130,6 +130,10 @@ class NodeRunRequest:
     # on a worker thread with its own event loop, so this must never be awaited
     # from inside the node — it marshals to the gateway loop itself.
     progress: Any = None
+    # The folder holding the run's record. A script runner records each process
+    # it starts there while it runs, so the conversion of a dead run can end the
+    # scripts its process left. None when the engine keeps no records.
+    record_dir: str | None = None
 
 
 @dataclass
@@ -196,6 +200,10 @@ class ResumeState:
     # resumed walk — whose in-memory runs list starts empty — can still compose
     # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
     recorded_outputs: dict[str, str] = field(default_factory=dict)
+    # The steps of ``recorded_outputs`` whose text was read whole from the run's
+    # resume store rather than from the record's capped copies: a parallel step
+    # may read its list or its branch ids from these whatever their length.
+    whole_outputs: frozenset[str] = frozenset()
     # The work_key the ORIGINAL (paused/failed) run used, if any — read from its
     # manifest (see build_resume_state). "Same run_id" alone does not guarantee "same
     # folder" once work_key exists: a keyed run's folder is a function of
@@ -227,30 +235,132 @@ def manifest_completed_passes(manifest: dict) -> dict[str, int]:
     return {node: c["completed"] for node, c in run_log.pass_counts(manifest).items()}
 
 
-def resume_refusal(manifest: dict) -> str | None:
+def _dead_position(manifest: dict) -> dict | None:
+    """The position of a ``crashed`` record that can be entered again: the
+    conversion of the dead run named its step as ``failed_node``. None otherwise."""
+    position = manifest.get("position")
+    if (manifest.get("status") == "crashed" and isinstance(position, dict)
+            and position.get("node") and manifest.get("failed_node") == position["node"]):
+        return position
+    return None
+
+
+def resumable_kind(manifest: dict) -> str | None:
+    """Which kind of resume a run's record allows: ``"paused"`` (``needs_input``
+    with a ``needs_input_node``), ``"failed"`` (``aborted`` with a
+    ``failed_node``), ``"dead"`` (``crashed`` with a ``position`` whose step the
+    dead run's conversion named as ``failed_node``), or None.
+
+    Decided by the status first: a ``crashed`` record can still carry the
+    ``needs_input_node`` or ``failed_node`` of the record a resume had claimed
+    before its own process died, and it is a dead run all the same."""
+    status = manifest.get("status")
+    if status == "crashed":
+        return "dead" if _dead_position(manifest) is not None else None
+    if status == "needs_input" and manifest.get("needs_input_node"):
+        return "paused"
+    if status == "aborted" and manifest.get("failed_node"):
+        return "failed"
+    return None
+
+
+def _later_run_on_the_key(workspace: str | Path, manifest: dict) -> str | None:
+    """The id of a run of the same workflow on the same ``work_key`` that started
+    after this one, or None. Runs on one key are serialized by the key's lock, so
+    a run that started later worked in the folder after this one, which no longer
+    holds what this run left there. This run's own start is the bound, not its
+    ``finished_at``: a dead run's end is the time its death was recorded, which
+    can come after a later run took the key."""
+    work_key = manifest.get("work_key")
+    name = manifest.get("workflow")
+    if not work_key or not name:
+        return None
+    try:
+        started = float(manifest.get("started_at") or 0.0)
+    except (TypeError, ValueError):
+        started = 0.0
+    for entry in run_log.list_runs(workspace, name, limit=10**9):
+        if entry.get("run_id") == manifest.get("run_id"):
+            continue
+        other = run_log.read_manifest(workspace, name, entry.get("run_id") or "") or {}
+        try:
+            other_started = float(other.get("started_at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if other.get("work_key") == work_key and other_started > started:
+            return other.get("run_id")
+    return None
+
+
+# The start of the root session key an automation gives every workflow run it
+# starts (``automation:<name>``). The automation keeps its own record of the
+# run: when the run's process dies, its orphan sweep (while the automation
+# exists) ends that record ``interrupted`` and starts no replacement for work
+# that had started, and nothing in it resumes the dead run; each later run it
+# starts is a new one. The refusal names no automation: the key's other
+# sessions under the same prefix (an automation's filter turn) are not named
+# after one.
+AUTOMATION_ROOT_PREFIX = "automation:"
+INCOMPLETE_RECORD_REFUSAL = ("its record is incomplete: it was rewritten without what the "
+                             "run was started with.")
+AUTOMATION_RUN_REFUSAL = ("it was started by an automation, and a run an automation "
+                          "started is not resumed by hand: the automation does not resume "
+                          "it, and its next run starts anew.")
+
+
+def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
+                   workflow: Workflow | None = None) -> str | None:
     """Why a run whose status could be resumed (``needs_input`` with a
-    ``needs_input_node``, or ``aborted`` with a ``failed_node``) still cannot be,
-    or None. Every resume surface asks this before it touches the record.
+    ``needs_input_node``, ``aborted`` with a ``failed_node``, or ``crashed``)
+    still cannot be, or None. Every resume surface asks this before it touches
+    the record. A ``crashed`` record that ``resumable_kind`` does not accept
+    always gets a reason, so a surface can say why instead of only that it
+    cannot. Reads only; never writes.
 
     A sub-workflow step's run (a record with a ``parent_run_id``) is never resumed
-    on its own, paused or failed: it would run its step in its own folder instead
-    of the caller's, end ``completed`` and leave the caller stopped. Resuming the
-    caller re-runs the sub-workflow step, in the caller's folder.
+    on its own, paused, failed or dead: it would run its step in its own folder
+    instead of the caller's, end ``completed`` and leave the caller stopped.
+    Resuming the caller re-runs the sub-workflow step, in the caller's folder.
 
-    A resume re-enters the walk at the failed node, so that node must be one the
-    walk itself dispatched: it has a failed row that belongs to no parallel node.
-    A record that names a branch or a fan-out worker has no such row, and kept no
-    input for it. Re-entering there would run that one unit as if it were a step
-    of the walk — without its input, without reconciling its siblings, without
-    anything that follows the parallel node — and report the run completed."""
-    paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
-    failed = manifest.get("failed_node") if manifest.get("status") == "aborted" else None
-    if not paused and not failed:
+    A resume of a failed run re-enters the walk at the failed node, so that node
+    must be one the walk itself dispatched: it has a failed row that belongs to no
+    parallel node. A record that names a branch or a fan-out worker has no such
+    row, and kept no input for it. Re-entering there would run that one unit as
+    if it were a step of the walk — without its input, without reconciling its
+    siblings, without anything that follows the parallel node — and report the
+    run completed. A dead run needs no such check: its step is the record's
+    position, which only ever names a step of the walk, and a run that died
+    between two steps has no row for the step it was about to enter.
+
+    A dead run is entered again at its position, with the input stored for it,
+    in its working folder. It is refused when its record is ``incomplete``
+    (rewritten by ``run_log.update_run`` with no record to carry from, so what
+    the run was started with is gone). It is refused when an automation started
+    it (its ``root_session_key`` is ``automation:<name>``): the automation keeps a record
+    of the run and never resumes it, so a resume by hand would run its steps
+    outside it. A paused run's answer and a failed step's retry are not refused
+    on that account. It is refused when it was recorded before records kept a
+    position, when its step cannot be entered again (no position — a walk that
+    had ended, or one whose next input could not be stored — or one the
+    conversion did not name as failed: a detached step that had started), when
+    ``workflow`` (the current definition) no longer has its step, when
+    ``workspace`` shows its working folder or its stored input gone, and when a
+    later run on its ``work_key`` has taken the folder over.
+    A script the dead process left that may still run is a refusal of its own,
+    ``run_log.dead_run_refusal``, which observes processes and so is asked
+    off the event loop, together with the conversion (``run_log.settle_dead_run``)."""
+    status = manifest.get("status")
+    paused = status == "needs_input" and manifest.get("needs_input_node")
+    failed = manifest.get("failed_node") if status == "aborted" else None
+    crashed = status == "crashed"
+    if not paused and not failed and not crashed:
         return None
     parent = manifest.get("parent_run_id")
     if parent:
         return (f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
                 f"run {parent!r} instead: it runs the sub-workflow step again.")
+    if crashed:
+        return _dead_run_refusal(manifest, workspace=workspace, workflow=workflow)
     if not failed:
         return None
     for r in manifest.get("runs") or []:
@@ -261,25 +371,148 @@ def resume_refusal(manifest: dict) -> str | None:
             "parallel node cannot be retried on its own. Start a new run instead.")
 
 
-def build_resume_state(manifest: dict, answers: str) -> ResumeState:
-    """The ResumeState for re-entering a paused or failed run, built from its manifest.
-    The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
-    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: each
-    node's highest attempt number and completed passes over the whole run, and the
-    re-entry upstream.
+def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
+                      workflow: Workflow | None) -> str | None:
+    """The ``crashed`` part of ``resume_refusal``, asked in this order."""
+    if manifest.get("incomplete"):
+        # Rewritten by a walk that found no record to carry from: what the run
+        # was started with (its root, its parent, its folder) is gone, so a
+        # resume could not enter it where it ran.
+        return INCOMPLETE_RECORD_REFUSAL
+    root = manifest.get("root_session_key")
+    if isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX):
+        return AUTOMATION_RUN_REFUSAL
+    if "position" not in manifest:
+        return ("it was recorded before a run kept the step it was in. Start a new "
+                "run instead.")
+    position = _dead_position(manifest)
+    if position is None:
+        return "the step it was in cannot be entered again. Start a new run instead."
+    step = position["node"]
+    if workflow is not None and step not in workflow.nodes:
+        return (f"its step {step!r} is no longer in the workflow's definition. Start a "
+                "new run instead.")
+    if workspace is not None:
+        work_dir = manifest.get("work_dir")
+        stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                         position.get("seq") or 0)
+        if (work_dir and not Path(work_dir).is_dir()) or stored is None or stored[0] != step:
+            return "its working folder was pruned. Start a new run instead."
+        later = _later_run_on_the_key(workspace, manifest)
+        if later:
+            return (f"run {later!r} on the same key started after it and has taken over "
+                    "its folder.")
+    return None
 
-    Two distinct upstream contracts: a ``needs_input`` node ASKED, so it receives the
+
+MCP_TOOLS_REFUSAL = ("its steps use MCP tools that only a run resumed by the agent has. "
+                     "Ask the agent to resume it with run_workflow.")
+
+
+def _uses_mcp_tools(workflow: Workflow, workspace: str | Path) -> bool:
+    """Whether a step of ``workflow``, or of a workflow a sub-workflow step names
+    (followed to any depth), names ``mcps``. Each workflow is read once, so one
+    that names itself, directly or through another, ends the walk; a named
+    workflow that cannot be loaded counts as having no such step."""
+    from durin.workflow.loader import load_workflow
+
+    seen = {workflow.name}
+    pending = [workflow]
+    while pending:
+        for node in pending.pop().nodes.values():
+            if isinstance(node, WorkNode) and node.mcps:
+                return True
+            if isinstance(node, SubworkflowNode) and node.workflow not in seen:
+                seen.add(node.workflow)
+                try:
+                    pending.append(load_workflow(workspace, node.workflow))
+                except Exception:  # noqa: BLE001 - an unreadable definition has no steps to give tools to
+                    continue
+    return False
+
+
+def mcp_tools_refusal(manifest: dict, workflow: Workflow, *,
+                      workspace: str | Path) -> str | None:
+    """Why a surface without the gateway's live MCP tools (the workflows service)
+    must not resume this run, or None. Only a dead run is refused: one the agent's
+    run tool launched (``surface: "agent"``), whose steps had those tools, of a
+    workflow where a step — its own, or one of a sub-workflow it calls — names
+    ``mcps``. A paused or failed run is resumed by such a surface as it always
+    was, and a record without ``surface`` is never refused on its account."""
+    if resumable_kind(manifest) != "dead" or manifest.get("surface") != "agent":
+        return None
+    return MCP_TOOLS_REFUSAL if _uses_mcp_tools(workflow, workspace) else None
+
+
+def resume_source_outputs(manifest: dict, workspace: str | Path | None) -> dict[str, str]:
+    """What a resumed walk reads for the steps other steps read by name: the
+    record's capped ``resume_inputs``, overlaid with the whole outputs the run
+    stored when ``workspace`` is given."""
+    recorded = dict(manifest.get("resume_inputs") or {})
+    recorded.update(whole_source_outputs(manifest, workspace))
+    return recorded
+
+
+def whole_source_outputs(manifest: dict, workspace: str | Path | None) -> dict[str, str]:
+    """The outputs of the steps read by name that the run stored whole in its
+    resume folder; ``{}`` without a workspace."""
+    if workspace is None or not manifest.get("run_id"):
+        return {}
+    return resume_store.load_sources(resume_store.store_dir_of(workspace, manifest))
+
+
+def build_resume_state(manifest: dict, answers: str, *,
+                       workspace: str | Path | None = None) -> ResumeState:
+    """The ResumeState for re-entering a paused, failed or dead run, built from its
+    manifest. The caller validates resumability first (``resumable_kind`` and
+    ``resume_refusal``); this only folds the mechanical parts: each node's highest
+    attempt number and completed passes over the whole run, the outputs of the
+    steps read by name, and the re-entry upstream.
+
+    Three upstream contracts: a ``needs_input`` node ASKED, so it receives the
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
-    retry framing may pollute it."""
+    retry framing may pollute it — whole from the input stored for the record's
+    position when ``workspace`` is given and the position and the stored file both
+    name the failed node, else the record's capped ``resume_upstream``; a DEAD
+    run's step (its position) receives the input stored whole for that position
+    when ``workspace`` is given and the file is there, else the record's capped
+    ``resume_upstream``. Answers given to a
+    paused run whose resume then died are not replayed: the run is entered at its
+    position like any dead run.
+
+    With ``workspace``, the steps read by name get the whole outputs the run
+    stored, over the record's capped copies, for every kind."""
     visits = manifest_visit_counts(manifest)
     completed = manifest_completed_passes(manifest)
-    recorded_outputs = dict(manifest.get("resume_inputs") or {})
+    recorded_outputs = resume_source_outputs(manifest, workspace)
+    whole_outputs = frozenset(whole_source_outputs(manifest, workspace))
     work_key = manifest.get("work_key")
     earlier_rows = list(manifest.get("history") or []) + list(manifest.get("runs") or [])
     shared_session = manifest.get("shared_session")
+    kind = resumable_kind(manifest)
+    if kind == "dead":
+        position = manifest["position"]
+        upstream = manifest.get("resume_upstream")
+        if workspace is not None:
+            stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                             position.get("seq") or 0)
+            if stored is not None and stored[0] == position["node"]:
+                upstream = stored[1]
+        return ResumeState(
+            run_id=manifest["run_id"],
+            start_at=position["node"],
+            visits=visits,
+            completed=completed,
+            upstream=upstream,
+            recorded_outputs=recorded_outputs,
+            whole_outputs=whole_outputs,
+            work_key=work_key,
+            earlier_rows=earlier_rows,
+            shared_session=shared_session,
+        )
     needs_input_node = manifest.get("needs_input_node")
-    if needs_input_node:
+    if kind == "paused" or (kind is None and needs_input_node):
         questions = manifest.get("final_output") or ""
         return ResumeState(
             run_id=manifest["run_id"],
@@ -292,17 +525,28 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
                 f"--- The user's answers ---\n{answers}\n\nContinue from here."
             ),
             recorded_outputs=recorded_outputs,
+            whole_outputs=whole_outputs,
             work_key=work_key,
             earlier_rows=earlier_rows,
             shared_session=shared_session,
         )
+    failed_node = manifest["failed_node"]
+    upstream = manifest.get("resume_upstream")
+    position = manifest.get("position")
+    if (workspace is not None and isinstance(position, dict)
+            and position.get("node") == failed_node):
+        stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
+                                         position.get("seq") or 0)
+        if stored is not None and stored[0] == failed_node:
+            upstream = stored[1]
     return ResumeState(
         run_id=manifest["run_id"],
-        start_at=manifest["failed_node"],
+        start_at=failed_node,
         visits=visits,
         completed=completed,
-        upstream=manifest.get("resume_upstream"),
+        upstream=upstream,
         recorded_outputs=recorded_outputs,
+        whole_outputs=whole_outputs,
         work_key=work_key,
         earlier_rows=earlier_rows,
         shared_session=shared_session,
@@ -362,21 +606,29 @@ class _DetachedTracker:
     per-node manifest refresh (in-flight visibility); ``run()`` joins the rest at
     every terminal path so the manifest is complete before it is finalized. The
     submitted callables capture their own failures and return a NodeRun — a
-    future here never raises."""
+    future here never raises.
+
+    It also keeps the entry (``{node_id, iteration, session_key}``) of every
+    launched node whose record has not been drained yet: the record's
+    ``detached_active``, which the walk writes with the trace so a process that
+    dies leaves each of them on record. Only the walk thread calls ``launch``,
+    ``drain``, ``join`` and ``active``, so the record keeps one writer."""
 
     def __init__(self) -> None:
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._futures: list[concurrent.futures.Future] = []
         self._done: list[concurrent.futures.Future] = []
+        self._active: dict[concurrent.futures.Future, dict] = {}
         import threading
         self._lock = threading.Lock()
 
-    def launch(self, fn: Callable[[], NodeRun]) -> None:
+    def launch(self, fn: Callable[[], NodeRun], entry: dict) -> None:
         if self._executor is None:
             self._executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=_DETACHED_MAX_WORKERS, thread_name_prefix="durin-wf-detached")
         fut = self._executor.submit(fn)
         self._futures.append(fut)
+        self._active[fut] = entry
 
         def _mark(f: concurrent.futures.Future) -> None:
             with self._lock:
@@ -384,10 +636,16 @@ class _DetachedTracker:
 
         fut.add_done_callback(_mark)
 
+    def active(self) -> list[dict]:
+        """The entries of launched nodes whose records were not drained yet."""
+        return list(self._active.values())
+
     def drain(self) -> list[NodeRun]:
         """Records of detached nodes that finished since the last drain."""
         with self._lock:
             done, self._done = self._done, []
+        for f in done:
+            self._active.pop(f, None)
         return [f.result() for f in done]
 
     def join(self) -> list[NodeRun]:
@@ -479,6 +737,7 @@ class WorkflowEngine:
         parallel_script_concurrency: int = 4,
         on_run_end: Callable[[str], None] | None = None,
         shared_context_loader: Callable[[str], list[dict]] | None = None,
+        launch_surface: str | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -532,6 +791,12 @@ class WorkflowEngine:
         # restore the shared-context buffer from the record's ``shared_session``;
         # None means a resumed walk starts with an empty buffer.
         self._shared_context_loader = shared_context_loader
+        # Which surface launched the run ("agent": the run tool, whose steps have
+        # the gateway's live MCP tools; "service": the workflows service), written
+        # on the record by the run's first walk and kept by every resume, so a
+        # surface asked to resume it can tell whether it can give the steps the
+        # tools they had. None when the caller does not say.
+        self._launch_surface = launch_surface
 
     def run(
         self,
@@ -648,17 +913,67 @@ class WorkflowEngine:
             # manifest records that same key or runs_for_session can't find the run.
             effective_root = root_session_key or f"workflow:{run_id}:root"
             started_at = time.time()
-            self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
-                                 resumed=resume is not None)
-
-            def _update() -> None:
-                self._update_manifest(workflow, run_id, runs)
-
+            # The record names the step to enter next, and what that step
+            # receives is stored whole beside the run's working folder, so a run
+            # whose process died can be entered again. A sub-workflow's own run
+            # is never resumed on its own (its caller re-runs the whole step), so
+            # its record names no step and it stores nothing.
+            nested = parent_run_id is not None or work_dir_override is not None
+            store: Path | None = (
+                resume_store.store_dir(
+                    self._workspace, run_id, work_dir=work_dir,
+                    keyed=work_dir_override is None and resolved_work_key is not None)
+                if self._workspace is not None and not nested else None
+            )
+            start_seq = self._start_manifest(
+                workflow, run_id, effective_root, started_at, task,
+                parent_run_id, work_dir=work_dir, work_key=resolved_work_key,
+                resumed=resume is not None,
+                start_at=None if nested else (resume.start_at if resume else workflow.start),
+                start_upstream=resume.upstream if resume else None,
+                store=store)
+            sources = run_log.source_nodes(workflow)
+            stored_rows = 0
             # One tracker per run for launch-and-continue (detached) nodes. Every exit
             # from the try below joins it before the manifest is finalized, so a run
             # never reports terminal with a side-effect node silently still running.
             detached_tracker = _DetachedTracker()
+
+            def _store_sources() -> None:
+                # The rows that joined the trace since the last write: every one
+                # of a step another step reads by name has its whole output kept,
+                # an empty one included, in trace order, so the stored output is
+                # the last row the walk itself would read for that step.
+                nonlocal stored_rows
+                fresh, stored_rows = runs[stored_rows:], len(runs)
+                if store is not None:
+                    self._store_sources(workflow, store,
+                                        [r for r in fresh if r.node_id in sources])
+
+            def _update(*, position: dict | None | object = run_log.KEEP_POSITION,
+                        upstream: str | None = None,
+                        starting_detached: dict | None = None) -> None:
+                _store_sources()
+                if nested:
+                    position = run_log.KEEP_POSITION
+                elif isinstance(position, dict) and store is not None and not self._store_input(
+                        workflow, store, position, upstream):
+                    # Never point the record at an input that was not written,
+                    # nor keep the step before, which has finished (or, for a
+                    # detached launch, has started its side effect): the record
+                    # names no step, and a death before the next position is
+                    # written leaves a run that is refused, not re-entered.
+                    position = None
+                # The detached nodes still running go with the trace: a node
+                # whose row was just drained into `runs` leaves the list in the
+                # same write, and one about to be launched (`starting_detached`)
+                # joins it in the write that moves the position past it.
+                active = detached_tracker.active()
+                if starting_detached is not None:
+                    active.append(starting_detached)
+                self._update_manifest(workflow, run_id, runs, position=position,
+                                      detached_active=active)
+
             initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
                 result = self._walk(
@@ -668,10 +983,12 @@ class WorkflowEngine:
                     input_files=None if resume else input_files,
                     update_manifest=_update,
                     start_at=resume.start_at if resume else None,
+                    start_seq=start_seq,
                     initial_visits=dict(resume.visits) if resume else None,
                     initial_completed=dict(resume.completed) if resume and resume.completed else None,
                     initial_upstream=resume.upstream if resume else None,
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
+                    whole_outputs=resume.whole_outputs if resume else frozenset(),
                     earlier_rows=list(resume.earlier_rows) if resume else None,
                     initial_shared_context=initial_shared_context,
                     work_dir=work_dir,
@@ -725,6 +1042,7 @@ class WorkflowEngine:
             # never aborts) and land in the trace the manifest is finalized with —
             # `result.runs` aliases this same list.
             runs.extend(detached_tracker.join())
+            _store_sources()
             self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
             return result
         finally:
@@ -823,9 +1141,29 @@ class WorkflowEngine:
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
                         parent_run_id=None, work_dir=None, work_key=None,
-                        resumed=False) -> None:
+                        resumed=False, start_at=None, start_upstream=None,
+                        store=None) -> int:
+        """Write the run's first record, naming ``start_at`` as its position (none
+        when ``start_at`` is None), and return that position's sequence number. A
+        fresh run starts at 1; a resumed walk continues one past the sequence its
+        record reached, so a number is never given to two positions of one run (a
+        record written before positions existed has none, and its resumed walk
+        starts at 1). ``store`` is the run's resume folder: the step's input is
+        written there first, so the record never names an input that was not
+        written."""
+        seq = 1
         if self._workspace is None:
-            return
+            return seq
+        if resumed:
+            try:
+                prior = run_log.read_manifest(self._workspace, workflow.name, run_id) or {}
+                seq = int((prior.get("position") or {}).get("seq") or 0) + 1
+            except Exception:  # noqa: BLE001 - a bad record must not block the run
+                logger.exception("workflow run position read failed for {}", workflow.name)
+        position: dict | None = {"node": start_at, "seq": seq} if start_at else None
+        if store is not None and position is not None and not self._store_input(
+                workflow, store, position, start_upstream):
+            position = None
         typical = {}
         typical_total = None
         try:
@@ -851,17 +1189,48 @@ class WorkflowEngine:
                               spec_hash=provenance.node_hash(
                                   {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
                               durin_version=provenance.durin_version(),
-                              resumed=resumed)
+                              resumed=resumed,
+                              position=position,
+                              surface=self._launch_surface)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
+        return seq
 
-    def _update_manifest(self, workflow, run_id, runs) -> None:
+    @staticmethod
+    def _store_input(workflow, store: Path, position: dict, upstream: str | None) -> bool:
+        """Keep the whole input of the step ``position`` names in the run's resume
+        folder ``store``. False when it could not be written; the failure is
+        logged and never breaks the run."""
+        try:
+            resume_store.save_input(store, position["seq"], position["node"], upstream)
+        except Exception:  # noqa: BLE001 - a resume-store write must not break the run
+            logger.exception("workflow resume input write failed for {}", workflow.name)
+            return False
+        return True
+
+    @staticmethod
+    def _store_sources(workflow, store: Path, rows: list[NodeRun]) -> None:
+        for row in rows:
+            try:
+                resume_store.save_source(store, row.node_id, row.output or "")
+            except Exception:  # noqa: BLE001 - a resume-store write must not break the run
+                logger.exception("workflow resume source write failed for {}", workflow.name)
+
+    def _update_manifest(self, workflow, run_id, runs, *,
+                         position: dict | None | object = run_log.KEEP_POSITION,
+                         detached_active: list[dict] | None = None) -> None:
+        """Rewrite the live record. ``position`` is the step the walk enters next
+        (None once the walk has ended, or when that step's input could not be
+        stored); left out, the recorded one is kept — the
+        write that precedes a step's failure, where the failed step stays the
+        position. ``detached_active`` is the detached nodes still running."""
         if self._workspace is None:
             return
         try:
             run_log.update_run(self._workspace, workflow.name, run_id,
                                WorkflowResult(status="running", final_output=None, runs=runs),
-                               shared_session=_last_shared_session(workflow, runs))
+                               shared_session=_last_shared_session(workflow, runs),
+                               position=position, detached_active=detached_active)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
@@ -894,6 +1263,13 @@ class WorkflowEngine:
                 run_log.prune_manifests(self._workspace, workflow.name, keep=self._prune_keep)
             except Exception:  # noqa: BLE001 - pruning must not break the run
                 logger.exception("workflow run manifest prune failed for {}", workflow.name)
+
+    def _record_dir(self, workflow) -> str | None:
+        """The folder of this engine's run records for ``workflow``, or None when
+        the engine keeps none."""
+        if self._workspace is None:
+            return None
+        return str(run_log.runs_root(self._workspace) / workflow.name)
 
     @staticmethod
     def _frame_task(workflow: Workflow, task: str, output_format: str | None = None) -> str:
@@ -936,8 +1312,9 @@ class WorkflowEngine:
         raw_task: str | None = None,
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
-        update_manifest: Callable[[], None] | None = None,
+        update_manifest: Callable[..., None] | None = None,
         start_at: str | None = None,
+        start_seq: int = 1,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
         initial_completed: dict[str, int] | None = None,
@@ -946,6 +1323,7 @@ class WorkflowEngine:
         keyed: bool = False,
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
+        whole_outputs: frozenset[str] = frozenset(),
         earlier_rows: list[dict] | None = None,
         initial_shared_context: list[dict] | None = None,
     ) -> WorkflowResult:
@@ -973,6 +1351,10 @@ class WorkflowEngine:
         final_output_node: str | None = None
         final_route_label: str | None = None  # the label that ends the run: matched cases label, "PASS"/"FAIL", or None
         current: str | None = start_at or workflow.start
+        # The sequence number of the position the record names: it rises by one
+        # every time the walk names a next step, a step entered again included,
+        # and continues across resumes (run() passes where the record left off).
+        seq = start_seq
 
         # Seed input_files into the shared working folder so the start node reads them as
         # the run's starting files.
@@ -1009,22 +1391,31 @@ class WorkflowEngine:
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
             node_started_at = time.time()
+            # Only a work node persists a conversation. A script has no
+            # session at all, and a sub-workflow's and a parallel's work
+            # lives in their children's own rows.
+            started_session_key = (node_session_key(run_id, node, iteration)
+                                   if isinstance(node, WorkNode) else None)
+            # A detached node is not marked here: the record names it as in flight
+            # only through `detached_active`, in the write that also moves the
+            # position past it (below, before it is launched). Marked here, the
+            # record would hold it as the position and as started at once, and a
+            # death then would make a resume launch its side effect again.
+            is_detached = isinstance(node, (WorkNode, ScriptNode)) and node.detached
+            # Set once this visit's record write naming the next step was made.
+            position_written = False
             # Guarded like every other manifest write in this class: without a
             # workspace there is no manifest to mark, and calling through would
             # raise on every node of every workspace-less run — an exception the
             # handler below would then swallow on a purely normal path, hiding
             # any real write failure among the noise.
-            if self._workspace is not None:
+            if self._workspace is not None and not is_detached:
                 try:
                     run_log.mark_node_started(
                         self._workspace, workflow.name, run_id,
                         node_id=node.id, label=node_label(node), started_at=node_started_at,
                         iteration=iteration,
-                        # Only a work node persists a conversation. A script has no
-                        # session at all, and a sub-workflow's and a parallel's work
-                        # lives in their children's own rows.
-                        session_key=(node_session_key(run_id, node, iteration)
-                                     if isinstance(node, WorkNode) else None),
+                        session_key=started_session_key,
                     )
                 except Exception:  # noqa: BLE001 - observability write; never break the run
                     logger.exception("workflow node start marker failed for {}", workflow.name)
@@ -1162,9 +1553,26 @@ class WorkflowEngine:
                     detached_input = upstream_output
                     if getattr(node, "inputs_from", ()):
                         detached_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
+                    detached_entry = {"node_id": node.id, "iteration": iteration,
+                                      "session_key": started_session_key}
+                    # One write, before the launch: the node joins
+                    # `detached_active` and the position moves to its `next`,
+                    # which receives the same edge text. Rows of detached nodes
+                    # that finished meanwhile are drained into it too.
+                    runs.extend(detached_tracker.drain())
+                    if update_manifest is not None:
+                        if node.next is None:
+                            update_manifest(position=None, starting_detached=detached_entry)
+                        else:
+                            seq += 1
+                            update_manifest(position={"node": node.next, "seq": seq},
+                                            upstream=upstream_output,
+                                            starting_detached=detached_entry)
+                        position_written = True
                     self._launch_detached(
                         detached_tracker, node, task, detached_input, run_id,
-                        iteration, root_session_key, work_dir, raw_task=raw_task)
+                        iteration, root_session_key, work_dir, raw_task=raw_task,
+                        entry=detached_entry, record_dir=self._record_dir(workflow))
                 current = node.next
 
             elif isinstance(node, (WorkNode, ScriptNode)):
@@ -1207,6 +1615,7 @@ class WorkflowEngine:
                     run_id=run_id,
                     iteration=iteration,
                     root_session_key=root_session_key,
+                    record_dir=self._record_dir(workflow),
                     output_dir=out_dir,
                     # Same condition as the output_file write after the node returns.
                     output_file=((node.output_file or None)
@@ -1541,10 +1950,11 @@ class WorkflowEngine:
                         merged, abort = self._run_dynamic_parallel(
                             workflow, node, task, run_id, iteration, root_session_key,
                             upstream_output, runs, work_dir=work_dir,
-                            resume_outputs=resume_outputs)
+                            resume_outputs=resume_outputs, whole_outputs=whole_outputs)
                     elif node.branches_from is not None:
                         resolved, abort = self._resolve_runtime_branches(
-                            workflow, node, runs, upstream_output, resume_outputs)
+                            workflow, node, runs, upstream_output, resume_outputs,
+                            whole_outputs=whole_outputs)
                         # An empty resolved list is a legitimate "nothing applies" pass:
                         # record the node with empty output and continue to `next`.
                         merged = ""
@@ -1608,10 +2018,19 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts. Detached nodes
             # that finished since the last refresh join the trace here, so an
             # in-flight run shows them without waiting for the terminal join.
-            if detached_tracker is not None:
+            # The same write names the step to enter next and the exact edge text
+            # it will receive (every branch above set both), or no step once the
+            # walk has ended. A detached node's branch already made that write,
+            # before its launch.
+            if detached_tracker is not None and not position_written:
                 runs.extend(detached_tracker.drain())
-            if update_manifest is not None:
-                update_manifest()
+            if update_manifest is not None and not position_written:
+                if current is None:
+                    update_manifest(position=None)
+                else:
+                    seq += 1
+                    update_manifest(position={"node": current, "seq": seq},
+                                    upstream=upstream_output)
             if work_dir is not None and own_work_dir:
                 try:
                     os.utime(Path(work_dir).parent, None)   # keep .workflow/<run_id>/ recent while running
@@ -1777,23 +2196,25 @@ class WorkflowEngine:
         return "\n\n".join(blocks)
 
     @staticmethod
-    def _source_output(runs, source, resume_outputs):
+    def _source_output(runs, source, resume_outputs, whole_outputs=frozenset()):
         """The last output node ``source`` recorded, for a parallel node that reads
         its list or its branch ids from it: ``(text, cut, stored)``.
 
         The walk's own trace comes first. A resumed walk starts with an empty trace,
         so a source that ran before the resume point is read from the outputs the
-        record kept (``stored`` is True). Those copies are capped: one that reaches
-        the cap may be a fragment and is reported as ``cut`` — a list must never be
-        parsed from a fragment. ``text`` is None when the source left no output in
-        either place."""
+        resume was given (``stored`` is True). A source in ``whole_outputs`` was read
+        whole from the run's resume store. Any other is the record's capped copy: one
+        that reaches the cap may be a fragment and is reported as ``cut`` — a list
+        must never be parsed from a fragment. ``text`` is None when the source left
+        no output in either place."""
         for recorded in reversed(runs):
             if recorded.node_id == source:
                 return recorded.output, recorded.output_truncated, False
         stored = (resume_outputs or {}).get(source)
         if stored is None:
             return None, False, False
-        return stored, len(stored) >= run_log.RESUME_INPUT_MAX_CHARS, True
+        return (stored, source not in whole_outputs
+                and len(stored) >= run_log.RESUME_INPUT_MAX_CHARS, True)
 
     @staticmethod
     def _stored_source_cut(node, source: str, what: str) -> str:
@@ -1803,8 +2224,9 @@ class WorkflowEngine:
                 "characters), so nothing was started on a partial copy. Start a new run instead.")
 
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
-                         root_key, work_dir, raw_task=None):
-        """Submit a detached node to the run's tracker. The callable mirrors branch
+                         root_key, work_dir, raw_task=None, *, entry, record_dir=None):
+        """Submit a detached node to the run's tracker, with ``entry`` its item of
+        the record's ``detached_active``. The callable mirrors branch
         execution (same kind dispatch, working-folder anchoring) but captures every
         failure into the returned NodeRun: a side effect must never sink the run."""
         def _execute() -> NodeRun:
@@ -1812,15 +2234,15 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     node, task, upstream, run_id, iteration, root_key,
-                    None, out_dir=work_dir, raw_task=raw_task)
+                    None, out_dir=work_dir, raw_task=raw_task, record_dir=record_dir)
                 return self._unit_run(node.id, iteration, t0, node=node, resp=resp)
             except Exception as exc:  # noqa: BLE001 - a detached failure is a record, not an abort
                 return self._unit_run(node.id, iteration, t0, node=node, exc=exc)
 
-        tracker.launch(_execute)
+        tracker.launch(_execute, entry)
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
-                        workspace_override, out_dir=None, raw_task=None):
+                        workspace_override, out_dir=None, raw_task=None, record_dir=None):
         # Same kind dispatch as the linear walk: a script branch runs the script
         # contract (stdin = the parallel's upstream text, cwd = out_dir) beside
         # the agent branches.
@@ -1833,7 +2255,7 @@ class WorkflowEngine:
         return runner(NodeRunRequest(
             node=branch, task=task, raw_task=raw_task, upstream_output=upstream, shared_context=[],
             run_id=run_id, iteration=iteration, root_session_key=root_key,
-            workspace_override=workspace_override,
+            workspace_override=workspace_override, record_dir=record_dir,
             output_dir=out_dir if (is_script or getattr(branch, "tools", "none") == "default") else None,
             # Same split as the linear walk: a script branch's subprocess dies on
             # either cancel mode, an agent branch's turn only on a hard cancel.
@@ -1952,7 +2374,7 @@ class WorkflowEngine:
             )
         return [str(x) for x in parsed][:50], None
 
-    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, resume_outputs=None):
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, resume_outputs=None, whole_outputs=frozenset()):
         """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
 
         Returns ``(merged_output, abort_message)``.  Each worker run is appended to
@@ -1961,7 +2383,8 @@ class WorkflowEngine:
         # Resolve the list source: prefer the most recent recorded output of the
         # list_from node (it may not be the immediate predecessor); fall back to
         # upstream_output for the common case where it is.
-        list_text, list_truncated, stored = self._source_output(runs, node.list_from, resume_outputs)
+        list_text, list_truncated, stored = self._source_output(
+            runs, node.list_from, resume_outputs, whole_outputs)
         if stored and list_truncated:
             return "", self._stored_source_cut(node, node.list_from, "list")
         if list_text is None:
@@ -2070,7 +2493,8 @@ class WorkflowEngine:
         last_line = candidate.splitlines()[-1]
         return [tok.strip().strip("'\"") for tok in last_line.split(",") if tok.strip()][:50]
 
-    def _resolve_runtime_branches(self, workflow, node, runs, upstream, resume_outputs=None):
+    def _resolve_runtime_branches(self, workflow, node, runs, upstream, resume_outputs=None,
+                                  whole_outputs=frozenset()):
         """Resolve a ``branches_from`` parallel node's branch ids for this pass.
 
         Reads the most recent recorded output of the source node (falling back to the
@@ -2080,7 +2504,8 @@ class WorkflowEngine:
         in the emitting node — abort naming it rather than guessing.
         Returns ``(ids, abort_message)``.
         """
-        source_text, cut, stored = self._source_output(runs, node.branches_from, resume_outputs)
+        source_text, cut, stored = self._source_output(
+            runs, node.branches_from, resume_outputs, whole_outputs)
         if stored and cut:
             return [], self._stored_source_cut(node, node.branches_from, "branch ids")
         if source_text is None:
@@ -2207,7 +2632,8 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                        None, out_dir=work_dir, raw_task=raw_task)
+                        None, out_dir=work_dir, raw_task=raw_task,
+                        record_dir=self._record_dir(workflow))
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
@@ -2253,7 +2679,8 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                    str(fork_dir), out_dir=str(fork_dir), raw_task=raw_task)
+                    str(fork_dir), out_dir=str(fork_dir), raw_task=raw_task,
+                    record_dir=self._record_dir(workflow))
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()

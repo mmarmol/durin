@@ -21,6 +21,11 @@ and returned as ``route_label`` so the engine's routing path is identical to an
 agent node's. A non-zero exit on a NON-gate node is an error (NodeExecutionError
 → aborted run), not a verdict. A script node has no session: session_key is None
 and messages are empty.
+
+While the subprocess runs it is recorded beside the run's record
+(``run_log.record_script``), and the record is removed once it has exited, so
+that if this process dies the conversion of the dead run can end the script
+before its step runs again.
 """
 
 from __future__ import annotations
@@ -30,9 +35,13 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
+from loguru import logger
+
 from durin.security.secrets import get_secret_store, redact_secrets, scope_allows
+from durin.workflow import run_log
 from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
@@ -202,6 +211,66 @@ class ScriptNodeRunner:
             )
         except (FileNotFoundError, PermissionError, OSError) as exc:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
+        record = None
+        try:
+            record = self._record_child(req, proc)
+            return self._finish(req, proc, task, timeout)
+        finally:
+            if proc.returncode is None:
+                # Something other than the script's own end or a kill below
+                # broke the wait: end the script here, so it never outlives
+                # its step unrecorded.
+                self._end(proc)
+            run_log.forget_script(record)
+
+    @staticmethod
+    def _record_child(req: NodeRunRequest, proc: subprocess.Popen) -> Path | None:
+        """Record the script process beside the run's record while it runs, so
+        that if this process dies, the conversion of the dead run can end the
+        script before its step runs again. Nothing is recorded when the engine
+        keeps no record, or when the start time cannot be read (the process
+        could not be told from a later one with the same pid). A failed write
+        does not fail the step."""
+        if not req.record_dir:
+            return None
+        from durin.utils.process_tree import process_identity
+
+        started = process_identity(proc.pid)["started"]
+        if started is None:
+            if proc.poll() is not None:
+                return None     # it already exited: nothing left to record
+            logger.warning("script of step {!r} in run {}: its start could not be read, "
+                           "so its process (pid {}) is not recorded; if this process dies "
+                           "while it runs, nothing ends it", req.node.id, req.run_id, proc.pid)
+            return None
+        try:
+            return run_log.record_script(req.record_dir, req.run_id, pid=proc.pid,
+                                         started=started, node_id=req.node.id)
+        except OSError:
+            logger.warning("script of step {!r} in run {}: could not record its process",
+                           req.node.id, req.run_id)
+            return None
+
+    @staticmethod
+    def _end(proc: subprocess.Popen) -> None:
+        """Kill the script's process group and reap it, without reading its
+        streams (whatever broke the wait may break a read too)."""
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with suppress(Exception):
+            proc.kill()
+        with suppress(Exception):
+            proc.wait(timeout=10)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                with suppress(Exception):
+                    stream.close()
+
+    def _finish(self, req: NodeRunRequest, proc: subprocess.Popen, task: str | None,
+                timeout: int) -> NodeRunResponse:
+        """Feed the script its input, wait for it (killing it on a timeout or a
+        cancel) and turn what it printed into the step's response."""
+        node = req.node
         stdin_data = (req.upstream_output if req.upstream_output is not None else task) or ""
         deadline = time.monotonic() + timeout
         try:

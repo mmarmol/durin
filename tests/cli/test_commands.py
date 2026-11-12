@@ -895,6 +895,84 @@ def test_legacy_repl_tells_the_agent_not_to_wait_for_mid_turn_answers(
     assert seen == [False]
 
 
+def _a_run_thread_alive():
+    """A thread named like a workflow run's, kept alive until the returned
+    event is set: what ``leave_unfinished_runs`` looks for before it ends the
+    process."""
+    import threading
+
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, args=(10,), name="workflow-run-guard")
+    thread.start()
+    return release, thread
+
+
+def test_a_quit_with_a_run_in_flight_does_not_end_the_test_process(
+    mock_agent_runtime, tmp_path: Path,
+):
+    """The REPL's exit leaves unfinished runs by ending the process. In a test
+    the suite-wide guard stands in for that: with a run thread alive, the exit
+    path returns and this test is still running afterwards."""
+    agent_loop = mock_agent_runtime["agent_loop"]
+
+    async def _run() -> None:
+        return None
+
+    agent_loop.run = _run
+    agent_loop.workspace = tmp_path
+    release, thread = _a_run_thread_alive()
+    try:
+        with patch("durin.cli.commands._init_prompt_session"), \
+             patch("durin.cli.commands._read_interactive_input_async",
+                   AsyncMock(side_effect=EOFError)), \
+             patch("signal.signal"):
+            result = runner.invoke(app, ["agent", "--legacy"])
+        assert result.exit_code == 0, result.output
+        assert thread.is_alive()
+    finally:
+        release.set()
+        thread.join(5)
+    # Reaching this line is the proof: the process was not ended.
+
+
+def test_quitting_the_repl_tells_the_person_about_runs_left(
+    mock_agent_runtime, tmp_path: Path, monkeypatch,
+):
+    from durin.workflow import run_threads
+
+    calls: list[dict] = []
+    monkeypatch.setattr(run_threads, "leave_unfinished_runs", lambda **kw: calls.append(kw))
+    agent_loop = mock_agent_runtime["agent_loop"]
+
+    async def _run() -> None:
+        return None
+
+    agent_loop.run = _run
+    agent_loop.workspace = tmp_path
+    with patch("durin.cli.commands._init_prompt_session"), \
+         patch("durin.cli.commands._read_interactive_input_async",
+               AsyncMock(side_effect=EOFError)), \
+         patch("signal.signal"):
+        result = runner.invoke(app, ["agent", "--legacy"])
+    assert result.exit_code == 0, result.output
+    assert calls == [{"tell_user": True}]
+
+
+def test_quitting_the_tui_tells_the_person_about_runs_left(
+    mock_agent_runtime, tmp_path: Path, monkeypatch,
+):
+    from durin.workflow import run_threads
+
+    calls: list[dict] = []
+    monkeypatch.setattr(run_threads, "leave_unfinished_runs", lambda **kw: calls.append(kw))
+    mock_agent_runtime["agent_loop"].workspace = tmp_path
+    with patch("durin.cli.tui.run_durin_tui") as tui:
+        result = runner.invoke(app, ["agent", "--new"])
+    assert result.exit_code == 0, result.output
+    tui.assert_called_once()
+    assert calls == [{"tell_user": True}]
+
+
 def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):
     config_path = tmp_path / "agent-config.json"
     config_path.write_text("{}")
@@ -2453,9 +2531,13 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
     from durin.command.builtin import cmd_restart
     from durin.command.router import CommandContext
     from durin.utils import restart as restart_mod
+    from durin.workflow import cancellation
 
     monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
     calls: list[str] = []
+    # Whether the process had begun shutting down when intake stopped: every
+    # turn the shutdown cancels after that point is cancelled by a shutdown.
+    shutting_down_at_intake: list[bool] = []
 
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -2505,6 +2587,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
 
         def stop_intake(self) -> None:
             calls.append("agent.stop_intake")
+            shutting_down_at_intake.append(cancellation.shutting_down())
 
         def stop(self) -> None:
             calls.append("agent.stop")
@@ -2591,6 +2674,7 @@ def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, t
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert result.exit_code == 0, result.output
+    assert shutting_down_at_intake == [True]
     assert calls == [
         "agent.stop_intake",
         "agent.close_mcp",

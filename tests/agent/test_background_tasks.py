@@ -248,9 +248,8 @@ def test_running_revisit_of_a_completed_node_collapses_to_one_row(tmp_path):
 
 def test_a_crashed_run_reports_no_running_node(tmp_path):
     """Crash reconciliation (reconcile_one / reconcile_running) flips a dead run's
-    status to "crashed" but does not touch active_node — only a normal completion
-    (update_run) clears that marker. Without a status gate at the reader, a run
-    that died mid-node would report that node as "running" forever."""
+    status to "crashed" and clears active_node, so the dead node is not reported
+    as running."""
     from durin.agent.background_tasks import collect_tasks
     from durin.workflow import run_log
 
@@ -268,7 +267,27 @@ def test_a_crashed_run_reports_no_running_node(tmp_path):
 
     manifest = run_log.read_manifest(tmp_path, "wf", "r5")
     assert manifest["status"] == "crashed"
-    assert manifest["active_node"]["node_id"] == "search"   # reconcile leaves it set
+    assert manifest["active_node"] is None   # the conversion clears it
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    assert row["status"] == "failed"
+    assert not any(n["status"] == "running" for n in row["nodes"])
+
+
+def test_a_run_crashed_with_its_marker_still_set_reports_no_running_node(tmp_path):
+    """A record an older release flipped to "crashed" keeps its active_node; the
+    reader's status gate is what keeps it from showing as running forever."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r6", root_session_key="websocket:c", started_at=100.0)
+    run_log.mark_node_started(tmp_path, "wf", "r6", node_id="search",
+                              label="Search", started_at=140.0)
+    path = run_log._record_path(tmp_path, "wf", "r6")
+    rec = run_log.read_manifest(tmp_path, "wf", "r6")
+    rec["status"] = "crashed"
+    path.write_text(json.dumps(rec), encoding="utf-8")
 
     row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
                if t["kind"] == "workflow")

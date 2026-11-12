@@ -106,8 +106,15 @@ executors refuse new work once the exit begins (each DNS lookup fails, and a
 provider retries it as a connection error). So neither way out waits: a restart
 re-execs, and a stop ends the process as soon as everything is flushed
 (`leave_unfinished_runs`), naming the runs it left (the whole stop sequence is
-in [observability](observability.md)). Either way the run ends
-where a crash would, for the startup sweep to mark it `crashed`. Reactive dreams run
+in [observability](observability.md)). Quitting the TUI or the legacy REPL
+ends the same way. Either way the run ends
+where a crash would: its record stays `running` until the gateway's crash sweep (at
+start and periodically, in a gateway with the websocket channel), the `tasks` tool
+asked about it, or a resume of it finds its
+process gone and marks it `crashed`, resumable. What is left of a script it had started
+is ended then, before its step can run again, and a resume is refused while anything of
+it may still run (see [workflow.md](workflow.md)). An owner that cannot be observed is
+never taken for gone. Reactive dreams run
 on a daemon thread they start themselves (`dream-<trigger>`), outside the
 pool as well.
 
@@ -467,6 +474,7 @@ it), so a full-file atomic rewrite is enough — the same reasoning as
 workflow run logs. That single-writer assumption breaks across a gateway
 restart mid-run: `find_orphans` (`durin/automations/run_log.py`) reports a
 `running` manifest as orphaned once its owner process is confirmed dead
+(an owner is a process and one start of it, so a restart in place counts)
 (falling back to a `started_at` age cutoff — six hours by default — only for
 an ownerless legacy manifest), and the gateway's periodic
 `AutomationsRuntime.sweep_orphans()` task (started right after
