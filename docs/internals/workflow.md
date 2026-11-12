@@ -1313,7 +1313,7 @@ only reads; the record stays byte for byte as it was.
 **What is logged and counted.** Each refusal above is a `refusal.Refusal`: a `str` equal
 to its sentence, with a `kind` fixed where the sentence is made. The word is
 never worked out from the sentence's wording. The words are `owner_alive` (the process
-recorded as running it still seems alive), `script_alive` (a script may still run),
+recorded as running it still seems alive), `script_alive` (a script may still run, or its record cannot be read),
 `folder_pruned`, `step_gone`, `superseded` (a later run took the
 key's folder), `automation`, `mcp_tools`, `child_running`, `lost_race` (the record
 changed, was removed, or a lock stayed busy; a lost claim is a `ResumeLostError` whose
@@ -1325,7 +1325,7 @@ payloads holds a path, a process id or task text, and none sets a session key of
 
 | Event | Payload | Emitted |
 |---|---|---|
-| `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count) | once per conversion, with one info log line |
+| `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count; `null` when the folder could not be listed, which does not hold back the conversion) | once per conversion, with one info log line |
 | `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume |
 | `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`) |
 | `workflow.writeback_restored` | `workflow`, `run_id`, `step` | when a write-back a dead process left cut was put back before the walk used the folder (`step` is the step it resumes at, `null` for a run that was not resumed) or before a parallel step ran (that step) |
@@ -1504,7 +1504,9 @@ and matches a record by `launch.session_key` (a record without `launch`, one
 written before launches were kept, by `root_session_key`; a sub-workflow's own
 run is never matched), newest first. `run_workflow.cut_runs_notice` walks those
 records and stops at the first one that is not cut, so a conversation that launches
-again after being told is not told again. A run is cut when its record is `crashed`,
+again after being told is not told again about the same runs, unless the run the told
+launch started was itself cut: the next launch then names that run and the earlier cut
+runs with it. A run is cut when its record is `crashed`,
 or `running` with an owner that is proven gone (`run_log.owner_gone`, the same
 judgement the crash conversion uses; an owner that cannot be observed counts as
 alive). At most the newest few cut runs are examined (`_CUT_RUNS_EXAMINED`). The notice

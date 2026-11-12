@@ -349,3 +349,24 @@ def test_a_failing_end_of_the_scripts_still_exits(monkeypatch):
         release.set()
         thread.join(5)
     assert codes == [0]
+
+
+def test_the_shutdown_line_says_how_many_scripts_are_ended(monkeypatch, end_scripts_calls):
+    from durin.workflow import script_runner
+
+    held = subprocess.Popen(["true"])
+    held.wait(timeout=10)
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(m.record["message"]), level="WARNING",
+                      filter="durin.workflow.run_threads", format="{message}")
+    with script_runner._children_lock:
+        script_runner._children.add(held)
+    try:
+        _left_with_a_run_thread(monkeypatch, end_scripts_calls)
+    finally:
+        logger.remove(sink)
+        with script_runner._children_lock:
+            script_runner._children.discard(held)
+    [line] = lines
+    assert "1 workflow run(s) unfinished" in line
+    assert "ending the 1 workflow script(s) this process still holds" in line

@@ -532,9 +532,7 @@ new run if that one is still running. When the new launch uses the same
 `work_key` as the cut run, the note says that once the new run starts it takes
 over that key's folder and the cut run can no longer be resumed; a launch refused
 before its run starts (a missing input file, say) leaves the cut run resumable.
-When something of a cut run is still running, the note says so, even when the run
-could never be resumed, and a new run works beside it.
-The agent never ends those processes or deletes files itself. With unified
+With unified
 sessions all chats share one conversation, so the note can name a run that was
 started from another chat.
 
@@ -553,7 +551,11 @@ is unchanged.
 
 When durin stops (`durin gateway stop`, quitting the terminal UI) or restarts in
 place (`/restart`), it ends the scripts its runs were running, right before it
-exits, and those runs can be resumed at the step they were in. A process killed outright
+exits, and those runs can be resumed at the step they were in. A service manager
+should send its stop signal to the gateway's main process only (with systemd,
+`KillMode=mixed`): one that signals every process of the service reaches the scripts
+first, and a script that ends that way counts as its step's outcome, a failed step or
+a gate's `FAIL`. A process killed outright
 (a `kill -9`, a stop that had to force it, the system running out of memory, a
 power loss) cannot do that: its
 scripts keep running, and nothing in durin ever ends them. The resume of such a run

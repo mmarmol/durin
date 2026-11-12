@@ -151,13 +151,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   is entered again at the step it was in). Finished steps do not run again; the step the run
   stopped in runs again from its start — a parallel step with all its branches or workers, a
   sub-workflow step with its whole child — so what it already did outside durin (a sent
-  message, a posted comment) can happen twice, and after a crash a command its agent started
+  message, a posted comment) can happen twice, and after a crash a command an agent step started
   with the shell tool may still be running. Before you resume, check whether that step
   already acted; tell the person when you cannot. When you resume a run another
   conversation started, that conversation may not be told: if its person must know, tell
   your user.
   **When a resume is refused, or a reply (a run summary, a `tasks` reply, a launch's
-  `Note: run <id> … was cut short`) names a cut run or a file, folder or pid in a run's
+  `Note: run <id> … was cut short`) names a run cut short (status `crashed`) or a file, folder or pid in a run's
   way**, tell the person the reason and every run id, file, folder and pid it names. Do not,
   on your own, resume a cut run, end a process, or remove, move or change a file or folder:
   resume a cut run only when the person asks, after stopping the run your launch started

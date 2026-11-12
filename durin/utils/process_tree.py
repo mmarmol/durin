@@ -141,10 +141,10 @@ class Seen:
         self.pid, self.pgid, self.zombie, self.started = pid, pgid, zombie, started
 
 
-def _ps(args: list[str], timeout: float) -> subprocess.CompletedProcess:
+def _ps(args: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(["ps", *args], capture_output=True, text=True,
-                              timeout=max(0.05, timeout))
+                              timeout=_PS_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ObservationError(f"ps failed: {exc}") from exc
 
@@ -167,7 +167,7 @@ def _from_ps_line(text: str) -> tuple[str, int, str]:
     return state, int(pgid), rest.strip()
 
 
-def _observe(pid: int, *, timeout: float = _PS_TIMEOUT_S) -> Seen | None:
+def _observe(pid: int) -> Seen | None:
     """Observe one process: a ``Seen``, or None on proof that no process has
     that pid. Raises ObservationError when neither is known."""
     boot = _proc_boot_id()
@@ -188,7 +188,7 @@ def _observe(pid: int, *, timeout: float = _PS_TIMEOUT_S) -> Seen | None:
         except (ValueError, IndexError) as exc:
             raise ObservationError(f"/proc/{pid}/stat: {exc}") from exc
         return Seen(pid, pgid, state in ("Z", "X"), f"{_PROC_FORM}{boot}:{ticks}")
-    out = _ps(["-p", str(pid), "-o", "stat=,pgid=,lstart="], timeout)
+    out = _ps(["-p", str(pid), "-o", "stat=,pgid=,lstart="])
     text = out.stdout.strip()
     if not text:
         # ps prints nothing both for a pid that does not exist and when it fails.
@@ -202,10 +202,10 @@ def _observe(pid: int, *, timeout: float = _PS_TIMEOUT_S) -> Seen | None:
     return Seen(pid, pgid, state.startswith("Z"), started)
 
 
-def _lstart_of(pid: int, timeout: float) -> str | None:
+def _lstart_of(pid: int) -> str | None:
     """The ``ps -o lstart`` string of ``pid``, None on proof it does not exist.
     Raises ObservationError otherwise."""
-    out = _ps(["-p", str(pid), "-o", "lstart="], timeout)
+    out = _ps(["-p", str(pid), "-o", "lstart="])
     text = out.stdout.strip()
     if text:
         return text
@@ -214,7 +214,7 @@ def _lstart_of(pid: int, timeout: float) -> str | None:
     raise ObservationError(f"ps printed nothing for live pid {pid}")
 
 
-def _same_start(seen: Seen, recorded: str, *, timeout: float = _PS_TIMEOUT_S) -> bool:
+def _same_start(seen: Seen, recorded: str) -> bool:
     """Whether the observed process is the one whose start identity was
     recorded. A value recorded in the ``ps lstart`` form where this system
     reads /proc is compared the old way. Raises ObservationError when it cannot
@@ -222,7 +222,7 @@ def _same_start(seen: Seen, recorded: str, *, timeout: float = _PS_TIMEOUT_S) ->
     if recorded.startswith(_PROC_FORM) == seen.started.startswith(_PROC_FORM):
         return seen.started == recorded
     if not recorded.startswith(_PROC_FORM):
-        current = _lstart_of(seen.pid, timeout)
+        current = _lstart_of(seen.pid)
         return current is not None and current == recorded
     raise ObservationError("a /proc start identity cannot be read on this system")
 
@@ -302,7 +302,7 @@ def process_state(pid: object, started: object) -> str:
         return "unknown"
 
 
-def _process_table(timeout: float) -> list[Seen]:
+def _process_table() -> list[Seen]:
     """Every visible process, observed at once. Raises ObservationError when the
     table cannot be read whole."""
     boot = _proc_boot_id()
@@ -327,7 +327,7 @@ def _process_table(timeout: float) -> list[Seen]:
                 raise ObservationError(f"/proc/{pid}/stat: {exc}") from exc
             table.append(Seen(pid, pgid, state in ("Z", "X"), f"{_PROC_FORM}{boot}:{ticks}"))
         return table
-    out = _ps(["-A", "-o", "pid=,pgid=,stat=,lstart="], timeout)
+    out = _ps(["-A", "-o", "pid=,pgid=,stat=,lstart="])
     if out.returncode != 0 or not out.stdout.strip():
         raise ObservationError(f"ps -A failed ({out.returncode})")
     table = []
@@ -372,8 +372,7 @@ def _group_empty(pgid: int, members: list[Seen]) -> bool:
     raise ObservationError(f"group {pgid} exists but no member of it is visible")
 
 
-def left_script_state(pid: int, started: str, *,
-                      timeout: float = _PS_TIMEOUT_S) -> tuple[str, list[int], list[int]]:
+def left_script_state(pid: int, started: str) -> tuple[str, list[int], list[int]]:
     """Whether a script a dead run left could still be running, as
     ``(state, own, group)``:
 
@@ -397,13 +396,13 @@ def left_script_state(pid: int, started: str, *,
     elif state == "unknown":
         unknown = True
     try:
-        leader = _observe(pid, timeout=timeout)
+        leader = _observe(pid)
         reused = (leader is not None and not leader.zombie
-                  and not _same_start(leader, started, timeout=timeout))
+                  and not _same_start(leader, started))
         if not reused:
             if leader is not None and not leader.zombie and pid not in own:
                 own.append(pid)
-            in_group = [m for m in _process_table(timeout) if m.pgid == pid]
+            in_group = [m for m in _process_table() if m.pgid == pid]
             live = [m.pid for m in in_group if not m.zombie]
             group.extend(p for p in live if p != pid)
             if not live and not _group_empty(pid, in_group):

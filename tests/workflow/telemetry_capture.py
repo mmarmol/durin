@@ -46,3 +46,16 @@ def assert_clean(rows: list[dict], *private: str) -> None:
         assert "/" not in text and "pid" not in text, text
         for word in private:
             assert word not in text, text
+
+
+@pytest.fixture(name="log_lines")
+def log_lines_fixture():
+    """The messages durin's workflow modules log while the test runs, at INFO
+    and above."""
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(m.record["message"]), level="INFO",
+                      filter="durin.workflow", format="{message}")
+    yield lines
+    logger.remove(sink)

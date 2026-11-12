@@ -1717,12 +1717,6 @@ async def test_a_cut_run_refused_for_another_reason_is_not_named(tmp_path, how):
 
 
 @pytest.mark.asyncio
-async def test_a_cut_run_that_can_never_be_resumed_and_has_nothing_left_is_not_named(tmp_path):
-    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", node="removed")
-    assert "Note:" not in await _launch(tmp_path)
-
-
-@pytest.mark.asyncio
 async def test_at_most_ten_cut_runs_are_looked_at(tmp_path, monkeypatch):
     import importlib
     engine = importlib.import_module("durin.workflow.engine")

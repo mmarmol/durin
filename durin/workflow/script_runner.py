@@ -150,6 +150,13 @@ def end_scripts_for_exit() -> int:
     return ended
 
 
+def scripts_held() -> int:
+    """How many scripts this process started and has not reaped yet: what
+    ``end_scripts_for_exit`` would signal now, at most."""
+    with _children_lock:
+        return len(_children)
+
+
 def _start(argv: list[str], cwd: str | None, env: dict[str, str]) -> subprocess.Popen:
     """Start a script and keep it among this process's children; wait for the
     process to end instead when the process is ending.

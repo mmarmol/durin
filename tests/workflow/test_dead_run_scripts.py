@@ -155,10 +155,6 @@ def signals(monkeypatch):
 
 # ── a real process ended inside a script step ──
 
-def _script_pids(workspace, name="w", run_id="r1") -> list[int]:
-    return [e["pid"] for e in _recorded(workspace, name, run_id)]
-
-
 def _sub_and_child(tmp_path):
     parent = {"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "sub"},
@@ -459,7 +455,7 @@ def test_a_script_that_cannot_be_checked_refuses_the_resume(tmp_path, groups, mo
     run_log.record_script(folder, "r1", pid=proc.pid, started=_started(proc.pid), node_id="a")
     assert run_log.mark_dead_run(tmp_path, "w", "r1")["status"] == "crashed"
 
-    def cannot_read(_timeout):
+    def cannot_read():
         raise process_tree.ObservationError("ps failed")
 
     real_table = process_tree._process_table
@@ -818,7 +814,7 @@ def test_the_same_boot_and_start_ticks_are_the_same_process(proc_readers):
 
 def test_an_identity_recorded_the_old_way_is_compared_the_old_way(proc_readers, monkeypatch):
     seen = process_tree._observe(4242)
-    monkeypatch.setattr(process_tree, "_lstart_of", lambda pid, timeout: "Wed Nov 11 10:00:00 2026")
+    monkeypatch.setattr(process_tree, "_lstart_of", lambda pid: "Wed Nov 11 10:00:00 2026")
     assert process_tree._same_start(seen, "Wed Nov 11 10:00:00 2026") is True
     assert process_tree._same_start(seen, "Tue Nov 10 10:00:00 2026") is False
 
@@ -997,7 +993,7 @@ def _proc_table(monkeypatch, reads: dict):
         return read
 
     monkeypatch.setattr(process_tree, "_read_proc_stat", stat)
-    return process_tree._process_table(1.0)
+    return process_tree._process_table()
 
 
 def test_a_process_that_exits_while_the_table_is_read_counts_as_gone(monkeypatch):
