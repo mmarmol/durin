@@ -21,8 +21,17 @@ what ran before the end. ``DURIN_TEST_HANG_IN_APPLY=<k>`` hangs the same way
 right after the ``k``-th real file of a parallel step's write-back into the working
 folder was written (``workspace_fork._write_file``), so the test ends the process
 in the middle of that write-back. ``DURIN_TEST_OUTPUT_CHARS`` (``<id>=<n>``, comma-separated)
-pads an agent step's reply to ``n`` characters. ``SIGUSR1`` makes the process replace its own image (same pid) with an
-idle interpreter, which is what a restart in place looks like from outside.
+pads an agent step's reply to ``n`` characters.
+
+The run executes on a run thread, as in the gateway, and the process ends the
+way durin's own do. ``SIGTERM`` is a graceful stop: the process marks itself as
+shutting down (``cancellation.begin_shutdown``), stops waiting on the run and
+leaves it (``run_threads.leave_unfinished_runs``). ``SIGUSR1`` is a restart in
+place: the same mark, then ``restart.reexec``, which replaces the image (same
+pid). The image it replaces this one with is an idle interpreter instead of
+``python -m durin``: ``sys.executable`` points at a small script that starts
+one, so the test sees the pid alive, as after a real restart, and nothing else
+runs in this workspace.
 
 Other switches: ``DURIN_TEST_RUN_ID`` gives the run another id than ``r1``;
 ``DURIN_TEST_WORK_KEY`` runs it on that work key; ``DURIN_TEST_RESUME=1``
@@ -35,6 +44,7 @@ the runners the child used.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import os
@@ -51,7 +61,8 @@ if __name__ == "__main__":
     # ``durin`` the test process imported, not whatever else is installed.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from durin.workflow import run_log, workspace_fork  # noqa: E402
+from durin.utils import restart  # noqa: E402
+from durin.workflow import cancellation, run_log, run_threads, workspace_fork  # noqa: E402
 from durin.workflow.engine import (  # noqa: E402
     NodeRunResponse,
     WorkflowEngine,
@@ -248,8 +259,38 @@ def _hang_in_apply(workspace: Path, after: int) -> None:
     workspace_fork._write_file = write
 
 
-def _replace_image(_signum, _frame) -> None:
-    os.execv(sys.executable, [sys.executable, "-I", "-c", "import time; time.sleep(120)"])
+def _idle_interpreter(folder: Path) -> str:
+    """A script that replaces itself with an idle interpreter, whatever it is
+    given: what ``restart.reexec`` runs here in place of ``python -m durin``."""
+    path = folder / "idle-interpreter"
+    path.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -I -c "
+                    f"'import time; time.sleep({HANG_SECONDS})'\n", encoding="utf-8")
+    path.chmod(0o755)
+    return str(path)
+
+
+async def _until_ended(run_id: str, run) -> str | None:
+    """Run ``run`` on a run thread and wait for it, or for SIGTERM (``"stop"``)
+    or SIGUSR1 (``"restart"``), whichever comes first; returns the signal's
+    word, or None when the run ended. A signal first marks the process as
+    shutting down, before anything stops waiting on the run, as durin's own
+    processes do."""
+    loop = asyncio.get_running_loop()
+    ended: asyncio.Future[str] = loop.create_future()
+
+    def on_signal(word: str) -> None:
+        cancellation.begin_shutdown()
+        if not ended.done():
+            ended.set_result(word)
+
+    for sig, word in ((signal.SIGTERM, "stop"), (signal.SIGUSR1, "restart")):
+        loop.add_signal_handler(sig, on_signal, word)
+    walk = asyncio.ensure_future(run_threads.run_on_workflow_thread(run_id, run, paced=True))
+    await asyncio.wait({walk, ended}, return_when=asyncio.FIRST_COMPLETED)
+    if walk.done():
+        walk.result()
+        return None
+    return ended.result()
 
 
 def _resume(workspace: Path, workflow, run_id: str, task: str) -> int:
@@ -268,7 +309,6 @@ def _resume(workspace: Path, workflow, run_id: str, task: str) -> int:
 
 def main(argv: list[str]) -> int:
     workspace, definition, task = Path(argv[1]), Path(argv[2]), argv[3]
-    signal.signal(signal.SIGUSR1, _replace_image)
     workflow = parse_workflow(json.loads(definition.read_text(encoding="utf-8")))
     run_id = os.environ.get(RUN_ID_ENV) or RUN_ID
     if os.environ.get(HANG_IN_APPLY_ENV):
@@ -276,8 +316,13 @@ def main(argv: list[str]) -> int:
         _hang_in_apply(workspace, int(os.environ[HANG_IN_APPLY_ENV]))
     if os.environ.get(RESUME_ENV) == "1":
         return _resume(workspace, workflow, run_id, task)
-    build_engine(workspace, run_id).run(
+    run = lambda: build_engine(workspace, run_id).run(  # noqa: E731
         workflow, task, work_key=os.environ.get(WORK_KEY_ENV) or None)
+    how = asyncio.run(_until_ended(run_id, run))
+    if how == "restart":
+        sys.executable = _idle_interpreter(Path.cwd())
+        restart.reexec()
+    run_threads.leave_unfinished_runs()
     return 0
 
 

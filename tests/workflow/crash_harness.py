@@ -97,8 +97,9 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
     """Run `definition` in a child process and end the process while step
     `stop_in` is running (None: while the step `env` makes hang, such as a
     fan-out worker by its task, or inside a write-back with `HANG_IN_APPLY_ENV`).
-    `how`: "kill" (SIGKILL), "term" (SIGTERM, then wait), "exec" (the child
-    replaces its own image, keeping its pid).
+    `how`: "kill" (SIGKILL), "term" (a graceful stop: SIGTERM, which the child
+    handles as durin's own processes do, then wait for it to exit), "exec" (a
+    restart in place: the child replaces its own image, keeping its pid).
 
     The script processes the child leaves behind are killed at once, unless
     `keep_scripts`: they then stay alive for the test, which is what a dead
