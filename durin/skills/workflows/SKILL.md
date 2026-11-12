@@ -221,10 +221,14 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the same reason ends `A new run can start once a person has checked the folder and
   removed that file.` or `A new run undoes them once the cause is gone.`, the run stopped
   before its first step and cannot be resumed: start a new run once the person says the
-  cause is gone. A `choose`/`union` step whose result would turn a file into a folder (or
-  a folder into a file), or go through a link, ends the run like a union conflict:
-  `the branches' result cannot be written back: '<path>' …` — change the branches so they
-  do not, and start a new run. A crashed run you started whose workflow (or a sub-workflow it
+  cause is gone. A run stopped with `writing the branches' result back failed: <error>`
+  could not write a `choose`/`union` result into its folder (a read-only folder, a full
+  disk); the folder was put back. Tell the person the error; once the cause it names is
+  gone, retry with `resume_run_id`. A `choose`/`union` step whose result would turn a
+  file into a folder (or a folder into a file), write, delete or go through a link, write
+  a file that is not regular, or reach another volume, ends the run like a union
+  conflict: `the branches' result cannot be written back: '<path>' …` — change the
+  branches so they do not, and start a new run. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A crashed run an automation started is not resumed by hand
   on any surface: the automation does not resume it, and its next run starts anew. A

@@ -397,26 +397,30 @@ them too.
 
 The kept result is not written when it would turn a file into a folder or a
 folder into a file (for example one branch writes `p` and another `p/q`, or a
-branch replaces a folder with a file), or when it would go through a link in the
-working folder. The run then stops at the parallel step the way a `union`
-conflict does, naming the path: `parallel node '<id>': the branches' result
-cannot be written back: '<path>' would turn a file into a folder or a folder
-into a file` (or `… is reached through a link`). Nothing is applied.
+branch replaces a folder with a file), when it would write or delete a link or
+go through one, when a path it writes is not a regular file (a named pipe, say),
+or when a path lies on another volume mounted inside the working folder. The run
+then stops at the parallel step the way a `union` conflict does, naming the path:
+`parallel node '<id>': the branches' result cannot be written back: '<path>'
+would turn a file into a folder or a folder into a file` (or `… is reached
+through a link`, `… is a link`, `… is not a regular file`, `… is on another
+volume`). Nothing is applied.
 
-Otherwise the result is written file by file — first every file a branch
-deleted, then every file a branch wrote — with an undo record (`pending-apply/`
-beside the working folder) holding what each path held before. Each new file is
-prepared inside `pending-apply/` and renamed into place. If the process dies
-while the result is being written, the run undoes the writing when it is
-resumed, when the next run on the same work key starts, or when a `choose` or
-`union` step uses the folder next, so the repeated step starts from what its
-first attempt started from. The undo removes the files the writing added and the
-folders it made, and puts back what it recorded (files with their content and
-permissions, and links). It leaves what is not its own: a folder the writing
-made that now holds something else — a file a detached step wrote there, say —
-stays. If writing the result fails while the run is going (a full disk, for
-example), it is undone at once and the run stops at the parallel step; retry it
-once the cause is gone.
+Otherwise the result is written file by file — first the files a branch deleted
+(a file that is not there is skipped), then the files a branch wrote — with an
+undo record (`pending-apply/` beside the working folder) holding what each
+changed file held before. Each file is prepared inside `pending-apply/` and
+renamed into place. If writing fails while the run is going — a read-only
+folder, a full disk — the undo runs at once and the run stops at the parallel
+step with `writing the branches' result back failed: <error>`; retry it once the
+cause in the error is gone. If the process dies while the result is being
+written, the run undoes the writing when it is resumed, when the next run on the
+same work key starts, or when a `choose` or `union` step uses the folder next,
+so the repeated step starts from what its first attempt started from. The undo
+removes the files the writing created, removes the folders it made when they are
+empty (a folder it made that now holds another file — one a detached step wrote
+there, say — stays), and puts back each recorded file that no longer holds what
+it held before.
 
 When the folder cannot be put back, nothing more is changed and the run stops:
 
@@ -426,8 +430,8 @@ When the folder cannot be put back, nothing more is changed and the run stops:
   retried once a person has done that.
 - `the working folder holds changes of an earlier parallel step that could not
   be undone yet (<path>): <what stopped it>. A retry undoes them once the cause
-  is gone.` — putting the folder back stopped, for example on a full disk or a
-  folder replaced by a link; the run can be retried once the cause is gone.
+  is gone.` — putting a changed file back stopped, for example on a full disk or
+  a folder replaced by a link; the run can be retried once the cause is gone.
 
 A run that stops this way before its first step cannot be retried, and its
 message says so: `… A new run can start once a person has checked the folder and

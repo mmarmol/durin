@@ -1030,6 +1030,82 @@ def test_a_write_back_that_fails_beside_a_detached_steps_file_is_retried(tmp_pat
                             "out/det-report.txt": b"detached step output"}
 
 
+def test_a_read_only_folder_fails_the_write_back_the_same_way_on_every_retry(tmp_path):
+    import os
+
+    from durin.workflow import run_log, workspace_fork
+    from durin.workflow.engine import build_resume_state, resumable_kind
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    work = tmp_path / ".workflow" / "r1" / "work"
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "ro").mkdir()
+            (work / "ro" / "f.txt").write_text("f1")
+            (work / "keep.txt").write_text("k")
+            os.chmod(work / "ro", 0o555)
+        elif req.workspace_override and req.node.id == "a":
+            (Path(req.workspace_override) / "ro" / "f.txt").write_text("f2")
+            (Path(req.workspace_override) / "keep.txt").unlink()
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    eng = _copy_engine(tmp_path, node_runner)
+    wf = _copies_wf("union")
+    try:
+        res = eng.run(wf, "t")
+        before = _files(work)
+        for attempt in range(2):
+            assert res.status == "aborted" and res.failed_node == "fan", res.final_output
+            assert "writing the branches' result back failed: [Errno 13] Permission denied" \
+                in res.final_output
+            assert "could not be undone" not in res.final_output
+            assert not workspace_fork.pending_dir(work).exists()
+            assert _files(work) == before == {"ro/f.txt": b"f1", "keep.txt": b"k"}
+            rec = run_log.read_manifest(tmp_path, "d", "r1")
+            assert resumable_kind(rec) == "failed"
+            if attempt == 0:
+                res = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+        os.chmod(work / "ro", 0o755)                 # the cause is gone
+        done = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+        assert done.status == "completed", done.final_output
+        assert _files(work) == {"ro/f.txt": b"f2"}
+    finally:
+        if (work / "ro").is_dir():
+            os.chmod(work / "ro", 0o755)
+
+
+def test_a_branch_file_under_a_folder_link_of_the_real_folder_is_refused(tmp_path):
+    import os
+    import stat
+
+    from durin.workflow import workspace_fork
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.txt").write_text("outside x")
+    os.chmod(outside / "x.txt", 0o640)
+    work = tmp_path / ".workflow" / "r1" / "work"
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "dl").symlink_to(outside)
+        elif req.workspace_override and req.node.id == "a":
+            copy = Path(req.workspace_override)
+            assert not os.path.lexists(copy / "dl")      # the copy skips the folder link
+            (copy / "dl").mkdir()
+            (copy / "dl" / "new.txt").write_text("n")
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output == ("parallel node 'fan': the branches' result cannot be written "
+                                "back: 'dl/new.txt' is reached through a link")
+    assert sorted(p.name for p in outside.iterdir()) == ["x.txt"]
+    assert (outside / "x.txt").read_text() == "outside x"
+    assert stat.S_IMODE(os.stat(outside / "x.txt").st_mode) == 0o640
+    assert not workspace_fork.pending_dir(work).exists()
+
+
 _UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "
              "be undone ({path}). It can run once a person has checked the folder and "
              "removed that file.")
@@ -1080,10 +1156,12 @@ def test_a_journal_that_cannot_be_used_or_undone_aborts_the_run_with_the_file_na
             journal.write_text("{")
             (work / "a.txt").write_text("half")
             return
-        cs = workspace_fork.ChangeSet(created={"new.txt": b"n"}, modified={"a.txt": b"half"},
+        # new.txt and a.txt written, the third write cut: the undo has a.txt to put back.
+        cs = workspace_fork.ChangeSet(created={"new.txt": b"n"},
+                                      modified={"a.txt": b"half", "late.txt": b"l"},
                                       deleted=set())
         with monkeypatch.context() as m:
-            _cut_writes_at(m, 2)
+            _cut_writes_at(m, 3)
             with pytest.raises(OSError):
                 workspace_fork.apply_all([cs], work, run_id="old", node_id="fan")
 
