@@ -906,3 +906,14 @@ def test_runs_launched_by_skips_unreadable_files_and_a_missing_folder(tmp_path):
     (folder / "bad.json").write_text("{not json", encoding="utf-8")
     (folder / "list.json").write_text("[1]", encoding="utf-8")
     assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["ok"]
+
+
+def test_a_left_behind_refusal_survives_copy_deepcopy_and_pickle():
+    import copy
+    import pickle
+
+    original = run_log.LeftBehind("it cannot run yet.", "a script may still run")
+    for other in (copy.copy(original), copy.deepcopy(original),
+                  pickle.loads(pickle.dumps(original))):
+        assert type(other) is run_log.LeftBehind
+        assert other == original and other.fact == original.fact

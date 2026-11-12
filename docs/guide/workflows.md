@@ -506,7 +506,7 @@ sub-workflow step starts its child workflow again from its first step.
 When a restart replays the message that had started a workflow, the agent that
 launches the workflow again is told about the cut run: the reply to a new launch
 names the runs of that workflow started from the same conversation that a
-process ending cut short (up to three, newest first), and the agent offers to
+process ending cut short (a few of the most recent, newest first), and the agent offers to
 resume the cut run rather than leave two. When something of a cut run is still
 running, the note says so, even when the run could never be resumed, and the new
 run starts beside it. With unified sessions all chats share one conversation, so

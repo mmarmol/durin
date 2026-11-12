@@ -821,6 +821,10 @@ class LeftBehind(str):
         out.fact = fact
         return out
 
+    def __reduce__(self) -> tuple:
+        # Copying and pickling rebuild it with both of its arguments.
+        return (LeftBehind, (str(self), self.fact))
+
 
 def _left_script_refusal(node: object, state: str, own: list[int],
                          group: list[int]) -> str | None:
