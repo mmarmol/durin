@@ -35,6 +35,7 @@ def build_service_registry(
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
     approval_deps: Callable[[], Any] | None = None,
+    workflow_deliver_result: Callable[..., Awaitable[None]] | None = None,
     reconcile_runs: bool = True,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
@@ -75,6 +76,12 @@ def build_service_registry(
     ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
     surfaces without one (the websocket channel's shim registry) leave it
     ``None`` and those two routes report unavailable.
+
+    ``workflow_deliver_result`` is optional: the gateway passes the callback
+    that reports a resumed workflow run's result to the conversation that
+    launched it (see ``WorkflowsService``'s ``deliver_result``). The gateway's
+    registry serves the dashboard and the API, so it is the one that gets it;
+    a registry that serves no workflow route leaves it ``None``.
 
     ``approval_deps`` is optional: the gateway passes
     ``AgentLoop.approval_exec_deps`` so an approval decided through
@@ -164,7 +171,7 @@ def build_service_registry(
     registry.register("auth", AuthService(ApiTokenStore()))
     registry.register("workflows", WorkflowsService(
         workspace=_workspace(), app_config=config, sessions=session_manager,
-        config_loader=_live_config))
+        config_loader=_live_config, deliver_result=workflow_deliver_result))
     from durin.service.tasks import TasksService
     # Unlike subagent_manager/session_manager, a JobRegistry is a stateless
     # database handle rather than live in-memory state, so a fresh instance

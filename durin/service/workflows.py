@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ from durin.service.types import (
 )
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import run_log
+from durin.workflow import delivery, run_log
 from durin.workflow.artifacts import safe_key
 from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
 from durin.workflow.result import WorkflowResult
@@ -282,7 +282,9 @@ class WorkflowRecApplyResult(Result):
 class WorkflowsService:
     def __init__(self, workspace: Path, *, app_config: Any = None, sessions: Any = None,
                  config_loader: Callable[[], Any] | None = None,
-                 progress_publish: Callable[[dict], None] | None = None) -> None:
+                 progress_publish: Callable[[dict], None] | None = None,
+                 deliver_result: Callable[[dict, str, str, Any, bool], Awaitable[None]] | None = None,
+                 ) -> None:
         self._workspace = Path(workspace)
         self._app_config = app_config   # for the run endpoint (provider); None on the catalog registry
         self._sessions = sessions       # SessionManager for node-session persistence during a run
@@ -296,6 +298,13 @@ class WorkflowsService:
         # means execute() builds the engine with no progress_emit at all — a run
         # that behaves exactly as before this existed.
         self._progress_publish = progress_publish
+        # Reports a resumed run's result to the conversation that launched it,
+        # called as deliver_result(launch, name, run_id, result, output_files):
+        # `result` is the run's WorkflowResult, or the failure text when the walk
+        # raised; `output_files` says whether the workflow declares output files.
+        # The gateway wires it; None (catalog, tests, the automations' own
+        # service, whose outcomes their runtime reports) delivers nothing.
+        self._deliver_result = deliver_result
         # Strong-reference set for detached launch()es, so a run's task isn't
         # GC'd mid-flight — mirrors RunWorkflowTool's identical footgun guard.
         self._bg_tasks: set = set()
@@ -1051,6 +1060,12 @@ class WorkflowsService:
                 work_key=work_key,
                 launch=launch,
             )
+        except Exception as exc:
+            if claim is not None:
+                claim.drop()
+                await self._report_resume(claim, accepted_record, workflow, rid,
+                                          f"Workflow run failed: {exc}")
+            raise
         except BaseException:
             if claim is not None:
                 claim.drop()
@@ -1060,8 +1075,33 @@ class WorkflowsService:
             # a run that never reached _finalize_manifest at all (no workspace,
             # or a wiring error before the walk starts).
             _clear_cancel(rid)
+        if claim is not None:
+            await self._report_resume(claim, accepted_record, workflow, rid, result)
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return result
+
+    async def _report_resume(self, claim: ResumeClaim, record: dict | None, workflow: Any,
+                             run_id: str, result: Any) -> None:
+        """Report a resume's result to the conversation that launched the run.
+
+        Only a resume whose walk ran reports — one the engine took over. A
+        resume refused or lost to another resumer never gets here; one given up
+        before its walk, or ended by the engine before it wrote the run's record
+        (a rejected input or script, a busy work_key), left the run as it was.
+        A run launched by an automation or by this service names no
+        conversation. Best-effort: a failing delivery never changes the resume's
+        own outcome."""
+        launch = (record or {}).get("launch")
+        if (self._deliver_result is None or not claim.took_over
+                or delivery.launch_session_key(launch) is None):
+            return
+        output_files = bool((workflow.output or {}).get("file"))
+        try:
+            await self._deliver_result(launch, workflow.name, run_id, result, output_files)
+        except Exception:  # noqa: BLE001 - best-effort; the run's record holds its outcome
+            logger.opt(exception=True).warning(
+                "workflow {} run {}: reporting the resume to the conversation that launched "
+                "it failed", workflow.name, run_id)
 
     @route(
         "GET", "/api/v1/workflows/runs",

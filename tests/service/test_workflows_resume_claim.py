@@ -34,14 +34,15 @@ from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thre
 _DEAD_OWNER = {"pid": 2**22 + 54321, "started": "never"}
 
 
-def _svc(tmp_path):
+def _svc(tmp_path, deliver_result=None):
     app_config = SimpleNamespace(
         resolve_default_preset=lambda: object(),
         tools=ToolsConfig(),
         workflow=WorkflowConfig(),
     )
     return WorkflowsService(workspace=tmp_path, app_config=app_config,
-                            sessions=SessionManager(workspace=tmp_path))
+                            sessions=SessionManager(workspace=tmp_path),
+                            deliver_result=deliver_result)
 
 
 def _provider():
@@ -624,3 +625,304 @@ async def test_a_run_the_dashboard_launches_records_the_token_subject(tmp_path):
         result = await _svc(tmp_path).run(WorkflowRunCommand(name="wf", task="go"), principal)
     assert run_log.read_manifest(tmp_path, "wf", result.run_id)["launch"] == {
         "kind": "service", "subject": "tok-dash"}
+
+
+# ── a resumed run reports to the conversation that launched it ──
+
+
+class _Deliveries:
+    """A recording ``deliver_result``."""
+
+    def __init__(self, fail: bool = False):
+        self.calls: list[tuple] = []
+        self._fail = fail
+
+    async def __call__(self, launch, name, run_id, result, output_files):
+        self.calls.append((launch, name, run_id, result, output_files))
+        if self._fail:
+            raise RuntimeError("bus closed")
+
+
+@pytest.mark.asyncio
+async def test_a_resume_of_an_agent_launched_run_reports_its_result_once(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    assert deliveries.calls == [(_AGENT_LAUNCH, "wf", "dead1", result, False)]
+
+
+@pytest.mark.asyncio
+async def test_a_resume_reports_whether_the_workflow_declares_output_files(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    f = workflows_dir(tmp_path) / "wf.json"
+    definition = json.loads(f.read_text(encoding="utf-8"))
+    f.write_text(json.dumps({**definition, "output": {"file": "report.md"}}), encoding="utf-8")
+    deliveries = _Deliveries()
+    with _provider():
+        await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    [(_launch, _name, _run_id, _result, output_files)] = deliveries.calls
+    assert output_files is True
+
+
+@pytest.mark.asyncio
+async def test_a_resume_of_a_run_the_service_launched_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
+              launch={"kind": "service", "subject": "tok"})
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_of_a_record_without_a_launch_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
+              root_session_key="websocket:chatA")
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_run_reports_nowhere(tmp_path):
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wf.json").write_text(json.dumps(
+        {"name": "wf", "start": "only",
+         "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}]}),
+        encoding="utf-8")
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute(
+            "wf", "go", launch=_AGENT_LAUNCH)
+    assert result.status == "completed"
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_delivery_never_fails_the_resume(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries(fail=True)
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "completed"
+    assert len(deliveries.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_walk_that_raises_reports_the_failure_and_still_fails(tmp_path):
+    from durin.workflow.engine import WorkflowConfigError
+
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine._walk",
+                            side_effect=WorkflowConfigError("no runner for it")):
+        with pytest.raises(WorkflowConfigError, match="no runner for it"):
+            await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert deliveries.calls == [
+        (_AGENT_LAUNCH, "wf", "dead1", "Workflow run failed: no runner for it", False)]
+
+
+@pytest.mark.asyncio
+async def test_a_route_whose_walk_raises_still_fails(tmp_path):
+    from durin.service.principal import Scope
+    from durin.service.workflows import WorkflowRunCommand
+    from durin.workflow.engine import WorkflowConfigError
+
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    principal = Principal.remote("tok-dash", frozenset({Scope.WORKFLOWS_WRITE.value}))
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine._walk",
+                            side_effect=WorkflowConfigError("no runner for it")):
+        with pytest.raises(WorkflowConfigError):
+            await _svc(tmp_path, deliveries).run(
+                WorkflowRunCommand(name="wf", task="", resume_run_id="dead1"), principal)
+    assert len(deliveries.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_resume_refused_for_a_script_still_running_reports_nowhere(tmp_path, monkeypatch):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    settle = run_log.settle_dead_run
+
+    def _a_script_is_still_running(*args):
+        record, _ = settle(*args)
+        return record, "the script of its step 'only' from the earlier process is still running"
+
+    monkeypatch.setattr(run_log, "settle_dead_run", _a_script_is_still_running)
+    deliveries = _Deliveries()
+    with _provider(), pytest.raises(ValidationFailedError, match="still running"):
+        await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_refused_for_a_step_gone_from_the_definition_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    _write_flow(tmp_path, {"name": "wf", "start": "other", "nodes": [
+        {"id": "other", "kind": "script", "command": "echo x", "next": None}]})
+    deliveries = _Deliveries()
+    with _provider(), pytest.raises(ValidationFailedError, match="cannot be resumed"):
+        await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_that_loses_the_claim_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    svc = _svc(tmp_path, deliveries)
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        ResumeClaim.take(tmp_path, "wf", "dead1",
+                         expected=run_log.read_manifest(tmp_path, "wf", "dead1"))
+        return SimpleNamespace(get_default_model=lambda: "m")
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims):
+        with pytest.raises(ValidationFailedError, match="cancelled, or already resumed"):
+            await svc.execute("wf", "", resume_run_id="dead1")
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_rejected_by_the_engine_before_its_walk_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "script": "gone.sh"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1")
+    assert result.status == "aborted" and "script file not found" in (result.final_output or "")
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_whose_working_folder_stays_busy_reports_nowhere(tmp_path, monkeypatch):
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow.artifacts import keyed_run_lock_target, keyed_work_dir
+
+    _aborted_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    f = tmp_path / "workflows-runs" / "wf" / "failed1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(work_key="k1", launch=_AGENT_LAUNCH)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    before = run_log.read_manifest(tmp_path, "wf", "failed1")
+    monkeypatch.setattr("durin.workflow.engine._WORK_KEY_LOCK_TIMEOUT_S", 0.2)
+    deliveries = _Deliveries()
+    # Another run holds the key's folder for the whole resume.
+    with cross_process_lock(keyed_run_lock_target(keyed_work_dir(tmp_path, "wf", "k1"))):
+        with _provider(), pytest.raises(TimeoutError, match="work_key"):
+            await _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="failed1")
+    assert run_log.read_manifest(tmp_path, "wf", "failed1") == before
+    assert deliveries.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_cancelled_while_it_waits_for_a_thread_reports_nowhere(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    svc = _svc(tmp_path, deliveries)
+    gate = threading.Event()
+    holders = [asyncio.create_task(run_on_workflow_thread(f"h{i}", gate.wait, 10.0))
+               for i in range(MAX_CONCURRENT_RUNS)]
+    try:
+        with _provider():
+            resume = asyncio.create_task(svc.execute("wf", "", resume_run_id="dead1"))
+            assert await _until(lambda: (run_log.read_manifest(tmp_path, "wf", "dead1")
+                                         or {}).get("status") == "running")
+            await asyncio.sleep(0.1)
+            resume.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await resume
+    finally:
+        gate.set()
+    await asyncio.wait_for(asyncio.gather(*holders), timeout=10.0)
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
+    assert deliveries.calls == []
+
+
+_APPROVE_THEN_SCRIPT = {"name": "wf", "start": "ask", "nodes": [
+    {"id": "ask", "kind": "work", "approval": True, "next": "after"},
+    {"id": "after", "kind": "script", "command": "echo after-ok", "next": None}]}
+
+
+def _agent_approval_pause(tmp_path, definition: dict) -> None:
+    _agent_record(tmp_path, definition, status="needs_input", needs_input_node="ask",
+                  ask_kind="approval", final_output="the proposal", launch=_AGENT_LAUNCH)
+
+
+@pytest.mark.asyncio
+async def test_an_approval_answered_through_the_service_reports_the_walk_that_followed(tmp_path):
+    _agent_approval_pause(tmp_path, _APPROVE_THEN_SCRIPT)
+    deliveries = _Deliveries()
+    with _provider():
+        result = await _svc(tmp_path, deliveries).execute("wf", "approve", resume_run_id="agent1")
+    assert result.status == "completed" and "after-ok" in (result.final_output or "")
+    assert deliveries.calls == [(_AGENT_LAUNCH, "wf", "agent1", result, False)]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_approval_ends_the_run_without_a_report(tmp_path):
+    _agent_approval_pause(tmp_path, _APPROVE_THEN_SCRIPT)
+    deliveries = _Deliveries()
+    with _provider(), patch("durin.agent.approval_notify.notify_origin") as note:
+        result = await _svc(tmp_path, deliveries).execute("wf", "reject", resume_run_id="agent1")
+    assert result.status == "cancelled" and result.rejected
+    assert deliveries.calls == []
+    note.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_approved_last_step_ends_the_run_without_a_report(tmp_path):
+    _agent_approval_pause(tmp_path, {"name": "wf", "start": "ask", "nodes": [
+        {"id": "ask", "kind": "work", "approval": True, "next": None}]})
+    deliveries = _Deliveries()
+    with _provider(), patch("durin.agent.approval_notify.notify_origin") as note:
+        result = await _svc(tmp_path, deliveries).execute("wf", "approve", resume_run_id="agent1")
+    assert result.status == "completed" and result.final_output == "the proposal"
+    assert deliveries.calls == []
+    note.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_resume_whose_caller_stops_waiting_after_its_walk_started_reports_nowhere(tmp_path):
+    """The report is made by the call that waits on the walk: a caller cancelled
+    once the walk runs leaves the walk to finish on its thread, unreported."""
+    started = tmp_path / "started.marker"
+    gate_file = tmp_path / "gate.file"
+    _dead_run(tmp_path, {
+        "kind": "script", "timeout": 10,
+        "command": f"touch {started} && while [ ! -f {gate_file} ]; do sleep 0.05; done"},
+        surface="agent", root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    deliveries = _Deliveries()
+    with _provider():
+        resume = asyncio.create_task(
+            _svc(tmp_path, deliveries).execute("wf", "", resume_run_id="dead1"))
+        assert await _until(started.exists)
+        resume.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await resume
+        gate_file.touch()
+
+        def finished() -> bool:
+            manifest = run_log.read_manifest(tmp_path, "wf", "dead1")
+            return manifest is not None and manifest["status"] != "running"
+
+        assert await _until(finished)
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "completed"
+    assert deliveries.calls == []

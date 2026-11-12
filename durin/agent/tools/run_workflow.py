@@ -21,6 +21,8 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
 
+from loguru import logger
+
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.workflow.run_threads import run_on_workflow_thread
@@ -412,6 +414,19 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
     return "\n".join(lines)
 
 
+def result_summary(result: Any, *, output_files: bool, session_key: str | None) -> str:
+    """The summary of a finished run as it is delivered in a message to a
+    conversation: sized for one message, and sending the agent to the person
+    only when ``session_key`` names a conversation a person is in.
+    ``output_files`` says whether the workflow declares that it outputs files."""
+    from durin.agent.approval import is_interactive
+    return _format_result(
+        result, output_files=output_files,
+        human_reachable=is_interactive(session_key),
+        max_chars=_MAX_INJECT_SUMMARY_CHARS,
+    )
+
+
 @tool_parameters(_PARAMETERS)
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
@@ -499,7 +514,7 @@ class RunWorkflowTool(Tool, ContextAware):
         )
 
     async def _inject_result(
-        self, summary: str, *, name: str, inject_target: dict,
+        self, summary: str, *, name: str, run_id: str, inject_target: dict,
     ) -> None:
         """Inject a finished background-workflow result back to the agent.
 
@@ -507,35 +522,21 @@ class RunWorkflowTool(Tool, ContextAware):
         session_key_override routes it into the parent session's pending queue so
         the agent picks it up mid-turn (or as its next turn) and acts on it —
         including a needs_input result, which carries its own ask-and-re-run guidance.
+        A call with no session key is keyed to its ``<channel>:<chat_id>``.
 
         The summary arrives already sized for one readable message (the caller
         formats it with the delivery limit), so it is delivered whole: cutting
         it here would drop whatever came last, and the result and its files
         come before the node list for exactly that reason.
         """
-        if self._bus is None:
-            return
-        from durin.bus.events import InboundMessage
+        from durin.workflow import delivery
         channel = inject_target.get("channel") or "websocket"
         chat_id = inject_target.get("chat_id") or ""
-        override = inject_target.get("session_key") or f"{channel}:{chat_id}"
-        content = (
-            f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
-            "Summarize the outcome for the user, and follow what the summary says about "
-            "continuing the run."
-        )
-        msg = InboundMessage(
-            channel="system",
-            sender_id="workflow_background",
-            chat_id=f"{channel}:{chat_id}",
-            content=content,
-            session_key_override=override,
-            metadata={"injected_event": "workflow_background_result", "workflow": name},
-        )
-        try:
-            await self._bus.publish_inbound(msg)
-        except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
-            pass
+        target = {
+            "kind": "session", "channel": channel, "chat_id": chat_id,
+            "session_key": inject_target.get("session_key") or f"{channel}:{chat_id}",
+        }
+        await delivery.deliver(self._bus, target, name=name, run_id=run_id, summary=summary)
 
     async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "", work_key: str = "") -> str:  # type: ignore[override]
         from durin.agent.approval import is_interactive
@@ -735,6 +736,14 @@ class RunWorkflowTool(Tool, ContextAware):
         # calling session has no conversation to report to.
         launch = {"kind": "session", **inject_target} if root_session_key else None
 
+        # A resume made outside the conversation that launched the run also
+        # reports its result there, once its walk ran: that conversation is not
+        # the one waiting on this call. Same conversation = same session key.
+        from durin.workflow import delivery
+        launch_record = (accepted_record or {}).get("launch")
+        launch_key = delivery.launch_session_key(launch_record)
+        report_to_launch = launch_key is not None and launch_key != root_session_key
+
         # Claim a resumed run once nothing is left to build: move it to running
         # under the per-run lock, so a second resume (from here or from the
         # workflows service) or a cancel racing in behind this sees it lost and
@@ -771,28 +780,44 @@ class RunWorkflowTool(Tool, ContextAware):
                     claim.drop()
                 raise
 
+        async def _report_to_launch(result: Any = None, failure: BaseException | None = None) -> None:
+            # Only a resume whose walk ran reports: one refused, lost to another
+            # resumer, given up before its walk or ended by the engine before it
+            # wrote the run's record left the run as it was.
+            if not report_to_launch or claim is None or not claim.took_over:
+                return
+            try:
+                summary = (f"Workflow run failed: {failure}" if failure is not None
+                           else result_summary(result, output_files=output_files,
+                                               session_key=launch_key))
+                await delivery.deliver(self._bus, launch_record, name=name, run_id=run_id,
+                                       summary=summary, resumed_from="another conversation")
+            except Exception:  # noqa: BLE001 - best-effort; never changes the resume's outcome
+                logger.opt(exception=True).warning(
+                    "workflow {} run {}: reporting the resume to {} failed", name, run_id, launch_key)
+
         if background:
             async def _run_and_inject() -> None:
+                result = failure = None
                 try:
                     result = await _walk_on_a_thread(paced=False)
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result))
-                    summary = _format_result(
-                        result, output_files=output_files,
-                        human_reachable=is_interactive(root_session_key),
-                        max_chars=_MAX_INJECT_SUMMARY_CHARS,
-                    )
+                    summary = result_summary(result, output_files=output_files,
+                                             session_key=root_session_key)
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
                     if progress_emit is not None:
                         progress_emit({"run_id": run_id, "nodes": [], "done": True, "status": "failed"})
                     summary = f"Workflow run failed in background: {exc}"
+                    failure = exc
                 finally:
                     # Drop the cancel flag now the run is over (whether or not it was set).
                     _clear_cancel(run_id)
                 await self._inject_result(
-                    summary, name=name, inject_target=inject_target,
+                    summary, name=name, run_id=run_id, inject_target=inject_target,
                 )
+                await _report_to_launch(result, failure)
 
             task_handle = asyncio.create_task(_run_and_inject())
             # Keep a reference so the task isn't garbage-collected mid-flight.
@@ -823,6 +848,9 @@ class RunWorkflowTool(Tool, ContextAware):
             # (the worker thread would keep running headless with no handle);
             # instead the engine is stopped cooperatively below.
             result = await asyncio.shield(engine_future)
+        except Exception as exc:
+            await _report_to_launch(failure=exc)
+            raise
         except asyncio.CancelledError:
             # A turn cancelled because this process is shutting down is not a
             # stop: nothing is asked of the run, which ends with the process
@@ -850,6 +878,7 @@ class RunWorkflowTool(Tool, ContextAware):
             raise
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))
+        await _report_to_launch(result)
         return _format_result(
             result, output_files=output_files,
             human_reachable=is_interactive(root_session_key),

@@ -1231,3 +1231,242 @@ async def test_the_run_tool_refuses_a_dead_run_launched_by_an_automation_under_a
                    "and a run an automation started is not resumed by hand: the automation "
                    "does not resume it, and its next run starts anew.")
     fake_run.assert_not_called()
+
+
+# --- a resumed run reports to the conversation that launched it -------------
+
+_LAUNCHED_IN_A = {"kind": "session", "session_key": "websocket:chatA", "channel": "websocket",
+                  "chat_id": "chatA"}
+_RESUMED_ELSEWHERE = ("[Workflow 'doer' run r1, started from this conversation, was resumed "
+                      "from another conversation and finished]\n\n")
+
+
+def _tool_on_bus(tmp_path, bus, *, channel, chat_id, session_key):
+    sessions = SessionManager(workspace=tmp_path)
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(),
+                                 workflow=WorkflowConfig())
+    tool = RunWorkflowTool.create(SimpleNamespace(
+        workspace=str(tmp_path), sessions=sessions, app_config=app_config, bus=bus))
+    _context(tool, channel, chat_id, session_key)
+    return tool
+
+
+async def _resume_through_the_tool(tool, *, background):
+    import asyncio
+
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        out = await tool.execute(name="doer", task="", resume_run_id="r1", background=background)
+        async with asyncio.timeout(60):
+            await asyncio.gather(*tool._bg_tasks)
+    return out
+
+
+@pytest.mark.asyncio
+async def test_a_background_resume_from_another_conversation_reports_to_both(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    await _resume_through_the_tool(tool, background=True)
+
+    by_session = {m.session_key_override: m for m in bus.inbound}
+    assert len(bus.inbound) == 2 and set(by_session) == {"websocket:chatA", "websocket:chatB"}
+    assert by_session["websocket:chatB"].content.startswith("[Background workflow 'doer' finished]")
+    to_a = by_session["websocket:chatA"]
+    assert to_a.content.startswith(_RESUMED_ELSEWHERE) and "again" in to_a.content
+    assert to_a.chat_id == "websocket:chatA"
+    assert to_a.metadata == {"injected_event": "workflow_background_result", "workflow": "doer"}
+
+
+@pytest.mark.asyncio
+async def test_a_background_resume_from_the_launch_conversation_reports_once(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatA",
+                        session_key="websocket:chatA")
+    await _resume_through_the_tool(tool, background=True)
+
+    [msg] = bus.inbound
+    assert msg.session_key_override == "websocket:chatA"
+    assert msg.content.startswith("[Background workflow 'doer' finished]")
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_resume_from_another_conversation_reports_to_the_launch_one(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="slack", chat_id="C9", session_key="slack:C9")
+    out = await _resume_through_the_tool(tool, background=False)
+
+    assert "completed" in out.lower()
+    [msg] = bus.inbound
+    assert msg.session_key_override == "websocket:chatA"
+    assert msg.content.startswith(_RESUMED_ELSEWHERE)
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_resume_from_the_launch_conversation_publishes_nothing(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatA",
+                        session_key="websocket:chatA")
+    out = await _resume_through_the_tool(tool, background=False)
+
+    assert "completed" in out.lower()
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_of_a_record_without_a_launch_reports_as_before(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA")
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    await _resume_through_the_tool(tool, background=True)
+
+    [msg] = bus.inbound
+    assert msg.session_key_override == "websocket:chatB"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+async def test_a_refused_resume_reports_to_no_conversation(tmp_path, monkeypatch, background):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    settle = run_log.settle_dead_run
+
+    def _a_script_is_still_running(*args):
+        record, _ = settle(*args)
+        return record, "the script of its step 'only' from the earlier process is still running"
+
+    monkeypatch.setattr(run_log, "settle_dead_run", _a_script_is_still_running)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    out = await _resume_through_the_tool(tool, background=background)
+
+    assert out.startswith("Error:") and "still running" in out
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_of_a_step_gone_from_the_definition_reports_to_no_conversation(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    _write_workflow(tmp_path, "doer", {"name": "doer", "start": "other", "nodes": [
+        {"id": "other", "kind": "script", "command": "echo x", "next": None}]})
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    out = await _resume_through_the_tool(tool, background=True)
+
+    assert out.startswith("Error:")
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_that_loses_the_claim_reports_to_no_conversation(tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        ResumeClaim.take(tmp_path, "doer", "r1",
+                         expected=run_log.read_manifest(tmp_path, "doer", "r1"))
+        fake = MagicMock(spec=LLMProvider)
+        fake.get_default_model.return_value = "m"
+        return fake
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims):
+        out = await tool.execute(name="doer", task="", resume_run_id="r1", background=True)
+    assert out.startswith("Error:") and "already resumed" in out
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_background_resume_given_up_before_its_walk_reports_to_no_conversation(tmp_path):
+    import asyncio
+
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        await tool.execute(name="doer", task="", resume_run_id="r1", background=True)
+        pending = list(tool._bg_tasks)
+        for t in pending:
+            t.cancel()   # before the task ever ran a step
+        async with asyncio.timeout(30):
+            await asyncio.gather(*pending, return_exceptions=True)
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "doer", "r1")["status"] == "crashed"
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_resume_rejected_before_its_walk_reports_to_no_other_conversation(
+        tmp_path):
+    _dead_doer(tmp_path, {"kind": "script", "script": "gone.sh"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    out = await _resume_through_the_tool(tool, background=False)
+
+    assert "script file not found" in out
+    assert run_log.read_manifest(tmp_path, "doer", "r1")["status"] == "crashed"
+    assert bus.inbound == []
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_walk_that_raises_reports_the_failure_to_the_launch_conversation(
+        tmp_path):
+    from durin.workflow.engine import WorkflowConfigError
+
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    with patch("durin.workflow.engine.WorkflowEngine._walk",
+               side_effect=WorkflowConfigError("no runner for it")):
+        with pytest.raises(WorkflowConfigError):
+            await _resume_through_the_tool(tool, background=False)
+
+    [msg] = bus.inbound
+    assert msg.session_key_override == "websocket:chatA"
+    assert msg.content.startswith(_RESUMED_ELSEWHERE + "Workflow run failed: no runner for it")
+
+
+@pytest.mark.asyncio
+async def test_a_background_walk_that_raises_reports_the_failure_to_both_conversations(tmp_path):
+    from durin.workflow.engine import WorkflowConfigError
+
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="websocket:chatA", launch=_LAUNCHED_IN_A)
+    bus = _RecordingBus()
+    tool = _tool_on_bus(tmp_path, bus, channel="websocket", chat_id="chatB",
+                        session_key="websocket:chatB")
+    with patch("durin.workflow.engine.WorkflowEngine._walk",
+               side_effect=WorkflowConfigError("no runner for it")):
+        await _resume_through_the_tool(tool, background=True)
+
+    by_session = {m.session_key_override: m.content for m in bus.inbound}
+    assert len(bus.inbound) == 2
+    assert "Workflow run failed in background: no runner for it" in by_session["websocket:chatB"]
+    assert by_session["websocket:chatA"].startswith(
+        _RESUMED_ELSEWHERE + "Workflow run failed: no runner for it")

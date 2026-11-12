@@ -814,7 +814,8 @@ every rewrite carries it; a record written before it existed lacks it;
 `launch` — where the run was launched from, which a resume never changes (while
 `root_session_key` follows whoever resumes through the tool): `{kind: "session",
 session_key, channel, chat_id}` for the `run_workflow` tool (the address its background
-result goes to; a call with no calling session records none), `{kind: "automation",
+result goes to, and where a resume made elsewhere reports its result, §4g; a call with
+no calling session records none), `{kind: "automation",
 name}` for an automation, `{kind: "service", subject}` for the dashboard and the API
 (`subject` is the caller's token subject, `""` when it has none). A sub-workflow's own
 run records none, since its result goes to its caller, and a record written before the
@@ -1327,8 +1328,12 @@ Known limits: files a cut `read` parallel step's branches or a cut fan-out's wor
 wrote in the shared folder are still there when the step runs again. A process that
 dies after a `choose`/`union`
 write-back finished but before the record named the next step runs the step again on
-the folder that already holds its result. A run started from a chat and resumed from
-the dashboard or the API does not report its result back to that chat.
+the folder that already holds its result. A run started from a chat whose approval
+pause is rejected from the dashboard or the API, or whose approved step is the last
+one, ends without a walk, and that chat is not told (§4g). Nor is it told when the
+call that resumed the run stops waiting before the walk ends (a foreground
+`run_workflow` turn stopped with `/stop`, a cancelled `execute()`): the report is made
+by that call, and the walk finishes on its thread unreported.
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -1354,7 +1359,10 @@ paused one still cancellable. The `run_workflow` tool's background launch also g
 the record back when its task is cancelled before it runs a step. A claim is released
 at most once: a later claim of the same record by the same process writes exactly the
 record the first one wrote, so a second release could not tell the two apart. A
-failed release is logged and never replaces the run's own outcome.
+failed release is logged and never replaces the run's own outcome. Once the guarded
+walk returns or raises, `ResumeClaim.took_over` says whether the engine took the run
+over (its walk started and the record was not put back); a resumed run reports its
+result to the conversation that launched it only then (§4g).
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the
@@ -1632,6 +1640,48 @@ progress breadcrumb ("Processing background workflow result…") so the chat's
 stop button has visible context while the agent digests the result. The `background` flag applies only to
 `run_workflow` invocations from inside an agent turn; the HTTP
 `POST /api/v1/workflows/{name}/run` surface is always synchronous.
+
+**A resumed run reports to the conversation that launched it.** A run the agent
+launched from a conversation keeps that conversation on its record (`launch`, §4a),
+and a resume made anywhere else reports its result there with the message a
+background result travels as (`durin/workflow/delivery.py`): one `channel="system"`
+inbound message keyed to the launch conversation's session key, with
+`injected_event: "workflow_background_result"`, which starts a turn there. Its first
+line names the run and where the resume came from — `[Workflow '<name>' run <run_id>,
+started from this conversation, was resumed from <where> and finished]` — then comes
+the run summary, sized as a background summary and sending the agent to the person
+only when the launch conversation has one, and the same closing instruction.
+
+- The `run_workflow` tool compares the resuming call's session key with
+  `launch.session_key`. A resume from the launch conversation behaves as any run:
+  the foreground call returns the summary and publishes nothing, the background one
+  delivers one message. A resume from another conversation gets the same in that
+  conversation, and the launch conversation gets one message more, `<where>` being
+  `another conversation`.
+- The workflows service (the dashboard, the API) calls its `deliver_result` callback
+  after the walk of a resume of a run whose `launch.kind` is `session`: with the
+  result for every status, and with `Workflow run failed: <error>` for an exception
+  the walk raised, which still reaches the caller. `<where>` is `the dashboard or the
+  API`. The gateway builds the callback and hands it to the registry the HTTP app
+  serves `/api/v1` from (`build_service_registry(workflow_deliver_result=...)`); the
+  websocket channel's own registry serves no workflow route and gets none, and the
+  automations' workflows service gets none, since an automation's outcome is its
+  runtime's to report.
+- The report is made by the call that waits on the walk, after it ends; a call
+  cancelled while the walk runs makes none.
+- Only a resume whose walk ran reports (`ResumeClaim.took_over`). A resume that is
+  refused, that loses its claim to another resumer, that is given up before its
+  walk, or that the engine ends before writing the run's record (a preflight
+  rejection, a busy `work_key`) leaves the run as it was and reports nothing. The
+  claim allows one resumer per run, so each resumed walk reports once.
+- An approval pause answered through the service is such a resume: the launch
+  conversation receives the result of the walk that followed. A rejection, or an
+  approval of a last step, ends the run without a walk and reports nothing.
+- A fresh run through the service reports nothing this way, and neither does a run
+  launched by an automation or by the service, nor a record that has no `launch`.
+
+Delivery is best-effort: no bus, a launch naming no conversation, or a failed
+publish is logged, and the resume's own outcome is unchanged.
 
 The waiting contract is push, not poll: because the result is injected on
 completion, the launching agent is told (in the launch reply, the tool
@@ -2139,13 +2189,14 @@ End-to-end for a single `run_workflow` call:
 | `refresh_seeds`, `list_suggestions`, `apply_suggestion`, `dismiss_suggestion` | `durin/workflow/seeds.py` | Provenance-aware seeding: install missing seeds, auto-refresh untouched ones from the wheel, and turn updates to user-edited seeds into reviewable suggestions (see the Seeds bullet below). `seed_workflows` in `durin/utils/helpers.py` is the `sync_workspace_templates` entry that delegates here. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
-| `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
+| `RunWorkflowTool`, `result_summary` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run; `result_summary` is the run summary as delivered in a message (sized for one message), which the gateway also uses for a run resumed from the dashboard or the API. |
 | `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `mark_dead_run`, `reconcile_running`, `reconcile_one`, `request_stop`, `stop_requested`, `record_script`, `script_records`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker, the `detached_active` list, the `position` the walk enters next, and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `mark_dead_run` converts a dead `running` run into the record a failed step leaves, under the per-run lock; both crash sweeps call it. `request_stop` keeps a stop someone asked for beside a running record (`<run_id>.stop`), which `mark_dead_run` reads. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
-| `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts. |
+| `ResumeClaim`, `ResumeLostError` | `durin/workflow/resume_claim.py` | The resume claim every resume takes (workflows service and `run_workflow` tool, paused or aborted run): under the per-run lock it re-checks the record the resume accepted and moves it to `running`; `guard` wraps the engine walk and gives the record back if the engine never wrote it, `drop` gives it back when the caller gives up before the walk starts, and `took_over` says afterwards whether the engine took the run over. |
+| `result_message`, `deliver`, `launch_session_key` | `durin/workflow/delivery.py` | Delivers a run's result to the conversation its `launch` names: one `channel="system"` inbound message keyed to that conversation's session, read as a background result. Used for a background run's own result and for a resume made outside the launch conversation (§4g); best-effort, never raises. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped" — read from the run's own `run_evidence_dir` when a keyed work_dir has one, else the flat working folder), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |

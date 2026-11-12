@@ -33,6 +33,7 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
     await t._inject_result(
         "Workflow run r1: completed\nFinal output:\n42",
         name="qa",
+        run_id="r1",
         inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
     )
     assert len(bus.inbound) == 1
@@ -48,8 +49,40 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
 async def test_inject_result_is_best_effort_when_bus_missing():
     t = RunWorkflowTool(workspace="/tmp/x", sessions=object(), app_config=object(), bus=None)
     # Must not raise even though there is no bus.
-    await t._inject_result("x", name="qa",
+    await t._inject_result("x", name="qa", run_id="r1",
                            inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": None})
+
+
+@pytest.mark.asyncio
+async def test_inject_result_without_a_session_key_goes_to_the_chat():
+    bus = _FakeBus()
+    await _tool(bus)._inject_result(
+        "done", name="qa", run_id="r1",
+        inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": None})
+    [msg] = bus.inbound
+    assert (msg.chat_id, msg.session_key_override) == ("websocket:chatA", "websocket:chatA")
+    assert msg.content == (
+        "[Background workflow 'qa' finished]\n\ndone\n\nSummarize the outcome for the user, "
+        "and follow what the summary says about continuing the run.")
+
+
+@pytest.mark.parametrize("session_key, reachable", [
+    ("websocket:chatA", True), ("cron:job1:run:1", False), (None, False)])
+def test_result_summary_is_the_background_summary(session_key, reachable):
+    from durin.agent.tools.run_workflow import (
+        _MAX_INJECT_SUMMARY_CHARS,
+        _format_result,
+        result_summary,
+    )
+    from durin.workflow.result import WorkflowResult
+
+    result = WorkflowResult(status="needs_input", final_output="which env?", runs=[],
+                            run_id="r1", needs_input_node="ask", ask_kind="question",
+                            output_dir="/w/r1", output_files=[])
+    for declared in (False, True):
+        assert result_summary(result, output_files=declared, session_key=session_key) == (
+            _format_result(result, output_files=declared, human_reachable=reachable,
+                           max_chars=_MAX_INJECT_SUMMARY_CHARS))
 
 
 @pytest.mark.asyncio

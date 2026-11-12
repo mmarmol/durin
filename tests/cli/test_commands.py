@@ -3015,12 +3015,15 @@ def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
 
 
 def _run_gateway_with_fake_uvicorn(
-    monkeypatch, tmp_path: Path, *, uvicorn_exits_on_its_own: bool
+    monkeypatch, tmp_path: Path, *, uvicorn_exits_on_its_own: bool,
+    seen: dict | None = None,
 ) -> tuple[object, list[str], dict]:
     """Boot the gateway with the unified uvicorn server in place (a fake
     websocket channel and a fake ``uvicorn.Server``), send it SIGTERM from the
     agent loop, and return the CLI result, the ordered shutdown calls and the
-    kwargs uvicorn's Config was built with."""
+    kwargs uvicorn's Config was built with. ``seen``, when given, receives the
+    gateway's bus (``bus``), the keywords of every service-registry build
+    (``registry_builds``) and the registry the HTTP app serves (``app_registry``)."""
     import signal
     from types import SimpleNamespace
 
@@ -3146,8 +3149,23 @@ def _run_gateway_with_fake_uvicorn(
         return _FakeServer()
 
     class _FakeBus:
+        def __init__(self) -> None:
+            self.inbound: list = []
+            self.outbound: list = []
+
         def add_inbound_interceptor(self, _fn) -> None:
             return None
+
+        async def publish_inbound(self, msg) -> None:
+            self.inbound.append(msg)
+
+        async def publish_outbound(self, msg) -> None:
+            self.outbound.append(msg)
+
+    gateway_bus = _FakeBus()
+    if seen is not None:
+        seen["bus"] = gateway_bus
+        seen["registry_builds"] = []
 
     class _FakeUvicornConfig:
         def __init__(self, _app, **kwargs) -> None:
@@ -3186,7 +3204,7 @@ def _run_gateway_with_fake_uvicorn(
     _patch_cli_command_runtime(
         monkeypatch,
         config,
-        message_bus=lambda: _FakeBus(),
+        message_bus=lambda: gateway_bus,
         session_manager=lambda _workspace: object(),
     )
     monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
@@ -3199,11 +3217,22 @@ def _run_gateway_with_fake_uvicorn(
         "durin.memory.embed_supervisor.start_embed_server_supervisor", lambda _config: False,
     )
     monkeypatch.setattr("durin.agent.mcp_runtime.McpRuntime", lambda _agent: object())
-    monkeypatch.setattr("durin.service.wiring.build_service_registry", lambda **_kw: {})
+    def _build_registry(**kwargs):
+        registry = {"built_with": kwargs}
+        if seen is not None:
+            seen["registry_builds"].append(kwargs)
+        return registry
+
+    def _build_app(_channel, registry, **_kw):
+        if seen is not None:
+            seen["app_registry"] = registry
+        return gateway_app
+
+    monkeypatch.setattr("durin.service.wiring.build_service_registry", _build_registry)
     gateway_app = SimpleNamespace(state=SimpleNamespace(
         stop_openai_turns=lambda: calls.append("api.stop_openai_turns"),
     ))
-    monkeypatch.setattr("durin.api.asgi.build_gateway_http_app", lambda *_a, **_kw: gateway_app)
+    monkeypatch.setattr("durin.api.asgi.build_gateway_http_app", _build_app)
     monkeypatch.setattr("uvicorn.Config", _FakeUvicornConfig)
     monkeypatch.setattr("uvicorn.Server", _FakeUvicornServer)
 
@@ -3229,6 +3258,40 @@ def test_a_gateway_stop_lets_uvicorn_finish_its_own_exit_first(monkeypatch, tmp_
     # uvicorn's own graceful exit is bounded too: in-flight requests do not
     # hold the stop open indefinitely.
     assert uvicorn_kwargs.get("timeout_graceful_shutdown", 0) > 0
+
+
+def test_the_gateway_registry_reports_a_resumed_run_to_its_launch_conversation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The registry the dashboard and the API are served from gets the
+    callback that reports a resumed run's result to the conversation that
+    launched it: one inbound message under that conversation's session key,
+    nothing sent to a channel directly."""
+    from durin.workflow.result import WorkflowResult
+
+    seen: dict = {}
+    result, _calls, _kwargs = _run_gateway_with_fake_uvicorn(
+        monkeypatch, tmp_path, uvicorn_exits_on_its_own=True, seen=seen,
+    )
+    assert result.exit_code == 0, result.output
+
+    [built] = [kw for kw in seen["registry_builds"]
+               if kw.get("workflow_deliver_result") is not None]
+    assert seen["app_registry"]["built_with"] is built
+    launch = {"kind": "session", "session_key": "slack:C1:1700.1", "channel": "slack",
+              "chat_id": "C1"}
+    run = WorkflowResult(status="completed", final_output="42", runs=[], run_id="r1")
+    asyncio.run(built["workflow_deliver_result"](launch, "qa", "r1", run, False))
+
+    bus = seen["bus"]
+    [msg] = bus.inbound
+    assert (msg.channel, msg.chat_id, msg.session_key_override) == (
+        "system", "slack:C1", "slack:C1:1700.1")
+    assert msg.metadata == {"injected_event": "workflow_background_result", "workflow": "qa"}
+    assert msg.content.startswith(
+        "[Workflow 'qa' run r1, started from this conversation, was resumed from the "
+        "dashboard or the API and finished]\n\nWorkflow run r1: completed")
+    assert bus.outbound == []
 
 
 def test_a_gateway_stop_stops_intake_and_ends_sse_streams_before_uvicorn_exits(
@@ -3716,6 +3779,14 @@ def test_on_outcome_session_destination_injects_inbound_with_tag(monkeypatch, tm
     assert msg.metadata["automation"] == "a1"
     assert "all done" in msg.content
     seen["bus"].publish_outbound.assert_not_awaited()
+
+
+def test_the_automations_workflow_service_reports_no_resumed_run(monkeypatch, tmp_path: Path) -> None:
+    """An automation's outcome is its runtime's to report: the workflows
+    service the automations run through has no result callback."""
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    service = seen["automations_runtime"]._exec.__self__
+    assert service._deliver_result is None
 
 
 def test_on_outcome_channel_destination_publishes_outbound_verbatim(monkeypatch, tmp_path: Path) -> None:

@@ -1712,6 +1712,21 @@ def _run_gateway(
         except Exception:
             logger.exception("automation counterpart delivery (non-fatal) failed")
 
+    async def _deliver_resumed_workflow_result(launch, name, run_id, result, output_files) -> None:
+        """Report a workflow run resumed from the dashboard or the API to the
+        conversation that launched it: one system message on the bus, as a
+        background run's result arrives. ``result`` is the run's result, or the
+        failure text when its walk raised. Handed to the workflows service the
+        dashboard and the API are served from."""
+        from durin.agent.tools.run_workflow import result_summary
+        from durin.workflow import delivery
+
+        summary = result if isinstance(result, str) else result_summary(
+            result, output_files=output_files,
+            session_key=delivery.launch_session_key(launch))
+        await delivery.deliver(bus, launch, name=name, run_id=run_id, summary=summary,
+                               resumed_from="the dashboard or the API")
+
     async def _on_automation_outcome(outcome) -> None:
         """Deliver a terminal run's outcome to whoever should hear about it.
 
@@ -2331,6 +2346,9 @@ def _run_gateway(
                     stop_turn=agent.cancel_session_turns,
                     turn_key=agent.bus_turn_key,
                     approval_deps=agent.approval_exec_deps,
+                    # This registry serves the dashboard and the API, so a
+                    # run resumed there is reported to its launch conversation.
+                    workflow_deliver_result=_deliver_resumed_workflow_result,
                     # This build runs on the event loop. The websocket channel's
                     # own build of the same registry, made before the loop
                     # started, already swept the dead runs at boot.

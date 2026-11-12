@@ -542,6 +542,20 @@ dashboard or the API; when the agent started such a run, its later `mcps`
 steps then run without their MCP tools, as in any run started from the
 dashboard.
 
+**Where a resumed run's result goes.** A run the agent started from a chat
+reports its result to that chat when it is resumed elsewhere and its steps run
+to an end. Resumed from the dashboard or the API, it arrives there as a message the agent reads and
+summarizes, saying the run was resumed from the dashboard or the API; the
+dashboard or API caller also gets the result as before. Resumed by the agent
+from another chat, the starting chat gets the same message, saying the run was
+resumed from another conversation, and the chat that resumed it gets the result
+as usual. Resumed from the chat that started it, the result arrives once, as for
+any run. Only a resume that actually ran reports: one that was refused, or that
+another resume beat, reports nothing. Answering an approval from the dashboard
+counts: the chat receives the result of the steps that ran after it. Runs
+started by an automation, the dashboard or the API report nothing to a chat this
+way.
+
 A crashed run an [automation](automations.md) started is not resumed by hand:
 the agent's `run_workflow`, the dashboard and the API all refuse it. The
 automation records its own run as interrupted, does not resume the crashed
@@ -558,8 +572,11 @@ Known limits: files that a `read` parallel step's branches or a fan-out's
 workers wrote in the shared folder before the process died are still there when
 the step runs again. A process that dies right after a `choose` or `union` step
 finished writing its result, before the run moved on, runs the step again on a
-folder that already holds that result. A run started from a chat and resumed
-from the dashboard or the API does not report its result back to that chat.
+folder that already holds that result. A run started from a chat whose approval
+is rejected from the dashboard or the API, or whose approved step is its last,
+ends there, and that chat is not told. Neither is it told when whoever resumed
+the run stops waiting for it before it ends, such as an agent turn stopped
+while it waited on a resumed run.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
