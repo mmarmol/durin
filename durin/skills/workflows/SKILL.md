@@ -223,12 +223,17 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   before its first step and cannot be resumed: start a new run once the person says the
   cause is gone. A run stopped with `writing the branches' result back failed: <error>`
   could not write a `choose`/`union` result into its folder (a read-only folder, a full
-  disk); the folder was put back. Tell the person the error; once the cause it names is
-  gone, retry with `resume_run_id`. A `choose`/`union` step whose result would turn a
-  file into a folder (or a folder into a file), write, delete or go through a link, write
-  a file that is not regular, or reach another volume, ends the run like a union
-  conflict: `the branches' result cannot be written back: '<path>' …` — change the
-  branches so they do not, and start a new run. A crashed run you started whose workflow (or a sub-workflow it
+  disk). When the reason stops there, the folder was put back; when it goes on to say the
+  changes could not be undone yet, the folder has not been put back, and the retry puts
+  it back once the cause is gone. Either way, tell the person the error; once the cause
+  it names is gone, retry with `resume_run_id`. A `choose`/`union` step whose result
+  would turn a file into a folder (or a folder into a file), write, delete or go through
+  a link, write a file that is not regular, reach another volume, or touch a path that
+  cannot be examined, ends the run like a union conflict: `the branches' result cannot be
+  written back: '<path>' …` — change the branches so they do not, and start a new run.
+  The same ending with `the run's working folder is a link` or `… is on another volume
+  than the run's area` means the run's working folder itself cannot take the result: tell
+  the person, and do not move or replace the folder yourself. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A crashed run an automation started is not resumed by hand
   on any surface: the automation does not resume it, and its next run starts anew. A

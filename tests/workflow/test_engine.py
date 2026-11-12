@@ -1106,6 +1106,119 @@ def test_a_branch_file_under_a_folder_link_of_the_real_folder_is_refused(tmp_pat
     assert not workspace_fork.pending_dir(work).exists()
 
 
+def _linked_work(tmp_path, keyed: bool):
+    """The run's working folder made a link to a project folder outside the run area
+    holding one file; returns (working folder, project folder)."""
+    from durin.workflow.artifacts import keyed_work_dir
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "existing.txt").write_text("mine")
+    if keyed:
+        work = keyed_work_dir(tmp_path, "d", "k1")
+        work.rmdir()
+    else:
+        work = tmp_path / ".workflow" / "r1" / "work"
+        work.parent.mkdir(parents=True)
+    work.symlink_to(project)
+    return work, project
+
+
+def _snapshot(folder: Path) -> dict[str, tuple]:
+    import os
+    import stat
+    out = {}
+    for p in sorted(folder.rglob("*")):
+        st = os.lstat(p)
+        out[p.relative_to(folder).as_posix()] = (
+            p.read_bytes() if stat.S_ISREG(st.st_mode) else stat.S_IFMT(st.st_mode),
+            stat.S_IMODE(st.st_mode))
+    return out
+
+
+@pytest.mark.parametrize("keyed", [False, True], ids=["unkeyed", "keyed"])
+def test_a_linked_working_folder_does_not_stop_a_run_without_a_parallel_step(tmp_path, keyed):
+    from durin.workflow import workspace_fork
+    work, project = _linked_work(tmp_path, keyed)
+
+    def node_runner(req):
+        (Path(req.output_dir) / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    wf = parse_workflow({"name": "d", "start": "only", "nodes": [
+        {"id": "only", "kind": "work", "tools": "default", "next": None}]})
+    res = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                         workspace=str(tmp_path)).run(wf, "t", work_key="k1" if keyed else None)
+    assert res.status == "completed", res.final_output
+    files = _files(project)                  # the step wrote through the link
+    assert files["existing.txt"] == b"mine" and b"only" in files.values()
+    assert not (workspace_fork.run_area(work) / "pending-apply").exists()
+
+
+@pytest.mark.parametrize("why,text", [
+    ("link", "the run's working folder is a link"),
+    ("volume", "the run's working folder is on another volume than the run's area"),
+])
+def test_a_write_back_into_a_linked_or_mounted_working_folder_is_refused(tmp_path, monkeypatch,
+                                                                         why, text):
+    import os
+
+    from durin.workflow import workspace_fork
+    if why == "link":
+        work, project = _linked_work(tmp_path, keyed=False)
+    else:
+        work = project = tmp_path / ".workflow" / "r1" / "work"
+        real_lstat = os.lstat
+
+        def other_device(path, *a, **kw):
+            st = real_lstat(path, *a, **kw)
+            if os.fspath(path) == str(work):
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev + 1, *tuple(st)[3:10]))
+            return st
+
+        monkeypatch.setattr(os, "lstat", other_device)
+    seen = {}
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "seed.txt").write_text("s")
+            seen["before"] = _snapshot(project)
+        elif req.workspace_override:
+            (Path(req.workspace_override) / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output == f"parallel node 'fan': the branches' result cannot be written back: {text}"
+    monkeypatch.undo()
+    assert _snapshot(project) == seen["before"]
+    assert not os.path.lexists(workspace_fork.run_area(work) / "pending-apply")
+
+
+def test_a_journal_beside_a_linked_working_folder_names_the_journal(tmp_path, monkeypatch):
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    journal = workspace_fork.pending_dir(work) / "journal.json"
+    outside = tmp_path / "outside"
+    for rel in ("a.txt", "new.txt"):
+        (outside / rel).parent.mkdir(parents=True, exist_ok=True)
+        (outside / rel).write_bytes(b"OUTSIDE " + rel.encode())
+    shutil.move(str(work), str(tmp_path / "kept-work"))
+    work.symlink_to(outside)
+    before = _snapshot(outside)
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    assert res.final_output == _FRESH_UNUSABLE.format(path=journal)
+    assert _snapshot(outside) == before and journal.is_file()
+
+
 _UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "
              "be undone ({path}). It can run once a person has checked the folder and "
              "removed that file.")

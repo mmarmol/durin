@@ -399,12 +399,19 @@ The kept result is not written when it would turn a file into a folder or a
 folder into a file (for example one branch writes `p` and another `p/q`, or a
 branch replaces a folder with a file), when it would write or delete a link or
 go through one, when a path it writes is not a regular file (a named pipe, say),
-or when a path lies on another volume mounted inside the working folder. The run
+when a path lies on another volume mounted inside the working folder, or when a
+path cannot be examined (a folder without search permission, say). The run
 then stops at the parallel step the way a `union` conflict does, naming the path:
 `parallel node '<id>': the branches' result cannot be written back: '<path>'
 would turn a file into a folder or a folder into a file` (or `… is reached
 through a link`, `… is a link`, `… is not a regular file`, `… is on another
-volume`). Nothing is applied.
+volume`, `… cannot be examined: <error>`). Nothing is applied.
+
+The same happens when the run's working folder is itself a link, or lies on
+another volume than the run's own folder that holds it: `parallel node '<id>':
+the branches' result cannot be written back: the run's working folder is a
+link`, or `… the run's working folder is on another volume than the run's
+area`. Steps that are not a `choose` or `union` step still run in such a folder.
 
 Otherwise the result is written file by file — first the files a branch deleted
 (a file that is not there is skipped), then the files a branch wrote — with an
@@ -413,25 +420,34 @@ changed file held before. Each file is prepared inside `pending-apply/` and
 renamed into place. If writing fails while the run is going — a read-only
 folder, a full disk — the undo runs at once and the run stops at the parallel
 step with `writing the branches' result back failed: <error>`; retry it once the
-cause in the error is gone. If the process dies while the result is being
-written, the run undoes the writing when it is resumed, when the next run on the
-same work key starts, or when a `choose` or `union` step uses the folder next,
-so the repeated step starts from what its first attempt started from. The undo
-removes the files the writing created, removes the folders it made when they are
-empty (a folder it made that now holds another file — one a detached step wrote
-there, say — stays), and puts back each recorded file that no longer holds what
-it held before.
+cause in the error is gone. When the undo itself cannot finish for the same
+cause — on a full disk, after a file was already deleted or changed — the message
+goes on with the "could not be undone yet" text below, and the retry first puts
+the folder back. If the process dies while the result is being written, the run
+undoes the writing when it is resumed, when the next run on the same work key
+starts, or when a `choose` or `union` step uses the folder next, so the repeated
+step starts from what its first attempt started from.
+
+The undo only touches a file that still holds what the writing left there: it
+removes a file the writing created and puts back a file it changed only while
+that file holds the content written there, and puts back a file it deleted only
+while nothing is at that path. A file someone else changed or made in between is
+left as it is and named in a warning in the log. Folders the writing made are
+removed when empty; one that now holds another file — one a detached step wrote
+there, say — stays.
 
 When the folder cannot be put back, nothing more is changed and the run stops:
 
 - `the working folder holds changes of an earlier parallel step that could not
   be undone (<path>). It can run once a person has checked the folder and
-  removed that file.` — the undo record itself cannot be used; the run can be
-  retried once a person has done that.
+  removed that file.` — the undo record itself cannot be used, or it lies beside
+  a working folder that has been replaced by a link; the run can be retried once
+  a person has done that.
 - `the working folder holds changes of an earlier parallel step that could not
   be undone yet (<path>): <what stopped it>. A retry undoes them once the cause
-  is gone.` — putting a changed file back stopped, for example on a full disk or
-  a folder replaced by a link; the run can be retried once the cause is gone.
+  is gone.` — putting a changed file back stopped, for example on a full disk, a
+  folder replaced by a link, or a folder whose permissions no longer let its
+  files be examined; the run can be retried once the cause is gone.
 
 A run that stops this way before its first step cannot be retried, and its
 message says so: `… A new run can start once a person has checked the folder and

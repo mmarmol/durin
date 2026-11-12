@@ -2789,9 +2789,11 @@ class WorkflowEngine:
 
         def _write_back(changesets):
             # The result goes into the real folder only through the undo journal.
-            # A result that would change a path's shape or go through a link is
-            # refused before anything is stored: the step ends like a union
-            # conflict, with this abort text. A failure after the journal was
+            # A working folder that is a link or on another volume than its run
+            # area, and a result that would change a path's shape, go through a
+            # link or touch a path that cannot be examined, are refused before
+            # anything is stored: the step ends like a union conflict, with this
+            # abort text. A failure after the journal was
             # written is undone at once, and the run aborts at this step,
             # retryable; when the undo cannot finish, its journal stays for the
             # retry. A journal already present was not written by this call and is

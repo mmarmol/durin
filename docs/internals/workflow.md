@@ -520,31 +520,37 @@ journal in `pending-apply/` beside the working folder. The journal belongs to th
 folder, not to a run, so a sub-workflow writing into its caller's folder and a later
 run on the same key find it in the same place.
 
-*What a write-back refuses.* A delete of a path that does not exist is dropped: it is
-neither recorded nor done. Before anything is stored, `apply_all` then checks every
-path it will write or delete against the real folder. The working folder itself must
-be a folder, not a link (`ValueError`, as for a folder outside `.workflow/`). A path
-must be a relative POSIX path with no empty, `.` or `..` part. The write-back is
-refused, with the folder untouched and no `pending-apply/` left, when:
+*What a write-back refuses.* Before anything is stored, `apply_all` checks the whole
+write-back against the real folder. A path must be a relative POSIX path with no empty,
+`.` or `..` part, and no path may be both deleted and written, or written with two
+different contents — a union conflict, which never reaches the write-back
+(`ValueError`, as for a folder outside `.workflow/`). A delete of a path the system
+reports as missing ("no such file or directory") is dropped: it is neither recorded nor
+done. The write-back is refused, with the folder untouched and no `pending-apply/` left,
+when:
 
-| Condition | Text after `'<path>'` |
+| Condition | Text |
 |---|---|
-| a written path is also needed as a folder by another written path; a write or delete target is a folder; a folder above a written path is a file | `would turn a file into a folder or a folder into a file` |
-| a folder above a touched path is a link | `is reached through a link` |
-| a write or delete target is a link (to a file, a folder, or nothing) | `is a link` |
-| a write or delete target exists and is not a regular file (a FIFO, a socket, a device) | `is not a regular file` |
-| the nearest existing folder of the path is on another volume than the working folder (`st_dev`) | `is on another volume` |
+| the working folder is a link | `the run's working folder is a link` |
+| the working folder is on another volume than its run area (`st_dev`): every file is staged in `pending-apply/` and could not be renamed into it | `the run's working folder is on another volume than the run's area` |
+| a written path is also needed as a folder by another written path; a write or delete target is a folder; a folder above a written path is a file | `'<path>' would turn a file into a folder or a folder into a file` |
+| a folder above a touched path is a link | `'<path>' is reached through a link` |
+| a write or delete target is a link (to a file, a folder, or nothing) | `'<path>' is a link` |
+| a write or delete target exists and is not a regular file (a FIFO, a socket, a device) | `'<path>' is not a regular file` |
+| the nearest existing folder of the path is on another volume than the working folder (`st_dev`) | `'<path>' is on another volume` |
+| examining a touched path or a folder above it fails with any error but "no such file or directory" (a folder without search permission; a delete under a path that is a file) | `'<path>' cannot be examined: <error>` |
 
 The step then ends the way a union conflict does — an abort from the parallel node, its
 branch rows kept, nothing applied, no failed step: `parallel node '<id>': the branches'
-result cannot be written back: '<path>' <reason>`. Two branches of a `union` that
+result cannot be written back: <text>`. Two branches of a `union` that
 write `p` and `p/q` are already a union conflict naming both paths (`conflicts`). A
 branch can carry a path under a folder link of the real folder (its copy has no such
 link, so a folder it makes there is a real one); that path is refused here.
 
 *Write-back.* Each remaining path is recorded: an existing file's bytes go to `pre/<n>`
-(streamed, file by file) with its mode; a path that did not exist is noted as such, and
-so is every folder the write-back creates. The run area's entry for `pending-apply` is
+(streamed, file by file) with its mode; a path that did not exist is noted as such; a
+written path also keeps the SHA-256 of the content written there; and every folder the
+write-back creates is noted. The run area's entry for `pending-apply` is
 flushed to disk once that folder is made, the stored copies are flushed, and
 `journal.json` is written last: the journal file existing is what says a write-back is
 pending. Then every delete runs, then every write, each changeset's in turn. Each file
@@ -553,36 +559,55 @@ renamed into place. Each delete, folder made and rename is preceded by a check t
 folders between the working folder and the path are real folders; a change landing
 between that check and the operation is not caught. A check that fails, or an
 operation that fails (a rename onto another volume, a read-only folder, a full disk),
-fails the write-back, and the engine runs the undo at once. Last, the journal and its
-folder are removed.
+fails the write-back, and the engine runs the undo at once. A write-back that finishes
+removes the journal and its folder last. When the undo of a failed one finishes —
+nothing had changed yet, or every change could be put back — the step ends with
+`writing the branches' result back failed: <error>` and no journal is left; a retry
+while the cause holds (a read-only folder) ends the same way. When it cannot finish —
+a delete or a change was already made and putting the file back fails for the same
+cause, a full disk say — the text continues with `; ` and the undo-stopped text, the
+journal stays, and the retry undoes the write-back first once the cause is gone.
 
 *Undo.* A process that dies in the middle leaves the journal, and whoever uses the
 folder next runs the undo before using it (`restore_pending`): the run itself before
 its walk (a top-level run, keyed or not, on a fresh start or a resume — a keyed run
 holds its key's lock by then), and every `choose`/`union` step at its entry, before it
-clears old copies and snapshots the folder. Nothing is done when the working folder is
-a link. The undo removes the files the write-back created at paths that did not exist
-before, removes the folders it created when they are empty (a created folder that holds
-something else, a detached step's file say, is left), and puts back each stored file
-that no longer holds its stored bytes and mode, making folders as needed; a stored
-file that still holds them is not touched. So an undo after a write-back that changed
-nothing changes nothing, and a write-back that keeps failing (a read-only folder, a
-full disk) ends as `writing the branches' result back failed: <error>` with no journal
-left, the same on every retry. Each operation of the undo is preceded by the same check;
-a path whose folders are no longer real folders inside the working folder, or whose
-operation fails, is left as it is, the other paths are still done, and the undo then
-raises `UndoError` naming every such path and keeps the journal, so it runs again once
-the cause is gone. The write-back is undone, never completed: the whole step runs again
+clears old copies and snapshots the folder. With no journal there is nothing to do,
+whatever the working folder is (a link included). The undo acts on a path only while
+it holds what the write-back left there:
+
+- a written path is put back — its stored file returns, or it is removed when it did
+  not exist before — only when it is a regular file holding the content written there;
+- a deleted path is put back only when it does not exist;
+- a path that holds what it held before (for a stored file, its bytes and mode) needs
+  nothing;
+- a path that holds anything else — other bytes, a link, a folder, a file someone made
+  at a path the write-back had not reached yet, nothing where a written file was, a
+  file where a folder above a stored file was — was changed by someone else. It is
+  left as it is, the undo goes on, and the paths left are named in one warning in the
+  log.
+
+The folders the write-back created are removed when they are empty, deepest first; a
+created folder that holds something else (a detached step's file, or a file left
+above) stays. So an undo after a write-back that changed nothing changes nothing. A
+path that cannot be examined (any error but "no such file or directory"), a path
+reached through a link (at a folder above it, or at a folder the write-back created),
+or an operation that fails, is left as it is; the other paths are still done, and the
+undo then raises `UndoError` naming every such path and keeps the journal, so it runs
+again once the cause is gone. Each operation of the undo is preceded by the same folder
+check; a change landing between the examination of a path and its operation is not
+caught. The
+write-back is undone, never completed: the whole step runs again
 on a resume, and a step that ran on top of its own earlier result would not start from
 what its first attempt started from. The conversion of a dead run (`mark_dead_run`)
 does not undo it: it does not hold the folder (a live run on the same key may be
 writing its own result back).
 
 *When the folder cannot be put back.* A journal that cannot be used (it cannot be read,
-a path in it leaves the folder, a stored copy is missing, or a symlink stands at the
-journal, at `pending-apply` or at its `pre` or `tmp` folder), or a working folder that
-is a link (the text then names the working folder), is not followed and the folder
-stays as it is. Which text a run gets, and whether it can be retried, depends on
+a path in it leaves the folder, an entry names neither a stored copy nor a content
+hash, a stored copy is missing, or a symlink stands at the journal, at `pending-apply`
+or at its `pre` or `tmp` folder), or a journal beside a working folder that is a link,
+is not followed and the folder stays as it is; the text names the journal file. Which text a run gets, and whether it can be retried, depends on
 the run:
 
 | Where | Run | Text | Retried |
@@ -2078,7 +2103,7 @@ End-to-end for a single `run_workflow` call:
 | `store_dir`, `store_dir_of`, `save_input`, `load_input`, `save_source`, `load_sources`, `discard` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole beside its working folder (`.workflow/<run_id>/resume/`, or `resume/<run_id>/` beside a work key's shared folder): the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. `store_dir_of` finds the folder from a record. Removed when a run ends in a state no resume can enter. The record keeps only capped copies, for its readers. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
-| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `pending_dir`, `apply_all`, `restore_pending`, `PendingApplyError`, `UndoError`, `WriteBackRefusedError` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel; the write-back into the real folder refuses a result that changes a path's shape, meets a link, a file that is not regular or another volume, and keeps an undo journal (`pending-apply/`) that `restore_pending` uses to undo a write-back a dead process cut. |
+| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `pending_dir`, `apply_all`, `restore_pending`, `PendingApplyError`, `UndoError`, `WriteBackRefusedError` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel; the write-back into the real folder refuses a linked working folder, one on another volume than its run area, and a result that changes a path's shape, meets a link, a file that is not regular, another volume or a path that cannot be examined, and keeps an undo journal (`pending-apply/`) that `restore_pending` uses to undo a write-back a dead process cut, leaving any path someone else changed since. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
