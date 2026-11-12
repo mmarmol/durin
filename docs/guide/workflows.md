@@ -400,7 +400,8 @@ folder into a file (for example one branch writes `p` and another `p/q`, or a
 branch replaces a folder with a file), when it would write or delete a link or
 go through one, when a path it writes is not a regular file (a named pipe, say),
 when a path lies on another volume mounted inside the working folder, or when a
-path cannot be examined (a folder without search permission, say). The run
+path cannot be examined (a folder that lost its search permission while the
+branches ran, say). The run
 then stops at the parallel step the way a `union` conflict does, naming the path:
 `parallel node '<id>': the branches' result cannot be written back: '<path>'
 would turn a file into a folder or a folder into a file` (or `… is reached
@@ -430,9 +431,13 @@ step starts from what its first attempt started from.
 
 The undo only touches a file that still holds what the writing left there: it
 removes a file the writing created and puts back a file it changed only while
-that file holds the content written there, and puts back a file it deleted only
-while nothing is at that path. A file someone else changed or made in between is
-left as it is and named in a warning in the log. Folders the writing made are
+that file holds the content written there with the mode the writing gave it, and
+puts back a file it deleted only while nothing is at that path. A file someone
+else changed or made in between — other content, another mode, a folder in its
+place, a deleted file the writing had changed — is left as it is and named
+in a warning in the log. A change that cannot be told from the writing's own is
+undone like it: a file someone wrote with exactly the content and mode the
+writing gives it, and a file someone deleted that the writing was deleting too. Folders the writing made are
 removed when empty; one that now holds another file — one a detached step wrote
 there, say — stays.
 

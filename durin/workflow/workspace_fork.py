@@ -395,10 +395,10 @@ def _stage_into(work: Path, rel: str, fill: Callable[[BinaryIO], object], mode: 
         raise
 
 
-def _write_file(target: Path, content: bytes, work: Path, staging: Path) -> None:
-    """Write one file of a write-back into the real folder, staged and renamed into
-    place (an existing file keeps its mode, a new one gets 0644): the only function
-    ``apply_all`` writes a file through."""
+def _write_file(target: Path, content: bytes, work: Path, staging: Path, mode: int) -> None:
+    """Write one file of a write-back into the real folder with *mode*, the mode its
+    journal entry records (the existing file's, or 0644 for a new one), staged and
+    renamed into place: the only function ``apply_all`` writes a file through."""
     rel = target.relative_to(work).as_posix()
     _make_folders(work, rel)
     try:
@@ -407,7 +407,6 @@ def _write_file(target: Path, content: bytes, work: Path, staging: Path) -> None
         st = None
     if st is not None and not stat.S_ISREG(st.st_mode):
         raise _UnsafePathError(rel, "is no longer a regular file")
-    mode = stat.S_IMODE(st.st_mode) if st is not None else 0o644
     _stage_into(work, rel, lambda out: out.write(content), mode, staging)
 
 
@@ -421,11 +420,10 @@ def _store_copy(source: Path, stored: Path) -> None:
 
 
 def _holds(path: Path, st: os.stat_result, stored: Path, mode: int) -> bool:
-    """Whether *path*, found as *st*, is a regular file with *mode* holding exactly
-    the bytes kept in *stored*, compared streamed. A file that cannot be read
-    raises."""
-    if (not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != mode
-            or st.st_size != os.stat(stored).st_size):
+    """Whether *path*, found as *st*, is a regular file holding exactly the bytes
+    kept in *stored*, compared streamed, with *mode*. The bytes are compared before
+    the mode, so a file of the stored size that cannot be read raises."""
+    if not stat.S_ISREG(st.st_mode) or st.st_size != os.stat(stored).st_size:
         return False
     with open(path, "rb") as now, open(stored, "rb") as before:
         while True:
@@ -433,7 +431,7 @@ def _holds(path: Path, st: os.stat_result, stored: Path, mode: int) -> bool:
             if chunk != before.read(1 << 16):
                 return False
             if not chunk:
-                return True
+                return stat.S_IMODE(st.st_mode) == mode
 
 
 def _file_hash(path: Path) -> str:
@@ -535,8 +533,8 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
     says does not exist is dropped. Then every path it touches is recorded in
     ``pending_dir(root)``: an existing file's bytes go to ``pre/<n>`` (streamed) with
     its mode, a path that did not exist is noted as such, a written path keeps the
-    SHA-256 of the content written there, and every folder the write-back creates is
-    noted. The run area's entry for ``pending-apply`` is flushed to disk, and
+    SHA-256 of the content written there and the mode it is written with (the
+    existing file's, or 0644), and every folder the write-back creates is noted. The run area's entry for ``pending-apply`` is flushed to disk, and
     ``journal.json`` is written last: the journal file existing is what says a
     write-back is pending.
 
@@ -577,13 +575,18 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
     pre.mkdir(parents=True)
     _fsync_dir(pending.parent)                     # the run area now names pending-apply
     entries: list[dict] = []
+    written_modes: dict[str, int] = {}
     for n, rel in enumerate([*deletes, *written]):
         target = work / rel
         st = _lstat(target)
-        entry = {"path": rel, "pre": None, "mode": None, "written": content.get(rel)}
+        entry = {"path": rel, "pre": None, "mode": None, "written": content.get(rel),
+                 "written_mode": None}
         if st is not None and stat.S_ISREG(st.st_mode):
             _store_copy(target, pre / str(n))
             entry.update(pre=str(n), mode=stat.S_IMODE(st.st_mode))
+        if rel in content:                   # the mode _write_file gives it
+            entry["written_mode"] = entry["mode"] if entry["mode"] is not None else 0o644
+            written_modes[rel] = entry["written_mode"]
         entries.append(entry)
     new_dirs = list(dict.fromkeys(
         folder for rel in written for folder in _ancestors(rel)
@@ -598,7 +601,7 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
         _guard(work, rel)
         (work / rel).unlink(missing_ok=True)
     for rel, data in writes:
-        _write_file(work / rel, data, work, staging)
+        _write_file(work / rel, data, work, staging, written_modes[rel])
     journal.unlink()
     shutil.rmtree(pending, ignore_errors=True)
 
@@ -630,6 +633,9 @@ def _read_journal(pending: Path) -> dict | None:
         stored, mode, written = entry.get("pre"), entry.get("mode"), entry.get("written")
         if written is not None and not (isinstance(written, str) and _SHA256.fullmatch(written)):
             raise PendingApplyError(journal, f"entry {entry!r} has no usable content hash")
+        if (written is not None) != _is_mode(entry.get("written_mode")) or (
+                written is None and entry.get("written_mode") is not None):
+            raise PendingApplyError(journal, f"entry {entry!r} has no usable written mode")
         if stored is None:
             if written is None:
                 raise PendingApplyError(journal, f"entry {entry!r} names neither a stored "
@@ -653,9 +659,12 @@ def _found(work: Path, pending: Path, entry: dict) -> str:
     ``"link"`` when a folder above it is a link; ``"earlier"`` when it holds what
     it held before the write-back (nothing, for a path that did not exist; the
     stored bytes and mode otherwise); ``"written"`` when it is a regular file
-    holding the content the write-back wrote there; ``"absent"`` when the system
-    says it does not exist; ``"other"`` for anything else, which someone else put
-    there. Raises ``OSError`` when the path cannot be examined."""
+    holding the content the write-back wrote there with the mode it gave it;
+    ``"absent"`` when the system says it does not exist; ``"other"`` for anything
+    else, which someone else put there. Content is compared before mode: a file the
+    check has to read (any file at a written path; at a deleted path, one of the
+    stored size) raises ``OSError`` when it cannot be read, as does a path that
+    cannot be examined."""
     rel, stored = entry["path"], entry.get("pre")
     chain = _chain(work, rel)
     if chain == "link":
@@ -668,7 +677,8 @@ def _found(work: Path, pending: Path, entry: dict) -> str:
     if stored is not None and _holds(work / rel, st, pending / _PRE / stored, entry["mode"]):
         return "earlier"
     if (entry.get("written") is not None and stat.S_ISREG(st.st_mode)
-            and _file_hash(work / rel) == entry["written"]):
+            and _file_hash(work / rel) == entry["written"]
+            and stat.S_IMODE(st.st_mode) == entry["written_mode"]):
         return "written"
     return "other"
 
@@ -679,10 +689,12 @@ def _undo(work: Path, pending: Path, data: dict) -> list[str]:
     because someone else changed them.
 
     A file the write-back created is removed when it holds the content written
-    there. A folder it created is removed when empty, deepest first, and left when
-    it holds something else. A stored file is put back when it holds the content
-    written there, or, for a path the write-back deleted, when it is absent; one
-    that holds its earlier bytes and mode is not touched. Anything else at a path
+    there with the mode the write-back gave it. A folder it created is removed when
+    empty, deepest first, and left when it holds something else. A stored file is
+    put back when it holds that content and mode, or, for a path the write-back
+    deleted, when it is absent; one that holds its earlier bytes and mode is not
+    touched. Each removal and rename checks the folders above its path again right
+    before it acts. Anything else at a path
     (other bytes, a link, a folder, a file where a folder above it was) was put
     there by someone else and is left. A path that cannot be examined, that is
     reached through a link (at a folder above it, or at a folder the write-back
@@ -711,7 +723,12 @@ def _undo(work: Path, pending: Path, data: dict) -> list[str]:
         if entry.get("pre") is not None or examine(entry) != "written":
             continue
         try:
+            # Reading the file took a while: its folders are checked again right
+            # before it is removed.
+            _guard(work, entry["path"])
             (work / entry["path"]).unlink()
+        except _UnsafePathError as exc:
+            stopped.append(str(exc))
         except OSError as exc:
             stopped.append(f"{entry['path']!r}: {exc}")
     for folder in sorted(data["new_dirs"], key=lambda f: f.count("/"), reverse=True):

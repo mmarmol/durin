@@ -1194,6 +1194,34 @@ def test_a_write_back_into_a_linked_or_mounted_working_folder_is_refused(tmp_pat
     assert not os.path.lexists(workspace_fork.run_area(work) / "pending-apply")
 
 
+def test_a_folder_that_loses_its_search_permission_while_the_branches_run_is_refused(tmp_path):
+    import os
+
+    from durin.workflow import workspace_fork
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    work = tmp_path / ".workflow" / "r1" / "work"
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "ns").mkdir()
+            (work / "ns" / "f.txt").write_text("f1")
+        elif req.workspace_override and req.node.id == "a":
+            (Path(req.workspace_override) / "ns" / "f.txt").write_text("f2")
+            os.chmod(work / "ns", 0o600)          # the real folder loses its search permission
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    try:
+        res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    finally:
+        os.chmod(work / "ns", 0o755)
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output.startswith("parallel node 'fan': the branches' result cannot be "
+                                       "written back: 'ns/f.txt' cannot be examined: [Errno 13]")
+    assert (work / "ns" / "f.txt").read_text() == "f1"
+    assert not workspace_fork.pending_dir(work).exists()
+
+
 def test_a_journal_beside_a_linked_working_folder_names_the_journal(tmp_path, monkeypatch):
     import shutil
 

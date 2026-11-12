@@ -538,7 +538,7 @@ when:
 | a write or delete target is a link (to a file, a folder, or nothing) | `'<path>' is a link` |
 | a write or delete target exists and is not a regular file (a FIFO, a socket, a device) | `'<path>' is not a regular file` |
 | the nearest existing folder of the path is on another volume than the working folder (`st_dev`) | `'<path>' is on another volume` |
-| examining a touched path or a folder above it fails with any error but "no such file or directory" (a folder without search permission; a delete under a path that is a file) | `'<path>' cannot be examined: <error>` |
+| examining a touched path or a folder above it fails with any error but "no such file or directory" (a folder that lost its search permission while the branches ran; a delete under a path that is a file) | `'<path>' cannot be examined: <error>` |
 
 The step then ends the way a union conflict does — an abort from the parallel node, its
 branch rows kept, nothing applied, no failed step: `parallel node '<id>': the branches'
@@ -549,13 +549,14 @@ link, so a folder it makes there is a real one); that path is refused here.
 
 *Write-back.* Each remaining path is recorded: an existing file's bytes go to `pre/<n>`
 (streamed, file by file) with its mode; a path that did not exist is noted as such; a
-written path also keeps the SHA-256 of the content written there; and every folder the
+written path also keeps the SHA-256 of the content written there and the mode it is
+written with (the existing file's at that moment, or 0644); and every folder the
 write-back creates is noted. The run area's entry for `pending-apply` is
 flushed to disk once that folder is made, the stored copies are flushed, and
 `journal.json` is written last: the journal file existing is what says a write-back is
 pending. Then every delete runs, then every write, each changeset's in turn. Each file
-is staged in `pending-apply/tmp/` with its mode (an existing file's, or 0644) and
-renamed into place. Each delete, folder made and rename is preceded by a check that the
+is staged in `pending-apply/tmp/` with the mode its entry records and renamed into
+place. Each delete, folder made and rename is preceded by a check that the
 folders between the working folder and the path are real folders; a change landing
 between that check and the operation is not caught. A check that fails, or an
 operation that fails (a rename onto another volume, a read-only folder, a full disk),
@@ -577,37 +578,45 @@ whatever the working folder is (a link included). The undo acts on a path only w
 it holds what the write-back left there:
 
 - a written path is put back — its stored file returns, or it is removed when it did
-  not exist before — only when it is a regular file holding the content written there;
+  not exist before — only when it is a regular file holding the content written there
+  with the mode the write-back gave it;
 - a deleted path is put back only when it does not exist;
 - a path that holds what it held before (for a stored file, its bytes and mode) needs
   nothing;
-- a path that holds anything else — other bytes, a link, a folder, a file someone made
-  at a path the write-back had not reached yet, nothing where a written file was, a
-  file where a folder above a stored file was — was changed by someone else. It is
-  left as it is, the undo goes on, and the paths left are named in one warning in the
-  log.
+- a path that holds anything else — other bytes, another mode, a link, a folder, a
+  file someone made at a path the write-back had not reached yet, nothing where a
+  written file was, a file where a folder above a stored file was — was changed by
+  someone else. It is left as it is, the undo goes on, and the paths left are named in
+  one warning in the log.
+
+Two changes by someone else cannot be told from the write-back's own and are undone
+like it: a file holding exactly the content and mode the write-back writes at that
+path, and a file the write-back deletes that someone deleted first. Content is
+compared before mode: a file the undo has to read to tell (any file at a written path;
+at a deleted path, one of the stored size) stops the undo when it cannot be read (see
+below), even when its mode alone would tell it apart.
 
 The folders the write-back created are removed when they are empty, deepest first; a
-created folder that holds something else (a detached step's file, or a file left
-above) stays. So an undo after a write-back that changed nothing changes nothing. A
-path that cannot be examined (any error but "no such file or directory"), a path
-reached through a link (at a folder above it, or at a folder the write-back created),
-or an operation that fails, is left as it is; the other paths are still done, and the
-undo then raises `UndoError` naming every such path and keeps the journal, so it runs
-again once the cause is gone. Each operation of the undo is preceded by the same folder
-check; a change landing between the examination of a path and its operation is not
-caught. The
-write-back is undone, never completed: the whole step runs again
-on a resume, and a step that ran on top of its own earlier result would not start from
-what its first attempt started from. The conversion of a dead run (`mark_dead_run`)
-does not undo it: it does not hold the folder (a live run on the same key may be
-writing its own result back).
+created folder that holds something else (a detached step's file, or a file left above)
+stays. So an undo after a write-back that changed nothing changes nothing. A path that
+cannot be examined (any error but "no such file or directory"), a path reached through a
+link (at a folder above it, or at a folder the write-back created), or an operation that
+fails, is left as it is; the other paths are still done, and the undo then raises
+`UndoError` naming every such path and keeps the journal, so it runs again once the
+cause is gone. Each operation of the undo is preceded, immediately, by the same folder
+check, also after the file at the path was read; a change landing between that check and
+the operation is not caught. The write-back is undone, never completed: the whole step
+runs again on a resume, and a step that ran on top of its own earlier result would not
+start from what its first attempt started from. The conversion of a dead run
+(`mark_dead_run`) does not undo it: it does not hold the folder (a live run on the same
+key may be writing its own result back).
 
 *When the folder cannot be put back.* A journal that cannot be used (it cannot be read,
-a path in it leaves the folder, an entry names neither a stored copy nor a content
-hash, a stored copy is missing, or a symlink stands at the journal, at `pending-apply`
-or at its `pre` or `tmp` folder), or a journal beside a working folder that is a link,
-is not followed and the folder stays as it is; the text names the journal file. Which text a run gets, and whether it can be retried, depends on
+a path in it leaves the folder, an entry names neither a stored copy nor a content hash,
+a written entry has no usable mode, a stored copy is missing, or a symlink stands at the
+journal, at `pending-apply` or at its `pre` or `tmp` folder), or a journal beside a
+working folder that is a link, is not followed and the folder stays as it is; the text
+names the journal file. Which text a run gets, and whether it can be retried, depends on
 the run:
 
 | Where | Run | Text | Retried |

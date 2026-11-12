@@ -196,6 +196,10 @@ def test_the_journal_names_the_run_the_step_and_every_path(work, monkeypatch):
     assert {p: e["written"] for p, e in by_path.items()} == {
         "new/n.txt": hashlib.sha256(b"n").hexdigest(), "a.txt": hashlib.sha256(b"a2").hexdigest(),
         "sub/b.bin": hashlib.sha256(b"\x00").hexdigest(), "exe.sh": None}
+    # ... and the mode the write-back gives it: an existing file's own, 0644 for a new one.
+    assert {p: e["written_mode"] for p, e in by_path.items()} == {
+        "new/n.txt": 0o644, "a.txt": _mode_of(work / "a.txt"),
+        "sub/b.bin": _mode_of(work / "sub" / "b.bin"), "exe.sh": None}
     stored = workspace_fork.pending_dir(work) / "pre" / by_path["sub/b.bin"]["pre"]
     assert stored.read_bytes() == bytes(range(256))
     assert data["new_dirs"] == ["new"]
@@ -917,12 +921,163 @@ def _gen_view_of(tree: dict[str, tuple]) -> dict[str, tuple]:
     return {k: (v[0],) if v[0] == "dir" else v for k, v in tree.items()}
 
 
+def _mode_of(path: Path) -> int:
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+# a.txt is written first, sub/b.bin second: a cut after one write leaves a.txt
+# reached and sub/b.bin not.
+MODE_CS = ChangeSet({}, {"a.txt": b"a2", "sub/b.bin": b"\x00"}, set())
+
+
+@pytest.mark.parametrize("which", ["reached", "unreached"])
+def test_an_undo_leaves_a_path_whose_mode_alone_someone_changed(work, monkeypatch, which):
+    before = _tree(work)
+    _fail_after(monkeypatch, 1)
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([MODE_CS], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    rel = "a.txt" if which == "reached" else "sub/b.bin"
+    content = (work / rel).read_bytes()               # a2 when reached, the earlier bytes if not
+    new_mode = 0o600 if _mode_of(work / rel) != 0o600 else 0o640
+    os.chmod(work / rel, new_mode)
+    with _warnings() as lines:
+        assert workspace_fork.restore_pending(work) is True
+    assert _left_paths(lines) == [rel]
+    assert _tree(work) == {**before, rel: (content, new_mode)}
+    assert not workspace_fork.pending_dir(work).exists()
+
+
+@pytest.mark.parametrize("which", ["reached", "unreached"])
+def test_an_undo_stops_at_a_file_made_unreadable_and_runs_again_later(work, monkeypatch, which):
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    before = _tree(work)
+    _fail_after(monkeypatch, 1)
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([MODE_CS], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    rel = "a.txt" if which == "reached" else "sub/b.bin"
+    mode = _mode_of(work / rel)
+    os.chmod(work / rel, 0)
+    try:
+        with pytest.raises(workspace_fork.UndoError) as err:
+            workspace_fork.restore_pending(work)
+        assert f"{rel!r} cannot be examined" in str(err.value.cause)
+        assert _journal(work).is_file()
+    finally:
+        os.chmod(work / rel, mode)
+    with _warnings() as lines:
+        assert workspace_fork.restore_pending(work) is True
+    assert _left_paths(lines) == []
+    assert _tree(work) == before
+
+
+@pytest.mark.parametrize("case", ["created", "stored"])
+def test_the_undo_checks_the_folders_again_after_reading_a_file(work, tmp_path, monkeypatch, case):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # What the write-back writes at the swapped folder's file, so only the folder
+    # check can stop the undo from acting on the outside file.
+    if case == "created":
+        folder, name, cs = "nd", "x", ChangeSet({"nd/x": b"x", "top.txt": b"t"}, {}, set())
+    else:
+        folder, name, cs = "sub", "b.bin", ChangeSet({}, {"sub/b.bin": b"\x00", "a.txt": b"a2"},
+                                                     set())
+    (outside / name).write_bytes(b"x" if case == "created" else b"\x00")
+    before = _tree(work)
+    _fail_after(monkeypatch, 1)                    # the first file written, the second not
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    os.chmod(outside / name, _mode_of(work / folder / name))
+    outside_before = _tree(outside)
+    real_hash, kept = workspace_fork._file_hash, []
+
+    def hash_then_swap(path):
+        digest = real_hash(path)
+        if Path(path) == work / folder / name and not kept:
+            kept.append(_swap_for_link(work / folder, outside))  # between the read and the act
+        return digest
+
+    monkeypatch.setattr(workspace_fork, "_file_hash", hash_then_swap)
+    with pytest.raises(workspace_fork.UndoError) as err:
+        workspace_fork.restore_pending(work)
+    monkeypatch.undo()
+    assert kept and f"'{folder}/{name}'" in str(err.value.cause)
+    assert _tree(outside) == outside_before                    # the outside file is untouched
+    assert _journal(work).is_file()
+    _swap_back(work / folder, kept[0])
+    assert workspace_fork.restore_pending(work) is True
+    assert _tree(work) == before
+
+
+def test_a_mode_changed_before_the_write_reached_the_file_is_the_write_backs(work, monkeypatch):
+    before = _tree(work)
+    real, calls = workspace_fork._write_file, [0]
+
+    def chmod_then_write(target, content, *rest):
+        calls[0] += 1
+        if calls[0] == 2:
+            raise OSError("cut")
+        os.chmod(target, 0o600 if _mode_of(target) != 0o600 else 0o640)   # someone, just before
+        return real(target, content, *rest)
+
+    monkeypatch.setattr(workspace_fork, "_write_file", chmod_then_write)
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([MODE_CS], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    assert _mode_of(work / "a.txt") == before["a.txt"][1]      # written with the recorded mode
+    with _warnings() as lines:
+        assert workspace_fork.restore_pending(work) is True
+    assert _left_paths(lines) == []
+    assert _tree(work) == before
+
+
+def test_an_unreadable_file_of_another_size_at_a_deleted_path_is_told_apart_unread(work,
+                                                                                  monkeypatch):
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    _fail_after(monkeypatch, 0)                    # exe.sh deleted, no file written
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    (work / "exe.sh").write_bytes(b"someone else's longer script\n")
+    os.chmod(work / "exe.sh", 0)
+    try:
+        with _warnings() as lines:
+            assert workspace_fork.restore_pending(work) is True
+        assert _left_paths(lines) == ["exe.sh"]
+        assert _mode_of(work / "exe.sh") == 0
+    finally:
+        os.chmod(work / "exe.sh", 0o644)
+    assert (work / "exe.sh").read_bytes() == b"someone else's longer script\n"
+
+
+@pytest.mark.parametrize("entry_extra", [
+    {}, {"written_mode": None}, {"written_mode": "644"}, {"written_mode": 0o10000},
+    {"written_mode": True},
+], ids=["missing", "null", "text", "too-big", "bool"])
+def test_a_journal_written_entry_without_a_usable_mode_touches_nothing(work, entry_extra):
+    import hashlib
+    (work / "zzz.txt").write_bytes(b"made by the apply")
+    before = _tree(work)
+    journal = _plant(work, {"run_id": "r1", "node_id": "fan", "new_dirs": [], "entries": [
+        {"path": "zzz.txt", "pre": None, "mode": None,
+         "written": hashlib.sha256(b"made by the apply").hexdigest(), **entry_extra}]})
+    with pytest.raises(workspace_fork.PendingApplyError) as err:
+        workspace_fork.restore_pending(work)
+    assert err.value.path == journal
+    assert _tree(work) == before
+
+
 def test_a_journal_entry_without_a_pre_key_is_a_path_that_did_not_exist(work):
     import hashlib
     (work / "zzz.txt").write_bytes(b"made by the apply")
     before = {k: v for k, v in _tree(work).items() if k != "zzz.txt"}
     _plant(work, {"run_id": "r1", "node_id": "fan", "new_dirs": [], "entries": [
-        {"path": "zzz.txt", "written": hashlib.sha256(b"made by the apply").hexdigest()}]})
+        {"path": "zzz.txt", "written": hashlib.sha256(b"made by the apply").hexdigest(),
+         "written_mode": 0o644}]})
     assert workspace_fork.restore_pending(work) is True
     assert _tree(work) == before
 
@@ -1183,12 +1338,21 @@ def _gen_changesets(rng) -> list[ChangeSet]:
     # different content, is a union conflict and never reaches a write-back
     # (apply_all refuses it): every written path keeps the first content drawn for
     # it, and a delete of a written path is dropped.
+    # A path that exists in the generated tree is a modification, the rest are
+    # creations, as `diff` reports them.
     content: dict[str, bytes] = {}
     for cs in out:
         for rel, data in cs.created.items():
             content.setdefault(rel, data)
-    return [ChangeSet(created={rel: content[rel] for rel in cs.created}, modified={},
+    return [ChangeSet(created={rel: content[rel] for rel in cs.created
+                               if rel not in _GEN_EXISTING},
+                      modified={rel: content[rel] for rel in cs.created if rel in _GEN_EXISTING},
                       deleted=cs.deleted - set(content)) for cs in out]
+
+
+# What _gen_tree makes in the working folder (files, folders and the links).
+_GEN_EXISTING = {"f1.txt", "f2.bin", "d1/g.txt", "d1/d2/h.txt", "run.sh", "ll", "dl", "empty",
+                 "d1", "d1/d2"}
 
 
 def _gen_view(root: Path) -> dict[str, tuple]:
@@ -1245,29 +1409,91 @@ def _gen_touched(before: dict[str, tuple], changesets) -> set[str]:
             | {rel for cs in changesets for rel in cs.deleted if rel in before})
 
 
+# The two changes by someone else the undo cannot tell from the write-back's own,
+# so it undoes them: the path holds exactly the content and mode the write-back
+# writes there, or a path the write-back deletes is gone.
+SAME_AS_WRITTEN = "same as written"
+DELETED_LIKE_THE_WRITE_BACK = "deleted like the write-back"
+
+
 def _gen_someone_else(rng, work: Path, before: dict[str, tuple], changesets,
-                      expected: dict[str, tuple]) -> set[str]:
-    """After a cut, someone else writes their own bytes at a random subset of the
-    touched paths and of the files the write-back does not touch, wherever the
-    folder above the path is a folder now. Updates *expected* with what they wrote
-    and returns the touched paths among them: the ones the undo must name as left."""
+                      expected: dict[str, tuple], seen: dict[str, int]) -> set[str]:
+    """After a cut, someone else changes a random subset of the touched paths and of
+    the files the write-back does not touch: writes their own bytes, writes exactly
+    what the write-back writes there, changes only the mode, deletes the file, or
+    replaces it with a folder. Updates *expected*
+    with what the undo must leave, counts each change and each indistinguishable
+    case in *seen*, and returns the paths the undo must name as left.
+
+    The oracle is the generator's own: the tree before, the content each written
+    path gets and the mode the write-back gives it (the earlier file's, or 0644).
+    A touched path is undone when it holds what it held before, or one of the two
+    indistinguishable cases; any other change is left and named."""
+    content = {rel: data for cs in changesets for rel, data in {**cs.created, **cs.modified}.items()}
     touched = _gen_touched(before, changesets)
     files = {rel for rel, v in before.items() if v[0] not in ("dir", "link")}
-    edited = set()
+    def written_state(rel: str) -> tuple:
+        earlier = before.get(rel)
+        mode = earlier[1] if earlier is not None and earlier[0] != "dir" else 0o644
+        return (content[rel], mode)
+
+    edited, changed_to_written = set(), set()
     for rel in sorted(touched | files | {"missing.txt"}):
-        if rel == "ll" or rel.startswith("dl/") or rng.random() >= 0.3:
+        if rel == "ll" or rel.startswith("dl/") or rng.random() >= 0.4:
             continue
-        parent = (work / rel).parent
-        if parent.is_symlink() or not parent.is_dir() or (work / rel).is_dir():
+        path = work / rel
+        if path.parent.is_symlink() or not path.parent.is_dir():
             continue
-        if (work / rel).is_symlink():
+        if path.is_symlink() or (path.is_dir() and not path.is_symlink()):
             continue
-        _someone_writes(work, rel)
-        expected[rel] = (b"someone else's " + rel.encode(), 0o600)
-        for folder in _parents(rel):
-            expected.setdefault(folder, ("dir",))
+        kinds = ["write", "folder"] + (["mode", "delete"] if path.is_file() else [])
+        if rel in content:
+            kinds.append("same")            # exactly what the write-back writes there
+        if path.is_file() and rel in touched and rel not in content:
+            kinds += ["delete", "delete"]   # a file the write-back has yet to delete
+        kind = rng.choice(kinds)
+        seen[kind] += 1
+        if kind == "write":
+            _someone_writes(work, rel)
+        elif kind == "same":
+            data, mode = written_state(rel)
+            if not (path.is_file() and (path.read_bytes(), _mode_of(path)) == (data, mode)):
+                changed_to_written.add(rel)          # not already the write-back's state
+            path.write_bytes(data)
+            os.chmod(path, mode)
+        elif kind == "mode":
+            os.chmod(path, rng.choice([m for m in (0o600, 0o640, 0o644, 0o755)
+                                       if m != _mode_of(path)]))
+        elif kind == "delete":
+            path.unlink()
+        else:
+            if path.is_file():
+                path.unlink()
+            path.mkdir()
         edited.add(rel)
-    return edited & touched
+    now = _gen_view(work)
+    warned = set()
+    for rel in edited:
+        state, earlier = now.get(rel), before.get(rel)
+        if rel in touched and state != earlier:
+            written = written_state(rel) if rel in content else None
+            if written is not None and state == written:
+                seen[SAME_AS_WRITTEN] += rel in changed_to_written
+                state = earlier
+            elif rel not in content and state is None:
+                seen[DELETED_LIKE_THE_WRITE_BACK] += 1
+                state = earlier
+            else:
+                warned.add(rel)
+        elif rel in touched:
+            state = earlier
+        if state is None:
+            expected.pop(rel, None)
+        else:
+            expected[rel] = state
+            for folder in _parents(rel):
+                expected.setdefault(folder, ("dir",))
+    return warned
 
 
 def _gen_fail_one_path(m, work: Path, before: dict[str, tuple], changesets) -> str | None:
@@ -1304,6 +1530,8 @@ def test_every_generated_write_back_is_refused_applied_failed_or_undone(tmp_path
         pytest.skip("permissions do not bind the superuser")
     outcomes = {"refused": 0, "applied": 0, "undone": 0}
     special = 0                  # someone-else: cases with a path left; undo-fails-once: stops
+    seen = dict.fromkeys(["write", "mode", "delete", "folder", "same", SAME_AS_WRITTEN,
+                          DELETED_LIKE_THE_WRITE_BACK], 0)
     for seed in range(150):
         rng = random.Random(f"{mode}-{seed}")
         base = tmp_path / f"s{seed}"
@@ -1367,7 +1595,7 @@ def test_every_generated_write_back_is_refused_applied_failed_or_undone(tmp_path
                             expected.setdefault("/".join(parts[:depth]), ("dir",))
                 warned: set[str] = set()
                 if mode == "someone-else":
-                    warned = _gen_someone_else(rng, work, before, changesets, expected)
+                    warned = _gen_someone_else(rng, work, before, changesets, expected, seen)
                     special += bool(warned)
                 if mode == "cut-the-undo":
                     with monkeypatch.context() as m:
@@ -1407,6 +1635,12 @@ def test_every_generated_write_back_is_refused_applied_failed_or_undone(tmp_path
     assert outcomes["applied" if mode == "whole" else "undone"] > 10, outcomes
     if mode in ("someone-else", "undo-fails-once"):
         assert special > 10, (special, outcomes)
+    if mode == "someone-else":
+        # Every kind of change happened, and so did each change the undo cannot tell
+        # from the write-back's own.
+        print("someone-else changes:", seen)
+        assert all(seen[k] > 5 for k in ("write", "mode", "delete", "folder", "same",
+                                          SAME_AS_WRITTEN, DELETED_LIKE_THE_WRITE_BACK)), seen
 
 
 # ── storing the earlier content ──
