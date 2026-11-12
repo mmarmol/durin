@@ -1188,9 +1188,12 @@ child's own reap lock (`Popen` reaps a child and sets its `returncode` only unde
 a script reaped at that moment, whose pid could then be given to another process, is
 never signalled; a script whose reap lock stays busy past `_REAP_LOCK_WAIT_S` is skipped
 (only its own thread holds it that long, while it reaps a script it has killed itself).
-The call then waits, up to `_REAP_WAIT_S` for all of them together, for the scripts it
-killed to be reaped, so none is left a zombie that the image `os.execv` starts would
-inherit and never reap. From then on, under the same lock:
+The call reaps nothing: a script is reaped only by the thread that started it, so that
+thread's own kills (on a timeout, a cancel, or a wait that broke) always reach a pid that
+is still its script's. One limit follows: after a restart in place, the scripts the call
+killed stay as defunct entries of the restarted process (the image `os.execv` started
+inherits them as children and does not reap them) until that process ends. A resume
+treats a defunct process as gone. From then on, under the same lock:
 
 - no script is started: a script step entered after the call waits for the process to
   end, so a script is either started before the call (and ended by it) or not at all;

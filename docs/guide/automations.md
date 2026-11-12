@@ -229,6 +229,7 @@ outright (a `kill -9`, the system running out of memory, a power loss), a script
 step that was running keeps running. Nothing ends it and the automation's next run
 does not wait for it, so the two can work at the same time. Only a resume of the
 dead workflow run waits for such a script, and an automation never resumes one.
+
 Beyond the dashboard, an automation can also be defined and driven through:
 
 - **The agent, in chat.** Describe the standing work you want — "each time an email

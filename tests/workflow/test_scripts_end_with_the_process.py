@@ -9,7 +9,6 @@ not end here, so the test releases the threads it held once it has looked."""
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -212,28 +211,6 @@ def test_a_script_whose_reap_lock_stays_busy_is_skipped(
         proc.wait(timeout=_WAIT_S)
 
     assert killpg_calls == []
-
-
-def test_a_script_the_pass_kills_is_reaped_before_it_returns(tmp_path, exit_pass, groups):
-    """After a restart in place nothing reaps what the old image left: the
-    pass reaps the scripts it killed itself. The script's own thread cannot
-    do it here, since a process outside the script's group still holds the
-    script's output open."""
-    leader_file, holder_file = tmp_path / "leader", tmp_path / "holder"
-    holder_code = "import os, time; os.setsid(); time.sleep(30)"
-    command = (f'"{sys.executable}" -c "{holder_code}" & echo $! > "{holder_file}"; '
-               f'echo $$ > "{leader_file}"; exec sleep 61')
-    exit_pass.start(ScriptNodeRunner(str(tmp_path)), _request(tmp_path, command))
-    leader, holder = _pid_in(leader_file), _pid_in(holder_file)
-    groups.append(leader)
-    try:
-        _until(lambda: os.getpgid(holder) == holder, "the holder to leave the group")
-
-        assert script_runner.end_scripts_for_exit() == 1
-
-        assert process_tree._observe(leader) is None      # reaped, not a zombie
-    finally:
-        os.kill(holder, signal.SIGKILL)
 
 
 def test_a_script_that_exits_at_the_moment_of_the_pass_has_only_its_own_group_signalled(

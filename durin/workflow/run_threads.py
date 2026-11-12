@@ -136,28 +136,28 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     unfinished = runs_in_flight()
     if not unfinished:
         return
-    logger.warning(
-        "Shutdown: exiting with {} workflow run(s) unfinished: {}",
-        len(unfinished), ", ".join(unfinished))
-    if tell_user:
-        count = len(unfinished)
-        with suppress(Exception):
-            print(
-                f"durin: left {count} workflow run{'s' if count != 1 else ''} unfinished "
-                f"({', '.join(unfinished)}); "
-                f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
-                "(resume_run_id) or from the dashboard.",
-                file=sys.stderr, flush=True)
     try:
+        logger.warning(
+            "Shutdown: exiting with {} workflow run(s) unfinished: {}",
+            len(unfinished), ", ".join(unfinished))
+        if tell_user:
+            count = len(unfinished)
+            with suppress(Exception):
+                print(
+                    f"durin: left {count} workflow run{'s' if count != 1 else ''} unfinished "
+                    f"({', '.join(unfinished)}); "
+                    f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
+                    "(resume_run_id) or from the dashboard.",
+                    file=sys.stderr, flush=True)
         _flush_logs_before_exit()
         with suppress(Exception):
             sys.stdout.flush()
             sys.stderr.flush()
     finally:
         # The scripts the runs started go with the process, as its last act,
-        # even when the flush was interrupted: none outlives it, and none of
-        # their ends is recorded as an outcome. The exit follows whatever the
-        # pass does.
+        # even when the log line, the note or the flush was interrupted: none
+        # outlives it, and none of their ends is recorded as an outcome. The
+        # exit follows whatever the pass does.
         try:
             from durin.workflow import script_runner
 
