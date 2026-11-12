@@ -220,6 +220,13 @@ def test_a_record_written_from_nothing_carries_its_writer_and_a_start(tmp_path, 
     assert before <= rec["started_at"] <= time.time() and rec["ts"] == rec["started_at"]
     assert (rec["status"], rec["workflow"], rec["run_id"]) == ("running", "w", "r1")
     assert rec["position"] == {"node": "b", "seq": 2}
+    # Marked incomplete, and the mark survives the walk's later writes.
+    assert rec["incomplete"] is True
+    run_log.mark_node_started(tmp_path, "w", "r1", node_id="b", label="b", started_at=2.0)
+    run_log.update_run(tmp_path, "w", "r1",
+                       WorkflowResult(status="running", final_output=None, runs=[]),
+                       position={"node": "c", "seq": 3})
+    assert run_log.read_manifest(tmp_path, "w", "r1")["incomplete"] is True
 
 
 def test_a_rewrite_keeps_an_ownerless_record_ownerless(tmp_path):

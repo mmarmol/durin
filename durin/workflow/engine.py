@@ -301,6 +301,8 @@ def _later_run_on_the_key(workspace: str | Path, manifest: dict) -> str | None:
 # sessions under the same prefix (an automation's filter turn) are not named
 # after one.
 AUTOMATION_ROOT_PREFIX = "automation:"
+INCOMPLETE_RECORD_REFUSAL = ("its record is incomplete: it was rewritten without what the "
+                             "run was started with.")
 AUTOMATION_RUN_REFUSAL = ("it was started by an automation, and a run an automation "
                           "started is not resumed by hand: the automation does not resume "
                           "it, and its next run starts anew.")
@@ -331,8 +333,10 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     between two steps has no row for the step it was about to enter.
 
     A dead run is entered again at its position, with the input stored for it,
-    in its working folder. It is refused when an automation started it (its
-    ``root_session_key`` is ``automation:<name>``): the automation keeps a record
+    in its working folder. It is refused when its record is ``incomplete``
+    (rewritten by ``run_log.update_run`` with no record to carry from, so what
+    the run was started with is gone). It is refused when an automation started
+    it (its ``root_session_key`` is ``automation:<name>``): the automation keeps a record
     of the run and never resumes it, so a resume by hand would run its steps
     outside it. A paused run's answer and a failed step's retry are not refused
     on that account. It is refused when it was recorded before records kept a
@@ -370,6 +374,11 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
 def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
                       workflow: Workflow | None) -> str | None:
     """The ``crashed`` part of ``resume_refusal``, asked in this order."""
+    if manifest.get("incomplete"):
+        # Rewritten by a walk that found no record to carry from: what the run
+        # was started with (its root, its parent, its folder) is gone, so a
+        # resume could not enter it where it ran.
+        return INCOMPLETE_RECORD_REFUSAL
     root = manifest.get("root_session_key")
     if isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX):
         return AUTOMATION_RUN_REFUSAL

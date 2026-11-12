@@ -868,11 +868,14 @@ been requested. Manifests written before the owner field existed fall back to a
 generous `started_at` age threshold in the sweep; the `tasks` self-heal leaves them to it.
 A record with neither an owner nor a positive, readable `started_at` has no age to judge
 it by and is never converted. The walk's own rewrite (`update_run`) never writes such a
-record: when it finds no record to carry from (one read failed, or the workflow was
-renamed while the run was in flight, so its folder moved), the record it writes names the
-writing process as its owner and the time of that write as its start, and it carries none
-of what only the first write knew (`root_session_key`, `parent_run_id`, `work_dir`,
-`work_key`, `task`, `surface`).
+record: when it finds no record to carry from (one read failed, or its folder moved — a
+rename refuses a workflow with a run in flight, but not one whose run starts after its
+check), the record it writes names the writing process as its owner and the time of that
+write as its start, and it carries none of what only the first write knew
+(`root_session_key`, `parent_run_id`, `work_dir`, `work_key`, `task`, `surface`). Every
+key the first write has is also written by `update_run`, so no missing field marks such a
+record; it is marked `incomplete: true` instead, carried by every later rewrite, and a dead
+run with that mark is refused (below).
 
 *The conversion.* Both finders go through one function, `mark_dead_run`. Under the
 per-run lock (`run_lock_target`, the one a resume claim takes) it re-reads the record
@@ -1098,6 +1101,7 @@ in the workflows skill:
 
 | Case | Reason (after "cannot be resumed — ") |
 |---|---|
+| its record is marked `incomplete` (rewritten by `update_run` with no record to carry from, so its root, parent, folder and task are gone) | `its record is incomplete: it was rewritten without what the run was started with.` |
 | an automation started it (`root_session_key` is `automation:<name>`): the automation keeps its own record of the run, which its orphan sweep ends `interrupted` with no replacement once the run's process is gone (while the automation still exists), and nothing in the automation resumes the dead run. Only a dead run is refused on this account; a paused run's answer and a failed step's retry are not | `it was started by an automation, and a run an automation started is not resumed by hand: the automation does not resume it, and its next run starts anew.` |
 | no `position` key (recorded before positions existed) | `it was recorded before a run kept the step it was in. Start a new run instead.` |
 | a `position` of `null`, or one the conversion did not name as `failed_node` (a started detached step, a walk that had ended, a step whose input could not be stored, the minimal mark) | `the step it was in cannot be entered again. Start a new run instead.` |
@@ -2080,8 +2084,15 @@ End-to-end for a single `run_workflow` call:
   same lock target the version store snapshots under, beside the dir, so a write and a
   snapshot never interleave); **duplicate** (`…/{name}/duplicate` — copy a definition to a
   new name to use as a starting point); **rename** (`…/{name}/rename` — move the definition
-  to a new name; carries the run-history directory (manifests, recommendations, dream
-  cursor) along best-effort, rewrites the moved manifests' inner `workflow` field,
+  to a new name; refused before anything is written while a record of the workflow is
+  `running` with an owner that is alive or cannot be observed
+  (`run_log.run_in_flight`, asked off the event loop): `workflow '<name>' has a run in
+  progress; it can be renamed once that run has ended.` A walk in flight keeps writing
+  its record under the name it started with, so moving that record would leave a copy
+  under the new name that a later sweep finds dead at a stale step. A `running` record
+  whose owner is provably gone is a dead run and does not hold it. A run that starts
+  between the check and the move is not caught. Otherwise it carries the run-history
+  directory (manifests, recommendations, dream cursor) along best-effort, rewrites the moved manifests' inner `workflow` field,
   repoints `subworkflow` nodes in every other definition, and repoints the **automations**
   that run it — sub-flow callers share the definition directory and the rename's single
   commit, while an automation lives in its own directory with its own version store, so

@@ -567,6 +567,12 @@ Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.
 
+Renaming a workflow moves its run history, the workflows that call it and the
+automations that run it to the new name. A workflow with a run in progress
+cannot be renamed: the editor shows "workflow '<name>' has a run in progress;
+it can be renamed once that run has ended." A run whose process died does not
+hold the rename.
+
 The Workflows section's **Runs** pane is where to look across *all* workflows
 and origins (sessions, HTTP, cron, the editor) at once: a global, filterable
 run feed, with any run stranded on `needs_input` surfaced in a tray up top —

@@ -594,6 +594,17 @@ class WorkflowsService:
             raise ValidationFailedError(f"workflow {cmd.name!r} is unreadable: {exc}")
         definition["name"] = target          # keep the inner name consistent with the file name
         parse_workflow(definition)            # the renamed graph must still be valid
+        # A run in flight keeps writing its record under the name it started
+        # with: moving and rewriting that record under it would leave one
+        # record recreated, stripped, under the old name and a copy under the
+        # new one that a later sweep finds dead at a stale step. Refused before
+        # anything is written; a running record whose process is provably gone
+        # is a dead run and does not hold the rename. Off the event loop: the
+        # check observes processes.
+        if await asyncio.to_thread(run_log.run_in_flight, self._workspace, cmd.name):
+            raise ValidationFailedError(
+                f"workflow {cmd.name!r} has a run in progress; it can be renamed once "
+                "that run has ended.")
         dest = self._dir() / f"{target}.json"
         # Every file this rename touches, so the whole move lands as ONE version:
         # a partial commit would leave a history where a caller points at a

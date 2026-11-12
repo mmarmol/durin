@@ -384,14 +384,20 @@ def update_run(
     writing it is alive, so the crash sweep leaves it alone while it runs and
     finds it dead once this process is gone. What only ``start_run`` knew
     (``root_session_key``, ``parent_run_id``, ``work_dir``, ``work_key``,
-    ``task``, ``surface``) is not recoverable here and is left empty."""
+    ``task``, ``surface``) is not recoverable here and is left empty, so the
+    record is marked ``incomplete: True``, carried by every later rewrite: a
+    dead run with that mark is never resumed (``engine.resume_refusal``), since
+    a resume would enter it as a top-level run, in another folder, under no
+    root. Every key ``start_run`` writes is also written here, so no field's
+    absence could tell such a record apart; the mark does."""
     path = _record_path(workspace, name, run_id)
     found = read_manifest(workspace, name, run_id)
     if found is None:
         from durin.utils.process_tree import process_identity
 
         now = time.time()
-        base: dict = {"owner": process_identity(), "started_at": now, "ts": now}
+        base: dict = {"owner": process_identity(), "started_at": now, "ts": now,
+                      "incomplete": True}
     else:
         base = found
     record = {
@@ -426,6 +432,8 @@ def update_run(
                             if detached_active is None else list(detached_active)),
         "runs": _node_records(result),
     }
+    if base.get("incomplete"):
+        record["incomplete"] = True
     _write_json(path, record)
 
 
@@ -1206,6 +1214,28 @@ def _owner_gone(record: dict, now: float, max_age_s: float) -> bool:
     except (TypeError, ValueError):
         return False   # no start time, or an unreadable one
     return 0.0 < started < now - max_age_s
+
+
+def run_in_flight(workspace: str | Path, name: str) -> str | None:
+    """The id of a run of workflow ``name`` recorded ``running`` whose process
+    is not provably gone (``_owner_gone``: alive, or not observable), or None.
+    A ``running`` record whose owner is gone is a dead run, not one in flight.
+    Reads only; observes processes, so it is not for an event loop."""
+    folder = _wf_dir(workspace, name)
+    if not folder.is_dir():
+        return None
+    now = time.time()
+    for f in sorted(folder.glob("*.json")):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (isinstance(rec, dict) and rec.get("status") == "running"
+                and not _owner_gone(rec, now, RECONCILE_AGE_S)):
+            return rec.get("run_id") or f.stem
+    return None
 
 
 def _cut_row(entry: dict) -> dict:

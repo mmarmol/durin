@@ -325,6 +325,66 @@ def test_a_dead_run_an_automation_started_is_refused_and_no_other_run_is():
     assert resume_refusal(paused) is None and resume_refusal(failed) is None
 
 
+_INCOMPLETE = ("its record is incomplete: it was rewritten without what the run was "
+               "started with.")
+
+
+def _from_nothing(tmp_path, monkeypatch):
+    """A run whose record the walk rewrote with nothing to carry from (its one
+    read failed), then whose process died: converted, as a sweep would."""
+    from durin.workflow import resume_store
+    from durin.workflow.result import WorkflowResult
+
+    run_log.start_run(tmp_path, "w", "r1", root_session_key="automation:nightly",
+                      started_at=1.0, position={"node": "a", "seq": 1})
+    resume_store.save_input(resume_store.store_dir(tmp_path, "r1"), 2, "b", "in")
+    real = run_log.read_manifest
+    monkeypatch.setattr(run_log, "read_manifest", lambda *_a, **_kw: None)
+    run_log.update_run(tmp_path, "w", "r1",
+                       WorkflowResult(status="running", final_output=None, runs=[]),
+                       position={"node": "b", "seq": 2})
+    monkeypatch.setattr(run_log, "read_manifest", real)
+    path = run_log._record_path(tmp_path, "w", "r1")
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    run_log._write_json(path, {**rec, "owner": {"pid": 2**22 + 4242, "started": "never"}})
+    return run_log.mark_dead_run(tmp_path, "w", "r1")
+
+
+def test_a_dead_run_whose_record_was_rewritten_from_nothing_is_refused(tmp_path, monkeypatch):
+    rec = _from_nothing(tmp_path, monkeypatch)
+    assert rec["status"] == "crashed" and rec["failed_node"] == "b"
+    assert rec["root_session_key"] is None        # the automation's root was lost
+    assert resume_refusal(rec, workspace=tmp_path, workflow=parse_workflow(CHAIN)) == _INCOMPLETE
+    # A failed step's retry and a paused run's answer are not dead-run resumes.
+    assert resume_refusal({**rec, "status": "aborted",
+                           "runs": [{"node_id": "b", "status": "node_failed"}]}) is None
+    assert resume_refusal({**rec, "status": "needs_input", "needs_input_node": "b"}) is None
+
+
+def test_a_normal_dead_run_and_a_released_record_are_judged_as_before(tmp_path):
+    from durin.workflow import resume_store
+
+    resume_store.save_input(resume_store.store_dir(tmp_path, "r1"), 1, "a", "in")
+    run_log.start_run(tmp_path, "w", "r1", root_session_key="s", started_at=1.0,
+                      position={"node": "a", "seq": 1})
+    path = run_log._record_path(tmp_path, "w", "r1")
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    run_log._write_json(path, {**rec, "owner": {"pid": 2**22 + 4242, "started": "never"}})
+    dead = run_log.mark_dead_run(tmp_path, "w", "r1")
+    assert "incomplete" not in dead
+    assert resume_refusal(dead, workspace=tmp_path, workflow=parse_workflow(CHAIN)) is None
+    # The shape the released version's start_run and update_run write: no
+    # position, no incomplete mark.
+    released = {"schema": rec["schema"], "run_id": "old", "workflow": "w",
+                "status": "crashed", "root_session_key": "s", "started_at": 1.0,
+                "ts": 1.0, "task": None, "parent_run_id": None, "work_dir": None,
+                "work_key": None, "typical_s": {}, "typical_total_s": None,
+                "spec_hash": None, "durin_version": None, "resumed": False,
+                "earlier_nodes": [], "resume_inputs": None, "active_node": None, "runs": []}
+    assert resume_refusal(released) == (
+        "it was recorded before a run kept the step it was in. Start a new run instead.")
+
+
 def test_a_sub_workflow_run_names_the_surface_of_its_caller(tmp_path):
     from durin.workflow.engine import WorkflowEngine
     from durin.workflow.subworkflow import SubworkflowRunner
