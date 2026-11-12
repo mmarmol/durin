@@ -395,6 +395,18 @@ crashed, or at the latest when the resumed step starts again; the step never
 works with copies an earlier attempt left. Deleting the run's folder deletes
 them too.
 
+The kept result is written into the working folder file by file, with an undo
+record (`pending-apply/` beside the working folder) holding what each file
+contained before. If the process dies while that result is being written, the
+folder is put back as it was before the writing started when the run is
+resumed, when the next run on the same work key starts, or when a `choose` or
+`union` step uses the folder next; the repeated step then starts from what its
+first attempt started from. If that record cannot be used, nothing is changed
+and the run stops at the step it was about to start with: `the working folder
+holds changes of an earlier parallel step that could not be undone (<path>). It
+can run once a person has checked the folder and removed that file.` Once the
+file is removed, retrying the run starts that step again.
+
 Dynamic fan-out workers always share the folder directly (no per-worker
 isolation), so `reconcile` only applies to static and runtime-selected
 branches.
@@ -488,10 +500,12 @@ surface; start a new run instead. That refusal does not say whether a script
 of the old run is still working, so check before the new run repeats its
 work.
 
-Known limits: a process that dies while a `union` parallel step is
-applying its branches' files can leave the working folder partly applied. A
-run started from a chat and resumed from the dashboard or the API does not
-report its result back to that chat.
+Known limits: files that a `read` parallel step's branches or a fan-out's
+workers wrote in the shared folder before the process died are still there when
+the step runs again. A process that dies right after a `choose` or `union` step
+finished writing its result, before the run moved on, runs the step again on a
+folder that already holds that result. A run started from a chat and resumed
+from the dashboard or the API does not report its result back to that chat.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's

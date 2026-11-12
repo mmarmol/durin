@@ -512,7 +512,45 @@ run's copies are renamed to `branches/.dead-<run id>-XXXX` (a rename is fast, an
 resume that claims the run right after makes its new copies under `branches/<run id>`),
 and once the lock is released that renamed directory is deleted. A conversion that leaves
 `scripts_left` keeps the copies, since a script may still be writing in one; the step
-removes them when it is entered again. **Dynamic fan-out workers share the workspace** directly
+removes them when it is entered again.
+
+The reconciled result — a `choose` winner's changes, or every branch's for a `union` —
+is written into the real folder only by `workspace_fork.apply_all`, which keeps an undo
+journal in `pending-apply/` beside the working folder. Before anything in the folder
+changes it checks every path it will write or delete (a relative POSIX path with no
+empty, `.` or `..` part; a path that breaks the rule or names a directory fails the
+step with the folder untouched), copies each existing file's bytes to `pre/<n>`
+(streamed, file by file) with its mode, notes the paths that do not exist yet and the
+directories it will create, and writes `journal.json` last: the journal file existing
+is what says a write-back is pending. It then writes (each file replaced in one step,
+a symlinked file through its link) and deletes, per changeset in branch order, and
+removes the journal and its folder. The journal belongs to the folder, not to a run,
+so a sub-workflow writing into its caller's folder and a later run on the same key
+find it in the same place. A write-back that fails in the process is undone at once
+and the run aborts with the folder as the step found it. A process that dies in the
+middle leaves the journal, and whoever uses the folder next puts it back before
+using it (`restore_pending`): the run itself before its walk (a top-level
+run, keyed or not, on a fresh start or a resume — a keyed run holds its key's lock by
+then), and every `choose`/`union` step at its entry, before it clears old copies and
+snapshots the folder. The undo gives each path its stored bytes and mode back, removes
+the paths that did not exist, removes the created directories that are empty (deepest
+first), then the journal, then the stored copies; it ends in the same folder when it
+runs twice or after it was itself cut. The write-back is undone, never completed: the
+whole step runs again on a resume, and a step that ran on top of its own earlier result
+would not start from what its first attempt started from. The conversion of a dead
+run (`mark_dead_run`) does not undo it: it does not hold the folder (a live run on the
+same key may be writing its own result back). A journal that cannot be used (it cannot
+be read, a path in it leaves the folder, a stored copy is missing, or a symlink stands
+at the journal or at `pending-apply`) is never followed and the folder stays as it is:
+the run aborts at the step it was about to enter — the parallel step, or at run start
+the step the walk starts at — with a `node_failed` row for that step and the input it
+had, so a retry made once the file is gone enters it. The abort reads `the working
+folder holds changes of an earlier parallel step that could not be undone (<journal
+path>). It can run once a person has checked the folder and removed that file.` A
+folder outside a run's area has no journal: `pending_dir`, `apply_all` and
+`restore_pending` raise for it.
+
+**Dynamic fan-out workers share the workspace** directly
 (no per-worker isolation in v1); they hand their output off to the merge node via text, so
 `reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs across three tiers (the Airflow/Temporal
 shape — a config default, a per-unit override, and a hard cap). Each node's budget is
@@ -1161,7 +1199,8 @@ What the re-entered step does again is decided by its kind: a fresh-session agen
 starts a new conversation under a new attempt number; a persistent-session step continues
 its saved conversation; a shared-context step is given the shared conversation restored
 from `shared_session`; a script runs again; a parallel step runs all its branches or
-workers again; a sub-workflow step starts its child again from the child's start step,
+workers again, and a `choose`/`union` write-back the death cut is undone before the run's
+walk starts, so the step starts from the folder its first attempt started from; a sub-workflow step starts its child again from the child's start step,
 as a new child run, and the dead child stays on record as `crashed`. Steps that finished
 before the death do not run again. What the cut step did outside durin before the death
 can therefore happen twice. Only a script step's own processes are recorded and ended when
@@ -1190,10 +1229,12 @@ A cut row is not a failure of the step's own: the improve pass's evidence
 (`compute_diagnostics`: the `script_failures` count and the `failure_samples`) and
 `typical_node_durations` leave it out.
 
-Known limits: a process that dies while a `union` step applies its branches'
-writes can leave the working folder partly applied; the resumed step starts from that
-folder. A run started from a chat and resumed from the dashboard or the API does
-not report its result back to that chat.
+Known limits: files a cut `read` parallel step's branches or a cut fan-out's workers
+wrote in the shared folder are still there when the step runs again. A process that
+dies after a `choose`/`union`
+write-back finished but before the record named the next step runs the step again on
+the folder that already holds its result. A run started from a chat and resumed from
+the dashboard or the API does not report its result back to that chat.
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -1991,7 +2032,7 @@ End-to-end for a single `run_workflow` call:
 | `store_dir`, `store_dir_of`, `save_input`, `load_input`, `save_source`, `load_sources`, `discard` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole beside its working folder (`.workflow/<run_id>/resume/`, or `resume/<run_id>/` beside a work key's shared folder): the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. `store_dir_of` finds the folder from a record. Removed when a run ends in a state no resume can enter. The record keeps only capped copies, for its readers. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
-| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel. |
+| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `pending_dir`, `apply_all`, `restore_pending`, `PendingApplyError` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel; the write-back into the real folder keeps an undo journal (`pending-apply/`) that `restore_pending` uses to put back a write-back a dead process cut. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |

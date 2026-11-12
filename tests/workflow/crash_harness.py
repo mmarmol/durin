@@ -31,6 +31,11 @@ from durin.workflow import run_log
 from durin.workflow.engine import WorkflowEngine
 from tests.workflow import _crash_driver as driver
 
+# Ends the child right after the k-th real file of a parallel step's write-back
+# into the working folder is written (``env={HANG_IN_APPLY_ENV: "<k>"}``, with
+# ``stop_in=None``).
+HANG_IN_APPLY_ENV = driver.HANG_IN_APPLY_ENV
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DRIVER = Path(driver.__file__).resolve()
 _HUNG_WAIT_S = 30.0       # the step asked for must start within this
@@ -91,8 +96,9 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
                      keep_scripts: bool = False) -> Dead:
     """Run `definition` in a child process and end the process while step
     `stop_in` is running (None: while the step `env` makes hang, such as a
-    fan-out worker by its task). `how`: "kill" (SIGKILL), "term" (SIGTERM, then
-    wait), "exec" (the child replaces its own image, keeping its pid).
+    fan-out worker by its task, or inside a write-back with `HANG_IN_APPLY_ENV`).
+    `how`: "kill" (SIGKILL), "term" (SIGTERM, then wait), "exec" (the child
+    replaces its own image, keeping its pid).
 
     The script processes the child leaves behind are killed at once, unless
     `keep_scripts`: they then stay alive for the test, which is what a dead

@@ -718,6 +718,26 @@ class NodeExecutionError(RuntimeError):
         self.stderr = stderr
 
 
+UNUSABLE_FOLDER_ABORT = (
+    "the working folder holds changes of an earlier parallel step that could not be "
+    "undone ({path}). It can run once a person has checked the folder and removed "
+    "that file.")
+
+
+def _unusable_folder_failure(runs: list, step: str, attempt: int, upstream: str | None,
+                             exc: "workspace_fork.PendingApplyError") -> NodeExecutionError:
+    """The failure of ``step`` when the working folder holds a cut write-back whose
+    journal cannot be used: a ``node_failed`` row of the step's attempt joins the
+    trace, and the error carries the step's input, so the run aborts naming the step
+    and a retry made once the journal is gone enters it with that input."""
+    detail = UNUSABLE_FOLDER_ABORT.format(path=exc.path)
+    runs.append(NodeRun(node_id=step, iteration=attempt, output="",
+                        status="node_failed", error=detail))
+    failure = NodeExecutionError(step, attempt, None, RuntimeError(detail))
+    failure.resume_upstream = upstream
+    return failure
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -976,6 +996,19 @@ class WorkflowEngine:
 
             initial_shared_context = self._resume_shared_context(workflow, resume)
             try:
+                if work_dir is not None and not nested:
+                    # Whoever holds the folder puts back a write-back a dead run
+                    # left cut before the walk uses the folder (a keyed run holds
+                    # its key's lock from here). A journal that cannot be used
+                    # aborts the run at the step it would enter, with its input.
+                    try:
+                        workspace_fork.restore_pending(work_dir)
+                    except workspace_fork.PendingApplyError as exc:
+                        step = resume.start_at if resume else workflow.start
+                        attempt = (resume.visits.get(step, 0) if resume else 0) + 1
+                        raise _unusable_folder_failure(
+                            runs, step, attempt, resume.upstream if resume else None,
+                            exc) from exc
                 result = self._walk(
                     workflow, self._frame_task(workflow, task, output_format), run_id, runs,
                     raw_task=task,
@@ -1987,6 +2020,13 @@ class WorkflowEngine:
                         exc.cause if self._is_cancel(exc) else RuntimeError(detail))
                     failure.resume_upstream = upstream_output
                     raise failure from exc
+                except workspace_fork.PendingApplyError as exc:
+                    # The folder holds a cut write-back that cannot be undone: the
+                    # step does not run on it. The run aborts at this step with the
+                    # input it received, so a retry made once the journal is gone
+                    # enters it. Nothing else is written into the folder.
+                    raise _unusable_folder_failure(runs, node.id, iteration,
+                                                   upstream_output, exc) from exc
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 # Branches/workers run concurrently in their own (possibly forked,
                 # possibly shared) folders, so a per-branch diff here would be racy or
@@ -2673,6 +2713,12 @@ class WorkflowEngine:
             return "", (f"parallel node {node.id!r}: reconcile={node.reconcile!r} "
                         "needs the run's working folder")
         Path(fork_root).mkdir(parents=True, exist_ok=True)   # a fresh run's folder may not exist yet
+        # A write-back an earlier attempt of a parallel step left cut (its process
+        # died while writing the result into the folder) is undone before anything
+        # here reads the folder, so this attempt starts from what that one started
+        # from. A journal that cannot be used raises PendingApplyError, which ends
+        # the run at this step with the folder untouched.
+        workspace_fork.restore_pending(fork_root)
         copies_dir = workspace_fork.branches_root(fork_root) / run_id
         # Whatever an earlier attempt of this step left (its process died before
         # its own clean-up ran) goes before this attempt copies the folder. Only one
@@ -2685,6 +2731,24 @@ class WorkflowEngine:
         # the node by raising, so the rows are kept here rather than in the pool's
         # results: the branches that ran stay on record either way.
         rows: dict[str, NodeRun] = {}
+
+        def _write_back(changesets):
+            # The result goes into the real folder only through the undo journal.
+            # A failure after the journal was written is undone at once, so the
+            # aborted run leaves the folder as the step found it; when the undo
+            # fails too, the journal stays for whoever uses the folder next. A
+            # journal already present was not written by this call and is left
+            # as it is.
+            try:
+                workspace_fork.apply_all(changesets, fork_root, run_id=run_id, node_id=node.id)
+            except workspace_fork.PendingApplyError:
+                raise
+            except Exception:
+                try:
+                    workspace_fork.restore_pending(fork_root)
+                except Exception:  # noqa: BLE001 - the journal stays; the original failure is raised
+                    logger.exception("undoing the write-back of parallel node {} failed", node.id)
+                raise
 
         def _run(bid):
             # Each branch gets a private copy of the working folder: its file tools
@@ -2724,15 +2788,14 @@ class WorkflowEngine:
                 idx = self._pick_runner(node.criteria, [row.output for row, _ in results], node.judge_model)
                 idx = idx if isinstance(idx, int) and 0 <= idx < len(results) else 0
                 row, cs = results[idx]
-                workspace_fork.apply(cs, fork_root)
+                _write_back([cs])
                 return f"[chosen: {row.node_id}]\n{row.output}", None
             # union: apply every branch unless two touched the same path
             changesets = [cs for _, cs in results]
             conflict = workspace_fork.conflicts(changesets)
             if conflict:
                 return "", f"parallel node {node.id!r}: union conflict on {sorted(conflict)}"
-            for cs in changesets:
-                workspace_fork.apply(cs, fork_root)
+            _write_back(changesets)
             return "\n\n".join(f"[{row.node_id}]\n{row.output}" for row, _ in results), None
         finally:
             # The whole run's folder of copies, not copy by copy: a copy whose

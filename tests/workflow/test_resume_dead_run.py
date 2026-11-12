@@ -12,7 +12,13 @@ from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
 from durin.workflow.spec import parse_workflow
 from tests.workflow import _crash_driver as driver
-from tests.workflow.crash_harness import engine, marks, run_to_end, run_until_killed
+from tests.workflow.crash_harness import (
+    HANG_IN_APPLY_ENV,
+    engine,
+    marks,
+    run_to_end,
+    run_until_killed,
+)
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "a", "kind": "work", "tools": "default", "next": "b"},
@@ -260,6 +266,34 @@ def test_each_kind_of_static_parallel_step_runs_whole_again(tmp_path, reconcile)
     assert done.status == "completed"
     m = marks(dead.workspace)
     assert (m["left"], m["right"], m["pre"], m["after"]) == (2, 2, 1, 1)
+
+
+LOGS = {"name": "w", "start": "seed", "nodes": [
+    {"id": "seed", "kind": "script", "command": "echo seed > a.log; echo seed > b.log",
+     "next": "fan"},
+    {"id": "fan", "kind": "parallel", "branches": ["left", "right"], "reconcile": "union",
+     "next": "after"},
+    {"id": "left", "kind": "script", "command": "echo a >> a.log"},
+    {"id": "right", "kind": "script", "command": "echo b >> b.log"},
+    {"id": "after", "kind": "script", "command": "cat a.log b.log", "next": None}]}
+
+
+def test_a_union_killed_while_writing_back_resumes_from_the_folder_before_it(tmp_path):
+    whole, _ = run_to_end(tmp_path / "whole", LOGS)
+    whole_dir = Path(whole["work_dir"])
+    dead = run_until_killed(tmp_path / "cut", LOGS, stop_in=None,
+                            env={HANG_IN_APPLY_ENV: "1"})
+    folder = Path(dead.record["work_dir"])
+    # Killed after the first real file of the write-back was written.
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed"]
+    assert (workspace_fork.pending_dir(folder) / "journal.json").is_file()
+
+    done = _resume(dead, LOGS)
+    assert done.status == "completed"
+    assert _lines(folder / "a.log") == ["seed", "a"] == _lines(whole_dir / "a.log")
+    assert _lines(folder / "b.log") == ["seed", "b"] == _lines(whole_dir / "b.log")
+    assert not workspace_fork.pending_dir(folder).exists()
 
 
 def test_a_fan_out_that_was_cut_runs_every_worker_again(tmp_path):

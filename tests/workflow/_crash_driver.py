@@ -17,7 +17,10 @@ sleeps, which is the moment the test ends the process. When
 ``DURIN_TEST_HANG_AFTER`` names steps (comma-separated), it first waits until
 each has started: ``<id>`` for a step, ``<id>=<prefix>`` for a start of agent step
 ``<id>`` whose task starts with ``<prefix>`` (a fan-out worker), so the test knows
-what ran before the end. ``DURIN_TEST_OUTPUT_CHARS`` (``<id>=<n>``, comma-separated)
+what ran before the end. ``DURIN_TEST_HANG_IN_APPLY=<k>`` hangs the same way
+right after the ``k``-th real file of a parallel step's write-back into the working
+folder was written (``workspace_fork._write_file``), so the test ends the process
+in the middle of that write-back. ``DURIN_TEST_OUTPUT_CHARS`` (``<id>=<n>``, comma-separated)
 pads an agent step's reply to ``n`` characters. ``SIGUSR1`` makes the process replace its own image (same pid) with an
 idle interpreter, which is what a restart in place looks like from outside.
 
@@ -48,7 +51,7 @@ if __name__ == "__main__":
     # ``durin`` the test process imported, not whatever else is installed.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from durin.workflow import run_log  # noqa: E402
+from durin.workflow import run_log, workspace_fork  # noqa: E402
 from durin.workflow.engine import (  # noqa: E402
     NodeRunResponse,
     WorkflowEngine,
@@ -63,6 +66,7 @@ RUN_ID = "r1"
 HANG_ENV = "DURIN_TEST_HANG_IN"
 HANG_TASK_ENV = "DURIN_TEST_HANG_TASK"
 HANG_AFTER_ENV = "DURIN_TEST_HANG_AFTER"
+HANG_IN_APPLY_ENV = "DURIN_TEST_HANG_IN_APPLY"
 RUN_ID_ENV = "DURIN_TEST_RUN_ID"
 WORK_KEY_ENV = "DURIN_TEST_WORK_KEY"
 RESUME_ENV = "DURIN_TEST_RESUME"
@@ -229,6 +233,21 @@ def build_engine(workspace: str | Path, run_id: str = RUN_ID) -> WorkflowEngine:
     )
 
 
+def _hang_in_apply(workspace: Path, after: int) -> None:
+    """Make the write-back of a parallel step's result hang right after its
+    ``after``-th real file was written, flagging the hang like a hanging step."""
+    real = workspace_fork._write_file
+    written = [0]
+
+    def write(target, content):
+        real(target, content)
+        written[0] += 1
+        if written[0] == after:
+            _hang(marks_dir(workspace))
+
+    workspace_fork._write_file = write
+
+
 def _replace_image(_signum, _frame) -> None:
     os.execv(sys.executable, [sys.executable, "-I", "-c", "import time; time.sleep(120)"])
 
@@ -252,6 +271,9 @@ def main(argv: list[str]) -> int:
     signal.signal(signal.SIGUSR1, _replace_image)
     workflow = parse_workflow(json.loads(definition.read_text(encoding="utf-8")))
     run_id = os.environ.get(RUN_ID_ENV) or RUN_ID
+    if os.environ.get(HANG_IN_APPLY_ENV):
+        marks_dir(workspace).mkdir(parents=True, exist_ok=True)
+        _hang_in_apply(workspace, int(os.environ[HANG_IN_APPLY_ENV]))
     if os.environ.get(RESUME_ENV) == "1":
         return _resume(workspace, workflow, run_id, task)
     build_engine(workspace, run_id).run(

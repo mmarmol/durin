@@ -103,17 +103,18 @@ def test_write_vs_delete_on_same_path_conflicts(tmp_path):
 
 
 def test_apply_writes_creates_and_modifications_and_removes_deletions(tmp_path):
-    _write(tmp_path, "old.txt", "old")
+    work = _work(tmp_path)
+    _write(work, "old.txt", "old")
     cs = wf.ChangeSet(
         created={"sub/new.txt": b"new"},
         modified={"old.txt": b"updated"},
         deleted={"absent.txt"},
     )
-    wf.apply(cs, tmp_path)
-    assert (tmp_path / "sub/new.txt").read_text() == "new"
-    assert (tmp_path / "old.txt").read_text() == "updated"
+    wf.apply_all([cs], work, run_id="r1", node_id="fan")
+    assert (work / "sub/new.txt").read_text() == "new"
+    assert (work / "old.txt").read_text() == "updated"
     # deleting a missing path is a no-op, not an error
-    assert not (tmp_path / "absent.txt").exists()
+    assert not (work / "absent.txt").exists()
 
 
 def test_choose_applies_one_branch_discards_others(tmp_path):
@@ -128,7 +129,7 @@ def test_choose_applies_one_branch_discards_others(tmp_path):
         _write(fork_b, "result.txt", "approach B")
         cs_a = wf.diff(base, fork_a)
         cs_b = wf.diff(base, fork_b)
-        wf.apply(cs_b, work)            # judge picked B
+        wf.apply_all([cs_b], work, run_id="r1", node_id="fan")   # judge picked B
     finally:
         wf.cleanup(fork_a)
         wf.cleanup(fork_b)
@@ -146,8 +147,7 @@ def test_union_applies_disjoint_branches(tmp_path):
         cs_a = wf.diff(base, fork_a)
         cs_b = wf.diff(base, fork_b)
         assert wf.conflicts([cs_a, cs_b]) == set()    # disjoint
-        wf.apply(cs_a, work)
-        wf.apply(cs_b, work)
+        wf.apply_all([cs_a, cs_b], work, run_id="r1", node_id="fan")
     finally:
         wf.cleanup(fork_a)
         wf.cleanup(fork_b)
