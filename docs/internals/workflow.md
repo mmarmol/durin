@@ -1489,14 +1489,15 @@ beside it. The check exposes that fact alone (`run_log.LeftBehind.fact`, a
 refusal string that also carries the clause it rests on), and the note says it
 in its own words. Otherwise a run that `engine.resume_refusal` accepts is named
 with the way to resume it. The launch's `work_key` is passed to the notice: a
-cut run recorded on that same key is named as one this launch takes over (the
-launch uses the key's folder, and once it has recorded its run a resume of the
-cut run is refused because a later run on the key has taken over its folder),
-so the note gives no way to resume it and says it can no longer be resumed; the
-check runs before the launch records anything, so `resume_refusal` alone would
-still accept it. A launch that its pre-flight input check refuses records no run,
-so after such a launch the cut run on its key is still resumable, although the note
-said otherwise. A run with nothing left that can never be resumed
+cut run recorded on that same key is named with no way to resume it, and the note
+says, as a condition, that once this call's run starts it takes over that folder
+and the cut run can no longer be resumed (once that run is recorded, a resume of
+the cut run is refused because a later run on the key has taken over its folder).
+The check runs before the launch records anything, so `resume_refusal` alone
+would still accept the cut run, and a launch refused before its run starts (the
+pre-flight input check, in the background as in the foreground) records no run
+and leaves it resumable, which the condition allows. A run with nothing
+left that can never be resumed
 (its step is gone from the definition, its folder was pruned, its record is
 incomplete, an automation started it), one another caller is acting on, one
 whose process is alive, and one that finished, paused or aborted are not named.

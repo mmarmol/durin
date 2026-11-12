@@ -399,9 +399,9 @@ process ending cut short: the tool's reply ends with a note about each. The
 launch that carries the note has already started a new run (unless it was
 refused), so the model tells the person and does not resume the cut run while
 the new one runs the same work; to continue the cut run instead, it stops the new
-run first. A cut run on the launch's own work key cannot be resumed after it, and
-the note says so (see the workflow internals, "A launch names the runs the same
-conversation had cut").
+run first. A cut run on the launch's own work key cannot be resumed once the
+launch's run starts, and the note says so (see the workflow internals, "A launch
+names the runs the same conversation had cut").
 
 The journal file is shared by every process that can run an `AgentLoop`
 against this workspace — not only the gateway, but also the TUI and the

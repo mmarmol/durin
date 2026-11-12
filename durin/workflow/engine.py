@@ -781,12 +781,8 @@ def _journal_abort_text(exc: "workspace_fork.PendingApplyError | workspace_fork.
     if isinstance(exc, workspace_fork.UndoError):
         return (FRESH_UNDONE_YET_ABORT if fresh else UNDONE_YET_ABORT).format(
             path=exc.path, error=exc.cause, kept=kept)
-    # The exception carries its reason only in its message, after the journal's path.
-    message = str(exc)
-    prefix = f"the write-back journal {str(exc.path)!r} cannot be used: "
-    reason = message[len(prefix):] if message.startswith(prefix) else message
     return (FRESH_UNUSABLE_FOLDER_ABORT if fresh else UNUSABLE_FOLDER_ABORT).format(
-        path=exc.path, reason=reason, kept=kept)
+        path=exc.path, reason=exc.reason, kept=kept)
 
 
 class _FolderNotReadyError(Exception):

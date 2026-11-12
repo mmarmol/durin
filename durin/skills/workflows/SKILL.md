@@ -227,8 +227,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   work: that runs the work twice, effects outside durin included. To continue the cut run
   instead, stop the new run first
   (`tasks(action="stop", id=<new run id>)`), then resume the cut one with
-  `resume_run_id`. When the note says this call runs on the same work key and the cut run
-  can no longer be resumed, there is nothing to resume. When the note says something of
+  `resume_run_id`. When the note says the cut run is on the same work key as this call,
+  once this call's run has started it has taken over that folder and there is nothing
+  to resume; only if this call's result says it was refused before its run started is
+  the cut run still resumable. When the note says something of
   the cut run is still there (a script, a sub-workflow run, a process that seems alive),
   with or without saying the run cannot be resumed, tell the person; do not treat the new
   run as safe to repeat work beside it, and never end processes or delete files yourself.

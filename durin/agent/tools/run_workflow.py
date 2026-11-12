@@ -457,9 +457,10 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
     something of it may still be there (a script, a sub-workflow run, a process
     that seems alive) - named whether or not it could ever be resumed, since a
     new run works beside it; else it can be resumed - named with the way to do
-    it, unless it ran on the same work key as this launch: the launch takes over
-    that key's folder, after which a resume of the cut run is refused, so the
-    note says that instead. Not named: a run nothing of which is left and that
+    it, unless it ran on the same work key as this launch: once the launch's run
+    starts it takes over that key's folder, after which a resume of the cut run is
+    refused, so the note says that instead, as a condition (a launch refused
+    before its run starts leaves the cut run resumable). Not named: a run nothing of which is left and that
     can never be resumed (its step is gone, its folder was pruned, its record is
     incomplete, an automation started it), one another caller is acting on, one
     whose process is alive, and one that ended, paused or aborted. The closing
@@ -484,13 +485,17 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
         head = (f"Note: run {run_id} of '{name}', started from this conversation, was cut "
                 "short")
         same_key = bool(work_key) and record.get("work_key") == work_key
-        takeover = "This call runs on the same work key and takes over its folder"
+        # Conditional: this call's run takes the key's folder over only once it
+        # starts, and a launch refused before that (its pre-flight check) leaves the
+        # cut run resumable.
+        takeover = ("It is on the same work key as this call: once this call's run starts, "
+                    "it takes over that folder")
         beside = "This call did not resume it; a new run would work beside what it left."
         if reason:
             fact = getattr(reason, "fact", "something of it may still be there")
             if resumable and same_key:
                 paragraphs.append(
-                    f"{head} and {fact}. {takeover}, so that run can no longer be resumed.")
+                    f"{head} and {fact}. {takeover} and that run can no longer be resumed.")
             elif resumable:
                 paragraphs.append(
                     f"{head} and {fact}. It can be resumed once that is gone. {beside}")
@@ -500,7 +505,7 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
                 paragraphs.append(f"{head} and cannot be resumed, and {fact}. {beside}")
         elif resumable and same_key:
             paragraphs.append(
-                f"{head} when its process ended. {takeover}, so that run can no longer be "
+                f"{head} when its process ended. {takeover} and that run can no longer be "
                 "resumed.")
         elif resumable:
             paragraphs.append(

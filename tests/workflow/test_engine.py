@@ -1282,6 +1282,50 @@ def test_a_journal_folder_that_is_a_link_names_the_link_and_where_the_content_is
     assert link.is_symlink() and (tmp_path / "kept-pending" / "journal.json").is_file()
 
 
+
+@pytest.mark.parametrize("kind", ["unreadable", "bad-path", "missing-copy", "linked-folder"])
+def test_the_text_for_an_unusable_journal_carries_its_reason(tmp_path, monkeypatch, kind):
+    import json
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    pending = workspace_fork.pending_dir(work)
+    journal = pending / "journal.json"
+    data = json.loads(journal.read_text())
+    named, kept = journal, _KEPT.format(pre=pending / "pre")
+    if kind == "unreadable":
+        journal.write_text("{")
+        reason = _unreadable("{")
+    elif kind == "bad-path":
+        data["entries"][0]["path"] = "../outside.txt"
+        journal.write_text(json.dumps(data))
+        reason = f"entry {data['entries'][0]!r} names no path inside the folder"
+    elif kind == "missing-copy":
+        [stored] = [e["pre"] for e in data["entries"] if e.get("pre") is not None]
+        (pending / "pre" / stored).unlink()
+        reason = f"the stored copy {str(pending / 'pre' / stored)!r} is missing"
+    else:
+        shutil.move(str(pending), str(tmp_path / "kept-pending"))
+        pending.symlink_to(tmp_path / "kept-pending")
+        named = pending
+        reason = "the journal folder is a symlink"
+        kept = ("The earlier content of the files that step changed is kept in "
+                f"{pending / 'pre'}, where that link leads.")
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    assert res.final_output == (
+        "the working folder holds changes of an earlier parallel step that could not be "
+        f"undone ({named}): {reason}. {kept} A new run can start once a person has checked "
+        "the folder and removed that file.")
+
+
 _KEPT = ("The earlier content of the files that step changed is kept in {pre}; removing "
          "the journal file discards it when a run next starts in that folder.")
 _UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "

@@ -1597,10 +1597,13 @@ def _resumable_text(run_id, node="build"):
             "run again). This call did not resume it.")
 
 
+_ON_THE_KEY = ("It is on the same work key as this call: once this call's run starts, it "
+               "takes over that folder")
+
+
 def _same_key_text(run_id="r-cut"):
     return (f"Note: run {run_id} of 'qa', started from this conversation, was cut short when "
-            "its process ended. This call runs on the same work key and takes over its "
-            "folder, so that run can no longer be resumed.")
+            f"its process ended. {_ON_THE_KEY} and that run can no longer be resumed.")
 
 
 @pytest.mark.asyncio
@@ -1627,6 +1630,30 @@ async def test_a_launch_on_the_cut_runs_own_key_says_it_takes_the_folder_over(
 
 
 @pytest.mark.asyncio
+async def test_the_same_key_note_holds_when_the_launch_is_refused_before_its_run_starts(
+        tmp_path):
+    from durin.agent.tools.context import RequestContext
+    from durin.workflow.engine import resume_refusal
+
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", key="k1")
+    tool = _tool(tmp_path)
+    tool.set_context(RequestContext(channel="websocket", chat_id="chatA",
+                                    session_key="websocket:chatA"))
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        reply = await tool.execute(name="qa", task="go", background=False, work_key="k1",
+                                   input_files=[str(tmp_path / "missing.txt")])
+    assert "input file not found" in reply
+    assert reply.endswith("\n\n" + _same_key_text())
+    # The refused launch recorded no run: the cut run is still resumable, and the
+    # note did not say otherwise.
+    assert [r["run_id"] for r in run_log.list_runs(tmp_path, "qa")] == ["r-cut"]
+    rec = run_log.read_manifest(tmp_path, "qa", "r-cut")
+    assert resume_refusal(rec, workspace=tmp_path) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cut_key,launch_key", [("k1", "k2"), ("k1", ""), (None, "k2")])
 async def test_a_launch_on_another_key_names_the_cut_run_as_resumable(
         tmp_path, cut_key, launch_key):
@@ -1644,11 +1671,10 @@ async def test_a_launch_on_the_key_of_a_cut_run_with_something_still_there_names
     fact = _LEFT_BEHIND["script"](tmp_path, monkeypatch)
     reply = await _launch(tmp_path, work_key="k1")
     head = "Note: run r-cut of 'qa', started from this conversation, was cut short and "
-    takeover = "This call runs on the same work key and takes over its folder"
     if resumable:
-        expected = (head + f"{fact}. {takeover}, so that run can no longer be resumed.")
+        expected = head + f"{fact}. {_ON_THE_KEY} and that run can no longer be resumed."
     else:
-        expected = head + f"cannot be resumed, and {fact}. {takeover}."
+        expected = head + f"cannot be resumed, and {fact}. {_ON_THE_KEY}."
     assert reply.endswith("\n\n" + expected)
     assert "resume_run_id" not in reply.split("Note:")[1]
 

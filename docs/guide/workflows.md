@@ -528,9 +528,11 @@ launch has started a new run (unless it was refused), so two runs of the same
 work may exist. The agent tells you, and does not resume the cut run while the
 new one is running the same work: to continue the cut run instead, the new run is
 stopped first and then the cut run resumed. When the new launch uses the same
-`work_key` as the cut run, it takes over that key's folder, and the note says the cut
-run can no longer be resumed. When something of a cut run is still running, the note says
-so, even when the run could never be resumed, and a new run works beside it.
+`work_key` as the cut run, the note says that once the new run starts it takes
+over that key's folder and the cut run can no longer be resumed; a launch refused
+before its run starts (a missing input file, say) leaves the cut run resumable.
+When something of a cut run is still running, the note says so, even when the run
+could never be resumed, and a new run works beside it.
 The agent never ends those processes or deletes files itself. With unified
 sessions all chats share one conversation, so the note can name a run that was
 started from another chat.

@@ -242,11 +242,13 @@ def conflicts(changesets: list[ChangeSet]) -> set[str]:
 class PendingApplyError(Exception):
     """A write-back journal is present and cannot be used (unreadable, or beside a
     working folder that is a link): ``path`` is the journal file, or the link
-    standing where the journal folder should be."""
+    standing where the journal folder should be; ``reason`` says why it cannot be
+    used, as the message ends."""
 
     def __init__(self, path: str | Path, reason: str) -> None:
         super().__init__(f"the write-back journal {str(path)!r} cannot be used: {reason}")
         self.path = Path(path)
+        self.reason = reason
 
 
 class UndoError(Exception):

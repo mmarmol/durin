@@ -239,6 +239,9 @@ def test_an_unreadable_journal_touches_nothing_and_names_the_file(work):
     with pytest.raises(workspace_fork.PendingApplyError) as err:
         workspace_fork.restore_pending(work)
     assert err.value.path == journal
+    assert err.value.reason.startswith("it cannot be read (")
+    assert str(err.value) == (f"the write-back journal {str(journal)!r} cannot be used: "
+                              f"{err.value.reason}")
     assert _tree(work) == before and journal.read_text() == "{"
 
 
