@@ -475,6 +475,10 @@ automation records its own run as interrupted, does not resume the crashed
 one, and its next run starts anew. Only a crashed run is refused on this
 account.
 
+A crashed run whose record lost what the run was started with (its folder,
+its task, where it was started from) is refused as incomplete on every
+surface; start a new run instead.
+
 Known limits: a process that dies while a `union` parallel step is
 applying its branches' files can leave the working folder partly applied. A
 run started from a chat and resumed from the dashboard or the API does not
@@ -569,9 +573,9 @@ per-node progress as the graph executes.
 
 Renaming a workflow moves its run history, the workflows that call it and the
 automations that run it to the new name. A workflow with a run in progress
-cannot be renamed: the editor shows "workflow '<name>' has a run in progress;
-it can be renamed once that run has ended." A run whose process died does not
-hold the rename.
+cannot be renamed: the editor shows an error saying that the workflow has a
+run in progress and can be renamed once that run has ended. A run whose
+process died does not hold the rename.
 
 The Workflows section's **Runs** pane is where to look across *all* workflows
 and origins (sessions, HTTP, cron, the editor) at once: a global, filterable

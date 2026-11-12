@@ -867,7 +867,8 @@ answers with the truth — that the run crashed, or that it is cancelled when a 
 been requested. Manifests written before the owner field existed fall back to a
 generous `started_at` age threshold in the sweep; the `tasks` self-heal leaves them to it.
 A record with neither an owner nor a positive, readable `started_at` has no age to judge
-it by and is never converted. The walk's own rewrite (`update_run`) never writes such a
+it by and is never converted; it also holds a rename of its workflow, as a run in flight
+does. The walk's own rewrite (`update_run`) never writes such a
 record: when it finds no record to carry from (one read failed, or its folder moved — a
 rename refuses a workflow with a run in flight, but not one whose run starts after its
 check), the record it writes names the writing process as its owner and the time of that
@@ -979,7 +980,7 @@ exited, any finder can: the gateway's crash sweep (at its start and periodically
 gateway with the websocket channel), the `tasks` tool when asked about that run, or a
 resume of it. Each converts it, resumable at the step it was in. A restart in place
 (`/restart`) keeps the pid and the start time, so only the restarted process itself can
-tell that its earlier start is gone (see "The conversion" below). A gateway with the
+tell, by its boot id, that its earlier start is gone. A gateway with the
 websocket channel restarted in place sweeps at its start and finds the run. A gateway
 without it, the TUI or the REPL restarted in place runs no sweep: the run stays `running`, and a script step it was
 in keeps running, until that process's own `tasks` tool or a resume made from that
