@@ -725,14 +725,40 @@ UNUSABLE_FOLDER_ABORT = (
 UNDONE_YET_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
     "undone yet ({path}): {error}. A retry undoes them once the cause is gone.")
+# The same two conditions for a fresh run, which is not retried: a new run is.
+FRESH_UNUSABLE_FOLDER_ABORT = (
+    "the working folder holds changes of an earlier parallel step that could not be "
+    "undone ({path}). A new run can start once a person has checked the folder and "
+    "removed that file.")
+FRESH_UNDONE_YET_ABORT = (
+    "the working folder holds changes of an earlier parallel step that could not be "
+    "undone yet ({path}): {error}. A new run undoes them once the cause is gone.")
 
 
-def _journal_abort_text(exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError") -> str:
+class _WriteBackFailedError(Exception):
+    """A parallel step's write-back into the working folder failed with ``error``;
+    ``undo`` is the ``UndoError`` when undoing it stopped too, else None."""
+
+    def __init__(self, error: BaseException,
+                 undo: "workspace_fork.UndoError | None" = None) -> None:
+        super().__init__(str(error))
+        self.error = error
+        self.undo = undo
+
+
+def _journal_abort_text(exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError "
+                             "| _WriteBackFailedError", *, fresh: bool = False) -> str:
     """Why the working folder cannot be used: its write-back journal cannot be used
-    (a person must look), or undoing it stopped (a later attempt undoes it)."""
+    (a person must look), undoing it stopped (a later attempt undoes it), or the
+    step's own write-back failed (its error first, then the undo's when it stopped
+    too). A fresh run gets the texts that send the reader to a new run."""
+    if isinstance(exc, _WriteBackFailedError):
+        text = f"writing the branches' result back failed: {exc.error}"
+        return text if exc.undo is None else f"{text}; {_journal_abort_text(exc.undo)}"
     if isinstance(exc, workspace_fork.UndoError):
-        return UNDONE_YET_ABORT.format(path=exc.path, error=exc.cause)
-    return UNUSABLE_FOLDER_ABORT.format(path=exc.path)
+        return (FRESH_UNDONE_YET_ABORT if fresh else UNDONE_YET_ABORT).format(
+            path=exc.path, error=exc.cause)
+    return (FRESH_UNUSABLE_FOLDER_ABORT if fresh else UNUSABLE_FOLDER_ABORT).format(path=exc.path)
 
 
 class _FolderNotReadyError(Exception):
@@ -741,12 +767,13 @@ class _FolderNotReadyError(Exception):
 
 
 def _folder_failure(runs: list, step: str, attempt: int, upstream: str | None,
-                    exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError",
-                    ) -> NodeExecutionError:
+                    exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError "
+                         "| _WriteBackFailedError") -> NodeExecutionError:
     """The failure of ``step`` when the working folder holds a cut write-back that
-    cannot be undone now: a ``node_failed`` row of the step's attempt joins the
-    trace, and the error carries the step's input, so the run aborts naming the step
-    and a retry made once the cause is gone enters it with that input."""
+    cannot be undone now, or the step's own write-back failed: a ``node_failed``
+    row of the step's attempt joins the trace, and the error carries the step's
+    input, so the run aborts naming the step and a retry made once the cause is
+    gone enters it with that input."""
     detail = _journal_abort_text(exc)
     runs.append(NodeRun(node_id=step, iteration=attempt, output="",
                         status="node_failed", error=detail))
@@ -1026,7 +1053,8 @@ class WorkflowEngine:
                         workspace_fork.restore_pending(work_dir)
                     except (workspace_fork.PendingApplyError, workspace_fork.UndoError) as exc:
                         if resume is None:
-                            raise _FolderNotReadyError(_journal_abort_text(exc)) from exc
+                            raise _FolderNotReadyError(
+                                _journal_abort_text(exc, fresh=True)) from exc
                         step = resume.start_at
                         raise _folder_failure(runs, step, resume.visits.get(step, 0) + 1,
                                               resume.upstream, exc) from exc
@@ -2044,12 +2072,14 @@ class WorkflowEngine:
                         exc.cause if self._is_cancel(exc) else RuntimeError(detail))
                     failure.resume_upstream = upstream_output
                     raise failure from exc
-                except (workspace_fork.PendingApplyError, workspace_fork.UndoError) as exc:
+                except (workspace_fork.PendingApplyError, workspace_fork.UndoError,
+                        _WriteBackFailedError) as exc:
                     # The folder holds a cut write-back that cannot be undone now
-                    # (found at this step's entry, or left by its own write-back):
-                    # the step does not run on it. The run aborts at this step with
-                    # the input it received, so a retry made once the cause is gone
-                    # enters it. Nothing else is written into the folder.
+                    # (found at this step's entry), or the step's own write-back
+                    # failed (undone, or with its undo stopped too). The run aborts
+                    # at this step with the input it received, so a retry made once
+                    # the cause is gone enters it. Nothing else is written into the
+                    # folder.
                     raise _folder_failure(runs, node.id, iteration,
                                           upstream_output, exc) from exc
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
@@ -2759,19 +2789,27 @@ class WorkflowEngine:
 
         def _write_back(changesets):
             # The result goes into the real folder only through the undo journal.
-            # A failure after the journal was written is undone at once, so the
-            # aborted run leaves the folder as the step found it. An undo that
-            # cannot finish raises UndoError, keeping the journal: the run then
-            # aborts at this step, and a retry undoes it once the cause is gone. A
-            # journal already present was not written by this call and is left as
-            # it is.
+            # A result that would change a path's shape or go through a link is
+            # refused before anything is stored: the step ends like a union
+            # conflict, with this abort text. A failure after the journal was
+            # written is undone at once, and the run aborts at this step,
+            # retryable; when the undo cannot finish, its journal stays for the
+            # retry. A journal already present was not written by this call and is
+            # left as it is.
             try:
                 workspace_fork.apply_all(changesets, fork_root, run_id=run_id, node_id=node.id)
+            except workspace_fork.WriteBackRefusedError as exc:
+                return (f"parallel node {node.id!r}: the branches' result cannot be "
+                        f"written back: {exc}")
             except workspace_fork.PendingApplyError:
                 raise
-            except Exception:
-                workspace_fork.restore_pending(fork_root)
-                raise
+            except Exception as exc:
+                try:
+                    workspace_fork.restore_pending(fork_root)
+                except workspace_fork.UndoError as undo:
+                    raise _WriteBackFailedError(exc, undo) from exc
+                raise _WriteBackFailedError(exc) from exc
+            return None
 
         def _run(bid):
             # Each branch gets a private copy of the working folder: its file tools
@@ -2811,14 +2849,18 @@ class WorkflowEngine:
                 idx = self._pick_runner(node.criteria, [row.output for row, _ in results], node.judge_model)
                 idx = idx if isinstance(idx, int) and 0 <= idx < len(results) else 0
                 row, cs = results[idx]
-                _write_back([cs])
+                refused = _write_back([cs])
+                if refused is not None:
+                    return "", refused
                 return f"[chosen: {row.node_id}]\n{row.output}", None
             # union: apply every branch unless two touched the same path
             changesets = [cs for _, cs in results]
             conflict = workspace_fork.conflicts(changesets)
             if conflict:
                 return "", f"parallel node {node.id!r}: union conflict on {sorted(conflict)}"
-            _write_back(changesets)
+            refused = _write_back(changesets)
+            if refused is not None:
+                return "", refused
             return "\n\n".join(f"[{row.node_id}]\n{row.output}" for row, _ in results), None
         finally:
             # The whole run's folder of copies, not copy by copy: a copy whose

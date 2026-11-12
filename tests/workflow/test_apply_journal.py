@@ -134,7 +134,7 @@ def test_restoring_twice_or_after_a_cut_restore_ends_the_same(work, monkeypatch)
     monkeypatch.setattr(workspace_fork, "_put_back", cut)
     with pytest.raises(workspace_fork.UndoError) as err:
         workspace_fork.restore_pending(work)
-    assert err.value.path == _journal(work) and isinstance(err.value.cause, OSError)
+    assert err.value.path == _journal(work) and "killed" in str(err.value.cause)
     monkeypatch.undo()
     assert _journal(work).is_file()          # a cut restore keeps its journal
     assert workspace_fork.restore_pending(work) is True
@@ -290,23 +290,6 @@ def test_a_symlinked_file_round_trips_through_the_journal(work, tmp_path, monkey
     assert (work / "link.txt").is_symlink() and (work / "a.txt").read_bytes() == b"a1"
 
 
-def test_undoing_a_new_path_never_removes_what_a_link_there_points_at(work, tmp_path,
-                                                                       monkeypatch):
-    outside = tmp_path / "outside.txt"              # not there yet: the link dangles
-    (work / "link.txt").symlink_to(outside)
-    cs = ChangeSet(created={"link.txt": b"x", "a.txt": b"a2"}, modified={}, deleted=set())
-    _fail_after(monkeypatch, 1)
-    with pytest.raises(OSError):
-        workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
-    monkeypatch.undo()
-    assert outside.read_text() == "x"               # written through the link
-    outside.write_text("someone else's")
-    assert workspace_fork.restore_pending(work) is True
-    assert outside.read_text() == "someone else's"  # outside the run's area: untouched
-    assert os.readlink(work / "link.txt") == str(outside)    # the link itself stays
-    assert (work / "a.txt").read_bytes() == b"a1"
-
-
 def test_an_apply_does_not_start_over_a_pending_journal(work, monkeypatch):
     _fail_after(monkeypatch, 1)
     with pytest.raises(OSError):
@@ -366,6 +349,84 @@ def test_without_a_journal_a_leftover_folder_is_removed(work):
     assert workspace_fork.restore_pending(work) is False     # nothing at all: still False
 
 
+# ── what a write-back refuses ──
+
+SHAPE = "would turn a file into a folder or a folder into a file"
+LINKED = "is reached through a link"
+
+
+def _outside(tmp_path: Path) -> Path:
+    outside = tmp_path / "outside"
+    outside.mkdir(exist_ok=True)
+    (outside / "old.txt").write_text("outside old")
+    (outside / "sentinel").write_text("keep")
+    return outside
+
+
+def _refusal_case(work: Path, tmp_path: Path, case: str):
+    """Set up ``case`` in the folder; returns (changesets, refused path, reason)."""
+    outside = _outside(tmp_path)
+    if case == "a-file-and-a-file-inside-it":
+        return [ChangeSet({"p": b"p"}, {}, set()), ChangeSet({"p/q": b"q"}, {}, set())], "p", SHAPE
+    if case == "a-file-inside-a-file-first":
+        return [ChangeSet({"p/q": b"q"}, {}, set()), ChangeSet({"p": b"p"}, {}, set())], "p", SHAPE
+    if case == "b-write-onto-a-folder":
+        return [ChangeSet({"sub": b"x"}, {}, set())], "sub", SHAPE
+    if case == "b-write-onto-an-empty-folder":
+        (work / "emptyd").mkdir()
+        return [ChangeSet({"emptyd": b"x"}, {}, set())], "emptyd", SHAPE
+    if case == "b-delete-a-folder":
+        return [ChangeSet({}, {}, {"sub"})], "sub", SHAPE
+    if case == "c-write-under-a-file":
+        return [ChangeSet({"a.txt/y": b"y"}, {}, set())], "a.txt/y", SHAPE
+    if case == "c-write-under-a-file-it-deletes":
+        return ([ChangeSet({}, {}, {"a.txt"}), ChangeSet({"a.txt/y": b"y"}, {}, set())],
+                "a.txt/y", SHAPE)
+    (work / "linkdir").symlink_to(outside)
+    if case == "d-create-under-a-folder-link":
+        return [ChangeSet({"linkdir/new.txt": b"n"}, {}, set())], "linkdir/new.txt", LINKED
+    if case == "d-modify-under-a-folder-link":
+        return [ChangeSet({}, {"linkdir/old.txt": b"n"}, set())], "linkdir/old.txt", LINKED
+    if case == "d-delete-under-a-folder-link":
+        return [ChangeSet({}, {}, {"linkdir/old.txt"})], "linkdir/old.txt", LINKED
+    if case == "d-under-a-link-to-an-inside-folder":
+        (work / "inl").symlink_to("sub")
+        return [ChangeSet({"inl/new.bin": b"n"}, {}, set())], "inl/new.bin", LINKED
+    if case == "e-write-through-a-link-to-nothing":
+        (work / "dang").symlink_to(outside / "nothing-here")
+        return [ChangeSet({}, {"dang": b"n"}, set())], "dang", LINKED
+    raise AssertionError(case)
+
+
+REFUSALS = ["a-file-and-a-file-inside-it", "a-file-inside-a-file-first", "b-write-onto-a-folder",
+            "b-write-onto-an-empty-folder", "b-delete-a-folder", "c-write-under-a-file",
+            "c-write-under-a-file-it-deletes", "d-create-under-a-folder-link",
+            "d-modify-under-a-folder-link", "d-delete-under-a-folder-link",
+            "d-under-a-link-to-an-inside-folder", "e-write-through-a-link-to-nothing"]
+
+
+@pytest.mark.parametrize("case", REFUSALS)
+def test_a_write_back_that_changes_a_shape_or_goes_through_a_link_is_refused(work, tmp_path,
+                                                                             case):
+    changesets, path, reason = _refusal_case(work, tmp_path, case)
+    before, outside_before = _tree(work), _tree(tmp_path / "outside")
+    with pytest.raises(workspace_fork.WriteBackRefusedError) as err:
+        workspace_fork.apply_all(changesets, work, run_id="r1", node_id="fan")
+    assert str(err.value) == f"{path!r} {reason}"
+    assert err.value.path == path and err.value.reason == reason
+    assert _tree(work) == before and _tree(tmp_path / "outside") == outside_before
+    assert not os.path.lexists(workspace_fork.run_area(work) / "pending-apply")
+
+
+def test_a_file_and_a_file_inside_it_from_two_branches_is_a_union_conflict():
+    a = ChangeSet({"p": b"p"}, {}, set())
+    b = ChangeSet({"p/q/r": b"r"}, {}, set())
+    assert workspace_fork.conflicts([a, b]) == {"p", "p/q/r"}
+    assert workspace_fork.conflicts([b, a]) == {"p", "p/q/r"}
+    assert workspace_fork.conflicts([ChangeSet({"p/q": b"1"}, {}, set()),
+                                     ChangeSet({"p/r": b"2"}, {}, set())]) == set()
+
+
 # ── the order of a write-back and of its undo ──
 
 def _cut_folder_changes(monkeypatch, work: Path, k: int) -> list[int]:
@@ -392,56 +453,38 @@ def _cut_folder_changes(monkeypatch, work: Path, k: int) -> list[int]:
 
 
 def _mixed(base: Path) -> Path:
-    """A folder where a write-back turns a file into a directory, a directory into a
-    file, makes nested new directories, deletes a script and edits a file."""
+    """A folder where a write-back makes nested new folders, adds a file to an
+    existing one, deletes files and a link, edits files, one through a link."""
     work = base / ".workflow" / "r1" / "work"
     (work / "d").mkdir(parents=True)
     os.chmod(work / "d", 0o750)
     (work / "x").write_bytes(b"x1")
+    (work / "keep.txt").write_bytes(b"k1")
+    os.chmod(work / "keep.txt", 0o600)
     (work / "d" / "a").write_bytes(b"da")
     (work / "d" / "b").write_bytes(b"db")
     (work / "run.sh").write_bytes(b"#!/bin/sh\n")
     os.chmod(work / "run.sh", 0o755)
     (work / "a.txt").write_bytes(b"a1")
     os.chmod(work / "a.txt", 0o640)
+    (work / "rl").symlink_to("d/a")
+    (work / "wl").symlink_to("keep.txt")
     return work
 
 
-MIXED = [ChangeSet(created={}, modified={}, deleted={"x"}),
-         ChangeSet(created={"x/y": b"y", "n1/n2/new.txt": b"n"}, modified={}, deleted={"x"}),
-         ChangeSet(created={"d": b"d-file"}, modified={"a.txt": b"a2"},
-                   deleted={"d/a", "d/b", "run.sh"})]
-
-
-def test_a_file_that_becomes_a_directory_applies_whole(work):
-    (work / "x").write_bytes(b"the person's x")
-    # Branch A deleted x; branch B removed x and wrote x/y: not a conflict.
-    workspace_fork.apply_all([ChangeSet(created={}, modified={}, deleted={"x"}),
-                              ChangeSet(created={"x/y": b"y"}, modified={}, deleted={"x"})],
-                             work, run_id="r1", node_id="fan")
-    assert (work / "x" / "y").read_bytes() == b"y"
-    assert not workspace_fork.pending_dir(work).exists()
-
-
-def test_a_directory_that_becomes_a_file_applies_whole(work):
-    (work / "dd").mkdir()
-    (work / "dd" / "a").write_bytes(b"a")
-    (work / "dd" / "b").write_bytes(b"b")
-    workspace_fork.apply_all([ChangeSet(created={"dd": b"now a file"}, modified={},
-                                        deleted={"dd/a", "dd/b"})],
-                             work, run_id="r1", node_id="fan")
-    assert (work / "dd").read_bytes() == b"now a file"
-    assert stat.S_IMODE(os.stat(work / "dd").st_mode) == 0o644
-    assert not workspace_fork.pending_dir(work).exists()
+MIXED = [ChangeSet(created={"n1/n2/new.txt": b"n"}, modified={"a.txt": b"a2", "wl": b"k2"},
+                   deleted={"d/a", "rl"}),
+         ChangeSet(created={"d/c": b"c", "top.txt": b"t"}, modified={"x": b"x2"},
+                   deleted={"run.sh", "d/b"})]
 
 
 def test_the_mixed_write_back_applies_whole(tmp_path):
     work = _mixed(tmp_path)
     workspace_fork.apply_all(MIXED, work, run_id="r1", node_id="fan")
-    after = _tree(work)
-    assert {k: v for k, v in after.items() if v[0] != "dir"} == {
-        "x/y": (b"y", 0o644), "n1/n2/new.txt": (b"n", 0o644), "d": (b"d-file", 0o644),
-        "a.txt": (b"a2", 0o640)}
+    after = {k: v for k, v in _tree(work).items() if v[0] != "dir"}
+    assert after == {"n1/n2/new.txt": (b"n", 0o644), "a.txt": (b"a2", 0o640),
+                     "keep.txt": (b"k2", 0o600), "wl": ("link", "keep.txt"),
+                     "d/c": (b"c", 0o644), "top.txt": (b"t", 0o644), "x": (b"x2", 0o644)}
     assert not workspace_fork.pending_dir(work).exists()
 
 
@@ -461,10 +504,11 @@ def test_every_cut_of_a_mixed_write_back_is_put_back_whole(tmp_path, monkeypatch
         assert workspace_fork.restore_pending(work) is True, k
         assert _tree(work) == before, k
         assert not workspace_fork.pending_dir(work).exists(), k
-    assert cuts >= 10                          # every delete, rmdir, mkdir and write was cut
+    assert cuts >= 8                           # every delete, mkdir and staged rename was cut
 
 
 def test_every_cut_of_the_undo_ends_the_same_when_it_runs_again(tmp_path, monkeypatch):
+    import shutil
     combos = 0
     for k in range(200):
         base = tmp_path / f"k{k}"
@@ -478,9 +522,9 @@ def test_every_cut_of_the_undo_ends_the_same_when_it_runs_again(tmp_path, monkey
             else:
                 break
         cut_state = _tree(work)
+        keep_cut = (work / "keep.txt").read_bytes()
         pending = workspace_fork.pending_dir(work)
         saved = base / "saved-pending"
-        import shutil
         shutil.copytree(pending, saved, symlinks=True)
         for j in range(200):
             if j:                              # back to the state the cut apply left
@@ -488,6 +532,7 @@ def test_every_cut_of_the_undo_ends_the_same_when_it_runs_again(tmp_path, monkey
                 shutil.rmtree(pending, ignore_errors=True)     # gone after a whole undo
                 work.mkdir()
                 _rebuild(work, cut_state)
+                (work / "keep.txt").write_bytes(keep_cut)
                 shutil.copytree(saved, pending, symlinks=True)
             before = _tree(_mixed(base / f"ref{k}-{j}"))
             with monkeypatch.context() as m:
@@ -520,41 +565,138 @@ def _rebuild(root: Path, tree: dict[str, tuple]) -> None:
             os.chmod(p, entry[1])
 
 
-# ── what the undo leaves alone, and links ──
+# ── what the undo leaves, and what it will not act through ──
 
-def test_the_undo_never_removes_through_a_directory_link_leading_outside(work, tmp_path,
-                                                                          monkeypatch):
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (work / "linkdir").symlink_to(outside)
-    cs = ChangeSet(created={"linkdir/new.txt": b"n", "a.txt": b"a2"}, modified={}, deleted=set())
-    _fail_after(monkeypatch, 1)
+def test_the_undo_leaves_a_created_folder_that_holds_something_else(work, monkeypatch):
+    before = _tree(work)
+    _fail_after(monkeypatch, 1)                # new/n.txt written, then cut
     with pytest.raises(OSError):
-        workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
+        workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
     monkeypatch.undo()
-    assert (outside / "new.txt").read_bytes() == b"n"
-    (outside / "new.txt").write_text("someone else's")
+    (work / "new" / "det-report.txt").write_bytes(b"a detached step's file")
     assert workspace_fork.restore_pending(work) is True
-    assert (outside / "new.txt").read_text() == "someone else's"
-    assert os.readlink(work / "linkdir") == str(outside)
+    assert _tree(work) == {**before, "new": _tree(work)["new"],
+                           "new/det-report.txt": (b"a detached step's file", 0o644)}
+    assert not workspace_fork.pending_dir(work).exists()
 
 
-def test_an_outside_file_changed_through_a_directory_link_is_put_back(work, tmp_path,
-                                                                      monkeypatch):
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "old.txt").write_text("outside old")
-    os.chmod(outside / "old.txt", 0o600)
-    (work / "linkdir").symlink_to(outside)
+def test_the_undo_removes_a_link_put_where_a_new_file_was_and_not_its_target(work, tmp_path,
+                                                                              monkeypatch):
+    outside = _outside(tmp_path)
     before, outside_before = _tree(work), _tree(outside)
-    cs = ChangeSet(created={}, modified={"linkdir/old.txt": b"new", "a.txt": b"a2"},
-                   deleted=set())
     _fail_after(monkeypatch, 1)
     with pytest.raises(OSError):
-        workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
+        workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
     monkeypatch.undo()
+    (work / "new" / "n.txt").unlink()
+    (work / "new" / "n.txt").symlink_to(outside / "sentinel")
     assert workspace_fork.restore_pending(work) is True
     assert _tree(work) == before and _tree(outside) == outside_before
+
+
+def _swap_for_link(folder: Path, target: Path) -> Path:
+    """Replace *folder* with a link to *target*; returns where its content was kept."""
+    import shutil
+    kept = folder.parent.parent / f"kept-{folder.name}"
+    shutil.move(str(folder), str(kept))
+    folder.symlink_to(target)
+    return kept
+
+
+def _swap_back(folder: Path, kept: Path) -> None:
+    import shutil
+    folder.unlink()
+    shutil.move(str(kept), str(folder))
+
+
+@pytest.mark.parametrize("case", ["stored-file", "deleted-link", "created-folder"])
+def test_the_undo_does_not_act_through_a_folder_swapped_for_a_link(work, tmp_path, monkeypatch,
+                                                                     case):
+    outside = _outside(tmp_path)
+    (outside / "b.bin").write_bytes(b"OUTSIDE b")
+    (outside / "l").write_text("an outside file named l")
+    (outside / "x").write_text("an outside file named x")
+    os.chmod(outside / "sentinel", 0o600)
+    (work / "par").mkdir()
+    (work / "par" / "l").symlink_to("../a.txt")
+    before = _tree(work)
+    if case == "stored-file":
+        cs, k, swapped, named = (ChangeSet({}, {"sub/b.bin": b"\x00", "a.txt": b"a2"}, set()),
+                                 1, "sub", ["sub/b.bin"])
+    elif case == "deleted-link":
+        cs, k, swapped, named = (ChangeSet({}, {"a.txt": b"a2"}, {"par/l"}), 0, "par", ["par/l"])
+    else:
+        cs, k, swapped, named = (ChangeSet({"nd/x": b"x", "a.txt": b"a2"}, {}, set()),
+                                 1, "nd", ["nd", "nd/x"])
+    _fail_after(monkeypatch, k)
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    kept = _swap_for_link(work / swapped, outside)
+    outside_before = _tree(outside)
+    with pytest.raises(workspace_fork.UndoError) as err:
+        workspace_fork.restore_pending(work)
+    assert _tree(outside) == outside_before          # bytes, modes and entries
+    assert _journal(work).is_file()
+    for path in named:
+        assert repr(path) in str(err.value.cause)
+    assert (work / "a.txt").read_bytes() == b"a1"    # what was safe was done
+    _swap_back(work / swapped, kept)
+    assert workspace_fork.restore_pending(work) is True
+    assert _tree(work) == before and _tree(outside) == outside_before
+
+
+def test_a_write_through_a_link_waits_for_the_link_it_was_written_through(work, tmp_path,
+                                                                         monkeypatch):
+    outside = _outside(tmp_path)
+    target = tmp_path / "target.txt"
+    target.write_text("t1")
+    (work / "ll").symlink_to(target)
+    before = _tree(work)
+    _fail_after(monkeypatch, 1)                       # ll written through, then cut
+    with pytest.raises(OSError):
+        workspace_fork.apply_all([ChangeSet({}, {"ll": b"t2", "a.txt": b"a2"}, set())], work,
+                                 run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    assert target.read_text() == "t2" and (work / "ll").is_symlink()
+    (work / "ll").unlink()
+    (work / "ll").symlink_to(outside / "sentinel")    # someone points it elsewhere
+    outside_before = _tree(outside)
+    with pytest.raises(workspace_fork.UndoError) as err:
+        workspace_fork.restore_pending(work)
+    assert "'ll'" in str(err.value.cause) and _tree(outside) == outside_before
+    (work / "ll").unlink()
+    (work / "ll").symlink_to(target)
+    assert workspace_fork.restore_pending(work) is True
+    assert _tree(work) == before and target.read_text() == "t1"
+
+
+def test_the_write_back_does_not_write_through_a_folder_swapped_for_a_link(work, tmp_path,
+                                                                           monkeypatch):
+    outside = _outside(tmp_path)
+    (outside / "b.bin").write_bytes(b"OUTSIDE b")
+    before = _tree(work)
+    real = workspace_fork._write_file
+    calls, kept = [0], []
+
+    def swap_then_write(target, content, *rest):
+        calls[0] += 1
+        if calls[0] == 3:                             # before sub/b.bin is written
+            kept.append(_swap_for_link(work / "sub", outside))
+        return real(target, content, *rest)
+
+    monkeypatch.setattr(workspace_fork, "_write_file", swap_then_write)
+    outside_before = _tree(outside)
+    with pytest.raises(OSError) as err:
+        workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
+    monkeypatch.undo()
+    assert "'sub/b.bin'" in str(err.value) and _tree(outside) == outside_before
+    with pytest.raises(workspace_fork.UndoError):
+        workspace_fork.restore_pending(work)
+    assert _tree(outside) == outside_before
+    _swap_back(work / "sub", kept[0])
+    assert workspace_fork.restore_pending(work) is True
+    assert _tree(work) == before
 
 
 def test_a_deleted_link_comes_back_as_the_same_link(work, tmp_path, monkeypatch):
@@ -573,13 +715,13 @@ def test_a_deleted_link_comes_back_as_the_same_link(work, tmp_path, monkeypatch)
     assert _tree(work) == before and target.read_text() == "t1"
 
 
-# ── no temporary file in the working folder ──
+# ── staging and renaming ──
 
 def _listing(root: Path) -> set[str]:
     return {p.relative_to(root).as_posix() for p in root.rglob("*")}
 
 
-def test_no_temporary_file_ever_appears_in_the_working_folder(work, monkeypatch):
+def test_a_new_file_is_staged_outside_the_folder_and_renamed_into_place(work, monkeypatch):
     before = _listing(work)
     real_replace = os.replace
     seen: list[set[str]] = []
@@ -587,7 +729,7 @@ def test_no_temporary_file_ever_appears_in_the_working_folder(work, monkeypatch)
     def watch(src, dst, *a, **kw):
         if str(dst).startswith(str(work)):
             seen.append(_listing(work))
-            assert not str(src).startswith(str(work)), src     # staged outside the folder
+            assert str(src).startswith(str(workspace_fork.pending_dir(work) / "tmp")), src
         return real_replace(src, dst, *a, **kw)
 
     monkeypatch.setattr(os, "replace", watch)
@@ -600,34 +742,157 @@ def test_no_temporary_file_ever_appears_in_the_working_folder(work, monkeypatch)
     assert _listing(work) == before
 
 
-def test_a_rename_onto_another_device_falls_back_to_the_atomic_write(work, monkeypatch):
+def test_a_rename_that_fails_fails_the_write_back_and_it_is_undone(work, monkeypatch):
     before = _tree(work)
     real_replace = os.replace
-    refused: list[str] = []
 
     def other_device(src, dst, *a, **kw):
-        if "pending-apply" in str(src) and str(dst).startswith(str(work)):
-            refused.append(str(dst))
+        if "pending-apply" in str(src) and str(dst).endswith("a.txt"):
             raise OSError(errno.EXDEV, "cross-device link")
         return real_replace(src, dst, *a, **kw)
 
     monkeypatch.setattr(os, "replace", other_device)
-    workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
-    assert (work / "a.txt").read_bytes() == b"a2" and (work / "new/n.txt").read_bytes() == b"n"
-    assert stat.S_IMODE(os.stat(work / "new/n.txt").st_mode) == 0o644
-    assert len(refused) == 3
-    # The undo falls back the same way.
-    work2 = _folder(work.parent.parent.parent / "second")
-    before2 = _tree(work2)
-    monkeypatch.setattr(os, "replace", real_replace)
-    _fail_after(monkeypatch, 2)
-    with pytest.raises(OSError):
-        workspace_fork.apply_all([CS], work2, run_id="r1", node_id="fan")
+    with pytest.raises(OSError) as err:
+        workspace_fork.apply_all([CS], work, run_id="r1", node_id="fan")
+    assert err.value.errno == errno.EXDEV
     monkeypatch.undo()
-    monkeypatch.setattr(os, "replace", other_device)
-    assert workspace_fork.restore_pending(work2) is True
-    assert _tree(work2) == before2
-    assert before                              # the first folder's tree was taken
+    assert workspace_fork.restore_pending(work) is True
+    assert _tree(work) == before
+
+
+# ── a seeded generator: every write-back is refused, applied whole, or undone ──
+
+def _gen_tree(rng, base: Path) -> tuple[Path, Path]:
+    work = base / ".workflow" / "r1" / "work"
+    outside = base / "outside"
+    (outside / "od").mkdir(parents=True)
+    (outside / "of.txt").write_bytes(b"of-" + bytes([rng.randrange(256)]))
+    (outside / "od" / "x.txt").write_bytes(b"ox")
+    (work / "d1" / "d2").mkdir(parents=True)
+    (work / "empty").mkdir()
+    for rel in ("f1.txt", "f2.bin", "d1/g.txt", "d1/d2/h.txt", "run.sh"):
+        (work / rel).write_bytes(bytes(rng.randrange(256) for _ in range(rng.randrange(1, 9))))
+        os.chmod(work / rel, rng.choice([0o600, 0o640, 0o644, 0o755]))
+    (work / "ll").symlink_to(outside / "of.txt")
+    (work / "dl").symlink_to(outside / "od")
+    return work, outside
+
+
+# Paths a write-back can take, and paths that make it refused (a shape change or a
+# path under the folder link), drawn less often so most cases reach the folder.
+_GEN_WRITES = ["n1.txt", "nd/x.txt", "nd/ne/y.txt", "d1/new.txt", "d1/d2/new2.txt",
+               "empty/z.txt", "f1.txt", "f2.bin", "d1/g.txt", "d1/d2/h.txt", "run.sh", "ll"]
+_GEN_BAD_WRITES = ["dl/new.txt", "dl/x.txt", "f1.txt/sub", "empty", "d1", "nd"]
+_GEN_DELETES = ["f1.txt", "f2.bin", "d1/g.txt", "run.sh", "ll", "missing.txt"]
+_GEN_BAD_DELETES = ["d1", "dl/x.txt"]
+
+
+def _gen_pick(rng, good, bad):
+    return rng.choice(bad) if rng.random() < 0.06 else rng.choice(good)
+
+
+def _gen_changesets(rng) -> list[ChangeSet]:
+    out = []
+    for _ in range(rng.randrange(1, 4)):
+        writes = {_gen_pick(rng, _GEN_WRITES, _GEN_BAD_WRITES):
+                  bytes([rng.randrange(256)]) * rng.randrange(1, 5)
+                  for _ in range(rng.randrange(0, 4))}
+        deletes = {_gen_pick(rng, _GEN_DELETES, _GEN_BAD_DELETES)
+                   for _ in range(rng.randrange(0, 3))}
+        out.append(ChangeSet(created=writes, modified={}, deleted=deletes))
+    return out
+
+
+def _gen_view(root: Path) -> dict[str, tuple]:
+    """_tree without directory modes (a new directory's mode follows the umask)."""
+    return {k: (v[0],) if v[0] == "dir" else v for k, v in _tree(root).items()}
+
+
+def _gen_applied(before: dict[str, tuple], changesets, outside_file: dict) -> dict[str, tuple]:
+    tree = dict(before)
+    for cs in changesets:
+        for rel in cs.deleted:
+            if tree.get(rel, ("dir",))[0] != "dir":
+                del tree[rel]
+    for cs in changesets:
+        for rel, content in {**cs.created, **cs.modified}.items():
+            if tree.get(rel, (None,))[0] == "link":
+                outside_file["of.txt"] = content
+                continue
+            mode = tree[rel][1] if rel in tree else 0o644
+            tree[rel] = (content, mode)
+            parts = rel.split("/")[:-1]
+            for depth in range(1, len(parts) + 1):
+                tree.setdefault("/".join(parts[:depth]), ("dir",))
+    return tree
+
+
+@pytest.mark.parametrize("mode", ["whole", "cut", "cut-the-undo", "foreign-file"])
+def test_every_generated_write_back_is_refused_applied_or_undone(tmp_path, monkeypatch, mode):
+    import random
+    outcomes = {"refused": 0, "applied": 0, "undone": 0}
+    for seed in range(150):
+        rng = random.Random(f"{mode}-{seed}")
+        base = tmp_path / f"s{seed}"
+        work, outside = _gen_tree(rng, base)
+        changesets = _gen_changesets(rng)
+        before, outside_before = _gen_view(work), _gen_view(outside)
+        where = f"seed {mode}-{seed}: {changesets}"
+        cut = None if mode == "whole" else rng.randrange(0, 8)
+        with monkeypatch.context() as m:
+            if cut is not None:
+                _cut_folder_changes(m, work, cut)
+            try:
+                workspace_fork.apply_all(changesets, work, run_id="r1", node_id="fan")
+            except workspace_fork.WriteBackRefusedError:
+                outcome = "refused"
+            except OSError:
+                outcome = "cut"
+            else:
+                outcome = "applied"
+        if outcome == "refused":
+            assert _gen_view(work) == before, where
+            assert not os.path.lexists(work.parent / "pending-apply"), where
+            assert _gen_view(outside) == outside_before, where
+        elif outcome == "applied":
+            out_file = {}
+            assert _gen_view(work) == _gen_applied(before, changesets, out_file), where
+            assert not os.path.lexists(work.parent / "pending-apply"), where
+            expected_out = dict(outside_before)
+            if "of.txt" in out_file:
+                expected_out["of.txt"] = (out_file["of.txt"], outside_before["of.txt"][1])
+            assert _gen_view(outside) == expected_out, where
+        else:
+            expected = dict(before)
+            if mode == "foreign-file":
+                data = json.loads((work.parent / "pending-apply" / "journal.json").read_text())
+                made = [f for f in data["new_dirs"] if (work / f).is_dir()]
+                if made:
+                    foreign = rng.choice(made) + "/foreign.txt"
+                    (work / foreign).write_bytes(b"foreign")
+                    expected[foreign] = (b"foreign", 0o644)
+                    parts = foreign.split("/")[:-1]
+                    for depth in range(1, len(parts) + 1):
+                        expected.setdefault("/".join(parts[:depth]), ("dir",))
+            if mode == "cut-the-undo":
+                with monkeypatch.context() as m:
+                    _cut_folder_changes(m, work, rng.randrange(0, 6))
+                    try:
+                        workspace_fork.restore_pending(work)
+                    except workspace_fork.UndoError:
+                        pass
+                    else:
+                        assert _gen_view(work) == expected, where
+            if os.path.lexists(work.parent / "pending-apply" / "journal.json"):
+                assert workspace_fork.restore_pending(work) is True, where
+            assert _gen_view(work) == expected, where
+            assert not os.path.lexists(work.parent / "pending-apply"), where
+            assert _gen_view(outside) == outside_before, where
+            outcome = "undone"
+        outcomes[outcome] += 1
+    # The generator reaches every outcome the mode allows.
+    assert outcomes["refused"] > 10, outcomes
+    assert outcomes["applied" if mode == "whole" else "undone"] > 10, outcomes
 
 
 # ── storing the earlier content ──

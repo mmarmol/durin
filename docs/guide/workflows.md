@@ -395,33 +395,44 @@ crashed, or at the latest when the resumed step starts again; the step never
 works with copies an earlier attempt left. Deleting the run's folder deletes
 them too.
 
-The kept result is written into the working folder file by file — first every
-file a branch deleted, then every file a branch wrote — with an undo record
-(`pending-apply/` beside the working folder) holding what each path held
-before. No half-written file ever appears in the working folder: each file is
-prepared inside `pending-apply/` and moved into place whole. If the process
-dies while the result is being written, the folder is put back as it was
-before the writing started when the run is resumed, when the next run on the
-same work key starts, or when a `choose` or `union` step uses the folder next;
-the repeated step then starts from what its first attempt started from. Putting
-it back first removes what the writing added, then restores what was there
-(files with their content and permissions, links, folders). It never removes
-anything through a link that leads outside the working folder: what was
-written there stays.
+The kept result is not written when it would turn a file into a folder or a
+folder into a file (for example one branch writes `p` and another `p/q`, or a
+branch replaces a folder with a file), or when it would go through a link in the
+working folder. The run then stops at the parallel step the way a `union`
+conflict does, naming the path: `parallel node '<id>': the branches' result
+cannot be written back: '<path>' would turn a file into a folder or a folder
+into a file` (or `… is reached through a link`). Nothing is applied.
+
+Otherwise the result is written file by file — first every file a branch
+deleted, then every file a branch wrote — with an undo record (`pending-apply/`
+beside the working folder) holding what each path held before. Each new file is
+prepared inside `pending-apply/` and renamed into place. If the process dies
+while the result is being written, the run undoes the writing when it is
+resumed, when the next run on the same work key starts, or when a `choose` or
+`union` step uses the folder next, so the repeated step starts from what its
+first attempt started from. The undo removes the files the writing added and the
+folders it made, and puts back what it recorded (files with their content and
+permissions, and links). It leaves what is not its own: a folder the writing
+made that now holds something else — a file a detached step wrote there, say —
+stays. If writing the result fails while the run is going (a full disk, for
+example), it is undone at once and the run stops at the parallel step; retry it
+once the cause is gone.
 
 When the folder cannot be put back, nothing more is changed and the run stops:
 
 - `the working folder holds changes of an earlier parallel step that could not
   be undone (<path>). It can run once a person has checked the folder and
-  removed that file.` — the undo record itself cannot be used.
+  removed that file.` — the undo record itself cannot be used; the run can be
+  retried once a person has done that.
 - `the working folder holds changes of an earlier parallel step that could not
-  be undone yet (<path>): <error>. A retry undoes them once the cause is
-  gone.` — putting the folder back stopped, for example on a full disk.
+  be undone yet (<path>): <what stopped it>. A retry undoes them once the cause
+  is gone.` — putting the folder back stopped, for example on a full disk or a
+  folder replaced by a link; the run can be retried once the cause is gone.
 
-A run that stops this way at a parallel step, or when it was being resumed,
-can be retried once the cause is gone: the retry starts that step again. A run
-that stops this way before its first step is not retried: start a new run once
-the cause is gone, and it copies its input files as any new run does.
+A run that stops this way before its first step cannot be retried, and its
+message says so: `… A new run can start once a person has checked the folder and
+removed that file.` or `… A new run undoes them once the cause is gone.` Start a
+new run once that is done; it copies its input files as any new run does.
 
 Dynamic fan-out workers always share the folder directly (no per-worker
 isolation), so `reconcile` only applies to static and runtime-selected

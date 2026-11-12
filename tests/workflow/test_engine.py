@@ -897,48 +897,137 @@ def test_a_run_on_the_same_key_starts_from_the_folder_before_the_dead_write_back
     assert not workspace_fork.pending_dir(work).exists()
 
 
-def test_a_union_turning_a_file_into_a_directory_applies_whole(tmp_path):
-    from durin.workflow import workspace_fork
+def _shape_wf_runner(case):
+    """pre seeds the folder; the branches change it so the union's result would turn
+    a file into a folder (x/y under x) or a folder into a file (d), or two branches
+    write p and p/q."""
+    import shutil
 
     def node_runner(req):
         if req.node.id == "pre":
             (Path(req.output_dir) / "x").write_text("the person's x")
+            (Path(req.output_dir) / "d").mkdir()
+            (Path(req.output_dir) / "d" / "a").write_text("a")
+            (Path(req.output_dir) / "same.txt").write_text("s")
         elif req.workspace_override:
             copy = Path(req.workspace_override)
-            (copy / "x").unlink()                  # a: deletes x; b: makes x a folder
-            if req.node.id == "b":
-                (copy / "x").mkdir()
-                (copy / "x" / "y").write_text("y")
+            if case == "file-to-folder":
+                (copy / "x").unlink()              # a: deletes x; b: makes x a folder
+                if req.node.id == "b":
+                    (copy / "x").mkdir()
+                    (copy / "x" / "y").write_text("y")
+            elif case == "folder-to-file" and req.node.id == "a":
+                shutil.rmtree(copy / "d")
+                (copy / "d").write_text("now a file")
+            elif case == "file-and-file-inside":
+                (copy / ("p" if req.node.id == "a" else "p/q")).parent.mkdir(exist_ok=True)
+                (copy / ("p" if req.node.id == "a" else "p/q")).write_text(req.node.id)
+            elif case == "conflict":
+                (copy / "same.txt").write_text(req.node.id)
         return NodeRunResponse(output="o", session_key=None, messages=[])
-
-    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
-    assert res.status == "completed", res.final_output
-    work = tmp_path / ".workflow" / "r1" / "work"
-    assert _files(work) == {"x/y": b"y"}
-    assert not workspace_fork.pending_dir(work).exists()
+    return node_runner
 
 
-def test_a_union_turning_a_directory_into_a_file_applies_whole(tmp_path):
-    import shutil
+def _record_shape(tmp_path, res):
+    from durin.workflow import run_log
+    from durin.workflow.engine import resumable_kind
+    rec = run_log.read_manifest(tmp_path, "d", "r1")
+    return {"status": res.status, "failed_node": res.failed_node,
+            "record_failed_node": rec["failed_node"], "resumable": resumable_kind(rec),
+            "rows": sorted((r["node_id"], r["status"], r.get("branch_id")) for r in rec["runs"])}
 
+
+@pytest.mark.parametrize("case,text", [
+    ("file-to-folder", "parallel node 'fan': the branches' result cannot be written back: "
+                       "'x/y' would turn a file into a folder or a folder into a file"),
+    ("folder-to-file", "parallel node 'fan': the branches' result cannot be written back: "
+                       "'d' would turn a file into a folder or a folder into a file"),
+    ("file-and-file-inside", "parallel node 'fan': union conflict on ['p', 'p/q']"),
+])
+def test_a_union_whose_result_changes_a_shape_ends_like_a_union_conflict(tmp_path, case, text):
     from durin.workflow import workspace_fork
+    conflict_ws = tmp_path / "conflict"
+    conflict = _copy_engine(conflict_ws, _shape_wf_runner("conflict")).run(
+        _copies_wf("union"), "t")
+    assert conflict.status == "aborted" and "union conflict on ['same.txt']" in conflict.final_output
+
+    ws = tmp_path / "shape"
+    work = ws / ".workflow" / "r1" / "work"
+    seen = {}
+
+    def runner(req):
+        out = _shape_wf_runner(case)(req)
+        if req.node.id == "pre":
+            seen["before"] = _files(work)
+        return out
+
+    res = _copy_engine(ws, runner).run(_copies_wf("union"), "t")
+    assert res.final_output == text
+    assert _record_shape(ws, res) == _record_shape(conflict_ws, conflict)
+    assert _files(work) == seen["before"]                     # nothing applied
+    assert not (work / "d").is_file() and (work / "x").is_file()
+    assert not (workspace_fork.run_area(work) / "pending-apply").exists()
+
+
+def test_a_write_back_that_fails_beside_a_detached_steps_file_is_retried(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from durin.workflow import run_log, workspace_fork
+    from durin.workflow.engine import build_resume_state, resumable_kind
+
+    wf = parse_workflow({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "tools": "default", "next": "det"},
+        {"id": "det", "kind": "work", "tools": "default", "detached": True, "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "reconcile": "union",
+         "next": None},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"}]})
+    work = tmp_path / ".workflow" / "r1" / "work"
+    det_wrote = threading.Event()
 
     def node_runner(req):
         if req.node.id == "pre":
-            (Path(req.output_dir) / "d").mkdir()
-            (Path(req.output_dir) / "d" / "a").write_text("a")
-            (Path(req.output_dir) / "d" / "b").write_text("b")
-        elif req.workspace_override and req.node.id == "a":
-            copy = Path(req.workspace_override)
-            shutil.rmtree(copy / "d")
-            (copy / "d").write_text("now a file")
+            (Path(req.output_dir) / "seed.txt").write_text("s")
+        elif req.node.id == "det":
+            # A side-effect step writing its report under out/ once the folder exists.
+            for _ in range(500):
+                if (work / "out").is_dir():
+                    break
+                time.sleep(0.01)
+            (work / "out").mkdir(exist_ok=True)
+            (work / "out" / "det-report.txt").write_text("detached step output")
+            det_wrote.set()
+        elif req.workspace_override:
+            (Path(req.workspace_override) / "out").mkdir(exist_ok=True)
+            (Path(req.workspace_override) / "out" / f"{req.node.id}.txt").write_text(req.node.id)
         return NodeRunResponse(output="o", session_key=None, messages=[])
 
-    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
-    assert res.status == "completed", res.final_output
-    work = tmp_path / ".workflow" / "r1" / "work"
-    assert _files(work) == {"d": b"now a file"}
-    assert not workspace_fork.pending_dir(work).exists()
+    real = workspace_fork._write_file
+    full = [True]
+
+    def write(target, content, *rest):
+        real(target, content, *rest)
+        if full[0]:
+            det_wrote.wait(5)
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(workspace_fork, "_write_file", write)
+    eng = _copy_engine(tmp_path, node_runner)
+    res = eng.run(wf, "t")
+    assert res.status == "aborted" and res.failed_node == "fan", res.final_output
+    assert "writing the branches' result back failed: [Errno 28] No space left on device" \
+        in res.final_output
+    assert (work / "out" / "det-report.txt").read_text() == "detached step output"
+    assert not workspace_fork.pending_dir(work).exists()      # the undo left out/ and finished
+    rec = run_log.read_manifest(tmp_path, "d", "r1")
+    assert resumable_kind(rec) == "failed"
+
+    full[0] = False                                             # the disk has room again
+    retry = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+    assert retry.status == "completed", retry.final_output
+    assert _files(work) == {"seed.txt": b"s", "out/a.txt": b"a", "out/b.txt": b"b",
+                            "out/det-report.txt": b"detached step output"}
 
 
 _UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "
@@ -946,6 +1035,12 @@ _UNUSABLE = ("the working folder holds changes of an earlier parallel step that 
              "removed that file.")
 _UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could not "
                "be undone yet ({path}): {error}. A retry undoes them once the cause is gone.")
+_FRESH_UNUSABLE = ("the working folder holds changes of an earlier parallel step that could "
+                   "not be undone ({path}). A new run can start once a person has checked the "
+                   "folder and removed that file.")
+_FRESH_UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could "
+                     "not be undone yet ({path}): {error}. A new run undoes them once the cause "
+                     "is gone.")
 
 
 def _fail_undo(monkeypatch):
@@ -1026,8 +1121,12 @@ def test_a_journal_that_cannot_be_used_or_undone_aborts_the_run_with_the_file_na
         else:
             res = eng.run(wf, "t", work_key="k1" if keyed else None)
 
-    text = (_UNUSABLE.format(path=journal) if kind == "unusable"
-            else _UNDONE_YET.format(path=journal, error="disk full"))
+    fresh = where == "fresh-start"
+    error = "'a.txt': disk full"                # the path the undo could not put back
+    text = ((_FRESH_UNUSABLE if fresh else _UNUSABLE).format(path=journal) if kind == "unusable"
+            else (_FRESH_UNDONE_YET if fresh else _UNDONE_YET).format(path=journal, error=error))
+    if where == "after-write-back":
+        text = f"writing the branches' result back failed: disk full; {text}"
     assert res.status == "aborted"
     assert journal.exists()                     # left for the person, or for a retry
     rec = run_log.read_manifest(tmp_path, "d", "r1")
@@ -1035,7 +1134,8 @@ def test_a_journal_that_cannot_be_used_or_undone_aborts_the_run_with_the_file_na
         # A fresh run that cannot start is not retried: a new run is started.
         assert res.final_output == text and res.failed_node is None
         assert rec["failed_node"] is None and resumable_kind(rec) is None
-        assert started == []
+        assert resume_refusal(rec, workspace=tmp_path, workflow=wf) is None   # not resumable:
+        assert started == []                                                   # nothing to refuse
     else:
         assert text in res.final_output and res.failed_node == "fan"
         assert rec["status"] == "aborted" and rec["failed_node"] == "fan"
