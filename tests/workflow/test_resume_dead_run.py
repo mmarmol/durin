@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from durin.workflow import run_log
+from durin.workflow import run_log, workspace_fork
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
 from durin.workflow.spec import parse_workflow
@@ -100,6 +100,116 @@ def test_a_parallel_step_that_was_cut_runs_all_its_branches_again(tmp_path):
     folder = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
     assert (folder / "left.txt").is_file() and (folder / "right.txt").is_file()
     assert _attempts(dead.workspace, "w", "fan") == [(1, True), (2, False)]
+
+
+def _writing_fan(reconcile):
+    fan = {"id": "fan", "kind": "parallel", "branches": ["left", "right"],
+           "reconcile": reconcile, "next": "after"}
+    if reconcile == "choose":
+        fan["criteria"] = "any"
+    return {"name": "w", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "next": "fan"}, fan,
+        {"id": "left", "kind": "work", "tools": "default"},
+        {"id": "right", "kind": "work", "tools": "default"},
+        {"id": "after", "kind": "work", "next": None}]}
+
+
+def _copies(dead, run_id="r1", name="w"):
+    """The run's branch-copies folder for ``run_id`` (it may not exist)."""
+    work = Path(run_log.read_manifest(dead.workspace, name, "r1")["work_dir"])
+    return workspace_fork.branches_root(work) / run_id
+
+
+@pytest.mark.parametrize("reconcile", ["union", "choose"])
+def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversion_removes_them(
+        tmp_path, reconcile):
+    definition = _writing_fan(reconcile)
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    # The dead process's copies are in its run's folder, none in its temporary directory.
+    assert not list((tmp_path / "tmp").glob("durin_wf_branch_*"))
+    assert list((tmp_path / "tmp").iterdir()) == []
+    assert sorted(p.name.split("-")[0] for p in copies.iterdir()) == ["left", "right"]
+
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert rec["status"] == "crashed"
+    assert not copies.exists()
+    assert [p for p in copies.parent.iterdir()] == []        # no retired leftover either
+
+    done = _resume(dead, definition, rec)
+    assert done.status == "completed"
+    assert list(copies.parent.iterdir()) == []
+
+
+def test_a_directory_made_for_the_run_after_the_conversion_survives_the_delayed_delete(
+        tmp_path, monkeypatch):
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    real_cleanup = workspace_fork.cleanup
+    removed: list[Path] = []
+
+    def after_the_lock_is_released(path):
+        # A resume claimed the run and its step made new copies in the time between
+        # the conversion and this delayed delete.
+        assert path.name.startswith(".dead-r1-") and path != copies
+        (copies / "left-new").mkdir(parents=True)
+        (copies / "left-new" / "x.txt").write_text("fresh")
+        removed.append(path)
+        real_cleanup(path)
+
+    monkeypatch.setattr(workspace_fork, "cleanup", after_the_lock_is_released)
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+
+    assert len(removed) == 1 and not removed[0].exists()
+    assert (copies / "left-new" / "x.txt").read_text() == "fresh"
+
+
+def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monkeypatch):
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    still = {"pid": 1, "started": "x", "node_id": "left", "members": [], "unchecked": False}
+    monkeypatch.setattr(run_log, "_end_recorded_scripts", lambda *a, **k: ([still], []))
+
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+
+    assert rec["scripts_left"] == [still]
+    assert sorted(p.name.split("-")[0] for p in copies.iterdir()) == ["left", "right"]
+
+
+def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):
+    parent = {"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "sub"},
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "z"},
+        {"id": "z", "kind": "work", "next": None}]}
+    child = {"name": "child", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["left", "right"],
+         "reconcile": "union", "next": None},
+        {"id": "left", "kind": "work", "tools": "default"},
+        {"id": "right", "kind": "work", "tools": "default"}]}
+    flows = tmp_path / "ws" / "workflows"
+    flows.mkdir(parents=True)
+    (flows / "child.json").write_text(json.dumps(child), encoding="utf-8")
+
+    dead = run_until_killed(tmp_path, parent, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    [kid] = run_log.list_runs(dead.workspace, "child")
+    kid_record = run_log.read_manifest(dead.workspace, "child", kid["run_id"])
+    work = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
+    assert kid_record["work_dir"] == str(work)          # the child works in its parent's folder
+    kid_copies = workspace_fork.branches_root(work) / kid["run_id"]
+    assert kid_copies.is_dir() and any(kid_copies.iterdir())
+
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+
+    assert run_log.read_manifest(dead.workspace, "child", kid["run_id"])["status"] == "crashed"
+    assert not kid_copies.exists()
+    assert not any(p.name.startswith(".dead-") for p in kid_copies.parent.iterdir())
 
 
 @pytest.mark.parametrize("reconcile", ["read", "choose", "union"])

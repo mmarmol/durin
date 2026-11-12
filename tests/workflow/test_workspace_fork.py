@@ -12,17 +12,27 @@ def _write(root: Path, rel: str, text: str) -> None:
     p.write_text(text)
 
 
+def _work(tmp_path: Path) -> Path:
+    """A working folder laid out as the engine lays it out: <tmp>/.workflow/<run>/work."""
+    work = tmp_path / ".workflow" / "r1" / "work"
+    work.mkdir(parents=True)
+    return work
+
+
+def _fork(work: Path, label: str = "") -> Path:
+    return fork(work, into=wf.branches_root(work) / "r1", label=label)
+
+
 def test_fork_of_a_working_folder_roundtrips_edits(tmp_path):
     # The engine forks the run's shared working folder directly: seeded files come
     # along, edits and additions diff cleanly against the base snapshot.
-    work = tmp_path / "work"
-    work.mkdir()
+    work = _work(tmp_path)
     (work / "draft.md").write_text("v1")
 
     base = snapshot(work)
     assert "draft.md" in base
 
-    fork_dir = fork(work)
+    fork_dir = _fork(work)
     try:
         assert (fork_dir / "draft.md").read_text() == "v1"   # seeded
         (fork_dir / "draft.md").write_text("v2")
@@ -35,10 +45,11 @@ def test_fork_of_a_working_folder_roundtrips_edits(tmp_path):
 
 
 def test_fork_copies_files_and_excludes_heavy_dirs(tmp_path):
-    _write(tmp_path, "src/a.py", "print('a')")
-    _write(tmp_path, ".git/HEAD", "ref: refs/heads/main")
-    _write(tmp_path, "node_modules/x.js", "junk")
-    fork = wf.fork(tmp_path)
+    work = _work(tmp_path)
+    _write(work, "src/a.py", "print('a')")
+    _write(work, ".git/HEAD", "ref: refs/heads/main")
+    _write(work, "node_modules/x.js", "junk")
+    fork = _fork(work)
     try:
         assert (fork / "src/a.py").read_text() == "print('a')"
         assert not (fork / ".git").exists()          # heavy/managed dirs excluded
@@ -48,12 +59,13 @@ def test_fork_copies_files_and_excludes_heavy_dirs(tmp_path):
 
 
 def test_diff_detects_created_modified_deleted(tmp_path):
-    _write(tmp_path, "keep.txt", "keep")
-    _write(tmp_path, "change.txt", "before")
-    _write(tmp_path, "gone.txt", "remove me")
-    base = wf.snapshot(tmp_path)
+    work = _work(tmp_path)
+    _write(work, "keep.txt", "keep")
+    _write(work, "change.txt", "before")
+    _write(work, "gone.txt", "remove me")
+    base = wf.snapshot(work)
 
-    fork = wf.fork(tmp_path)
+    fork = _fork(work)
     try:
         _write(fork, "new.txt", "brand new")          # created
         (fork / "change.txt").write_text("after")     # modified
@@ -107,35 +119,37 @@ def test_apply_writes_creates_and_modifications_and_removes_deletions(tmp_path):
 def test_choose_applies_one_branch_discards_others(tmp_path):
     """End-to-end at the helper level: two branches each write the same artifact in
     isolation; 'choose' applies only the winner's changes to the real workspace."""
-    base = wf.snapshot(tmp_path)
-    fork_a = wf.fork(tmp_path)
-    fork_b = wf.fork(tmp_path)
+    work = _work(tmp_path)
+    base = wf.snapshot(work)
+    fork_a = _fork(work, "a")
+    fork_b = _fork(work, "b")
     try:
         _write(fork_a, "result.txt", "approach A")
         _write(fork_b, "result.txt", "approach B")
         cs_a = wf.diff(base, fork_a)
         cs_b = wf.diff(base, fork_b)
-        wf.apply(cs_b, tmp_path)        # judge picked B
+        wf.apply(cs_b, work)            # judge picked B
     finally:
         wf.cleanup(fork_a)
         wf.cleanup(fork_b)
-    assert (tmp_path / "result.txt").read_text() == "approach B"   # only the winner applied
+    assert (work / "result.txt").read_text() == "approach B"   # only the winner applied
 
 
 def test_union_applies_disjoint_branches(tmp_path):
-    base = wf.snapshot(tmp_path)
-    fork_a = wf.fork(tmp_path)
-    fork_b = wf.fork(tmp_path)
+    work = _work(tmp_path)
+    base = wf.snapshot(work)
+    fork_a = _fork(work, "a")
+    fork_b = _fork(work, "b")
     try:
         _write(fork_a, "module_x.py", "X")
         _write(fork_b, "module_y.py", "Y")
         cs_a = wf.diff(base, fork_a)
         cs_b = wf.diff(base, fork_b)
         assert wf.conflicts([cs_a, cs_b]) == set()    # disjoint
-        wf.apply(cs_a, tmp_path)
-        wf.apply(cs_b, tmp_path)
+        wf.apply(cs_a, work)
+        wf.apply(cs_b, work)
     finally:
         wf.cleanup(fork_a)
         wf.cleanup(fork_b)
-    assert (tmp_path / "module_x.py").read_text() == "X"
-    assert (tmp_path / "module_y.py").read_text() == "Y"
+    assert (work / "module_x.py").read_text() == "X"
+    assert (work / "module_y.py").read_text() == "Y"

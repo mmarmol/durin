@@ -2541,9 +2541,9 @@ class WorkflowEngine:
         success or a string when the run must abort (e.g. a union conflict, or a
         misconfiguration). 'read' branches run against the shared workspace (no writes
         applied) but are still handed the run's shared working folder; 'choose'/'union'
-        branches each run against a private copy of the workspace WITH the working
-        folder's current files seeded in, and their folder writes reconcile back
-        (choose/union) exactly like their other workspace writes. Each branch is
+        branches each run against a private copy of that working folder, made in the
+        run's own area and removed when the step ends or, after a death, when the step
+        is entered again; their writes reconcile back into the folder. Each branch is
         appended to ``runs`` so its session stays attributable in the trace.
 
         Per-branch progress is emitted via ``_progress_emit`` as branches start and
@@ -2588,7 +2588,7 @@ class WorkflowEngine:
         # whole workspace copied sessions/, memory/ and every other state dir per
         # branch — ruinous on a real workspace, and a concurrent gateway write there
         # could even read as a phantom branch change in the diff.
-        fork_root = work_dir if work_dir else self._workspace
+        fork_root = work_dir
 
         # Shared branch-status map, guarded by a lock because branches run in
         # ThreadPoolExecutor workers concurrently.
@@ -2661,10 +2661,26 @@ class WorkflowEngine:
 
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
+        # The copies live beside the working folder, in the run's own area, and
+        # nowhere else: a step without a working folder under `.workflow/` has no
+        # place to make them, so it fails rather than fall back to the workspace root
+        # or the system temporary directory.
+        try:
+            if not fork_root:
+                raise ValueError("no working folder")
+            workspace_fork.run_area(fork_root)
+        except ValueError:
+            return "", (f"parallel node {node.id!r}: reconcile={node.reconcile!r} "
+                        "needs the run's working folder")
         Path(fork_root).mkdir(parents=True, exist_ok=True)   # a fresh run's folder may not exist yet
+        copies_dir = workspace_fork.branches_root(fork_root) / run_id
+        # Whatever an earlier attempt of this step left (its process died before
+        # its own clean-up ran) goes before this attempt copies the folder. Only one
+        # parallel step uses a folder at a time and this run holds it, so everything
+        # under `branches/` is a leftover.
+        workspace_fork.clear_branches(fork_root)
 
         base = workspace_fork.snapshot(fork_root)
-        forks: list = []
         # Each branch's trace row, filled as the branch ends. A failing branch aborts
         # the node by raising, so the rows are kept here rather than in the pool's
         # results: the branches that ran stay on record either way.
@@ -2673,8 +2689,7 @@ class WorkflowEngine:
         def _run(bid):
             # Each branch gets a private copy of the working folder: its file tools
             # anchor there (workspace override) and its writes diff against the base.
-            fork_dir = workspace_fork.fork(fork_root)
-            forks.append(fork_dir)
+            fork_dir = workspace_fork.fork(fork_root, into=copies_dir, label=bid)
             t0 = time.monotonic()
             try:
                 resp = self._run_one_branch(
@@ -2720,5 +2735,6 @@ class WorkflowEngine:
                 workspace_fork.apply(cs, fork_root)
             return "\n\n".join(f"[{row.node_id}]\n{row.output}" for row, _ in results), None
         finally:
-            for fork_dir in forks:
-                workspace_fork.cleanup(fork_dir)
+            # The whole run's folder of copies, not copy by copy: a copy whose
+            # creation failed midway is not in any list.
+            workspace_fork.clear_branches(fork_root, run_id)

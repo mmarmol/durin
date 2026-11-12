@@ -137,10 +137,10 @@ the advice to `cd` into the folder or give full paths.
 Because it is one shared folder, created and edited files accumulate in a single place and
 each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
 on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than
-hand a copy down a chain. Parallel branches fork the run's working folder along with the
-workspace: a writing branch starts from the folder's current files, and its folder writes
-reconcile back (choose/union) exactly like workspace writes; read branches and dynamic
-fan-out workers are handed the shared folder directly. The `.workflow` tree gitignores
+hand a copy down a chain. A writing parallel branch (`choose`/`union`) works in a private copy of
+this folder only, never of the workspace around it: it starts from the folder's current
+files and its writes reconcile back into the folder; read branches and dynamic fan-out
+workers are handed the shared folder directly. The `.workflow` tree gitignores
 itself and is pruned to recent runs — with a status exemption: folders belonging to runs
 that are still executing, or paused at `needs_input` with a resume point, are never
 deleted and never count toward the retention window (`prune_runs`'s `protect` set, fed
@@ -488,7 +488,28 @@ branch's writes, aborting on a genuine conflict (two branches wrote *different* 
 the same path — identical incidental files reconcile cleanly). The fork copies the working
 folder ONLY — never the durin workspace around it: state dirs (sessions, memory, run
 manifests) are not branch output, and copying them per branch would be ruinous on a real
-workspace. **Dynamic fan-out workers share the workspace** directly
+workspace. A copy lives in the run's own area, beside the working folder:
+`branches/<run id>/<branch id>-XXXX` under `.workflow/<run id>/` (a keyed run: under the
+key's folder, with `<run id>` telling the key's runs apart; a sub-workflow run uses its
+own run id under its parent's folder). `workspace_fork.run_area` is the one place that
+derives the area, and it refuses a folder that does not lie under `.workflow/`: the copy
+functions raise for such a folder, and a `choose`/`union` step without a working folder
+under `.workflow/` aborts (`reconcile='…' needs the run's working folder`) rather than
+copy anywhere else, so nothing outside a run's area is ever created or removed. The
+copies go when the step ends, on every path (`clear_branches` removes the run's whole
+`branches/<run id>` folder, so a copy whose creation failed midway goes too). A process
+that dies mid-step leaves them in the run's area; they are removed in three places: the
+conversion of the dead run (`mark_dead_run`, which every surface and the sweep use, and
+which also converts a dead sub-workflow run, each clearing its own run id), the entry of
+the step (it removes everything under `branches/`, retired leftovers included, before it
+copies the folder, so private copies of an unfinished step never outlive its next
+attempt), and the pruning of the run's folder or the key's folder, which removes the
+`branches/` folder with it. The conversion works in two moves: under the run's lock the
+run's copies are renamed to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
+resume that claims the run right after makes its new copies under `branches/<run id>`),
+and once the lock is released that renamed directory is deleted. A conversion that leaves
+`scripts_left` keeps the copies, since a script may still be writing in one; the step
+removes them when it is entered again. **Dynamic fan-out workers share the workspace** directly
 (no per-worker isolation in v1); they hand their output off to the merge node via text, so
 `reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs across three tiers (the Airflow/Temporal
 shape — a config default, a per-unit override, and a hard cap). Each node's budget is
@@ -1169,8 +1190,7 @@ A cut row is not a failure of the step's own: the improve pass's evidence
 Known limits: a process that dies while a `union` step applies its branches'
 writes can leave the working folder partly applied; the resumed step starts from that
 folder. A run started from a chat and resumed from the dashboard or the API does
-not report its result back to that chat. The private copies a dead run's `choose` or
-`union` branches were writing stay in the system's temporary directory.
+not report its result back to that chat.
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -1284,7 +1304,7 @@ its own `node_failed` NodeRun (with its `session_key` and `error`), surviving un
 complete normally, and their outputs are merged (failed units appear as `FAILED: …` in
 the merged output). The run is only aborted when every unit failed. **`choose` and
 `union` reconcile are deliberately not isolated**: these branches write to private
-workspace forks and a half-failed fork has no coherent state to merge, so a branch
+copies of the working folder and a half-failed copy has no coherent state to merge, so a branch
 failure in those modes propagates and aborts the run — after every branch that ran
 has recorded its row, the failed one as `node_failed`. The abort is the parallel
 node's: it gets its own `node_failed` row naming the branch, and the run records the
@@ -1968,7 +1988,7 @@ End-to-end for a single `run_workflow` call:
 | `store_dir`, `store_dir_of`, `save_input`, `load_input`, `save_source`, `load_sources`, `discard` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole beside its working folder (`.workflow/<run_id>/resume/`, or `resume/<run_id>/` beside a work key's shared folder): the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. `store_dir_of` finds the folder from a record. Removed when a run ends in a state no resume can enter. The record keeps only capped copies, for its readers. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
-| `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
+| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
@@ -2274,8 +2294,8 @@ End-to-end for a single `run_workflow` call:
   `union` reconciliation (private copy per branch + content-aware conflict detection); a
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
-  copies down a chain — parallel branches fork it the same way (writing branches seed from
-  the current files and reconcile back, read branches and dynamic workers share it directly);
+  copies down a chain — writing parallel branches get a private copy of it (seeded from
+  the current files, reconciled back; read branches and dynamic workers share it directly);
   per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
   (`on_pass`/`on_fail`: a `PASS`/`FAIL` verdict from the agent — or, on a script node,

@@ -10,11 +10,22 @@ branches finish, their changes are reconciled back into the real folder:
 
 Copy-based (no git requirement, works whether or not the workspace is a repo) and pure
 (no LLM, no threads), so the reconcile logic is fully unit-testable on its own.
+
+A branch's copy lives in the run's own area, beside its working folder:
+``<run area>/branches/<run id>/<label>-XXXX``. The run area is the folder that
+holds the working folder (``<workspace>/.workflow/<run id>`` for an unkeyed run,
+the key's folder for a keyed one), so whatever removes the run's area removes its
+copies, and a process that dies mid-step leaves them where the next entry of the
+step, or the conversion of the dead run, finds and removes them. Nothing here
+creates or removes anything outside a run area: a folder that does not lie under
+``.workflow`` is refused.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -23,6 +34,11 @@ from pathlib import Path
 # Heavy or machine-managed directories that should never be copied into a branch fork
 # nor diffed: copying them per branch would be ruinous and they are not branch output.
 _EXCLUDE = {".git", "node_modules", ".venv", "venv", "__pycache__", ".durin", ".mypy_cache", ".workflow"}
+
+_AREA = ".workflow"
+_BRANCHES = "branches"
+# What a copy's parent name may look like: a run id is a plain name, never a path.
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 @dataclass
@@ -61,16 +77,80 @@ def snapshot(root: str | Path) -> dict[str, str]:
     return {rel: _hash(p.read_bytes()) for rel, p in _walk(Path(root)).items()}
 
 
-def fork(root: str | Path) -> Path:
-    """Copy *root* into a fresh temp directory (excluding heavy dirs) so a branch
-    can write into it in isolation. The caller owns cleanup (see ``cleanup``)."""
+def run_area(work_dir: str | Path) -> Path:
+    """The folder that holds a run's working folder and everything else the run
+    owns. Raises ``ValueError`` unless the working folder lies under a
+    ``.workflow`` directory and sits at least one level inside a run's own folder
+    (the ``.workflow`` directory itself, or a folder directly inside it, is not a
+    run's)."""
+    work = Path(os.path.abspath(work_dir))
+    area = work.parent
+    if _AREA not in work.parts or work.name == _AREA or area.name == _AREA:
+        raise ValueError(f"{str(work_dir)!r} is not a run's working folder under {_AREA}/")
+    return area
+
+
+def branches_root(work_dir: str | Path) -> Path:
+    """Where the private copies of a run's parallel steps live: ``branches`` beside
+    the working folder. Raises ``ValueError`` for a folder ``run_area`` refuses."""
+    return run_area(work_dir) / _BRANCHES
+
+
+def _safe_label(label: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", label).lstrip(".-") or "b"
+
+
+def fork(root: str | Path, *, into: str | Path, label: str = "") -> Path:
+    """Copy the working folder *root* (excluding heavy dirs) into a fresh directory
+    made inside *into*, so a branch can write there in isolation. *into* must lie
+    under ``branches_root(root)``, otherwise ``ValueError`` and nothing is created.
+    The caller owns removal (``clear_branches``, or ``cleanup`` for one copy)."""
     src = Path(root)
-    dst = Path(tempfile.mkdtemp(prefix="durin_wf_branch_"))
+    base = branches_root(src)
+    target_parent = Path(os.path.abspath(into))
+    if target_parent != base and base not in target_parent.parents:
+        raise ValueError(f"{str(into)!r} is not under {str(base)!r}")
+    target_parent.mkdir(parents=True, exist_ok=True)
+    safe = _safe_label(label)
+    dst = Path(tempfile.mkdtemp(prefix=f"{safe}-" if label else "b-", dir=target_parent))
     for rel, p in _walk(src).items():
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, target)
     return dst
+
+
+def clear_branches(work_dir: str | Path, run_id: str | None = None) -> None:
+    """Remove one run's copies (``branches/<run_id>``), or every run's and every
+    retired leftover (the whole ``branches`` folder) when *run_id* is None.
+    Best-effort and never raises; a folder ``run_area`` refuses is left alone."""
+    try:
+        root = branches_root(work_dir)
+        if run_id is None:
+            shutil.rmtree(root, ignore_errors=True)
+        elif _PLAIN_NAME.fullmatch(run_id):
+            shutil.rmtree(root / run_id, ignore_errors=True)
+    except Exception:  # noqa: BLE001 - a clean-up never stops the caller
+        pass
+
+
+def retire_branches(work_dir: str | Path, run_id: str) -> Path | None:
+    """Rename one run's copies to a name nothing else uses
+    (``branches/.dead-<run_id>-XXXX``) and return it, or None when there is
+    nothing to rename or the folder is refused. A rename is fast, so it can be done
+    under a lock; the caller removes the returned directory afterwards (``cleanup``)
+    without racing a new attempt that makes copies under ``branches/<run_id>``.
+    Never raises."""
+    try:
+        root = branches_root(work_dir)
+        if not _PLAIN_NAME.fullmatch(run_id) or not (root / run_id).is_dir():
+            return None
+        retired = Path(tempfile.mkdtemp(prefix=f".dead-{run_id}-", dir=root))
+        retired.rmdir()                       # mkdtemp only reserves the unique name
+        (root / run_id).rename(retired)
+        return retired
+    except Exception:  # noqa: BLE001 - a clean-up never stops the caller
+        return None
 
 
 def diff(base: dict[str, str], fork_dir: str | Path) -> ChangeSet:

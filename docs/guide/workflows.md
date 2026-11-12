@@ -381,12 +381,19 @@ decides how their work comes back together:
   copy; give them a read-only mode, since a writing `read` branch lands its
   changes unchecked.
 - `choose` — each branch writes into its own private copy of the run's
-  files; a judge picks the best one to keep, discarding the rest. A
+  working folder; a judge picks the best one to keep, discarding the rest. A
   `choose` node requires a `criteria` string (how the judge should pick
   the winner).
 - `union` — every branch's writes are applied; a genuine conflict (two
   branches wrote *different* content to the same file) aborts the run
   rather than silently picking one.
+
+The private copies live inside the run's own folder (under `.workflow/`, beside
+its working folder) and are deleted when the step ends. If the process dies in
+the middle of the step, they are removed when the dead run is marked as
+crashed, or at the latest when the resumed step starts again; the step never
+works with copies an earlier attempt left. Deleting the run's folder deletes
+them too.
 
 Dynamic fan-out workers always share the folder directly (no per-worker
 isolation), so `reconcile` only applies to static and runtime-selected
@@ -484,9 +491,7 @@ work.
 Known limits: a process that dies while a `union` parallel step is
 applying its branches' files can leave the working folder partly applied. A
 run started from a chat and resumed from the dashboard or the API does not
-report its result back to that chat. The private copies a dead run's
-`choose` or `union` branches were working in stay in the system's temporary
-directory.
+report its result back to that chat.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's
