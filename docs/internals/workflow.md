@@ -1171,7 +1171,10 @@ When that happens to a process still running, the runner logs a warning that a r
 could not wait for it.
 
 The script runner also keeps, in memory, the scripts this process started and has not
-reaped, under one lock. The process ends them where it ends or replaces itself, as the
+reaped, under one lock. The lock is held only to read whether the process is ending and
+to add a script to the set or remove it: a script starts outside it, so a start that
+blocks (a working folder on a stalled mount) holds back neither the call below nor any
+other run's script. The process ends them where it ends or replaces itself, as the
 last thing before it does: `run_threads.leave_unfinished_runs` calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
 TUI or the REPL quitting while a run is still on its thread; with no run on a thread it
 returns without calling it; the call runs even when the log flush before it is
@@ -1191,7 +1194,11 @@ inherits them as children and does not reap them) until that process ends. A res
 treats a defunct process as gone. From then on, under the same lock:
 
 - no script is started: a script step entered after the call waits for the process to
-  end, so a script is either started before the call (and ended by it) or not at all;
+  end. A script whose start was in progress when the call ran is not among the scripts
+  it signalled; once started, its own thread sees that the process is ending, kills and
+  reaps it, records nothing and waits for the process to end. If the process ends before
+  that thread gets there, that script outlives the process with no record of it, so a
+  resume does not wait for it;
 - a thread whose script has been reaped waits for the process to end instead of
   returning, raising or removing the script's record. A script the exit ended (exit code
   -9) is never a failed step, never a gate's `FAIL` and never a route taken, and its
@@ -1205,7 +1212,11 @@ but which has not reached that point yet is held like the others, and so is one 
 script ends by itself between the call and the exit: neither outcome is recorded, and
 the step runs again on a resume. A stop or a restart in place thus leaves the run as a crash
 does: recorded `running` at the step it was in, found dead later and resumable there,
-with no script of it running.
+with no script of it running. That holds because the process ends its scripts itself, as
+its last act. A supervisor that sends the stop signal to every process of the service
+(systemd's default `KillMode=control-group`, for one), not only to the gateway's main
+process, reaches a script before that: a script that ends on it before the last act is
+recorded as its outcome, a failed step, or `FAIL` for a gate.
 
 Nothing else ever signals a script: a conversion of a dead run (`mark_dead_run`), a sweep,
 a `tasks` call, a resume and a launch only observe processes (signal 0 is an existence
