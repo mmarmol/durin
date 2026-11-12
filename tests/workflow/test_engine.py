@@ -1251,21 +1251,61 @@ def test_a_journal_beside_a_linked_working_folder_names_the_journal(tmp_path, mo
 
     res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
     assert res.status == "aborted" and started == []
-    assert res.final_output == _FRESH_UNUSABLE.format(path=journal)
+    assert res.final_output == _FRESH_UNUSABLE.format(
+        path=journal, reason="the working folder is a link", pre=journal.parent / "pre")
     assert _snapshot(outside) == before and journal.is_file()
 
 
+def test_a_journal_folder_that_is_a_link_names_the_link_and_where_the_content_is(
+        tmp_path, monkeypatch):
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    link = workspace_fork.run_area(work) / "pending-apply"
+    shutil.move(str(link), str(tmp_path / "kept-pending"))
+    link.symlink_to(tmp_path / "kept-pending")
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    # Removing the link would not discard what it leads to: the text does not say so.
+    assert res.final_output == (
+        "the working folder holds changes of an earlier parallel step that could not be "
+        f"undone ({link}): the journal folder is a symlink. The earlier content of the files "
+        f"that step changed is kept in {link / 'pre'}, where that link leads. A new run can "
+        "start once a person has checked the folder and removed that file.")
+    assert link.is_symlink() and (tmp_path / "kept-pending" / "journal.json").is_file()
+
+
+_KEPT = ("The earlier content of the files that step changed is kept in {pre}; removing "
+         "the journal file discards it when a run next starts in that folder.")
 _UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "
-             "be undone ({path}). It can run once a person has checked the folder and "
-             "removed that file.")
+             "be undone ({path}): {reason}. " + _KEPT + " It can run once a person has checked "
+             "the folder and removed that file.")
 _UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could not "
-               "be undone yet ({path}): {error}. A retry undoes them once the cause is gone.")
+               "be undone yet ({path}): {error}. " + _KEPT + " A retry undoes them once the "
+               "cause is gone.")
 _FRESH_UNUSABLE = ("the working folder holds changes of an earlier parallel step that could "
-                   "not be undone ({path}). A new run can start once a person has checked the "
-                   "folder and removed that file.")
+                   "not be undone ({path}): {reason}. " + _KEPT + " A new run can start once a "
+                   "person has checked the folder and removed that file.")
 _FRESH_UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could "
-                     "not be undone yet ({path}): {error}. A new run undoes them once the cause "
-                     "is gone.")
+                     "not be undone yet ({path}): {error}. " + _KEPT + " A new run undoes them "
+                     "once the cause is gone.")
+
+
+def _unreadable(text):
+    """The reason a journal holding ``text`` cannot be used: it does not parse."""
+    import json
+    try:
+        json.loads(text)
+    except ValueError as exc:
+        return f"it cannot be read ({exc})"
+    raise AssertionError(f"{text!r} parses")
 
 
 def _fail_undo(monkeypatch):
@@ -1350,12 +1390,18 @@ def test_a_journal_that_cannot_be_used_or_undone_aborts_the_run_with_the_file_na
 
     fresh = where == "fresh-start"
     error = "'a.txt': disk full"                # the path the undo could not put back
-    text = ((_FRESH_UNUSABLE if fresh else _UNUSABLE).format(path=journal) if kind == "unusable"
-            else (_FRESH_UNDONE_YET if fresh else _UNDONE_YET).format(path=journal, error=error))
+    pre = journal.parent / "pre"
+    text = ((_FRESH_UNUSABLE if fresh else _UNUSABLE).format(
+                path=journal, reason=_unreadable("{"), pre=pre) if kind == "unusable"
+            else (_FRESH_UNDONE_YET if fresh else _UNDONE_YET).format(
+                path=journal, error=error, pre=pre))
     if where == "after-write-back":
         text = f"writing the branches' result back failed: disk full; {text}"
     assert res.status == "aborted"
     assert journal.exists()                     # left for the person, or for a retry
+    if kind == "undo-fails":
+        # The folder the text names holds what a.txt held before the write-back.
+        assert b"a1" in [f.read_bytes() for f in pre.iterdir()]
     rec = run_log.read_manifest(tmp_path, "d", "r1")
     if where == "fresh-start":
         # A fresh run that cannot start is not retried: a new run is started.

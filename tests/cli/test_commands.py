@@ -3282,7 +3282,7 @@ _WS_LAUNCH = {"kind": "session", "session_key": "websocket:chatA", "channel": "w
               "chat_id": "chatA"}
 _RESUMED_FROM_THE_DASHBOARD = (
     "[Workflow 'qa' run r1, started from this conversation, was resumed from the "
-    "dashboard or the API and finished]\n\n")
+    "dashboard or the API]\n\n")
 
 
 def test_the_gateway_registry_reports_a_resumed_run_to_its_launch_conversation(

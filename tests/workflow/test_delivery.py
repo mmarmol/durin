@@ -20,7 +20,7 @@ def test_the_message_is_addressed_to_the_launch_conversation():
     assert msg.metadata == {"injected_event": "workflow_background_result", "workflow": "qa"}
     assert msg.content == (
         "[Workflow 'qa' run r1, started from this conversation, was resumed from the "
-        f"dashboard or the API and finished]\n\ndone\n\n{_TAIL}")
+        f"dashboard or the API]\n\ndone\n\n{_TAIL}")
 
 
 def test_without_resumed_from_the_text_is_todays():

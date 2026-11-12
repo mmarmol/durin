@@ -296,6 +296,49 @@ def test_a_union_killed_while_writing_back_resumes_from_the_folder_before_it(tmp
     assert not workspace_fork.pending_dir(folder).exists()
 
 
+def test_a_sub_workflow_killed_while_writing_back_is_undone_before_its_first_step(tmp_path):
+    # The child writes into its caller's folder. Its first step records what the
+    # folder holds, outside the folder; the union's own entry would also undo the
+    # cut write-back, but only after that first step has run.
+    seen = tmp_path / "seen.log"
+    parent = {"name": "w", "start": "seed", "nodes": [
+        {"id": "seed", "kind": "script", "command": "echo seed > a.log; echo seed > b.log",
+         "next": "sub"},
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "after"},
+        {"id": "after", "kind": "script", "command": "cat a.log b.log", "next": None}]}
+    child = {"name": "child", "start": "look", "nodes": [
+        {"id": "look", "kind": "script",
+         "command": f"cat a.log b.log >> '{seen}'; echo -- >> '{seen}'", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["left", "right"], "reconcile": "union",
+         "next": "end"},
+        {"id": "left", "kind": "script", "command": "echo a >> a.log"},
+        {"id": "right", "kind": "script", "command": "echo b >> b.log"},
+        {"id": "end", "kind": "script", "command": "true", "next": None}]}
+    flows = tmp_path / "ws" / "workflows"
+    flows.mkdir(parents=True)
+    (flows / "child.json").write_text(json.dumps(child), encoding="utf-8")
+
+    dead = run_until_killed(tmp_path, parent, stop_in=None, env={HANG_IN_APPLY_ENV: "1"})
+    folder = Path(dead.record["work_dir"])
+    [first_child] = run_log.list_runs(dead.workspace, "child")
+    child_record = run_log.read_manifest(dead.workspace, "child", first_child["run_id"])
+    assert Path(child_record["work_dir"]) == folder
+    # Killed after the first real file of the child's write-back was written.
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed"]
+    assert (workspace_fork.pending_dir(folder) / "journal.json").is_file()
+    assert _lines(seen) == ["seed", "seed", "--"]
+
+    assert run_log.mark_dead_run(dead.workspace, "child", first_child["run_id"]) is not None
+    done = _resume(dead, parent)
+    assert done.status == "completed", done.final_output
+    # The child's first step, run again, saw the folder as it was before the write-back.
+    assert _lines(seen) == ["seed", "seed", "--", "seed", "seed", "--"]
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed", "b"]
+    assert not workspace_fork.pending_dir(folder).exists()
+
+
 def test_a_fan_out_that_was_cut_runs_every_worker_again(tmp_path):
     definition = {"name": "w", "start": "ids", "nodes": [
         {"id": "ids", "kind": "script", "command": """echo '["one","two","three"]'""",

@@ -494,7 +494,8 @@ key's folder, with `<run id>` telling the key's runs apart; a sub-workflow run u
 own run id under its parent's folder). The copy's name carries no branch id: its path
 is quoted in shell commands, whose deny rules match words in it, so a branch id like
 `reboot-check` must not end up there. A symlink at `branches` or at `branches/<run id>`
-is refused: the copy functions raise or do nothing. `workspace_fork.run_area` is the one place that
+is refused: the copy functions raise or do nothing.
+`workspace_fork.run_area` is the one place that
 derives the area, and it refuses a folder that does not lie under `.workflow/`: the copy
 functions raise for such a folder, and a `choose`/`union` step without a working folder
 under `.workflow/` aborts (`reconcile='…' needs the run's working folder`) rather than
@@ -507,8 +508,8 @@ converts a dead sub-workflow run, each clearing its own run id), when the step i
 again (it removes everything under `branches/`, retired leftovers included, before it
 copies the folder, so private copies of an unfinished step never outlive its next
 attempt), and when the run's folder or the key's folder is pruned, which removes the
-`branches/` folder with it. The conversion works in two moves: under the run's lock the
-run's copies are renamed to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
+`branches/` folder with it. The conversion first renames the run's copies, under the
+run's lock, to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
 resume that claims the run right after makes its new copies under `branches/<run id>`),
 and once the lock is released that renamed directory is deleted. A conversion that leaves
 `scripts_left` keeps the copies, since a script may still be writing in one; the step
@@ -552,8 +553,9 @@ link, so a folder it makes there is a real one); that path is refused here.
 written path also keeps the SHA-256 of the content written there and the mode it is
 written with: the existing file's mode at that moment without its setuid and setgid
 bits (the system may silently drop those from a file whose group the user is not in),
-or, for a new file, the mode a new file gets in that place under the process umask,
-read from a file made in `pending-apply/` and removed at once (reading the umask
+or, for a new file, the mode a new file gets under the process umask, read from a
+probe file made in `pending-apply/` (not in the folder the file goes to) and removed at
+once (reading the umask
 itself would mean setting it for every running thread); and every folder the
 write-back creates is noted. The run area's entry for `pending-apply` is
 flushed to disk once that folder is made, the stored copies are flushed, and
@@ -593,7 +595,7 @@ it holds what the write-back left there:
   someone else. It is left as it is, the undo goes on, and the paths left are named in
   one warning in the log.
 
-Two changes by someone else cannot be told from the write-back's own and are undone
+Some changes by someone else cannot be told from the write-back's own and are undone
 like it: a file holding exactly the content and mode the write-back writes at that
 path, and a file the write-back deletes that someone deleted first. Content is
 compared before mode: a file the undo has to read to tell (any file at a written path;
@@ -620,16 +622,28 @@ a path in it leaves the folder, an entry names neither a stored copy nor a conte
 a written entry has no usable mode, a stored copy is missing, or a symlink stands at the
 journal, at `pending-apply` or at its `pre` or `tmp` folder), or a journal beside a
 working folder that is a link, is not followed and the folder stays as it is; the text
-names the journal file. Which text a run gets, and whether it can be retried, depends on
-the run:
+names the journal file (or the link standing at `pending-apply`) and the reason
+`PendingApplyError` gives. The journal and undo-stopped texts also name the folder that
+holds the earlier content of the files the cut write-back changed (`pending-apply/pre/`),
+and say that removing the journal file discards it when a run next starts in that
+folder: `restore_pending` with no journal present removes `pending-apply/` whole. When
+`pending-apply` is itself a link, the text names its `pre` folder as where that link
+leads and does not say removing the link discards it, since removing a link leaves its
+target. Which text a run gets, and whether it can be retried, depends on the run (`<kept>`
+is that sentence about the earlier content):
 
 | Where | Run | Text | Retried |
 |---|---|---|---|
-| a parallel step's entry, or a resumed run's start | journal cannot be used | `the working folder holds changes of an earlier parallel step that could not be undone (<journal path>). It can run once a person has checked the folder and removed that file.` | yes, at that step, with its input |
-| the same | undo stopped | `the working folder holds changes of an earlier parallel step that could not be undone yet (<journal path>): <paths and errors>. A retry undoes them once the cause is gone.` | yes, at that step, with its input |
-| a fresh run's start | journal cannot be used | `… could not be undone (<journal path>). A new run can start once a person has checked the folder and removed that file.` | no: no failed step; a new run, which copies its input files again |
-| the same | undo stopped | `… could not be undone yet (<journal path>): <paths and errors>. A new run undoes them once the cause is gone.` | no: no failed step; a new run |
+| a parallel step's entry, or a resumed run's start | journal cannot be used | `the working folder holds changes of an earlier parallel step that could not be undone (<journal path>): <reason>. <kept> It can run once a person has checked the folder and removed that file.` | yes, at that step, with its input |
+| the same | undo stopped | `the working folder holds changes of an earlier parallel step that could not be undone yet (<journal path>): <paths and errors>. <kept> A retry undoes them once the cause is gone.` | yes, at that step, with its input |
+| a fresh run's start | journal cannot be used | `… could not be undone (<journal path>): <reason>. <kept> A new run can start once a person has checked the folder and removed that file.` | no: no failed step; a new run, which copies its input files again |
+| the same | undo stopped | `… could not be undone yet (<journal path>): <paths and errors>. <kept> A new run undoes them once the cause is gone.` | no: no failed step; a new run |
 | the step's own write-back failed | — | `writing the branches' result back failed: <error>`, followed by `; ` and the undo-stopped text when its undo stopped too | yes, at that step, with its input |
+
+`<kept>` is `The earlier content of the files that step changed is kept in <journal
+folder>/pre; removing the journal file discards it when a run next starts in that
+folder.`, or, when `pending-apply` is a link, `The earlier content of the files that step
+changed is kept in <link>/pre, where that link leads.`
 
 A folder outside a run's area has no journal: `pending_dir`, `apply_all` and
 `restore_pending` raise for it.
@@ -1328,8 +1342,11 @@ Known limits: files a cut `read` parallel step's branches or a cut fan-out's wor
 wrote in the shared folder are still there when the step runs again. A process that
 dies after a `choose`/`union`
 write-back finished but before the record named the next step runs the step again on
-the folder that already holds its result. A run started from a chat is not reported
-to that chat when the call that resumed it stops waiting before the walk ends (a
+the folder that already holds its result. A dead run nobody resumes keeps its folder
+as its cut write-back left it, with the journal beside it, until the run's area is
+pruned (on a key, a later run on that key undoes it at its start). A run started from a
+chat is not reported to that chat when the call that resumed it stops waiting before
+the walk ends (a
 foreground `run_workflow` turn stopped with `/stop`, a cancelled `execute()`): the
 report is made by that call, and the walk finishes on its thread unreported. Nor is it
 reported when the process carrying out the resume does not serve that chat's channel:
@@ -1459,17 +1476,27 @@ says whether something of it may still be there). All of it runs in one
 worker-thread call, since it observes processes and waits on run locks; a
 failure is logged and the launch goes on without a note. The notice writes no
 record of its own; through the existing settling it can convert a dead run and
-its dead sub-workflow runs, end the scripts they left, and remove script records
-proven over.
+its dead sub-workflow runs, end the scripts they left, remove script records
+proven over, remove each converted run's private copies of a parallel step (kept
+when something of a script is left) and its stop request file, and, for a run
+that ends not resumable (`cancelled`), its resume files.
 
 What decides a run is named: first, whether something of it may still be there
 (the dead-run check's answer when it is not a race answer: a script, a
 sub-workflow run still recorded as running, a process that seems alive); such a
-run is named whether or not it could ever be resumed, since the new run starts
+run is named whether or not it could ever be resumed, since a new run works
 beside it. The check exposes that fact alone (`run_log.LeftBehind.fact`, a
 refusal string that also carries the clause it rests on), and the note says it
 in its own words. Otherwise a run that `engine.resume_refusal` accepts is named
-with the way to resume it. A run with nothing left that can never be resumed
+with the way to resume it. The launch's `work_key` is passed to the notice: a
+cut run recorded on that same key is named as one this launch takes over (the
+launch uses the key's folder, and once it has recorded its run a resume of the
+cut run is refused because a later run on the key has taken over its folder),
+so the note gives no way to resume it and says it can no longer be resumed; the
+check runs before the launch records anything, so `resume_refusal` alone would
+still accept it. A launch that its pre-flight input check refuses records no run,
+so after such a launch the cut run on its key is still resumable, although the note
+said otherwise. A run with nothing left that can never be resumed
 (its step is gone from the definition, its folder was pruned, its record is
 incomplete, an automation started it), one another caller is acting on, one
 whose process is alive, and one that finished, paused or aborted are not named.
@@ -1477,10 +1504,17 @@ Only the first few qualifying runs are named (`_CUT_RUNS_NAMED`), newest first,
 then `and {n} more.` counting the further qualifying runs among those examined. The note is appended after a
 blank line to the background launch reply and to the foreground result; with
 nothing to name the reply is unchanged. Its texts state what is there and, for a
-resumable run, the condition for resuming it; they tell the reader to end no
-process and delete no file. Under unified sessions every chat shares one session
-key, so a launch from one chat can name a run cut in another and call it started
-from this conversation.
+resumable run on another key or none, the condition for resuming it; they tell
+the reader to end no process and delete no file. Their closing sentence (`This
+call did not resume it.`, or `This call did not resume it; a new run would work
+beside what it left.`) holds whether or not the launch got as far as recording a
+run, since the note is also appended to a foreground result whose launch was
+refused before that. The note is a fact for the model, not an offer: unless it
+is refused, the launch it comes with starts a new run, and the workflows skill
+tells the model not to resume the cut run while the new one runs the same work
+(stopping the new run first when the cut one is to be continued). Under unified
+sessions every chat shares one session key, so a launch from one chat can name a
+run cut in another and call it started from this conversation.
 
 **Missing script file.** When a `ScriptNode` names a `script` file, its existence is
 checked in the same pre-flight pass as input-file validation (§2), before any node
@@ -1692,8 +1726,9 @@ background result travels as (`durin/workflow/delivery.py`): one `channel="syste
 inbound message keyed to the launch conversation's session key, with
 `injected_event: "workflow_background_result"`, which starts a turn there. Its first
 line names the run and where the resume came from — `[Workflow '<name>' run <run_id>,
-started from this conversation, was resumed from <where> and finished]` — then comes
-the run summary, sized as a background summary and sending the agent to the person
+started from this conversation, was resumed from <where>]`, the same whatever the
+outcome (finished, paused again, aborted) — then comes the run summary, which says how
+it ended, sized as a background summary and sending the agent to the person
 only when the launch conversation has one, and the same closing instruction.
 
 - The `run_workflow` tool compares the resuming call's session key with

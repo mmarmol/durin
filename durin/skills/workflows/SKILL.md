@@ -161,12 +161,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   completes as long as one worker does, so read the failed count and the failures before
   you use or report the output. A result message can also arrive for a run THIS conversation
   started that was resumed elsewhere — from the dashboard, the API or another conversation;
-  its first line says so (`... started from this conversation, was resumed from ... and
-  finished`). Treat it like any result: summarize the outcome for the user and follow what
-  the summary says about continuing the run. The other way round, when you resume a run
-  another conversation started, that conversation is told only if the process you run in
-  serves its channel (the gateway serves the web chat and the chat channels switched on;
-  the terminal UI serves none, and nothing serves a terminal or `/v1` API conversation):
+  its first line says so (`... started from this conversation, was resumed from ...`); the
+  summary below it says how the run ended. Treat it like any result: summarize the
+  outcome for the user and follow what the summary says about continuing the run. The
+  other way round, when you resume a run another conversation started, that conversation
+  is told only if the process you run in serves its channel (the gateway serves the web
+  chat when it is switched on and the chat channels switched on; the terminal UI serves
+  none, and nothing serves a terminal or `/v1` API conversation):
   it may not hear about it, so if its person needs to know, say so to your user and
   point to the run's record. Do NOT wait for it with
   sleep+status polling: tell the user the workflow is running and **end your turn** — the
@@ -220,21 +221,31 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   telling the person that the old script may still be working. A launch reply (or a
   foreground result) can end with `Note: run <id> of '<workflow>', started from this
   conversation, was cut short…`: a run of that workflow this conversation had started was
-  cut short by a restart, and the call you just made started a new one. Tell the person, and
-  resume the cut run with `resume_run_id` rather than leave two, unless the person wanted a
-  new run. When the note instead says something of the cut run is still there (a script, a
-  sub-workflow run, a process that seems alive), with or without saying the run cannot be
-  resumed, tell the person; do not treat the new run as safe to repeat work beside it, and
-  do not end processes or delete files yourself. When the reason is that
-  another caller is acting on it, that it was already resumed, or that its record no longer
-  exists, nothing the old process left is in the way: look at the run's status before
-  trying again. A run can also stop because a write of a `choose`/`union` result into
-  its folder was cut and putting the folder back cannot be done now: `the working folder
-  holds changes of an earlier parallel step that could not be undone (<path>). It can run
-  once a person has checked the folder and removed that file.`, or `… could not be undone
-  yet (<path>): <error>. A retry undoes them once the cause is gone.` NEVER remove that
-  file or touch the folder yourself: tell the person which file the reason names and what
-  stopped it, then retry with `resume_run_id` once the person says the cause is gone. When
+  cut short by a restart, and the call that carried the note already started a new run
+  (unless its result says it was refused), so there may now be two runs of the same
+  work. Tell the person. Do NOT resume the cut run while the new one is running the same
+  work: that runs the work twice, effects outside durin included. To continue the cut run
+  instead, stop the new run first
+  (`tasks(action="stop", id=<new run id>)`), then resume the cut one with
+  `resume_run_id`. When the note says this call runs on the same work key and the cut run
+  can no longer be resumed, there is nothing to resume. When the note says something of
+  the cut run is still there (a script, a sub-workflow run, a process that seems alive),
+  with or without saying the run cannot be resumed, tell the person; do not treat the new
+  run as safe to repeat work beside it, and never end processes or delete files yourself.
+  When the reason is that another caller is acting on it, that it was already resumed, or
+  that its record no longer exists, nothing the old process left is in the way: look at
+  the run's status before trying again. A run can also stop because a write of a
+  `choose`/`union` result into its folder was cut and putting the folder back cannot be
+  done now: `the working folder
+  holds changes of an earlier parallel step that could not be undone (<path>): <reason>.
+  The earlier content of the files that step changed is kept in <folder>; removing the
+  journal file discards it when a run next starts in that folder. It can run once a person
+  has checked the folder and removed that file.`, or `… could not be undone yet (<path>):
+  <error>. The earlier content … is kept in <folder>; … A retry undoes them once the cause
+  is gone.` NEVER remove that file or anything else, or touch the folder, yourself:
+  tell the person which file the reason names, the reason or error, and the folder
+  where the earlier content is kept (removing the journal file throws that content
+  away), then retry with `resume_run_id` once the person says the cause is gone. When
   the same reason ends `A new run can start once a person has checked the folder and
   removed that file.` or `A new run undoes them once the cause is gone.`, the run stopped
   before its first step and cannot be resumed: start a new run once the person says the

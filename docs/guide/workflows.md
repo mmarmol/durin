@@ -396,8 +396,8 @@ works with copies an earlier attempt left. Deleting the run's folder deletes
 them too.
 
 The kept result is not written when it would turn a file into a folder or a
-folder into a file (for example one branch writes `p` and another `p/q`, or a
-branch replaces a folder with a file), when it would write or delete a link or
+folder into a file (for example a branch replaces a file `x` with a folder that
+holds `x/y`, or replaces a folder with a file), when it would write or delete a link or
 go through one, when a path it writes is not a regular file (a named pipe, say),
 when a path lies on another volume mounted inside the working folder, or when a
 path cannot be examined (a folder that lost its search permission while the
@@ -406,7 +406,10 @@ then stops at the parallel step the way a `union` conflict does, naming the path
 `parallel node '<id>': the branches' result cannot be written back: '<path>'
 would turn a file into a folder or a folder into a file` (or `… is reached
 through a link`, `… is a link`, `… is not a regular file`, `… is on another
-volume`, `… cannot be examined: <error>`). Nothing is applied.
+volume`, `… cannot be examined: <error>`). Nothing is applied. Two branches of
+a `union` where one writes a file `p` and another a file `p/q` are a union
+conflict instead, and the message names both paths:
+`parallel node '<id>': union conflict on ['p', 'p/q']`.
 
 The same happens when the run's working folder is itself a link, or lies on
 another volume than the run's own folder that holds it: `parallel node '<id>':
@@ -446,15 +449,29 @@ there, say — stays.
 When the folder cannot be put back, nothing more is changed and the run stops:
 
 - `the working folder holds changes of an earlier parallel step that could not
-  be undone (<path>). It can run once a person has checked the folder and
-  removed that file.` — the undo record itself cannot be used, or it lies beside
-  a working folder that has been replaced by a link; the run can be retried once
-  a person has done that.
+  be undone (<path>): <why it cannot be used>. The earlier content of the files
+  that step changed is kept in <folder>; removing the journal file discards it
+  when a run next starts in that folder. It can run once a person has checked
+  the folder and removed that file.` — the undo record itself cannot be used
+  (it cannot be read, say), or it lies beside a working folder that has been
+  replaced by a link; the run can be retried once a person has done that.
 - `the working folder holds changes of an earlier parallel step that could not
-  be undone yet (<path>): <what stopped it>. A retry undoes them once the cause
-  is gone.` — putting a changed file back stopped, for example on a full disk, a
+  be undone yet (<path>): <what stopped it>. The earlier content of the files
+  that step changed is kept in <folder>; removing the journal file discards it
+  when a run next starts in that folder. A retry undoes them once the cause is
+  gone.` — putting a changed file back stopped, for example on a full disk, a
   folder replaced by a link, or a folder whose permissions no longer let its
   files be examined; the run can be retried once the cause is gone.
+
+`<path>` is the undo record's journal file (`pending-apply/journal.json`), and
+`<folder>` is the `pending-apply/pre/` folder beside it, which holds what each
+file the step changed or deleted held before. A run that starts in the folder
+while no journal file is there removes `pending-apply/` whole, so once the
+journal file is gone that earlier content is gone too: take from `pre/` what the
+folder needs before removing the journal file. When `pending-apply` itself has
+been replaced by a link, `<path>` is that link, the message says the earlier
+content is kept where the link leads, and removing the link leaves that content
+where it is.
 
 A run that stops this way before its first step cannot be retried, and its
 message says so: `… A new run can start once a person has checked the folder and
@@ -506,11 +523,17 @@ sub-workflow step starts its child workflow again from its first step.
 When a restart replays the message that had started a workflow, the agent that
 launches the workflow again is told about the cut run: the reply to a new launch
 names the runs of that workflow started from the same conversation that a
-process ending cut short (a few of the most recent, newest first), and the agent offers to
-resume the cut run rather than leave two. When something of a cut run is still
-running, the note says so, even when the run could never be resumed, and the new
-run starts beside it. With unified sessions all chats share one conversation, so
-the note can name a run that was started from another chat.
+process ending cut short (a few of the most recent, newest first). By then the
+launch has started a new run (unless it was refused), so two runs of the same
+work may exist. The agent tells you, and does not resume the cut run while the
+new one is running the same work: to continue the cut run instead, the new run is
+stopped first and then the cut run resumed. When the new launch uses the same
+`work_key` as the cut run, it takes over that key's folder, and the note says the cut
+run can no longer be resumed. When something of a cut run is still running, the note says
+so, even when the run could never be resumed, and a new run works beside it.
+The agent never ends those processes or deletes files itself. With unified
+sessions all chats share one conversation, so the note can name a run that was
+started from another chat.
 
 So a step that acts outside durin — sends a message, posts a comment, writes
 to another system — should be safe to run twice. The general way is a script
@@ -556,8 +579,9 @@ chat is resumed somewhere else — from the dashboard, the API, or another
 conversation — the chat that started it is told how the resume came out, as a
 message the agent reads and summarizes. That happens only when the process
 that carries out the resume runs that chat's channel. The running gateway runs
-the web chat and the chat channels that are switched on (Slack, Telegram and
-the others); the terminal UI and a one-shot `durin agent -m` run none.
+the web chat when it is switched on, and the chat channels that are switched on
+(Slack, Telegram and the others); the terminal UI and a one-shot `durin agent -m`
+run none.
 
 - Resumed from the dashboard or the API, the gateway carries it out: the
   message says the run was resumed from the dashboard or the API, and the
@@ -604,9 +628,11 @@ Known limits: files that a `read` parallel step's branches or a fan-out's
 workers wrote in the shared folder before the process died are still there when
 the step runs again. A process that dies right after a `choose` or `union` step
 finished writing its result, before the run moved on, runs the step again on a
-folder that already holds that result. A chat that started a run is not always
-told how a resume made elsewhere came out; "Where a resumed run's result goes"
-above says when it is.
+folder that already holds that result. A dead run nobody resumes keeps its
+folder as its cut write-back left it, with the undo record beside it, until the
+run's folder is pruned; a later run on the same work key puts that folder back
+first. A chat that started a run is not always told how a resume made elsewhere
+came out; "Where a resumed run's result goes" above says when it is.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's

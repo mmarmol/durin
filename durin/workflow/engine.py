@@ -723,19 +723,32 @@ class NodeExecutionError(RuntimeError):
 
 UNUSABLE_FOLDER_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
-    "undone ({path}). It can run once a person has checked the folder and removed "
-    "that file.")
+    "undone ({path}): {reason}. {kept} It can run once a person has checked the folder "
+    "and removed that file.")
 UNDONE_YET_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
-    "undone yet ({path}): {error}. A retry undoes them once the cause is gone.")
+    "undone yet ({path}): {error}. {kept} A retry undoes them once the cause is gone.")
 # The same two conditions for a fresh run, which is not retried: a new run is.
 FRESH_UNUSABLE_FOLDER_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
-    "undone ({path}). A new run can start once a person has checked the folder and "
-    "removed that file.")
+    "undone ({path}): {reason}. {kept} A new run can start once a person has checked the "
+    "folder and removed that file.")
 FRESH_UNDONE_YET_ABORT = (
     "the working folder holds changes of an earlier parallel step that could not be "
-    "undone yet ({path}): {error}. A new run undoes them once the cause is gone.")
+    "undone yet ({path}): {error}. {kept} A new run undoes them once the cause is gone.")
+# Where the earlier content of the files a cut write-back changed is kept: the
+# journal's folder (`pending-apply`) holds it in `pre/`. A run that starts in the
+# folder with no journal there removes that folder whole, so removing the journal
+# file throws that content away. When `pending-apply` itself is a link, the
+# content is where the link leads, and removing the link leaves it there.
+KEPT_CONTENT = (
+    "The earlier content of the files that step changed is kept in {pre}; removing the "
+    "journal file discards it when a run next starts in that folder.")
+KEPT_CONTENT_BEHIND_LINK = (
+    "The earlier content of the files that step changed is kept in {pre}, where that "
+    "link leads.")
+_JOURNAL_FOLDER = "pending-apply"
+_KEPT_FOLDER = "pre"
 
 
 class _WriteBackFailedError(Exception):
@@ -752,16 +765,28 @@ class _WriteBackFailedError(Exception):
 def _journal_abort_text(exc: "workspace_fork.PendingApplyError | workspace_fork.UndoError "
                              "| _WriteBackFailedError", *, fresh: bool = False) -> str:
     """Why the working folder cannot be used: its write-back journal cannot be used
-    (a person must look), undoing it stopped (a later attempt undoes it), or the
-    step's own write-back failed (its error first, then the undo's when it stopped
-    too). A fresh run gets the texts that send the reader to a new run."""
+    (a person must look; the text gives the reason), undoing it stopped (a later
+    attempt undoes it), or the step's own write-back failed (its error first, then
+    the undo's when it stopped too). The first two also say where the earlier
+    content of the changed files is kept. A fresh run gets the texts that send the
+    reader to a new run."""
     if isinstance(exc, _WriteBackFailedError):
         text = f"writing the branches' result back failed: {exc.error}"
         return text if exc.undo is None else f"{text}; {_journal_abort_text(exc.undo)}"
+    # ``path`` is the journal file, or the link standing where its folder should be.
+    if exc.path.name == _JOURNAL_FOLDER:
+        kept = KEPT_CONTENT_BEHIND_LINK.format(pre=exc.path / _KEPT_FOLDER)
+    else:
+        kept = KEPT_CONTENT.format(pre=exc.path.parent / _KEPT_FOLDER)
     if isinstance(exc, workspace_fork.UndoError):
         return (FRESH_UNDONE_YET_ABORT if fresh else UNDONE_YET_ABORT).format(
-            path=exc.path, error=exc.cause)
-    return (FRESH_UNUSABLE_FOLDER_ABORT if fresh else UNUSABLE_FOLDER_ABORT).format(path=exc.path)
+            path=exc.path, error=exc.cause, kept=kept)
+    # The exception carries its reason only in its message, after the journal's path.
+    message = str(exc)
+    prefix = f"the write-back journal {str(exc.path)!r} cannot be used: "
+    reason = message[len(prefix):] if message.startswith(prefix) else message
+    return (FRESH_UNUSABLE_FOLDER_ABORT if fresh else UNUSABLE_FOLDER_ABORT).format(
+        path=exc.path, reason=reason, kept=kept)
 
 
 class _FolderNotReadyError(Exception):

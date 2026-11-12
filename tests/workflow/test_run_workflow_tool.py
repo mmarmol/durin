@@ -1238,7 +1238,7 @@ async def test_the_run_tool_refuses_a_dead_run_launched_by_an_automation_under_a
 _LAUNCHED_IN_A = {"kind": "session", "session_key": "websocket:chatA", "channel": "websocket",
                   "chat_id": "chatA"}
 _RESUMED_ELSEWHERE = ("[Workflow 'doer' run r1, started from this conversation, was resumed "
-                      "from another conversation and finished]\n\n")
+                      "from another conversation]\n\n")
 
 
 def _tool_on_bus(tmp_path, bus, *, channel, chat_id, session_key, serves=("websocket", "slack")):
@@ -1513,7 +1513,7 @@ async def test_a_process_that_serves_the_launch_channel_reports_there(tmp_path):
     assert (msg.chat_id, msg.session_key_override) == ("slack:C1", "slack:C1:1700.1")
     assert msg.content.startswith(
         "[Workflow 'doer' run r1, started from this conversation, was resumed from another "
-        "conversation and finished]")
+        "conversation]\n\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1525,20 +1525,24 @@ _HERE = {"kind": "session", "session_key": "websocket:chatA",
 
 
 def _cut(tmp_path, run_id, *, started_at, launch=_HERE, root="websocket:chatA", node="build",
-         parent=None, owner=_DEAD_OWNER, status="running", keep_folder=True, incomplete=False):
+         parent=None, owner=_DEAD_OWNER, status="running", keep_folder=True, incomplete=False,
+         key=None):
     """Run ``run_id`` of workflow ``qa``, started from a conversation and left by
     a process that died in step ``node`` (``status`` ``running`` with a dead
-    owner, or settled to ``crashed`` already)."""
+    owner, or settled to ``crashed`` already); on work key ``key`` when given."""
     from durin.workflow import resume_store
-    from durin.workflow.artifacts import artifact_dir
+    from durin.workflow.artifacts import artifact_dir, keyed_work_dir
 
     _write_workflow(tmp_path, "qa", {"name": "qa", "start": "build", "nodes": [
         {"id": "build", "kind": "script", "command": "echo ok", "next": None}]})
-    work_dir = artifact_dir(tmp_path, run_id, "work", None)
+    work_dir = (keyed_work_dir(tmp_path, "qa", key) if key
+                else artifact_dir(tmp_path, run_id, "work", None))
     work_dir.mkdir(parents=True, exist_ok=True)
-    resume_store.save_input(resume_store.store_dir(tmp_path, run_id), 1, node, "")
+    resume_store.save_input(resume_store.store_dir(tmp_path, run_id, work_dir=str(work_dir),
+                                                   keyed=key is not None), 1, node, "")
     run_log.start_run(tmp_path, "qa", run_id, root_session_key=root, started_at=started_at,
-                      task="t", work_dir=str(work_dir), position={"node": node, "seq": 1},
+                      task="t", work_dir=str(work_dir), work_key=key,
+                      position={"node": node, "seq": 1},
                       surface="agent", launch=launch, parent_run_id=parent)
     f = tmp_path / "workflows-runs" / "qa" / f"{run_id}.json"
     rec = json.loads(f.read_text(encoding="utf-8"))
@@ -1559,7 +1563,8 @@ def _fresh_result(*_a, **_kw):
     return WorkflowResult(status="completed", run_id="fresh", final_output="ok", runs=[])
 
 
-async def _launch(tmp_path, *, session="websocket:chatA", background=True, resume_run_id=""):
+async def _launch(tmp_path, *, session="websocket:chatA", background=True, resume_run_id="",
+                  work_key=""):
     import asyncio
 
     from durin.agent.tools.context import RequestContext
@@ -1579,7 +1584,7 @@ async def _launch(tmp_path, *, session="websocket:chatA", background=True, resum
     with patch("durin.providers.factory.make_provider", return_value=fake), \
          patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
         out = await tool.execute(name="qa", task="go", background=background,
-                                 resume_run_id=resume_run_id)
+                                 resume_run_id=resume_run_id, work_key=work_key)
         async with asyncio.timeout(60):
             await asyncio.gather(*tool._bg_tasks)
     return out
@@ -1589,7 +1594,13 @@ def _resumable_text(run_id, node="build"):
     return (f"Note: run {run_id} of 'qa', started from this conversation, was cut short when "
             f"its process ended and has not been resumed. It can be resumed with "
             f"resume_run_id='{run_id}' (it enters node '{node}' again; finished nodes do not "
-            "run again). This call started a new run; it did not resume that one.")
+            "run again). This call did not resume it.")
+
+
+def _same_key_text(run_id="r-cut"):
+    return (f"Note: run {run_id} of 'qa', started from this conversation, was cut short when "
+            "its process ended. This call runs on the same work key and takes over its "
+            "folder, so that run can no longer be resumed.")
 
 
 @pytest.mark.asyncio
@@ -1599,8 +1610,47 @@ async def test_a_launch_names_a_run_this_conversation_had_cut(tmp_path):
     assert ("Note: run r-cut of 'qa', started from this conversation, was cut short when its "
             "process ended and has not been resumed.") in reply
     assert "resume_run_id='r-cut'" in reply and "it enters node 'build' again" in reply
-    assert reply.rstrip().endswith("This call started a new run; it did not resume that one.")
+    assert reply.rstrip().endswith("This call did not resume it.")
     assert reply.count("\n\nNote: run r-cut") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [True, False])
+async def test_a_launch_on_the_cut_runs_own_key_says_it_takes_the_folder_over(
+        tmp_path, background):
+    # A turn replayed after a restart launches the workflow again on the same key.
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", key="k1")
+    reply = await _launch(tmp_path, work_key="k1", background=background)
+    assert reply.endswith("\n\n" + _same_key_text())
+    # What the note says is not a resume to attempt: it names no way to resume.
+    assert "resume_run_id=" not in reply.split("Note:")[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cut_key,launch_key", [("k1", "k2"), ("k1", ""), (None, "k2")])
+async def test_a_launch_on_another_key_names_the_cut_run_as_resumable(
+        tmp_path, cut_key, launch_key):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", key=cut_key)
+    reply = await _launch(tmp_path, work_key=launch_key)
+    assert reply.endswith("\n\n" + _resumable_text("r-cut"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resumable", [True, False])
+async def test_a_launch_on_the_key_of_a_cut_run_with_something_still_there_names_both(
+        tmp_path, monkeypatch, resumable):
+    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", key="k1",
+         **({} if resumable else {"node": "removed"}))
+    fact = _LEFT_BEHIND["script"](tmp_path, monkeypatch)
+    reply = await _launch(tmp_path, work_key="k1")
+    head = "Note: run r-cut of 'qa', started from this conversation, was cut short and "
+    takeover = "This call runs on the same work key and takes over its folder"
+    if resumable:
+        expected = (head + f"{fact}. {takeover}, so that run can no longer be resumed.")
+    else:
+        expected = head + f"cannot be resumed, and {fact}. {takeover}."
+    assert reply.endswith("\n\n" + expected)
+    assert "resume_run_id" not in reply.split("Note:")[1]
 
 
 @pytest.mark.asyncio
@@ -1667,8 +1717,9 @@ def _still_there_text(fact, *, resumable, run_id="r-cut"):
     head = f"Note: run {run_id} of 'qa', started from this conversation, was cut short and "
     if resumable:
         return (head + f"{fact}. It can be resumed once that is gone. "
-                "This call started a new run beside it.")
-    return head + f"cannot be resumed, and {fact}. This call started a new run beside it."
+                "This call did not resume it; a new run would work beside what it left.")
+    return (head + f"cannot be resumed, and {fact}. "
+            "This call did not resume it; a new run would work beside what it left.")
 
 
 def _leave_a_script_record(tmp_path, monkeypatch, state, own, group, *, run_id="r-cut"):

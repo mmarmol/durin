@@ -446,21 +446,26 @@ _CUT_RUNS_EXAMINED = 10
 _CUT_RUNS_NAMED = 3
 
 
-def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any) -> str:
-    """What a fresh launch tells about the runs of ``name`` that the conversation
-    ``session_key`` started and that a process ending cut short, or "" when there
-    is nothing to say. Only the newest few that are recorded ``crashed`` or
-    ``running`` are looked at. A run recorded as running whose process is gone is
-    converted first, as a resume does (which also ends the scripts that run left).
-    What decides a run is named, in order: something of it may still be there (a
-    script, a sub-workflow run, a process that seems alive) - named whether or
-    not it could ever be resumed, since the new run starts beside it; else it
-    can be resumed - named with the way to do it. Not named: a run nothing of
-    which is left and that can never be resumed (its step is gone, its folder
-    was pruned, its record is incomplete, an automation started it), one another
-    caller is acting on, one whose process is alive, and one that ended, paused
-    or aborted. Observes processes and waits on locks: an event loop calls it
-    through a thread."""
+def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
+                    work_key: str | None = None) -> str:
+    """What a fresh launch on ``work_key`` (None: no key) tells about the runs of
+    ``name`` that the conversation ``session_key`` started and that a process
+    ending cut short, or "" when there is nothing to say. Only the newest few that
+    are recorded ``crashed`` or ``running`` are looked at. A run recorded as
+    running whose process is gone is converted first, as a resume does (which
+    also ends the scripts that run left). What decides a run is named, in order:
+    something of it may still be there (a script, a sub-workflow run, a process
+    that seems alive) - named whether or not it could ever be resumed, since a
+    new run works beside it; else it can be resumed - named with the way to do
+    it, unless it ran on the same work key as this launch: the launch takes over
+    that key's folder, after which a resume of the cut run is refused, so the
+    note says that instead. Not named: a run nothing of which is left and that
+    can never be resumed (its step is gone, its folder was pruned, its record is
+    incomplete, an automation started it), one another caller is acting on, one
+    whose process is alive, and one that ended, paused or aborted. The closing
+    sentences hold whether or not this launch gets as far as recording a run.
+    Observes processes and waits on locks: an event loop calls it through a
+    thread."""
     from durin.workflow import run_log
     from durin.workflow.engine import resumable_kind, resume_refusal
 
@@ -478,22 +483,30 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any) 
                      and resume_refusal(record, workspace=workspace, workflow=workflow) is None)
         head = (f"Note: run {run_id} of '{name}', started from this conversation, was cut "
                 "short")
+        same_key = bool(work_key) and record.get("work_key") == work_key
+        takeover = "This call runs on the same work key and takes over its folder"
+        beside = "This call did not resume it; a new run would work beside what it left."
         if reason:
             fact = getattr(reason, "fact", "something of it may still be there")
-            if resumable:
+            if resumable and same_key:
                 paragraphs.append(
-                    f"{head} and {fact}. It can be resumed once that is gone. This call "
-                    "started a new run beside it.")
+                    f"{head} and {fact}. {takeover}, so that run can no longer be resumed.")
+            elif resumable:
+                paragraphs.append(
+                    f"{head} and {fact}. It can be resumed once that is gone. {beside}")
+            elif same_key:
+                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {takeover}.")
             else:
-                paragraphs.append(
-                    f"{head} and cannot be resumed, and {fact}. This call started a new "
-                    "run beside it.")
+                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {beside}")
+        elif resumable and same_key:
+            paragraphs.append(
+                f"{head} when its process ended. {takeover}, so that run can no longer be "
+                "resumed.")
         elif resumable:
             paragraphs.append(
                 f"{head} when its process ended and has not been resumed. It can be resumed "
                 f"with resume_run_id='{run_id}' (it enters node '{record.get('failed_node')}' "
-                "again; finished nodes do not run again). This call started a new run; it "
-                "did not resume that one.")
+                "again; finished nodes do not run again). This call did not resume it.")
     shown = paragraphs[:_CUT_RUNS_NAMED]
     if len(paragraphs) > len(shown):
         shown.append(f"and {len(paragraphs) - len(shown)} more.")
@@ -706,7 +719,8 @@ class RunWorkflowTool(Tool, ContextAware):
         if not resume_run_id and calling_session:
             try:
                 cut_notice = await asyncio.to_thread(
-                    cut_runs_notice, self._workspace, name, calling_session, workflow)
+                    cut_runs_notice, self._workspace, name, calling_session, workflow,
+                    work_key or None)
             except Exception:  # noqa: BLE001 - the launch goes on without the notice
                 logger.opt(exception=True).warning(
                     "workflow {}: looking for the runs {} had cut failed", name, calling_session)

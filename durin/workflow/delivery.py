@@ -51,8 +51,10 @@ def result_message(launch: Any, *, name: str, run_id: str, summary: str,
     channel = launch.get("channel") or "websocket"
     chat_id = launch.get("chat_id") or ""
     if resumed_from:
+        # The head holds for every outcome (finished, paused again, aborted):
+        # the summary below it says how the run ended.
         head = (f"[Workflow '{name}' run {run_id}, started from this conversation, was "
-                f"resumed from {resumed_from} and finished]")
+                f"resumed from {resumed_from}]")
     else:
         head = f"[Background workflow '{name}' finished]"
     return InboundMessage(
