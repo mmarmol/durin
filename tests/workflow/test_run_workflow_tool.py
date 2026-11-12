@@ -1592,11 +1592,11 @@ async def _launch(tmp_path, *, session="websocket:chatA", background=True, resum
     return out
 
 
-def _resumable_text(run_id, node="build"):
+def _resumable_text(run_id):
     return (f"Note: run {run_id} of 'qa', started from this conversation, was cut short when "
-            f"its process ended and has not been resumed. It can be resumed with "
-            f"resume_run_id='{run_id}' (it enters node '{node}' again; finished nodes do not "
-            "run again). This call did not resume it.")
+            f"its process ended and has not been resumed. resume_run_id='{run_id}' asks to "
+            "enter it again at the step it was in, and says why if it cannot; this call did "
+            "not resume it.")
 
 
 _ON_THE_KEY = ("It is on the same work key as this call: once this call's run starts, it "
@@ -1614,8 +1614,8 @@ async def test_a_launch_names_a_run_this_conversation_had_cut(tmp_path):
     reply = await _launch(tmp_path)
     assert ("Note: run r-cut of 'qa', started from this conversation, was cut short when its "
             "process ended and has not been resumed.") in reply
-    assert "resume_run_id='r-cut'" in reply and "it enters node 'build' again" in reply
-    assert reply.rstrip().endswith("This call did not resume it.")
+    assert _resumable_text("r-cut") in reply
+    assert reply.rstrip().endswith("this call did not resume it.")
     assert reply.count("\n\nNote: run r-cut") == 1
 
 
@@ -1665,23 +1665,6 @@ async def test_a_launch_on_another_key_names_the_cut_run_as_resumable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resumable", [True, False])
-async def test_a_launch_on_the_key_of_a_cut_run_with_something_still_there_names_both(
-        tmp_path, monkeypatch, resumable):
-    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", key="k1",
-         **({} if resumable else {"node": "removed"}))
-    fact = _LEFT_BEHIND["script"](tmp_path, monkeypatch)
-    reply = await _launch(tmp_path, work_key="k1")
-    head = "Note: run r-cut of 'qa', started from this conversation, was cut short and "
-    if resumable:
-        expected = head + f"{fact}. {_ON_THE_KEY} and that run can no longer be resumed."
-    else:
-        expected = head + f"cannot be resumed, and {fact}. {_ON_THE_KEY}."
-    assert reply.endswith("\n\n" + expected)
-    assert "resume_run_id" not in reply.split("Note:")[1]
-
-
-@pytest.mark.asyncio
 async def test_a_launch_with_nothing_cut_is_the_plain_launch_reply(tmp_path):
     from durin.agent.tools.run_workflow import _background_launch_message
     _write_workflow(tmp_path, "qa", {"name": "qa", "start": "build", "nodes": [
@@ -1692,12 +1675,13 @@ async def test_a_launch_with_nothing_cut_is_the_plain_launch_reply(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_running_record_whose_process_is_gone_is_settled_and_named(tmp_path):
+async def test_a_running_record_whose_process_is_gone_is_named_and_left_as_it_was(tmp_path):
     _cut(tmp_path, "r-cut", started_at=1.0)
-    assert run_log.read_manifest(tmp_path, "qa", "r-cut")["status"] == "running"
+    f = tmp_path / "workflows-runs" / "qa" / "r-cut.json"
+    before = f.read_bytes()
     reply = await _launch(tmp_path)
     assert _resumable_text("r-cut") in reply
-    assert run_log.read_manifest(tmp_path, "qa", "r-cut")["status"] == "crashed"
+    assert f.read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -1724,138 +1708,12 @@ async def test_a_live_run_a_finished_run_and_a_child_run_are_not_named(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_a_cut_run_whose_check_answers_with_a_race_refusal_is_not_named(tmp_path):
-    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
-    busy = sorted(run_log.DEAD_RUN_RACE_REFUSALS)[0]
-    with patch.object(run_log, "dead_run_refusal", return_value=busy):
-        reply = await _launch(tmp_path)
-    assert "Note:" not in reply
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("how", ["step_gone", "folder_pruned", "incomplete"])
 async def test_a_cut_run_refused_for_another_reason_is_not_named(tmp_path, how):
     kwargs = {"step_gone": {"node": "removed"}, "folder_pruned": {"keep_folder": False},
               "incomplete": {"incomplete": True}}[how]
     _cut(tmp_path, "r-cut", started_at=1.0, status="crashed", **kwargs)
     assert "Note:" not in await _launch(tmp_path)
-
-
-def _still_there_text(fact, *, resumable, run_id="r-cut"):
-    head = f"Note: run {run_id} of 'qa', started from this conversation, was cut short and "
-    if resumable:
-        return (head + f"{fact}. It can be resumed once that is gone. "
-                "This call did not resume it; a new run would work beside what it left.")
-    return (head + f"cannot be resumed, and {fact}. "
-            "This call did not resume it; a new run would work beside what it left.")
-
-
-def _leave_a_script_record(tmp_path, monkeypatch, state, own, group, *, run_id="r-cut"):
-    from durin.utils import process_tree
-    run_log.record_script(tmp_path / "workflows-runs" / "qa", run_id, pid=424242,
-                          started="x", node_id="build")
-    monkeypatch.setattr(process_tree, "left_script_state",
-                        lambda pid, started, **kw: (state, own, group))
-
-
-def _leave_a_sub_run(tmp_path, monkeypatch):
-    run_log.start_run(tmp_path, "kid", "r-kid", root_session_key="websocket:chatA",
-                      started_at=2.0, parent_run_id="r-cut")
-    return "its sub-workflow run 'r-kid' of workflow 'kid' is still recorded as running"
-
-
-def _leave_a_live_owner(tmp_path, monkeypatch):
-    from durin.utils.process_tree import process_identity
-    f = tmp_path / "workflows-runs" / "qa" / "r-cut.json"
-    rec = json.loads(f.read_text(encoding="utf-8"))
-    rec["owner"] = process_identity()
-    f.write_text(json.dumps(rec), encoding="utf-8")
-    return f"the process that was running it (pid {process_identity()['pid']}) still seems alive"
-
-
-def _leave_an_unreadable_record(tmp_path, monkeypatch):
-    path = tmp_path / "workflows-runs" / "qa" / "r-cut.script.9"
-    path.write_text("{not json", encoding="utf-8")
-    return (f"a record of one of its scripts, {path}, cannot be read, so whether that "
-            "script still runs cannot be checked")
-
-
-def _script_fact(state, own, group, fact):
-    def leave(tmp_path, monkeypatch):
-        _leave_a_script_record(tmp_path, monkeypatch, state, own, group)
-        return fact
-    return leave
-
-
-_LEFT_BEHIND = {
-    "script_and_group": _script_fact(
-        "alive", [111], [222],
-        "the script of its step 'build' is still running (pid 111), and so are processes "
-        "in its former process group (pid 222), which may not be that script's"),
-    "script": _script_fact("alive", [111], [],
-                           "the script of its step 'build' is still running (pid 111)"),
-    "group": _script_fact(
-        "alive", [], [222],
-        "processes in the former process group of the script of its step 'build' are still "
-        "running (pid 222), which may not be that script's"),
-    "unknown": _script_fact(
-        "unknown", [], [222],
-        "whether the script of its step 'build' ended could not be checked (pid 222)"),
-    "unreadable": _leave_an_unreadable_record,
-    "owner": _leave_a_live_owner,
-    "sub_run": _leave_a_sub_run,
-}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("resumable", [True, False])
-@pytest.mark.parametrize("kind", sorted(_LEFT_BEHIND))
-async def test_a_cut_run_with_something_still_there_is_named_with_that_fact(
-        tmp_path, monkeypatch, kind, resumable):
-    _cut(tmp_path, "r-cut", started_at=1.0, status="crashed",
-         **({} if resumable else {"node": "removed"}))
-    fact = _LEFT_BEHIND[kind](tmp_path, monkeypatch)
-    reply = await _launch(tmp_path)
-    assert _still_there_text(fact, resumable=resumable) in reply
-    assert "resume_run_id" not in reply.split("Note:")[1]
-    # the refusal a resume gets keeps its own words
-    reason = run_log.settle_dead_run(tmp_path, "qa", "r-cut")[1]
-    assert reason.fact == fact and "It can be resumed once" in reason
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("resumable", [True, False])
-async def test_a_cut_run_whose_script_is_really_still_running_is_named(tmp_path, resumable):
-    import os
-    import signal
-    import subprocess
-
-    from durin.utils.process_tree import process_identity
-
-    _cut(tmp_path, "r-cut", started_at=1.0, **({} if resumable else {"node": "removed"}))
-    proc = subprocess.Popen(["sh", "-c", "sleep 61 & echo $!; read _"], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, text=True, start_new_session=True)
-    member = None
-    try:
-        member = int(proc.stdout.readline())
-        run_log.record_script(tmp_path / "workflows-runs" / "qa", "r-cut", pid=proc.pid,
-                              started=process_identity(proc.pid)["started"], node_id="build")
-        proc.stdin.close()
-        proc.wait(timeout=10)         # the leader is gone; its member stays in the group
-        reply = await _launch(tmp_path)
-        fact = ("processes in the former process group of the script of its step 'build' are "
-                f"still running (pid {member}), which may not be that script's")
-        assert _still_there_text(fact, resumable=resumable) in reply
-        os.kill(member, 0)            # the note did not end it
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=10)
-        if member is not None:
-            try:
-                os.kill(member, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
 
 @pytest.mark.asyncio
@@ -1866,12 +1724,14 @@ async def test_a_cut_run_that_can_never_be_resumed_and_has_nothing_left_is_not_n
 
 @pytest.mark.asyncio
 async def test_at_most_ten_cut_runs_are_looked_at(tmp_path, monkeypatch):
+    import importlib
+    engine = importlib.import_module("durin.workflow.engine")
     for i in range(40):
         _cut(tmp_path, f"r{i:02d}", started_at=float(i + 1), status="crashed")
     calls = []
-    real = run_log.settle_dead_run
-    monkeypatch.setattr(run_log, "settle_dead_run",
-                        lambda ws, name, run_id: calls.append(run_id) or real(ws, name, run_id))
+    real = engine.resume_refusal
+    monkeypatch.setattr(engine, "resume_refusal",
+                        lambda rec, **kw: calls.append(rec["run_id"]) or real(rec, **kw))
     reply = await _launch(tmp_path)
     assert len(calls) == 10 and calls[0] == "r39" and calls[-1] == "r30"
     notes = reply.split("\n\nNote: ")[1:]
@@ -1879,16 +1739,74 @@ async def test_at_most_ten_cut_runs_are_looked_at(tmp_path, monkeypatch):
     assert reply.endswith("\n\nand 7 more.")
 
 
+def _record_status(tmp_path, run_id, **fields):
+    f = tmp_path / "workflows-runs" / "qa" / f"{run_id}.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(fields)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+
+
 @pytest.mark.asyncio
-async def test_finished_runs_do_not_use_up_the_ten(tmp_path):
+async def test_the_walk_stops_at_the_first_run_that_is_not_cut(tmp_path):
+    _cut(tmp_path, "r-old", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-done", started_at=2.0, status="crashed")
+    _record_status(tmp_path, "r-done", status="completed", failed_node=None)
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_a_live_owner_stops_the_walk(tmp_path):
+    from durin.utils.process_tree import process_identity
+    _cut(tmp_path, "r-old", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-live", started_at=2.0, owner=process_identity())
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_owner_cannot_be_observed_counts_as_alive(tmp_path, monkeypatch):
+    from durin.utils import process_tree
+    _cut(tmp_path, "r-old", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-unseen", started_at=2.0)
+    monkeypatch.setattr(process_tree, "process_alive", lambda owner: True)
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_with_a_refusal_is_not_named_and_does_not_stop_the_walk(tmp_path):
+    _cut(tmp_path, "r-old", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-gone", started_at=2.0, status="crashed", node="removed")
+    reply = await _launch(tmp_path)
+    assert _resumable_text("r-old") in reply and "r-gone" not in reply
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_is_told_once(tmp_path):
     _cut(tmp_path, "r-cut", started_at=1.0, status="crashed")
-    for i in range(12):
-        _cut(tmp_path, f"d{i:02d}", started_at=float(10 + i), status="crashed")
-        f = tmp_path / "workflows-runs" / "qa" / f"d{i:02d}.json"
-        rec = json.loads(f.read_text(encoding="utf-8"))
-        rec.update(status="completed", failed_node=None)
-        f.write_text(json.dumps(rec), encoding="utf-8")
     assert _resumable_text("r-cut") in await _launch(tmp_path)
+    # The first launch recorded its run; the next launch walks from it.
+    run_log.start_run(tmp_path, "qa", "r-first", root_session_key="websocket:chatA",
+                      started_at=5.0, launch=_HERE)
+    _record_status(tmp_path, "r-first", status="completed")
+    assert "Note:" not in await _launch(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_giving_the_note_writes_nothing_and_takes_no_lock(tmp_path, monkeypatch):
+    from durin.workflow import run_log as rl
+
+    def forbidden(*_a, **_kw):
+        raise AssertionError("a launch's note must only read")
+
+    _cut(tmp_path, "r-crashed", started_at=1.0, status="crashed")
+    _cut(tmp_path, "r-dead", started_at=2.0)
+    folder = tmp_path / "workflows-runs" / "qa"
+    before = {f.name: f.read_bytes() for f in folder.iterdir() if f.is_file()}
+    for attr in ("cross_process_lock", "settle_dead_run", "mark_dead_run", "dead_run_refusal"):
+        monkeypatch.setattr(rl, attr, forbidden)
+    from durin.agent.tools.run_workflow import cut_runs_notice
+    notice = cut_runs_notice(str(tmp_path), "qa", "websocket:chatA", None)
+    assert "r-dead" in notice and "r-crashed" in notice
+    assert {f.name: f.read_bytes() for f in folder.iterdir() if f.is_file()} == before
 
 
 @pytest.mark.asyncio

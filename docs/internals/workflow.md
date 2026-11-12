@@ -1305,8 +1305,7 @@ the time the conversion ran, which can come after a later run took the key. A re
 only reads; the record stays byte for byte as it was.
 
 **What is logged and counted.** Each refusal above is a `refusal.Refusal`: a `str` equal
-to its sentence, with a `kind` fixed where the sentence is made (`LeftBehind`, the
-refusal that names what the earlier process left, is one, with its `fact`). The word is
+to its sentence, with a `kind` fixed where the sentence is made. The word is
 never worked out from the sentence's wording. The words are `owner_alive` (the process
 recorded as running it still seems alive), `script_alive` (a script may still run),
 `folder_pruned`, `step_gone`, `superseded` (a later run took the
@@ -1497,49 +1496,39 @@ workflow the conversation had started: `run_log.runs_launched_by(workspace,
 name, session_key)` reads only that workflow's folder under `workflows-runs/`
 and matches a record by `launch.session_key` (a record without `launch`, one
 written before launches were kept, by `root_session_key`; a sub-workflow's own
-run is never matched). `run_workflow.cut_runs_notice` examines only the most recent of those records
-that are `crashed` or `running` (`_CUT_RUNS_EXAMINED`), and settles each the way a resume does
-(`run_log.settle_dead_run`: a `running` record whose process is gone becomes
-`crashed`, and the dead-run check says whether something of it may still be
-there). All of it runs in one
-worker-thread call, since it observes processes and waits on run locks; a
-failure is logged and the launch goes on without a note. The notice writes no
-record of its own; through the existing settling it can convert a dead run and
-its dead sub-workflow runs, remove script records proven over, remove each
-converted run's private copies of a parallel step (kept when the run left a
-script record) and its stop request file, and, for a run that ends not
-resumable (`cancelled`), its resume files.
+run is never matched), newest first. `run_workflow.cut_runs_notice` walks those
+records and stops at the first one that is not cut, so a conversation that launches
+again after being told is not told again. A run is cut when its record is `crashed`,
+or `running` with an owner that is proven gone (`run_log.owner_gone`, the same
+judgement the crash conversion uses; an owner that cannot be observed counts as
+alive). At most the newest few cut runs are examined (`_CUT_RUNS_EXAMINED`). The notice
+only reads: it writes no record, takes no run lock, waits on none and ends no process,
+an event loop calls it through a thread; a failure is
+logged and the launch goes on without a note.
 
-What decides a run is named: first, whether something of it may still be there
-(the dead-run check's answer when it is not a race answer: a script, a
-sub-workflow run still recorded as running, a process that seems alive); such a
-run is named whether or not it could ever be resumed, since a new run works
-beside it. The check exposes that fact alone (`run_log.LeftBehind.fact`, a
-refusal string that also carries the clause it rests on), and the note says it
-in its own words. Otherwise a run that `engine.resume_refusal` accepts is named
-with the way to resume it. The launch's `work_key` is passed to the notice: a
-cut run recorded on that same key is named with no way to resume it, and the note
-says, as a condition, that once this call's run starts it takes over that folder
-and the cut run can no longer be resumed (once that run is recorded, a resume of
-the cut run is refused because a later run on the key has taken over its folder).
-The check runs before the launch records anything, so `resume_refusal` alone
-would still accept the cut run, and a launch refused before its run starts (the
-pre-flight input check, in the background as in the foreground) records no run
-and leaves it resumable, which the condition allows. A run with nothing
-left that can never be resumed
-(its step is gone from the definition, its folder was pruned, its record is
-incomplete, an automation started it), one another caller is acting on, one
-whose process is alive, and one that finished, paused or aborted are not named.
-Only the first few qualifying runs are named (`_CUT_RUNS_NAMED`), newest first,
-then `and {n} more.` counting the further qualifying runs among those examined. The note is appended after a
+Which cut runs are named: a `running` record is named without further checks (its
+refusals are only known once it is converted, and a script it left is looked at by
+the resume). A `crashed` record is named unless `engine.resume_refusal`, which only
+reads, gives a reason: a run whose step is gone from the definition, whose folder
+was pruned, whose record is incomplete, or that a later run
+on its key took over is cut but not named. The
+launch's `work_key` is passed to the notice: a cut run recorded on that same key is
+named with no way to resume it, and the note says, as a condition, that once this
+call's run starts it takes over that folder and the cut run can no longer be resumed
+(once that run is recorded, a resume of the cut run is refused because a later run on
+the key has taken over its folder). The check runs before the launch records anything,
+so `resume_refusal` alone would still accept the cut run, and a launch refused before
+its run starts (the pre-flight input check, in the background as in the foreground)
+records no run and leaves it resumable, which the condition allows. Any other cut run
+is named with `resume_run_id='<id>'`, which asks to enter it again at the step it was
+in and says why if it cannot; the note promises nothing a later check could take
+back, and states that this call did not resume it. Only the first few named runs are
+shown (`_CUT_RUNS_NAMED`), newest first, then `and {n} more.` counting the further
+named runs among those examined. The note is appended after a
 blank line to the background launch reply and to the foreground result; with
-nothing to name the reply is unchanged. Its texts state what is there and, for a
-resumable run on another key or none, the condition for resuming it; they tell
-the reader to end no process and delete no file. Their closing sentence (`This
-call did not resume it.`, or `This call did not resume it; a new run would work
-beside what it left.`) holds whether or not the launch got as far as recording a
-run, since the note is also appended to a foreground result whose launch was
-refused before that. The note is a fact for the model, not an offer: unless it
+nothing to name the reply is unchanged. Its texts hold whether or not the launch got
+as far as recording a run, since the note is also appended to a foreground result whose
+launch was refused before that. The note is a fact for the model, not an offer: unless it
 is refused, the launch it comes with starts a new run, and the workflows skill
 tells the model to tell the person and not to resume the cut run on its own, since
 the new run does or has done the same work; it resumes the cut run only when the

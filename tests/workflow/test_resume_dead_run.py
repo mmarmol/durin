@@ -894,7 +894,7 @@ def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch)
     marked = dict(rec, owner=process_tree.process_identity())
     run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), marked)
     refusal = run_log.dead_run_refusal(dead.workspace, marked)
-    assert refusal.kind == "owner_alive" and refusal.fact
+    assert refusal.kind == "owner_alive"
     run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), rec)
 
     # a script that may still run
@@ -903,7 +903,7 @@ def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch)
         monkeypatch.setattr(process_tree, "left_script_state",
                             lambda pid, started, state=state, **kw: (state, [7], [8]))
         refusal = run_log.dead_run_refusal(dead.workspace, rec)
-        assert refusal.kind == "script_alive" and refusal.fact
+        assert refusal.kind == "script_alive"
     # a script record nobody can read
     path.write_text("{not json", encoding="utf-8")
     assert run_log.dead_run_refusal(dead.workspace, rec).kind == "other"

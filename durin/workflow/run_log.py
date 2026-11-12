@@ -764,24 +764,6 @@ def _pids(pids: list[int]) -> str:
     return ", ".join(str(p) for p in pids)
 
 
-class LeftBehind(Refusal):
-    """A refusal that names something the dead process left. It reads as its
-    text everywhere a refusal is used; ``fact`` is the same thing as a clause
-    that is true on its own (what is still there), for a caller that says it in
-    words of its own."""
-
-    fact: str
-
-    def __new__(cls, text: str, fact: str, kind: str = "other") -> "LeftBehind":
-        out = super().__new__(cls, text, kind)
-        out.fact = fact
-        return out
-
-    def __reduce__(self) -> tuple:
-        # Copying and pickling rebuild it with all of its arguments.
-        return (LeftBehind, (str(self), self.fact, self.kind))
-
-
 def _left_script_refusal(node: object, state: str, own: list[int],
                          group: list[int]) -> str | None:
     """The refusal for one script a dead run left, or None when nothing of it
@@ -792,35 +774,27 @@ def _left_script_refusal(node: object, state: str, own: list[int],
     must not end processes or remove files on its account."""
     if state == "alive":
         if own and group:
-            return LeftBehind(
+            return Refusal(
                 f"the script of its step '{node}' from the earlier process is still "
                 f"running (pid {_pids(own)}), and so are processes in its former "
                 f"process group (pid {_pids(group)}), which may not be that script's. "
                 "It can be resumed once they have all ended.",
-                f"the script of its step '{node}' is still running (pid {_pids(own)}), "
-                f"and so are processes in its former process group (pid {_pids(group)}), "
-                "which may not be that script's",
                 kind="script_alive")
         if own:
-            return LeftBehind(
+            return Refusal(
                 f"the script of its step '{node}' from the earlier process is still "
                 f"running (pid {_pids(own)}). It can be resumed once it has ended.",
-                f"the script of its step '{node}' is still running (pid {_pids(own)})",
                 kind="script_alive")
-        return LeftBehind(
+        return Refusal(
             f"processes in the former process group of the script of its step "
             f"'{node}' are still running (pid {_pids(group)}); they may not be that "
             "script's. It can be resumed once they have ended.",
-            f"processes in the former process group of the script of its step '{node}' "
-            f"are still running (pid {_pids(group)}), which may not be that script's",
             kind="script_alive")
     if state == "unknown":
-        return LeftBehind(
+        return Refusal(
             f"whether the script of its step '{node}' from the earlier process left "
             f"anything running could not be checked (pid {_pids(group)}). It can be "
             "resumed once nothing of that script is left.",
-            f"whether the script of its step '{node}' ended could not be checked "
-            f"(pid {_pids(group)})",
             kind="script_alive")
     return None
 
@@ -841,12 +815,10 @@ DEAD_RUN_RACE_REFUSALS = frozenset({_TAKEN_REFUSAL, _GONE_REFUSAL, _BUSY_REFUSAL
 
 
 def _unreadable_script_refusal(path: Path) -> str:
-    return LeftBehind(
+    return Refusal(
         f"a record of one of its scripts, {path}, cannot be read, so whether that "
         "script still runs cannot be checked. It can be resumed once a person has "
-        "made sure nothing of that script is left and has removed that file.",
-        f"a record of one of its scripts, {path}, cannot be read, so whether that "
-        "script still runs cannot be checked")
+        "made sure nothing of that script is left and has removed that file.")
 
 
 def _script_checks(workspace: str | Path, name: str,
@@ -932,8 +904,7 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
     ``_TAKEN_REFUSAL`` (``_GONE_REFUSAL`` when the record was removed); a
     sub-workflow run's record, or a script record, that changed meanwhile gives
     ``_BUSY_REFUSAL``, as does a lock that stays busy. These three are
-    ``DEAD_RUN_RACE_REFUSALS``. Every other answer is a ``LeftBehind``: the
-    refusal text, with the fact it rests on in ``fact``.
+    ``DEAD_RUN_RACE_REFUSALS``.
 
     Observes processes and may wait for a lock, so a caller on an event loop
     runs it off the loop."""
@@ -955,20 +926,17 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
             return _TAKEN_REFUSAL
         if owner_alive:
             pid = owner.get("pid") if isinstance(owner, dict) else owner
-            return LeftBehind(
+            return Refusal(
                 f"it was marked interrupted while the process that was running it "
                 f"(pid {pid}) still seems alive. It can be resumed once that process "
                 "has ended.",
-                f"the process that was running it (pid {pid}) still seems alive",
                 kind="owner_alive")
         if running:
             child_name, child = running
-            return LeftBehind(
+            return Refusal(
                 f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
                 "is still recorded as running. It can be resumed once that run has ended "
                 "or been found dead.",
-                f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
-                "is still recorded as running",
                 kind="child_running")
         return _settle_scripts(checks)
 
@@ -1235,8 +1203,9 @@ DEAD_RUN_ERROR = "the process ended while this step was running"
 DEAD_RUN_LOCK_TIMEOUT_S = 15.0
 
 
-def _owner_gone(record: dict, now: float, max_age_s: float) -> bool:
-    """Whether the process executing a ``running`` record is gone. A record with
+def owner_gone(record: dict, now: float, max_age_s: float) -> bool:
+    """Whether the process executing a ``running`` record is gone, by observation
+    only: nothing is written and no lock is taken. A record with
     an ``owner`` is dead as soon as that process is not alive; a record without
     one (written before owners existed) only once its ``started_at``, a positive
     time, is older than ``max_age_s``. Without such a start time the record has
@@ -1256,7 +1225,7 @@ def _owner_gone(record: dict, now: float, max_age_s: float) -> bool:
 
 def run_in_flight(workspace: str | Path, name: str) -> str | None:
     """The id of a run of workflow ``name`` recorded ``running`` whose process
-    is not provably gone (``_owner_gone``: alive, or not observable), or None.
+    is not provably gone (``owner_gone``: alive, or not observable), or None.
     A ``running`` record whose owner is gone is a dead run, not one in flight.
     Reads only; observes processes, so it is not for an event loop."""
     folder = _wf_dir(workspace, name)
@@ -1271,7 +1240,7 @@ def run_in_flight(workspace: str | Path, name: str) -> str | None:
         except (OSError, json.JSONDecodeError):
             continue
         if (isinstance(rec, dict) and rec.get("status") == "running"
-                and not _owner_gone(rec, now, RECONCILE_AGE_S)):
+                and not owner_gone(rec, now, RECONCILE_AGE_S)):
             return rec.get("run_id") or f.stem
     return None
 
@@ -1477,7 +1446,7 @@ def mark_dead_run(
             record = read_manifest(workspace, name, run_id)
             if not isinstance(record, dict) or record.get("status") != "running":
                 return None
-            if not _owner_gone(record, now, max_age_s):
+            if not owner_gone(record, now, max_age_s):
                 return None
             stop_path = stop_request_path(workspace, name, run_id)
             stop = _read_stop_request(stop_path) or record.get("stop_requested") or None
@@ -1568,7 +1537,7 @@ def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) ->
             # the conversion checks it again under the lock.
             if not isinstance(rec, dict) or rec.get("status") != "running":
                 continue
-            if not _owner_gone(rec, now, max_age_s):
+            if not owner_gone(rec, now, max_age_s):
                 continue
             if mark_dead_run(workspace, wf_dir.name, f.stem,
                              now=now, max_age_s=max_age_s) is not None:

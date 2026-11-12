@@ -233,10 +233,7 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   replayed turn with no person present), leave the cut run as it is and say in your reply
   that it exists. When the note says the cut run is on the same work key as this call,
   do not try to resume it: once this call's run has started it has taken over that
-  folder. When the note says something of
-  the cut run is still there (a script, a sub-workflow run, a process that seems alive),
-  with or without saying the run cannot be resumed, tell the person; do not treat the new
-  run as safe to repeat work beside it, and never end processes or delete files yourself.
+  folder.
   When the reason is that another caller is acting on it, that it was already resumed, or
   that its record no longer exists, nothing the old process left is in the way: look at
   the run's status before trying again. A run can also stop because a write of a

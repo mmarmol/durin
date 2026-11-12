@@ -1,6 +1,7 @@
 """Tests for per-run workflow records (the diagnostic source)."""
 
 from durin.workflow import run_log
+from durin.workflow.refusal import Refusal
 from durin.workflow.result import NodeRun, WorkflowResult
 
 
@@ -908,12 +909,12 @@ def test_runs_launched_by_skips_unreadable_files_and_a_missing_folder(tmp_path):
     assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["ok"]
 
 
-def test_a_left_behind_refusal_survives_copy_deepcopy_and_pickle():
+def test_a_script_refusal_survives_copy_deepcopy_and_pickle():
     import copy
     import pickle
 
-    original = run_log.LeftBehind("it cannot run yet.", "a script may still run")
+    original = Refusal("it cannot run yet.", "script_alive")
     for other in (copy.copy(original), copy.deepcopy(original),
                   pickle.loads(pickle.dumps(original))):
-        assert type(other) is run_log.LeftBehind
-        assert other == original and other.fact == original.fact
+        assert type(other) is Refusal
+        assert other == original and other.kind == original.kind
