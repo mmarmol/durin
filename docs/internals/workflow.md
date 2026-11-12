@@ -550,7 +550,11 @@ link, so a folder it makes there is a real one); that path is refused here.
 *Write-back.* Each remaining path is recorded: an existing file's bytes go to `pre/<n>`
 (streamed, file by file) with its mode; a path that did not exist is noted as such; a
 written path also keeps the SHA-256 of the content written there and the mode it is
-written with (the existing file's at that moment, or 0644); and every folder the
+written with: the existing file's mode at that moment without its setuid and setgid
+bits (the system may silently drop those from a file whose group the user is not in),
+or, for a new file, the mode a new file gets in that place under the process umask,
+read from a file made in `pending-apply/` and removed at once (reading the umask
+itself would mean setting it for every running thread); and every folder the
 write-back creates is noted. The run area's entry for `pending-apply` is
 flushed to disk once that folder is made, the stored copies are flushed, and
 `journal.json` is written last: the journal file existing is what says a write-back is
@@ -579,7 +583,7 @@ it holds what the write-back left there:
 
 - a written path is put back — its stored file returns, or it is removed when it did
   not exist before — only when it is a regular file holding the content written there
-  with the mode the write-back gave it;
+  with the recorded mode;
 - a deleted path is put back only when it does not exist;
 - a path that holds what it held before (for a stored file, its bytes and mode) needs
   nothing;

@@ -69,6 +69,10 @@ _PRE = "pre"
 _TMP = "tmp"
 _STORED_NAME = re.compile(r"[0-9]+")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# The set-user-id and set-group-id bits: a written file never gets them, since the
+# system may silently drop them from a file whose group the user is not in, and the
+# undo must find on the file exactly the mode it recorded.
+_SET_ID = stat.S_ISUID | stat.S_ISGID
 
 
 @dataclass
@@ -397,8 +401,8 @@ def _stage_into(work: Path, rel: str, fill: Callable[[BinaryIO], object], mode: 
 
 def _write_file(target: Path, content: bytes, work: Path, staging: Path, mode: int) -> None:
     """Write one file of a write-back into the real folder with *mode*, the mode its
-    journal entry records (the existing file's, or 0644 for a new one), staged and
-    renamed into place: the only function ``apply_all`` writes a file through."""
+    journal entry records (see ``apply_all``), staged and renamed into place: the
+    only function ``apply_all`` writes a file through."""
     rel = target.relative_to(work).as_posix()
     _make_folders(work, rel)
     try:
@@ -453,6 +457,19 @@ def _put_back(work: Path, rel: str, stored: Path, mode: int, staging: Path) -> N
             shutil.copyfileobj(src, out)
 
     _stage_into(work, rel, fill, mode, staging)
+
+
+def _new_file_mode(folder: Path) -> int:
+    """The mode a new file gets in *folder* under the process umask, read from a
+    file made there with 0666 and removed at once. Reading the umask itself means
+    setting it, which would change it for every thread running meanwhile."""
+    probe = folder / ".new-file-mode"
+    fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        return stat.S_IMODE(os.fstat(fd).st_mode) & ~_SET_ID
+    finally:
+        os.close(fd)
+        os.unlink(probe)
 
 
 def _fsync_dir(folder: Path) -> None:
@@ -534,7 +551,9 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
     ``pending_dir(root)``: an existing file's bytes go to ``pre/<n>`` (streamed) with
     its mode, a path that did not exist is noted as such, a written path keeps the
     SHA-256 of the content written there and the mode it is written with (the
-    existing file's, or 0644), and every folder the write-back creates is noted. The run area's entry for ``pending-apply`` is flushed to disk, and
+    existing file's without its set-user-id and set-group-id bits, or, for a new
+    file, the mode a new file gets under the process umask), and every folder the
+    write-back creates is noted. The run area's entry for ``pending-apply`` is flushed to disk, and
     ``journal.json`` is written last: the journal file existing is what says a
     write-back is pending.
 
@@ -574,6 +593,7 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
     pre = pending / _PRE
     pre.mkdir(parents=True)
     _fsync_dir(pending.parent)                     # the run area now names pending-apply
+    new_mode = _new_file_mode(pending)
     entries: list[dict] = []
     written_modes: dict[str, int] = {}
     for n, rel in enumerate([*deletes, *written]):
@@ -585,7 +605,8 @@ def apply_all(changesets: list[ChangeSet], root: str | Path, *, run_id: str,
             _store_copy(target, pre / str(n))
             entry.update(pre=str(n), mode=stat.S_IMODE(st.st_mode))
         if rel in content:                   # the mode _write_file gives it
-            entry["written_mode"] = entry["mode"] if entry["mode"] is not None else 0o644
+            entry["written_mode"] = (entry["mode"] & ~_SET_ID if entry["mode"] is not None
+                                     else new_mode)
             written_modes[rel] = entry["written_mode"]
         entries.append(entry)
     new_dirs = list(dict.fromkeys(

@@ -1200,15 +1200,23 @@ def test_a_folder_that_loses_its_search_permission_while_the_branches_run_is_ref
     from durin.workflow import workspace_fork
     if os.geteuid() == 0:
         pytest.skip("permissions do not bind the superuser")
+    import threading
     work = tmp_path / ".workflow" / "r1" / "work"
+    # A branch's runner is called once its copy of the folder exists; the real
+    # folder loses its permission only after both runners were entered, so neither
+    # copy is made from a folder that can no longer be read. A barrier that times
+    # out breaks, and the branch fails loudly instead of hanging.
+    both_copied = threading.Barrier(2, timeout=10)
 
     def node_runner(req):
         if req.node.id == "pre":
             (work / "ns").mkdir()
             (work / "ns" / "f.txt").write_text("f1")
-        elif req.workspace_override and req.node.id == "a":
-            (Path(req.workspace_override) / "ns" / "f.txt").write_text("f2")
-            os.chmod(work / "ns", 0o600)          # the real folder loses its search permission
+        elif req.workspace_override:
+            both_copied.wait()
+            if req.node.id == "a":
+                (Path(req.workspace_override) / "ns" / "f.txt").write_text("f2")
+                os.chmod(work / "ns", 0o600)      # the real folder loses its search permission
         return NodeRunResponse(output="o", session_key=None, messages=[])
 
     try:

@@ -223,11 +223,12 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   before its first step and cannot be resumed: start a new run once the person says the
   cause is gone. A run stopped with `writing the branches' result back failed: <error>`
   could not write a `choose`/`union` result into its folder (a read-only folder, a full
-  disk). When the reason stops there, the folder was put back, except for any path
-  someone else changed meanwhile, which is left as it is and named in a warning; when it
-  goes on to say the changes could not be undone yet, the folder has not been put back,
-  and the retry puts it back once the cause is gone. Either way, tell the person the error; once the cause
-  it names is gone, retry with `resume_run_id`. A `choose`/`union` step whose result
+  disk). When the reason stops there, the folder was put back, except for a path someone
+  else changed meanwhile in a way the undo can tell from the write-back's own, which is
+  left as it is and named in a warning; when it goes on to say the changes could not be
+  undone yet, the folder has not been put back, and the retry puts it back once the cause
+  is gone. Either way, tell the person the error; once the cause it names is gone, retry
+  with `resume_run_id`. A `choose`/`union` step whose result
   would turn a file into a folder (or a folder into a file), write, delete or go through
   a link, write a file that is not regular, reach another volume, or touch a path that
   cannot be examined, ends the run like a union conflict: `the branches' result cannot be

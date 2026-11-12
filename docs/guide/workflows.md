@@ -431,8 +431,10 @@ step starts from what its first attempt started from.
 
 The undo only touches a file that still holds what the writing left there: it
 removes a file the writing created and puts back a file it changed only while
-that file holds the content written there with the mode the writing gave it, and
-puts back a file it deleted only while nothing is at that path. A file someone
+that file holds the content written there with the mode the writing gave it — the
+earlier file's mode without its setuid and setgid bits, or, for a file it
+created, what the umask allows — and puts back a file it deleted only while
+nothing is at that path. A file someone
 else changed or made in between — other content, another mode, a folder in its
 place, a deleted file the writing had changed — is left as it is and named
 in a warning in the log. A change that cannot be told from the writing's own is
