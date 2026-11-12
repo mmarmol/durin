@@ -390,10 +390,10 @@ decides how their work comes back together:
 
 The private copies live inside the run's own folder (under `.workflow/`, beside
 its working folder) and are deleted when the step ends. If the process dies in
-the middle of the step, they are removed when the dead run is marked as
-crashed, or at the latest when the resumed step starts again; the step never
-works with copies an earlier attempt left. Deleting the run's folder deletes
-them too.
+the middle of the step, they stay on disk until the resumed step starts again,
+which removes them before it makes its own, or until the run's folder is
+pruned; the step never works with copies an earlier attempt left. Deleting the
+run's folder deletes them too.
 
 The kept result is not written when it would turn a file into a folder or a
 folder into a file (for example a branch replaces a file `x` with a folder that
@@ -506,7 +506,7 @@ picks between its branches' files, the whole parallel step re-runs. A resume tha
 missing, say — leaves the run paused as it was, so you can answer it again
 once that's fixed. A sub-workflow step's own run is never resumed on its own,
 paused or failed: resume the run that called it, which runs the sub-workflow
-step again in its own folder. A resume of the sub-workflow's run is refused
+step again, in the caller's folder. A resume of the sub-workflow's run is refused
 with the id of that caller.
 
 **A run cut by a crash or a restart.** When the process running a workflow
@@ -555,7 +555,17 @@ exits, and those runs can be resumed at the step they were in. A service manager
 should send its stop signal to the gateway's main process only (with systemd,
 `KillMode=mixed`): one that signals every process of the service reaches the scripts
 first, and a script that ends that way counts as its step's outcome, a failed step or
-a gate's `FAIL`. A process killed outright
+a gate's `FAIL`. `durin gateway stop` gives the gateway five seconds to exit and
+then kills it outright. A run that was cut still shows as running until durin
+finds its process gone: when a gateway that serves the dashboard starts, on its periodic check,
+when the agent's `tasks` tool is asked about it, or when it is resumed. It then
+shows as `crashed`. A run that someone had asked to stop before its process ended
+shows as `cancelled` instead and cannot be resumed. Quitting the REPL with a run
+in flight exits at once, as quitting the terminal UI does, and both say on the
+terminal how many runs they left and how to resume them. A one-shot `durin agent
+-m` interrupted with Ctrl+C is the exception: that stops its run.
+
+A process killed outright
 (a `kill -9`, a stop that had to force it, the system running out of memory, a
 power loss) cannot do that: its
 scripts keep running, and nothing in durin ever ends them. The resume of such a run

@@ -5,6 +5,110 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.14.0 — 2026-11-12
+
+A workflow run outlives the process that was running it.
+
+### Highlights
+
+- **A run cut by a crash, a stop or a restart can be resumed at the step it
+  was in.** A run whose process ended was marked `crashed` and had to be
+  started again from its first step. The record now keeps the step the run is
+  in and what that step received. Resume it through the agent (`run_workflow`
+  with `resume_run_id`), from the dashboard ("Resume at the interrupted step")
+  or through the API. Steps that finished do not run again. The step the run
+  was in runs again from its start, a parallel step with all its branches, so
+  a step that acts outside durin should be safe to repeat. (#741)
+- **Stopping or restarting durin ends the scripts its runs were running.**
+  A stop of the gateway could leave a run's script running after the process
+  had gone. On `durin gateway stop`, on quitting the terminal UI or the REPL
+  and on `/restart`, the process now ends every script it started as its last
+  act, and those runs can be resumed.
+  A script ended this way is not recorded as a failed step or a gate's `FAIL`.
+  Nothing else in durin ever ends a process: a script that survives a hard
+  kill is left alone, and a resume of its run waits for it and names its
+  process id. (#741, #743, #744)
+- **Resuming the same run more than once stays correct.** A step that failed
+  on its last allowed pass could not be retried; after two resumes a loop
+  restarted an earlier step as its first pass; a resumed shared-context step
+  got an empty conversation; and two resumes of one run could both start.
+  Attempts and passes are now counted over the whole run, the shared
+  conversation is restored, and every resume, on every surface, claims the
+  run first. (#740)
+- **A `choose` or `union` step never leaves the folder half-written.** A
+  process that died while the branches' result was being written left the
+  run's folder partly changed. The result is now checked whole before anything
+  is written, and a write that was cut is undone before anything uses the
+  folder again. (#742)
+- **A resumed run tells the conversation that launched it.** A run started
+  from a chat and resumed from the dashboard, the API or another conversation
+  reports its result to that chat. When a chat launches a workflow again after
+  a run of it was cut, the reply says so once, with the run's id; the agent
+  tells you and does not resume it on its own. (#742, #743)
+
+### Changes
+
+#### Workflows
+
+- A resume is refused, with the reason, when the step cannot be entered again:
+  the run was recorded before runs kept their step, the step is gone from the
+  workflow, the working folder was pruned, a later run with the same `work_key`
+  has used the folder, a script of the cut run may still be running, a
+  sub-workflow run of it has not ended, or someone else is acting on the run.
+  (#741, #743)
+- A run that someone had asked to stop before its process ended is recorded
+  `cancelled` and is not resumable. (#741)
+- A crashed run that an automation started is not resumed by hand. (#741)
+- A sub-workflow's own run can no longer be resumed directly. Resume the run
+  that called it; the refusal names it. (#740)
+- A step that failed on its last allowed pass can be retried: a failed attempt
+  does not use up a pass. (#740)
+- The dashboard's Runs pane and the editor's test panel offer **Retry the
+  failed step** on an aborted run, and show a step's pass number instead of
+  its attempt number. `POST /api/v1/workflows/{name}/run` returns
+  `failed_node`. (#740)
+- A resumed run that completes lists the files of every walk, not only the
+  last one. (#740)
+- A workflow cannot be renamed while one of its runs is in flight. (#741)
+- A `choose` or `union` result that edits or deletes a symbolic link, writes
+  under a linked folder, or touches a special file or a path on another volume
+  is refused with the path and the reason. It used to be applied. (#742)
+- The files a `choose` or `union` result writes are replaced, not rewritten in
+  place: a hard link to such a file is broken and extended attributes are not
+  carried. (#742)
+- The private copies of `choose` and `union` branches live beside the run's
+  folder instead of the system's temporary directory. (#742)
+- Quitting the terminal UI or the REPL with a run in flight exits at once,
+  leaves the run resumable and says so on the terminal. (#741)
+- Every run found dead, every resume and every refused resume writes one log
+  line and one telemetry event (`workflow.run_found_dead`,
+  `workflow.run_resumed`, `workflow.resume_refused`,
+  `workflow.writeback_restored`). (#743, #744)
+- The workflows skill's instructions on running and resuming are a sixth of
+  their size, so a turn that loads the skill costs less. (#743)
+- The guides state a limit that already existed: a step's `mcps` are available
+  only in a run the agent starts from a chat. (#740)
+
+#### Upgrading
+
+- A run in flight when you upgrade cannot be resumed afterwards: it was
+  recorded before runs kept their step. Let runs finish before upgrading.
+- `durin gateway stop` kills the gateway after five seconds. A stop that takes
+  longer leaves the scripts running, and the resume waits for them.
+- A service manager should send its stop signal to the gateway's main process
+  only (with systemd, `KillMode=mixed`). One that signals every process of the
+  service ends a script before the gateway does, and that script's end counts
+  as its step's outcome: a failed step, or a gate's `FAIL`. This is how earlier
+  versions behave too.
+
+#### Dashboard
+
+- KaTeX 0.19 renders formulas, as the dashboard's single copy. (#739)
+
+#### Dependencies and data
+
+- pypdf 7. (#738)
+
 ## 0.13.1 — 2026-11-11
 
 ### Highlights

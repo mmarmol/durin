@@ -82,7 +82,8 @@ guardrails — waits for you to say yes, in the chat or from the dashboard's
 
 Every run — workflows, scheduled cron jobs, agent tasks — shows up in a live panel
 with per-step detail, status, and the model used. Nothing happens in a black box:
-watch a run, open a paused checkpoint, and pick up right where it stopped.
+watch a run, open a paused checkpoint, and pick up right where it stopped. A run
+cut short by a crash or a restart can be resumed at the step it was in.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-runs.svg" alt="durin's Runs panel: live task list with per-step progress" width="860">
