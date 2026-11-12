@@ -218,6 +218,22 @@ def test_a_failing_end_of_the_scripts_still_exits(monkeypatch):
     assert execs == [] and exits == [1]
 
 
+def test_an_interruption_on_the_way_to_the_exec_still_exits(monkeypatch, end_scripts_calls):
+    """Once the scripts were ended, the threads that held them wait for the
+    process to end: a Ctrl+C landing on the way to the exec must not let the
+    process go on."""
+    def interrupted(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("durin.utils.restart.os.execv", interrupted)
+    exits: list[int] = []
+    monkeypatch.setattr("durin.utils.restart.os._exit", exits.append)
+
+    reexec()
+
+    assert end_scripts_calls == ["end_scripts"] and exits == [1]
+
+
 def test_should_show_cli_restart_notice():
     notice = RestartNotice(channel="cli", chat_id="direct", started_at_raw="100")
     assert should_show_cli_restart_notice(notice, "cli:direct") is True

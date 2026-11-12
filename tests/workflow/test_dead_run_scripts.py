@@ -311,6 +311,7 @@ def test_a_script_left_by_a_kill_holds_the_resume_until_it_has_ended(tmp_path, s
         wf, "t", resume=build_resume_state(settled, "", workspace=dead.workspace))
     assert done.status == "completed"
     assert marks(dead.workspace)["b"] == 2          # exactly one new start
+    assert signals == []        # the test's own end of the script goes around this list
 
 
 @pytest.mark.parametrize("finder", ["sweep", "tasks"])
