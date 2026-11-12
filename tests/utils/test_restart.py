@@ -191,31 +191,6 @@ def test_reexec_ends_the_scripts_of_the_process_right_before_the_exec(
     assert end_scripts_calls == ["end_scripts", "execv"]
 
 
-def test_a_restart_logs_how_many_scripts_it_ends(monkeypatch, end_scripts_calls):
-    import subprocess
-
-    from loguru import logger
-
-    from durin.workflow import script_runner
-
-    monkeypatch.setattr("durin.utils.restart.os.execv", lambda *a, **k: None)
-    held = subprocess.Popen(["true"])
-    held.wait(timeout=10)
-    lines: list[str] = []
-    sink = logger.add(lambda m: lines.append(m.record["message"]), level="INFO",
-                      filter="durin.utils.restart", format="{message}")
-    with script_runner._children_lock:
-        script_runner._children.add(held)
-    try:
-        reexec()
-    finally:
-        logger.remove(sink)
-        with script_runner._children_lock:
-            script_runner._children.discard(held)
-    assert lines == ["reexec: ending the 1 workflow script(s) this process still holds "
-                     "before the re-exec"]
-
-
 def test_the_loser_of_the_reexec_race_ends_no_script(monkeypatch, end_scripts_calls):
     monkeypatch.setattr("durin.utils.restart._reexeced", True)  # the winner "already" ran
     thread = threading.Thread(target=reexec, daemon=True)

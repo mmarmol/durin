@@ -1136,8 +1136,9 @@ quitting; a `/restart` without a gateway — first marks itself as shutting down
 flight. A foreground `run_workflow` call whose turn is cancelled while the process is
 shutting down asks nothing of its run: no cancel flag, no stop file. The run is left to
 end with the process (a process with a run still on its thread leaves it rather than
-wait for it, and ends the run's scripts right before it exits, as described below; the
-TUI and the REPL also write one line to stderr naming how many runs
+wait for it, and ends the run's scripts right before it exits, as described below; its
+warning log line names the runs it leaves and how many workflow scripts the process still
+holds as it ends them; the TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
 the dashboard, since their log line is usually disabled). The run's record stays
 `running` until a process that can tell finds its process gone. Once the process has
@@ -1171,10 +1172,11 @@ When that happens to a process still running, the runner logs a warning that a r
 could not wait for it.
 
 The script runner also keeps, in memory, the scripts this process started and has not
-reaped, under one lock. The lock is held only to read whether the process is ending and
-to add a script to the set or remove it: a script starts outside it, so a start that
-blocks (a working folder on a stalled mount) holds back neither the call below nor any
-other run's script. The process ends them where it ends or replaces itself, as the
+reaped, under one lock. A script's thread holds the lock only to read whether the
+process is ending and to add its script to the set or remove it, and a script starts
+outside it, so a start that blocks (a working folder on a stalled mount) holds back
+neither the call below nor any other run's script. The call below holds it while it
+signals, up to `_REAP_LOCK_WAIT_S` for each script. The process ends them where it ends or replaces itself, as the
 last thing before it does: `run_threads.leave_unfinished_runs` calls `script_runner.end_scripts_for_exit` right before `os._exit` (a gateway stop, the
 TUI or the REPL quitting while a run is still on its thread; with no run on a thread it
 returns without calling it; the call runs even when the log flush before it is
@@ -1326,8 +1328,8 @@ payloads holds a path, a process id or task text, and none sets a session key of
 | Event | Payload | Emitted |
 |---|---|---|
 | `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count; `null` when the folder could not be listed, which does not hold back the conversion) | once per conversion, with one info log line |
-| `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume |
-| `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`) |
+| `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume, with one info log line (the same words) |
+| `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`), with one info log line (the same words) |
 | `workflow.writeback_restored` | `workflow`, `run_id`, `step` | when a write-back a dead process left cut was put back before the walk used the folder (`step` is the step it resumes at, `null` for a run that was not resumed) or before a parallel step ran (that step) |
 
 `build_resume_state(record, answers, workspace=...)` enters a dead run at its position's

@@ -157,7 +157,7 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   conversation started, that conversation may not be told: if its person must know, tell
   your user.
   **When a resume is refused, or a reply (a run summary, a `tasks` reply, a launch's
-  `Note: run <id> … was cut short`) names a run cut short (status `crashed`) or a file, folder or pid in a run's
+  `Note: run <id> … was cut short`) names a run cut short (its process ended while it ran) or a file, folder or pid in a run's
   way**, tell the person the reason and every run id, file, folder and pid it names. Do not,
   on your own, resume a cut run, end a process, or remove, move or change a file or folder:
   resume a cut run only when the person asks, after stopping the run your launch started

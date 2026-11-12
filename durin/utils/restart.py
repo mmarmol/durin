@@ -134,8 +134,6 @@ def reexec() -> None:
         # recorded as an outcome.
         from durin.workflow import script_runner
 
-        logger.info("reexec: ending the {} workflow script(s) this process still holds "
-                    "before the re-exec", script_runner.scripts_held())
         script_runner.end_scripts_for_exit()
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
     except BaseException as exc:

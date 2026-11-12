@@ -31,7 +31,8 @@ This process keeps the scripts it started and has not reaped, and ends them
 all only at the point it ends or replaces itself (``end_scripts_for_exit``,
 called right before ``os._exit`` or ``os.execv``). Apart from that, a script's
 group is signalled only by the thread that started it, before that thread
-reaps it, on a timeout or a cancel.
+reaps it: on a timeout or a cancel, when its wait was broken, and when its
+start was still in progress as the process began to end.
 """
 
 from __future__ import annotations
@@ -77,9 +78,10 @@ _CLEAN_ENV_ALLOWLIST = (
 )
 
 # The scripts this process started and has not reaped, and whether this process
-# is ending. One lock covers both, and it is held only to read the one and
-# change the other: a script starts outside it, so neither the end-of-process
-# pass nor another run's script ever waits for a start. A script is either in
+# is ending. One lock covers both. A script thread holds it only to read the one
+# and change the other, and a script starts outside it, so neither the
+# end-of-process pass nor another run's script ever waits for a start; the pass
+# holds it while it signals, up to ``_REAP_LOCK_WAIT_S`` per script. A script is either in
 # the set when the pass runs (and ended by it), or its starting thread sees,
 # under the lock, that the pass has run and ends it itself; a thread whose
 # script was reaped learns under it whether the pass has run.
@@ -166,17 +168,26 @@ def _start(argv: list[str], cwd: str | None, env: dict[str, str]) -> subprocess.
     When the pass ran while this script was starting, the script is not among
     the children it signalled: this thread ends it (its own child, not yet
     reaped), records nothing and waits for the process to end. If the process
-    ends before this thread gets there, the script outlives it unrecorded."""
+    ends before this thread gets there, the script outlives it unrecorded. A
+    start that fails once the pass has run is no outcome either: this thread
+    waits for the process to end instead of raising the failure."""
     with _children_lock:
         exiting = _exiting
     if exiting:
         _wait_for_exit()
-    proc = subprocess.Popen(
-        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, cwd=cwd, env=env, text=True,
-        errors="replace",   # a script emitting non-UTF-8 bytes must degrade, not crash the runner
-        start_new_session=True,   # own process group, so a timeout kill reaps children too
-    )
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, cwd=cwd, env=env, text=True,
+            errors="replace",   # a script emitting non-UTF-8 bytes must degrade, not crash the runner
+            start_new_session=True,   # own process group, so a timeout kill reaps children too
+        )
+    except Exception:
+        with _children_lock:
+            exiting = _exiting
+        if exiting:
+            _wait_for_exit()
+        raise
     with _children_lock:
         exiting = _exiting
         if not exiting:

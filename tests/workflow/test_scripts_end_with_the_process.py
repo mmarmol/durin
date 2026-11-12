@@ -305,12 +305,14 @@ def test_a_script_step_entered_after_the_pass_starts_no_process(tmp_path, exit_p
 class _HeldStarts:
     """``subprocess.Popen`` with the start of any script whose command holds
     ``HOLD`` kept waiting until the test releases it; every other start goes
-    straight through. ``started`` collects the held scripts once started."""
+    straight through. ``started`` collects the held scripts once started; a
+    held start raises ``fails_with`` instead when the test sets it."""
 
     def __init__(self) -> None:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.started: list[subprocess.Popen] = []
+        self.fails_with: Exception | None = None
         self.real = subprocess.Popen
 
     def __call__(self, args, *a, **kw):
@@ -318,6 +320,8 @@ class _HeldStarts:
         if held:
             self.entered.set()
             self.release.wait(_WAIT_S)
+            if self.fails_with is not None:
+                raise self.fails_with
         proc = self.real(args, *a, **kw)
         if held:
             self.started.append(proc)
@@ -395,8 +399,8 @@ def test_a_script_start_in_one_run_holds_back_no_other_run(tmp_path, held_starts
     held_done: list = []
     held = _in_thread(lambda: held_done.append(engine(held_ws).run(
         parse_workflow(_flow(_ROUTING["linear"], "echo HOLD")), "t")))
-    assert held_starts.entered.wait(_WAIT_S)
     try:
+        assert held_starts.entered.wait(_WAIT_S)
         free_done: list = []
         free = _in_thread(lambda: free_done.append(engine(free_ws).run(
             parse_workflow(_flow(_ROUTING["linear"], "echo free")), "t")))
@@ -407,5 +411,36 @@ def test_a_script_start_in_one_run_holds_back_no_other_run(tmp_path, held_starts
         assert held.is_alive()
     finally:
         held_starts.release.set()
-    held.join(_WAIT_S)
+        held.join(_WAIT_S)
     assert held_done[0].status == "completed"
+
+
+def test_a_script_start_that_fails_after_the_pass_is_no_outcome(
+        tmp_path, exit_pass, held_starts):
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    wf = parse_workflow(_flow(_ROUTING["linear"], "echo HOLD"))
+    thread = exit_pass.start(engine(workspace).run, wf, "t")
+    assert held_starts.entered.wait(_WAIT_S)
+    assert script_runner.end_scripts_for_exit() == 0
+    held_starts.fails_with = OSError(5, "Input/output error")
+    held_starts.release.set()
+
+    _until(lambda: exit_pass.held() == 1, "the starting thread to wait for the process end")
+    assert thread.is_alive()
+    record = run_log.read_manifest(workspace, "w", "r1")
+    assert record["status"] == "running" and record["runs"] == []
+
+
+def test_a_script_start_that_fails_with_no_pass_is_a_failed_step(tmp_path, held_starts):
+    workspace = tmp_path / "ws"
+    (workspace / "workflows").mkdir(parents=True)
+    held_starts.fails_with = OSError(5, "Input/output error")
+    held_starts.release.set()
+
+    done = engine(workspace).run(parse_workflow(_flow(_ROUTING["linear"], "echo HOLD")), "t")
+
+    assert done.status == "aborted"
+    record = run_log.read_manifest(workspace, "w", "r1")
+    assert record["status"] == "aborted"
+    assert [(r["node_id"], r["status"]) for r in record["runs"]] == [("s", "node_failed")]
