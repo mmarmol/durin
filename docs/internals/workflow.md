@@ -1497,9 +1497,9 @@ again after being told is not told again. A run is cut when its record is `crash
 or `running` with an owner that is proven gone (`run_log.owner_gone`, the same
 judgement the crash conversion uses; an owner that cannot be observed counts as
 alive). At most the newest few cut runs are examined (`_CUT_RUNS_EXAMINED`). The notice
-only reads: it writes no record, takes no run lock, waits on none and ends no process,
-an event loop calls it through a thread; a failure is
-logged and the launch goes on without a note.
+only reads: it writes no record, takes no run lock, waits on none and ends no process.
+An event loop calls it through a thread. A failure is logged and the launch goes on
+without a note.
 
 Which cut runs are named: a `running` record is named without further checks (its
 refusals are only known once it is converted, and a script it left is looked at by

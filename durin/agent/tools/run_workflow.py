@@ -443,6 +443,7 @@ def _with_notice(text: str, notice: str) -> str:
 
 
 # How many of the newest cut runs a launch looks at, and how many of them it names.
+# The count includes cut runs the note then skips because they cannot be resumed.
 _CUT_RUNS_EXAMINED = 10
 _CUT_RUNS_NAMED = 3
 
