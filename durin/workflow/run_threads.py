@@ -125,8 +125,9 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     the process. Leaving instead ends the run where a crash would: its manifest
     stays ``running`` until a sweep, a ``tasks`` call about it or a resume
     finds its process gone and marks it ``crashed``, resumable at the step it
-    was in. With no run executing this returns and the interpreter exits as
-    usual.
+    was in. The scripts the runs started are ended right before the exit
+    (``script_runner.end_scripts_for_exit``). With no run executing this
+    returns and the interpreter exits as usual.
 
     ``tell_user`` also writes one line to stderr naming how many runs were left
     and how to resume them: the terminal UI and the REPL, where a person is
@@ -135,20 +136,31 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     unfinished = runs_in_flight()
     if not unfinished:
         return
-    logger.warning(
-        "Shutdown: exiting with {} workflow run(s) unfinished: {}",
-        len(unfinished), ", ".join(unfinished))
-    if tell_user:
-        count = len(unfinished)
+    try:
+        logger.warning(
+            "Shutdown: exiting with {} workflow run(s) unfinished: {}",
+            len(unfinished), ", ".join(unfinished))
+        if tell_user:
+            count = len(unfinished)
+            with suppress(Exception):
+                print(
+                    f"durin: left {count} workflow run{'s' if count != 1 else ''} unfinished "
+                    f"({', '.join(unfinished)}); "
+                    f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
+                    "(resume_run_id) or from the dashboard.",
+                    file=sys.stderr, flush=True)
+        _flush_logs_before_exit()
         with suppress(Exception):
-            print(
-                f"durin: left {count} workflow run{'s' if count != 1 else ''} unfinished "
-                f"({', '.join(unfinished)}); "
-                f"{'they' if count != 1 else 'it'} can be resumed with run_workflow "
-                "(resume_run_id) or from the dashboard.",
-                file=sys.stderr, flush=True)
-    _flush_logs_before_exit()
-    with suppress(Exception):
-        sys.stdout.flush()
-        sys.stderr.flush()
-    os._exit(0)
+            sys.stdout.flush()
+            sys.stderr.flush()
+    finally:
+        # The scripts the runs started go with the process, as its last act,
+        # even when the log line, the note or the flush was interrupted: none
+        # outlives it, and none of their ends is recorded as an outcome. The
+        # exit follows whatever the pass does.
+        try:
+            from durin.workflow import script_runner
+
+            script_runner.end_scripts_for_exit()
+        finally:
+            os._exit(0)

@@ -142,143 +142,28 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
 
 - **Discover:** call `list_workflows` to see what this workspace offers — each entry carries
   its description and I/O — before picking one to run (or to confirm one already exists).
-- **Run:** `run_workflow(name, task)` — optionally `output_format` to shape this call's
-  result, and `input_files` (a list of absolute paths) to hand the workflow files to work on:
-  each is seeded into the run's shared working folder before the start node runs — **under its
-  original basename**, so a workflow whose nodes expect `context.json` must be handed a file
-  *named* `context.json` (rename your copy first if needed) — and every node
-  (including a dynamic fan-out of one worker per file) reads them there — use this instead of
-  pasting file contents into `task`. Provided paths are validated before anything runs: a
-  missing file or two files with the same name abort with a clear message, and a workflow
-  that declares `input: {"file": true}` given no files pauses immediately asking for them.
-  **By default the run goes to the background:** the call returns immediately with a run id,
-  and the result is **delivered to you automatically as a follow-up message** when it
-  finishes. That summary reads top to bottom: the run's status and how many node runs
-  succeeded and failed; the failures (node and error, an identical error listed once with
-  its count; a long error is cut and a long list of different errors ends with a count of
-  the rest); the final output; the files; and last the node list, a fan-out's workers
-  folded into one line. **`completed` does not mean every worker succeeded** — a fan-out
-  completes as long as one worker does, so read the failed count and the failures before
-  you use or report the output. A result message can also arrive for a run THIS conversation
-  started that was resumed elsewhere — from the dashboard, the API or another conversation;
-  its first line says so (`... started from this conversation, was resumed from ...`); the
-  summary below it says how the run ended. Treat it like any result: summarize the
-  outcome for the user and follow what the summary says about continuing the run. The
-  other way round, when you resume a run another conversation started, that conversation
-  is told only if the process you run in serves its channel (the gateway serves the web
-  chat when it is switched on and the chat channels switched on; the terminal UI serves
-  none, and nothing serves a terminal or `/v1` API conversation):
-  it may not hear about it, so if its person needs to know, say so to your user and
-  point to the run's record. Do NOT wait for it with
-  sleep+status polling: tell the user the workflow is running and **end your turn** — the
-  follow-up wakes you, and the user watches live per-node progress in the Work panel.
-  Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or
-  you need a mid-run look at the run's work dir and files (status reports both, plus
-  per-node durations, and — while a node is still executing — names it as the
-  currently-running entry so you know what the workflow is doing right now, not only
-  what it has already finished); `tasks(action="stop", ...)` cancels. Pass `background=false` ONLY
-  when you need the result to keep reasoning in the same turn (the call then blocks and
-  returns the result directly). `tasks` only sees runs launched THIS session — for a run from
-  earlier (any session), use `workflow_runs(action="search", query=...)` to find it and
-  `action="show"` to read its manifest and artifact files instead of running the workflow again.
-  `action="cost"` gives the per-run token/cost table (per node, plus a total) instead of
-  hand-computing it from telemetry — it includes any child sub-workflow runs.
-  **Getting files back:** when the workflow declares it outputs files
-  (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
-  produced files — read them there, and copy out anything that must outlive the run (working
-  folders are pruned after `workflow.keep_runs` newer runs). If the workflow declares
-  `output.artifacts`, the summary also WARNS about any promised file the completed run did
-  not produce — act on that gap (re-run, repair, or tell the user) before consuming the rest. **If the result says it needs
-  input**, the workflow did not fail — it paused with questions and the summary carries the
-  run id; answer them (from your own context when you can, otherwise ask the user), then call
-  `run_workflow` again with `resume_run_id=<that id>` and the answers as `task`. That resumes
-  the SAME run — same working folder, node sessions, and loop counters — at the node that
-  asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
-  failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
-  retries the FAILED node with the exact input it had — completed nodes never re-run
-  (a failed `choose`/`union` branch retries its whole parallel node). **A crashed run
-  resumes the same way too**: a run whose process died (a gateway crash, restart or kill)
-  shows status `crashed` — `run_workflow` with
-  `resume_run_id=<that id>` and no answers enters the node that was running again, from its
-  start, with the input it had; finished nodes do not re-run, a parallel node re-runs all its
-  branches or workers, and a sub-workflow node starts its child again. So that node's effects
-  outside durin (a sent message, a posted comment) can happen twice: before resuming, check
-  whether it already acted, and tell the user when you cannot. Only a script node's own
-  processes are ended when a run is found dead: a command an agent node started with its
-  shell tool is not, and may still be running when the node runs it again. The resume is refused, with
-  the reason, when the run was recorded before runs kept the step they were in, its node is gone from the
-  definition, its folder was pruned, or a later run on the same `work_key` took the folder
-  over — then start a new run. It is also refused while a script the dead process started
-  may still run, when it was marked interrupted while the process that ran it still seems
-  alive, while one of its sub-workflow runs is still recorded as running, or while a record
-  of one of its scripts cannot be read. When the reason names such a file, NEVER delete it
-  yourself: tell the person which file it names; they remove it once they have made sure
-  nothing of that script is left. When the reason names process ids, NEVER
-  end those processes yourself: after a restart a pid can belong to something else, and
-  the code deliberately does not signal them. Tell the person which process ids are left
-  and that they should check these are the script's before ending them; the run can be
-  resumed once they have ended. Do not start a new run of the workflow meanwhile without
-  telling the person that the old script may still be working. A launch reply (or a
-  foreground result) can end with `Note: run <id> of '<workflow>', started from this
-  conversation, was cut short…`: a run of that workflow this conversation had started was
-  cut short by a restart, and the call that carried the note already started a new run
-  (unless its result says it was refused), so there may now be two runs of the same
-  work. Tell the person. Do NOT resume the cut run on your own: the new run does, or has
-  already done, the same work, so resuming the cut one runs that work twice, effects
-  outside durin included — also after the new run has finished. Resume it only when the
-  person asks for that; if the new run is still running then, stop it first
-  (`tasks(action="stop", id=<new run id>)`) and wait until it shows as cancelled before
-  calling `run_workflow` with `resume_run_id`. When nobody can be asked (a scheduled or
-  replayed turn with no person present), leave the cut run as it is and say in your reply
-  that it exists. When the note says the cut run is on the same work key as this call,
-  do not try to resume it: once this call's run has started it has taken over that
-  folder. When the note says something of
-  the cut run is still there (a script, a sub-workflow run, a process that seems alive),
-  with or without saying the run cannot be resumed, tell the person; do not treat the new
-  run as safe to repeat work beside it, and never end processes or delete files yourself.
-  When the reason is that another caller is acting on it, that it was already resumed, or
-  that its record no longer exists, nothing the old process left is in the way: look at
-  the run's status before trying again. A run can also stop because a write of a
-  `choose`/`union` result into its folder was cut and putting the folder back cannot be
-  done now: `the working folder
-  holds changes of an earlier parallel step that could not be undone (<path>): <reason>.
-  The earlier content of the files that step changed is kept in <folder>; removing the
-  journal file discards it when a run next starts in that folder. It can run once a person
-  has checked the folder and removed that file.`, or `… could not be undone yet (<path>):
-  <error>. The earlier content … is kept in <folder>; … A retry undoes them once the cause
-  is gone.` NEVER remove that file or anything else, or touch the folder, yourself:
-  tell the person which file the reason names, the reason or error, and the folder
-  where the earlier content is kept (removing the journal file throws that content
-  away), then retry with `resume_run_id` once the person says the cause is gone. When
-  the same reason ends `A new run can start once a person has checked the folder and
-  removed that file.` or `A new run undoes them once the cause is gone.`, the run stopped
-  before its first step and cannot be resumed: start a new run once the person says the
-  cause is gone. A run stopped with `writing the branches' result back failed: <error>`
-  could not write a `choose`/`union` result into its folder (a read-only folder, a full
-  disk). When the reason stops there, the folder was put back, except for a path someone
-  else changed meanwhile in a way the undo can tell from the write-back's own, which is
-  left as it is and named in a warning; when it goes on to say the changes could not be
-  undone yet, the folder has not been put back, and the retry puts it back once the cause
-  is gone. Either way, tell the person the error; once the cause it names is gone, retry
-  with `resume_run_id`. A `choose`/`union` step whose result
-  would turn a file into a folder (or a folder into a file), write, delete or go through
-  a link, write a file that is not regular, reach another volume, or touch a path that
-  cannot be examined, ends the run like a union conflict: `the branches' result cannot be
-  written back: '<path>' …` — change the branches so they do not, and start a new run.
-  The same ending with `the run's working folder is a link` or `… is on another volume
-  than the run's area` means the run's working folder itself cannot take the result: tell
-  the person, and do not move or replace the folder yourself. A crashed run you started whose workflow (or a sub-workflow it
-  calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
-  dashboard and API refuse it. A crashed run an automation started is not resumed by hand
-  on any surface: the automation does not resume it, and its next run starts anew. A
-  crashed run whose reason says its record is incomplete cannot be resumed either: start a
-  new run, and tell the person that a script of the old run may still be working (this
-  reason does not say whether one is). A paused or aborted run you started can still be answered or
-  retried from the dashboard, but its later `mcps` steps then run without their MCP tools.
-  When nobody can be asked (a cron or workflow context), the summary says so: answer from
-  what you were given, or stop and report that the run waits for input. **A run paused
-  for a person's approval is not yours to resolve**: the summary says so, and
-  `run_workflow` refuses `resume_run_id` on it — tell the user it is waiting for them.
+- **Run:** `run_workflow(name, task)` — its parameters and replies say how to hand it
+  files, run it in the background, read its result, and answer or retry a run that stopped.
+  **`completed` does not mean every worker succeeded**: a fan-out completes when one worker
+  does, so read the failed count and the failures before you use or report the output.
+  **Resume** with `resume_run_id=<run id>`: a `needs_input` run (the answers go in `task`),
+  an `aborted` run (its failed step is retried) or a `crashed` run, whose process died (it
+  is entered again at the step it was in). Finished steps do not run again; the step the run
+  stopped in runs again from its start — a parallel step with all its branches or workers, a
+  sub-workflow step with its whole child — so what it already did outside durin (a sent
+  message, a posted comment) can happen twice, and after a crash a command its agent started
+  with the shell tool may still be running. Before you resume, check whether that step
+  already acted; tell the person when you cannot. When you resume a run another
+  conversation started, that conversation may not be told: if its person must know, tell
+  your user.
+  **When a resume is refused, or a reply (a run summary, a `tasks` reply, a launch's
+  `Note: run <id> … was cut short`) names a cut run or a file, folder or pid in a run's
+  way**, tell the person the reason and every run id, file, folder and pid it names. Do not,
+  on your own, resume a cut run, end a process, or remove, move or change a file or folder:
+  resume a cut run only when the person asks, after stopping the run your launch started
+  (`tasks(action="stop", id=<run id>)`) if it still runs, and once it shows as cancelled.
+  Before you start a new run in place of a crashed one whose reply names a script, or says
+  its record is incomplete, tell the person a script of the crashed run may still be working.
 - **Author:** call `workflow_write(name, definition, rationale)` — it validates the graph
   before anything lands (schema errors come back verbatim), refuses to overwrite an existing
   name, and records the change in the workflow version history. A successful save may still

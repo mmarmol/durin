@@ -30,7 +30,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import provenance, resume_store, run_log, workspace_fork
+from durin.workflow import provenance, resume_events, resume_store, run_log, workspace_fork
 from durin.workflow.artifacts import (
     EVIDENCE_DIRNAME,
     artifact_dir,
@@ -39,6 +39,7 @@ from durin.workflow.artifacts import (
     prune_runs,
     run_evidence_dir,
 )
+from durin.workflow.refusal import Refusal
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
@@ -301,11 +302,11 @@ def _later_run_on_the_key(workspace: str | Path, manifest: dict) -> str | None:
 # sessions under the same prefix (an automation's filter turn) are not named
 # after one.
 AUTOMATION_ROOT_PREFIX = "automation:"
-INCOMPLETE_RECORD_REFUSAL = ("its record is incomplete: it was rewritten without what the "
-                             "run was started with.")
-AUTOMATION_RUN_REFUSAL = ("it was started by an automation, and a run an automation "
-                          "started is not resumed by hand: the automation does not resume "
-                          "it, and its next run starts anew.")
+INCOMPLETE_RECORD_REFUSAL = Refusal("its record is incomplete: it was rewritten without what "
+                                    "the run was started with.")
+AUTOMATION_RUN_REFUSAL = Refusal(
+    "it was started by an automation, and a run an automation started is not resumed by "
+    "hand: the automation does not resume it, and its next run starts anew.", "automation")
 
 
 def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
@@ -358,8 +359,8 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
         return None
     parent = manifest.get("parent_run_id")
     if parent:
-        return (f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
-                f"run {parent!r} instead: it runs the sub-workflow step again.")
+        return Refusal(f"it is the run of a sub-workflow step inside run {parent!r}. Resume "
+                       f"run {parent!r} instead: it runs the sub-workflow step again.")
     if crashed:
         return _dead_run_refusal(manifest, workspace=workspace, workflow=workflow)
     if not failed:
@@ -368,8 +369,8 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
         if (r.get("node_id") == failed and r.get("status") == "node_failed"
                 and r.get("branch_id") is None and r.get("worker_index") is None):
             return None
-    return (f"its failed node {failed!r} ran inside a parallel node, and a unit of a "
-            "parallel node cannot be retried on its own. Start a new run instead.")
+    return Refusal(f"its failed node {failed!r} ran inside a parallel node, and a unit of a "
+                   "parallel node cannot be retried on its own. Start a new run instead.")
 
 
 def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
@@ -386,30 +387,32 @@ def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
             isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX)):
         return AUTOMATION_RUN_REFUSAL
     if "position" not in manifest:
-        return ("it was recorded before a run kept the step it was in. Start a new "
-                "run instead.")
+        return Refusal("it was recorded before a run kept the step it was in. Start a new "
+                       "run instead.")
     position = _dead_position(manifest)
     if position is None:
-        return "the step it was in cannot be entered again. Start a new run instead."
+        return Refusal("the step it was in cannot be entered again. Start a new run "
+                       "instead.")
     step = position["node"]
     if workflow is not None and step not in workflow.nodes:
-        return (f"its step {step!r} is no longer in the workflow's definition. Start a "
-                "new run instead.")
+        return Refusal(f"its step {step!r} is no longer in the workflow's definition. "
+                       "Start a new run instead.", "step_gone")
     if workspace is not None:
         work_dir = manifest.get("work_dir")
         stored = resume_store.load_input(resume_store.store_dir_of(workspace, manifest),
                                          position.get("seq") or 0)
         if (work_dir and not Path(work_dir).is_dir()) or stored is None or stored[0] != step:
-            return "its working folder was pruned. Start a new run instead."
+            return Refusal("its working folder was pruned. Start a new run instead.",
+                           "folder_pruned")
         later = _later_run_on_the_key(workspace, manifest)
         if later:
-            return (f"run {later!r} on the same key started after it and has taken over "
-                    "its folder.")
+            return Refusal(f"run {later!r} on the same key started after it and has taken "
+                           "over its folder.", "superseded")
     return None
 
 
-MCP_TOOLS_REFUSAL = ("its steps use MCP tools that only a run resumed by the agent has. "
-                     "Ask the agent to resume it with run_workflow.")
+MCP_TOOLS_REFUSAL = Refusal("its steps use MCP tools that only a run resumed by the agent "
+                            "has. Ask the agent to resume it with run_workflow.", "mcp_tools")
 
 
 def _uses_mcp_tools(workflow: Workflow, workspace: str | Path) -> bool:
@@ -1078,7 +1081,10 @@ class WorkflowEngine:
                     # which copies its input files again, starts once the cause
                     # is gone.
                     try:
-                        workspace_fork.restore_pending(work_dir)
+                        if workspace_fork.restore_pending(work_dir):
+                            resume_events.writeback_restored(
+                                workflow.name, run_id,
+                                step=resume.start_at if resume else None)
                     except (workspace_fork.PendingApplyError, workspace_fork.UndoError) as exc:
                         if resume is None:
                             raise _FolderNotReadyError(
@@ -2802,7 +2808,8 @@ class WorkflowEngine:
         # here reads the folder, so this attempt starts from what that one started
         # from. A journal that cannot be used (PendingApplyError) or an undo that
         # cannot finish (UndoError) ends the run at this step.
-        workspace_fork.restore_pending(fork_root)
+        if workspace_fork.restore_pending(fork_root):
+            resume_events.writeback_restored(workflow.name, run_id, step=node.id)
         copies_dir = workspace_fork.branches_root(fork_root) / run_id
         # Whatever an earlier attempt of this step left (its process died before
         # its own clean-up ran) goes before this attempt copies the folder. Only one

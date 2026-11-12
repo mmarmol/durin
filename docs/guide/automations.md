@@ -221,6 +221,15 @@ the delivery policy says. Clicking Stop again while that request is pending
 offers a second, stronger option instead of repeating the same no-op: Force
 stop interrupts a work node's turn mid-flight rather than waiting for the next
 step boundary.
+
+When durin itself stops or restarts with a run in flight, the run ends with it,
+its running script step included, and shows as interrupted; it is not resumed, and
+the automation's next run starts anew. One limit: when durin's process is killed
+outright (a `kill -9`, the system running out of memory, a power loss), a script
+step that was running keeps running. Nothing ends it and the automation's next run
+does not wait for it, so the two can work at the same time. Only a resume of the
+dead workflow run waits for such a script, and an automation never resumes one.
+
 Beyond the dashboard, an automation can also be defined and driven through:
 
 - **The agent, in chat.** Describe the standing work you want — "each time an email

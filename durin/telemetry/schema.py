@@ -1970,6 +1970,44 @@ class SkillObservationStalledEvent(TypedDict):
     attempts: int  # failed attempts on the record when it stalled
 
 
+class WorkflowRunFoundDeadEvent(TypedDict):
+    """A run recorded as running whose process was gone was converted to the
+    record a resume enters."""
+
+    workflow: str
+    run_id: str
+    status: str  # "crashed" | "cancelled"
+    step: str | None  # the step it was in
+    scripts_recorded: int  # script records it left beside its record
+
+
+class WorkflowRunResumedEvent(TypedDict):
+    """A resume claimed a stopped run."""
+
+    workflow: str
+    run_id: str
+    kind: str | None  # "paused" | "failed" | "dead"
+    surface: str  # "service" | "agent"
+
+
+class WorkflowResumeRefusedEvent(TypedDict):
+    """A resume of a stopped run was refused."""
+
+    workflow: str
+    run_id: str
+    surface: str  # "service" | "agent"
+    reason: str  # owner_alive | script_alive | folder_pruned | step_gone | superseded | automation | mcp_tools | child_running | lost_race | other
+
+
+class WorkflowWritebackRestoredEvent(TypedDict):
+    """A write-back a dead process left cut was put back before the run's
+    walk (or a parallel step) used the working folder."""
+
+    workflow: str
+    run_id: str
+    step: str | None
+
+
 class WorkflowImproveRecommendedEvent(TypedDict):
     """The improve pass queued a proposal (prompt / command / script_file) as
     a recommendation — either a MANUAL-mode workflow, or an AUTO-mode one where
@@ -2251,6 +2289,10 @@ EVENTS: dict[str, type] = {
     "skill.used": SkillUsedEvent,
     "skill.observation_logged": SkillObservationLoggedEvent,
     "skill.curation_action": SkillCurationActionEvent,
+    "workflow.run_found_dead": WorkflowRunFoundDeadEvent,
+    "workflow.run_resumed": WorkflowRunResumedEvent,
+    "workflow.resume_refused": WorkflowResumeRefusedEvent,
+    "workflow.writeback_restored": WorkflowWritebackRestoredEvent,
     "workflow.improve.recommended": WorkflowImproveRecommendedEvent,
     "workflow.improve.applied": WorkflowImproveAppliedEvent,
     "workflow.improve.reverted": WorkflowImproveRevertedEvent,

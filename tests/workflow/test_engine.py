@@ -618,21 +618,19 @@ def test_a_copy_whose_creation_failed_midway_is_removed(tmp_path, monkeypatch):
 
 def test_entering_the_step_removes_what_an_earlier_attempt_left(tmp_path):
     planted = tmp_path / ".workflow" / "r1" / "branches" / "old-run" / "left-zzz" / "junk"
-    retired = tmp_path / ".workflow" / "r1" / "branches" / ".dead-old-run-q1" / "junk"
-    seen: list[tuple[bool, bool]] = []
+    seen: list[bool] = []
 
     def node_runner(req):
         if req.node.id == "pre":
-            for p in (planted, retired):
-                p.parent.mkdir(parents=True)
-                p.write_text("junk")
+            planted.parent.mkdir(parents=True)
+            planted.write_text("junk")
         elif req.workspace_override:
-            seen.append((planted.parent.exists(), retired.parent.exists()))
+            seen.append(planted.parent.exists())
         return NodeRunResponse(output="o", session_key=None, messages=[])
 
     res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
     assert res.status == "completed"
-    assert seen == [(False, False), (False, False)]
+    assert seen == [False, False]
 
 
 def test_a_branchs_file_tools_work_inside_its_copy(tmp_path):

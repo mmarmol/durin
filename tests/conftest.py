@@ -279,6 +279,51 @@ def _not_shutting_down():
 
 
 @pytest.fixture(autouse=True)
+def _no_script_left_and_not_exiting():
+    """Fail a test that leaves this process marked as ending, or a script
+    child it started still kept, and clear both for the next test.
+
+    ``script_runner.end_scripts_for_exit`` marks the process as ending, and
+    from then on every script step waits for the process to end. In a real
+    process the exit follows at once; in a test with ``os._exit`` or
+    ``os.execv`` stubbed it does not, and a later test in the same worker
+    would hang on its first script step. A failure here names the test that
+    left it, instead of a hang somewhere after it.
+    """
+    import sys
+
+    yield
+    runner = sys.modules.get("durin.workflow.script_runner")
+    if runner is None:
+        return
+    with runner._children_lock:
+        exiting, kept = runner._exiting, len(runner._children)
+        runner._exiting = False
+        runner._children.clear()
+    assert not exiting, "the test left the process marked as ending (end_scripts_for_exit)"
+    assert not kept, f"the test left {kept} script child(ren) kept by the script runner"
+
+
+@pytest.fixture
+def end_scripts_calls(monkeypatch):
+    """For a test that reaches ``os._exit`` or ``os.execv`` with them stubbed:
+    ``script_runner.end_scripts_for_exit`` is replaced by a recorder, since
+    the real pass would leave this process marked as ending. Each call
+    appends ``"end_scripts"`` to the returned list, so a test can put it in
+    order with the exit it stubbed."""
+    from durin.workflow import script_runner
+
+    calls: list[str] = []
+
+    def record() -> int:
+        calls.append("end_scripts")
+        return 0
+
+    monkeypatch.setattr(script_runner, "end_scripts_for_exit", record)
+    return calls
+
+
+@pytest.fixture(autouse=True)
 def _no_test_ends_its_own_process(monkeypatch):
     """Keep every in-process exit path from ending the test process.
 

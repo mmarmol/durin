@@ -31,9 +31,10 @@ from durin.service.types import (
 )
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import delivery, run_log
+from durin.workflow import delivery, resume_events, run_log
 from durin.workflow.artifacts import safe_key
 from durin.workflow.loader import WorkflowNotFoundError, load_workflow, workflows_dir
+from durin.workflow.refusal import kind_of
 from durin.workflow.result import WorkflowResult
 from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
 from durin.workflow.run_threads import run_on_workflow_thread
@@ -853,9 +854,12 @@ class WorkflowsService:
             refusal = ((resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
                         or scripts_refusal) if manifest is not None else None)
             if refusal:
+                resume_events.refused(name, resume_run_id, surface="service",
+                                      reason=kind_of(refusal))
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {refusal}")
             if kind is None:
+                resume_events.refused(name, resume_run_id, surface="service", reason="other")
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — "
                     "only a needs_input run (with the answers as task), an aborted "
@@ -879,6 +883,8 @@ class WorkflowsService:
                 with cross_process_lock(run_log.run_lock_target(self._workspace, name, resume_run_id)):
                     manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
                     if manifest is None or manifest.get("status") != "needs_input":
+                        resume_events.refused(name, resume_run_id, surface="service",
+                                              reason="lost_race")
                         raise ValidationFailedError(
                             f"run {resume_run_id!r} of workflow {name!r} cannot be "
                             "resumed — it was cancelled, or already resumed, before "
@@ -943,6 +949,8 @@ class WorkflowsService:
             # launched, with steps that name `mcps`, is left to the agent.
             mcp_refusal = mcp_tools_refusal(accepted_record, workflow, workspace=self._workspace)
             if mcp_refusal:
+                resume_events.refused(name, resume_run_id, surface="service",
+                                      reason=kind_of(mcp_refusal))
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — {mcp_refusal}")
 
@@ -1052,7 +1060,10 @@ class WorkflowsService:
                 claim = ResumeClaim.take(
                     self._workspace, name, resume_run_id, expected=accepted_record)
             except ResumeLostError as exc:
+                resume_events.refused(name, resume_run_id, surface="service", reason=exc.kind)
                 raise ValidationFailedError(str(exc)) from exc
+            resume_events.resumed(name, resume_run_id, kind=resumable_kind(accepted_record),
+                                  surface="service")
             walk = claim.guard(engine.run)
 
         try:

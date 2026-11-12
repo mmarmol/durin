@@ -265,13 +265,15 @@ class _ExitedError(Exception):
     pass
 
 
-def _left_with_a_run_thread(monkeypatch, **kwargs) -> int:
+def _left_with_a_run_thread(monkeypatch, end_scripts_calls, **kwargs) -> int:
     """Run the real ``leave_unfinished_runs`` with a run thread alive and
-    ``os._exit`` replaced by an exception; returns the exit code it asked for."""
+    ``os._exit`` replaced by an exception; returns the exit code it asked for.
+    ``end_scripts_calls`` (the fixture) also gets ``"exit"`` at the exit."""
     codes: list[int] = []
 
     def _exit(code):
         codes.append(code)
+        end_scripts_calls.append("exit")
         raise _ExitedError
 
     monkeypatch.setattr(run_threads.os, "_exit", _exit)
@@ -287,8 +289,8 @@ def _left_with_a_run_thread(monkeypatch, **kwargs) -> int:
     return codes[0]
 
 
-def test_a_quit_tells_the_person_how_many_runs_were_left(monkeypatch, capsys):
-    assert _left_with_a_run_thread(monkeypatch, tell_user=True) == 0
+def test_a_quit_tells_the_person_how_many_runs_were_left(monkeypatch, capsys, end_scripts_calls):
+    assert _left_with_a_run_thread(monkeypatch, end_scripts_calls, tell_user=True) == 0
     lines = capsys.readouterr().err.splitlines()
     told = [line for line in lines if "left1" in line]
     assert len(told) == 1
@@ -296,6 +298,54 @@ def test_a_quit_tells_the_person_how_many_runs_were_left(monkeypatch, capsys):
     assert "resume_run_id" in told[0] and "dashboard" in told[0]
 
 
-def test_a_gateway_stop_keeps_only_its_log_line(monkeypatch, capsys):
-    _left_with_a_run_thread(monkeypatch)
+def test_a_gateway_stop_keeps_only_its_log_line(monkeypatch, capsys, end_scripts_calls):
+    _left_with_a_run_thread(monkeypatch, end_scripts_calls)
     assert "resume_run_id" not in capsys.readouterr().err
+
+
+def test_the_scripts_of_the_runs_end_right_before_the_exit(monkeypatch, end_scripts_calls):
+    assert _left_with_a_run_thread(monkeypatch, end_scripts_calls) == 0
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
+def test_with_no_run_left_no_script_is_ended(monkeypatch, end_scripts_calls):
+    _REAL_LEAVE_UNFINISHED_RUNS()
+    assert end_scripts_calls == []
+
+
+@pytest.mark.parametrize("where", ["log line", "flush"])
+def test_an_interrupted_way_out_still_ends_the_scripts_and_then_exits(
+        monkeypatch, end_scripts_calls, where):
+    """A second Ctrl+C while the log line is written or the log is flushed
+    must not skip the end of the scripts, which would outlive a graceful
+    stop, nor the exit."""
+    def interrupted(*_a, **_k):
+        raise KeyboardInterrupt
+
+    if where == "log line":
+        monkeypatch.setattr(run_threads.logger, "warning", interrupted)
+    else:
+        monkeypatch.setattr(run_threads, "_flush_logs_before_exit", interrupted)
+    assert _left_with_a_run_thread(monkeypatch, end_scripts_calls) == 0
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
+def test_a_failing_end_of_the_scripts_still_exits(monkeypatch):
+    from durin.workflow import script_runner
+
+    def broken() -> int:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(script_runner, "end_scripts_for_exit", broken)
+    codes: list[int] = []
+    monkeypatch.setattr(run_threads.os, "_exit", codes.append)
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, args=(10,), name="workflow-run-left2")
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError):
+            _REAL_LEAVE_UNFINISHED_RUNS()
+    finally:
+        release.set()
+        thread.join(5)
+    assert codes == [0]

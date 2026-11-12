@@ -28,6 +28,8 @@ from durin.workflow import run_log
 from durin.workflow.loader import workflows_dir
 from durin.workflow.resume_claim import ResumeClaim
 from durin.workflow.run_threads import MAX_CONCURRENT_RUNS, run_on_workflow_thread
+from tests.workflow.telemetry_capture import assert_clean, payloads, recorded
+from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 # A pid far above any real pid_max, so the owner reads as long gone: a pause
 # is usually answered after the gateway that paused it has restarted.
@@ -937,3 +939,78 @@ async def test_a_resume_whose_caller_stops_waiting_after_its_walk_started_report
         assert await _until(finished)
     assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "completed"
     assert deliveries.calls == []
+
+
+# ── what a resume and a refusal leave in telemetry ──
+
+@pytest.mark.asyncio
+async def test_a_claimed_resume_is_counted_with_its_kind_and_surface(tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    with _provider():
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert payloads(telemetry_dir, "workflow.run_resumed") == [
+        {"workflow": "wf", "run_id": "dead1", "kind": "dead", "surface": "service"}]
+    assert payloads(telemetry_dir, "workflow.resume_refused") == []
+    # the conversion the resume was owed is counted too
+    assert [p["run_id"] for p in payloads(telemetry_dir, "workflow.run_found_dead")] == ["dead1"]
+    assert_clean(recorded(telemetry_dir), "the task")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_resume_is_counted_with_a_word_not_the_text(tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
+              root_session_key="automation:nightly")
+    with _provider(), pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert payloads(telemetry_dir, "workflow.resume_refused") == [
+        {"workflow": "wf", "run_id": "dead1", "surface": "service", "reason": "automation"}]
+    assert payloads(telemetry_dir, "workflow.run_resumed") == []
+    assert_clean(recorded(telemetry_dir), "nightly", "automation:")
+
+
+@pytest.mark.asyncio
+async def test_a_resume_left_to_the_agent_is_refused_as_mcp_tools(tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "work", "mcps": ["tracker"]}, surface="agent")
+    with _provider(), pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    [refused] = payloads(telemetry_dir, "workflow.resume_refused")
+    assert refused["reason"] == "mcp_tools"
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_with_a_running_sub_run_is_refused_as_child_running(
+        tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    _live_descendant(tmp_path, "dead1")
+    with _provider(), pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    [refused] = payloads(telemetry_dir, "workflow.resume_refused")
+    assert refused["reason"] == "child_running"
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_cannot_be_resumed_at_all_is_refused_as_other(tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    run_log.finalize_short_circuit(tmp_path, "wf", "dead1", status="completed",
+                                   final_output="done")
+    with _provider(), pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    [refused] = payloads(telemetry_dir, "workflow.resume_refused")
+    assert refused["reason"] == "other"
+
+
+@pytest.mark.asyncio
+async def test_a_resume_that_loses_its_claim_is_refused_as_lost_race(tmp_path, telemetry_dir):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"})
+    real_take = ResumeClaim.take.__func__
+
+    def take_after_another_resume_did(cls, workspace, name, run_id, *, expected):
+        real_take(cls, workspace, name, run_id, expected=expected)     # the other resume
+        return real_take(cls, workspace, name, run_id, expected=expected)
+
+    with _provider(), patch.object(ResumeClaim, "take", classmethod(take_after_another_resume_did)):
+        with pytest.raises(ValidationFailedError):
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert [p["reason"] for p in payloads(telemetry_dir, "workflow.resume_refused")] == [
+        "lost_race"]
+    assert payloads(telemetry_dir, "workflow.run_resumed") == []

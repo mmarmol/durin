@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
@@ -19,6 +18,12 @@ from tests.workflow.crash_harness import (
     run_to_end,
     run_until_killed,
 )
+from tests.workflow.telemetry_capture import (
+    assert_clean,
+    payloads,
+    recorded,
+)
+from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "a", "kind": "work", "tools": "default", "next": "b"},
@@ -128,8 +133,8 @@ def _copies(dead, run_id="r1", name="w"):
 
 
 @pytest.mark.parametrize("reconcile", ["union", "choose"])
-def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversion_removes_them(
-        tmp_path, reconcile):
+def test_a_dead_runs_copies_stay_until_the_resume_enters_the_step_and_it_starts_clean(
+        tmp_path, monkeypatch, reconcile):
     definition = _writing_fan(reconcile)
     dead = run_until_killed(tmp_path, definition, stop_in="right",
                             env={driver.HANG_AFTER_ENV: "left"})
@@ -137,88 +142,53 @@ def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversi
     # The dead process's copies are in its run's folder, none in its temporary directory.
     assert not list((tmp_path / "tmp").glob("durin_wf_branch_*"))
     assert list((tmp_path / "tmp").iterdir()) == []
-    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
+    left_over = sorted(p.name for p in copies.iterdir())
+    assert len(left_over) == 2 and all(n.startswith("b-") for n in left_over)
+    (copies / left_over[0] / "stale.txt").write_text("from the dead attempt")
 
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert rec["status"] == "crashed"
-    assert not copies.exists()
-    assert [p for p in copies.parent.iterdir()] == []        # no retired leftover either
+    assert sorted(p.name for p in copies.iterdir()) == left_over
+    assert (copies / left_over[0] / "stale.txt").is_file()
 
+    real_fork = workspace_fork.fork
+    on_disk_at_each_fork: list[list[str]] = []
+
+    def watching(root, *, into):
+        on_disk_at_each_fork.append(sorted(p.name for p in Path(into).parent.rglob("*")
+                                           if p.name == "stale.txt" or p.name in left_over))
+        return real_fork(root, into=into)
+
+    monkeypatch.setattr(workspace_fork, "fork", watching)
+    done = _resume(dead, definition, rec)
+    assert done.status == "completed"
+    assert len(on_disk_at_each_fork) == 2
+    assert on_disk_at_each_fork[0] == [], "the step's first copy started beside the dead run's"
+    folder = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
+    assert not (folder / "stale.txt").exists()
+    assert list(copies.parent.iterdir()) == []
+
+
+def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path):
+    """A script record the dead run left means a script may still be writing in
+    a copy; the step removes them when it is entered again."""
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    run_log.record_script(folder, "r1", pid=2**22 + 7, started="never", node_id="left")
+
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+
+    assert rec["status"] == "crashed"
+    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
     done = _resume(dead, definition, rec)
     assert done.status == "completed"
     assert list(copies.parent.iterdir()) == []
 
 
-def test_a_directory_made_for_the_run_after_the_conversion_survives_the_delayed_delete(
-        tmp_path, monkeypatch):
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    copies = _copies(dead)
-    real_cleanup = workspace_fork.cleanup
-    removed: list[Path] = []
-
-    def after_the_lock_is_released(path):
-        # A resume claimed the run and its step made new copies in the time between
-        # the conversion and this delayed delete.
-        assert path.name.startswith(".dead-r1-") and path != copies
-        (copies / "left-new").mkdir(parents=True)
-        (copies / "left-new" / "x.txt").write_text("fresh")
-        removed.append(path)
-        real_cleanup(path)
-
-    monkeypatch.setattr(workspace_fork, "cleanup", after_the_lock_is_released)
-    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
-
-    assert len(removed) == 1 and not removed[0].exists()
-    assert (copies / "left-new" / "x.txt").read_text() == "fresh"
-
-
-def test_the_copies_are_renamed_while_the_lock_is_held_and_the_record_already_reads_crashed(
-        tmp_path, monkeypatch):
-    import threading
-
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    real_retire = workspace_fork.retire_branches
-    seen: dict = {}
-
-    def at_the_rename(work_dir, run_id):
-        def try_the_lock():
-            try:
-                with cross_process_lock(run_log.run_lock_target(dead.workspace, "w", "r1"),
-                                        timeout=0.3):
-                    seen["lock_free"] = True
-            except TimeoutError:
-                seen["lock_free"] = False
-        # A lock is held per thread, so another thread tells whether it is held at all.
-        other = threading.Thread(target=try_the_lock)
-        other.start()
-        other.join()
-        seen["status"] = run_log.read_manifest(dead.workspace, "w", "r1")["status"]
-        return real_retire(work_dir, run_id)
-
-    monkeypatch.setattr(workspace_fork, "retire_branches", at_the_rename)
-    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
-    assert seen == {"lock_free": False, "status": "crashed"}
-
-
-def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monkeypatch):
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    copies = _copies(dead)
-    still = {"pid": 1, "started": "x", "node_id": "left", "members": [], "unchecked": False}
-    monkeypatch.setattr(run_log, "_end_recorded_scripts", lambda *a, **k: ([still], []))
-
-    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
-
-    assert rec["scripts_left"] == [still]
-    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
-
-
-def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):
+def test_a_dead_sub_workflow_runs_copies_are_left_by_its_conversion_too(tmp_path):
     parent = {"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "sub"},
         {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "z"},
@@ -245,8 +215,7 @@ def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_p
     assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
 
     assert run_log.read_manifest(dead.workspace, "child", kid["run_id"])["status"] == "crashed"
-    assert not kid_copies.exists()
-    assert not any(p.name.startswith(".dead-") for p in kid_copies.parent.iterdir())
+    assert kid_copies.is_dir() and any(kid_copies.iterdir())
 
 
 @pytest.mark.parametrize("reconcile", ["read", "choose", "union"])
@@ -734,3 +703,195 @@ def test_a_cut_parallel_step_reading_long_branch_ids_starts_the_same_branches(tm
     assert _resume(dead, definition, rec=rec).status == "completed"
     m = marks(dead.workspace)
     assert (m["left"], m["right"], m["pick"]) == (2, 2, 1) and "spare" not in m
+
+
+# ── what a dead run's conversion, refusals and write-back undo leave in telemetry ──
+
+def test_a_conversion_is_logged_and_counted_once(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    recorded_scripts = len(run_log.script_records(dead.workspace, "w", "r1"))
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1") is not None
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1") is None      # already converted
+    assert payloads(telemetry_dir, "workflow.run_found_dead") == [
+        {"workflow": "w", "run_id": "r1", "status": "crashed", "step": "b",
+         "scripts_recorded": recorded_scripts}]
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_conversion_counts_the_script_records_the_run_left(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    already = len(run_log.script_records(dead.workspace, "w", "r1"))
+    for pid in (2**22 + 11, 2**22 + 12):                   # long-gone processes
+        run_log.record_script(folder, "r1", pid=pid, started="never", node_id="b")
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["scripts_recorded"] == already + 2
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_run_someone_stopped_is_counted_as_cancelled(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    assert run_log.request_stop(dead.workspace, "w", "r1", hard=False)
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["status"] == "cancelled" and found["step"] == "b"
+
+
+def test_a_conversion_on_the_sweep_thread_is_recorded_not_dropped(tmp_path, telemetry_dir):
+    import threading
+    import time
+
+    from durin.telemetry.logger import current_telemetry
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    seen: list = []
+
+    def sweep():
+        seen.append(current_telemetry())          # nothing is bound on this thread
+        run_log.reconcile_running(dead.workspace, now=time.time(),
+                                  max_age_s=run_log.RECONCILE_AGE_S)
+        seen.append(current_telemetry())
+
+    thread = threading.Thread(target=sweep)
+    thread.start()
+    thread.join(30)
+    assert seen == [None, None]                   # and none is left bound after it
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["run_id"] == "r1"
+    assert list(telemetry_dir.glob("*.jsonl"))    # on disk, in the instance's telemetry
+
+
+def test_a_conversion_inside_a_bound_session_goes_to_that_sessions_log(tmp_path, telemetry_dir):
+    from durin.telemetry.logger import bind_telemetry, reset_telemetry
+
+    class Sink:
+        def __init__(self):
+            self.events = []
+
+        def log(self, event_type, data):
+            self.events.append((event_type, dict(data)))
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    sink = Sink()
+    token = bind_telemetry(sink)
+    try:
+        run_log.mark_dead_run(dead.workspace, "w", "r1")
+    finally:
+        reset_telemetry(token)
+    assert [t for t, _ in sink.events] == ["workflow.run_found_dead"]
+    assert not telemetry_dir.exists() or not list(telemetry_dir.glob("*.jsonl"))
+
+
+def _refusal_of(dead, definition=CHAIN, **over):
+    rec = run_log.read_manifest(dead.workspace, definition["name"], "r1")
+    return resume_refusal(dict(rec, **over), workspace=dead.workspace,
+                          workflow=parse_workflow(definition))
+
+
+def test_each_refusal_of_a_dead_run_names_its_reason(tmp_path):
+    from durin.workflow.engine import (
+        AUTOMATION_RUN_REFUSAL,
+        INCOMPLETE_RECORD_REFUSAL,
+        MCP_TOOLS_REFUSAL,
+        mcp_tools_refusal,
+    )
+
+    dead = run_until_killed(tmp_path / "a", CHAIN, stop_in="c")
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert _refusal_of(dead, launch={"kind": "automation"}).kind == "automation"
+    assert _refusal_of(dead, launch={"kind": "automation"}) == AUTOMATION_RUN_REFUSAL
+    assert _refusal_of(dead, incomplete=True).kind == "other"
+    assert _refusal_of(dead, incomplete=True) == INCOMPLETE_RECORD_REFUSAL
+    assert _refusal_of(dead, parent_run_id="p").kind == "other"
+    rec = run_log.read_manifest(dead.workspace, "w", "r1")
+    no_position = {k: v for k, v in rec.items() if k != "position"}
+    assert resume_refusal(no_position, workspace=dead.workspace).kind == "other"
+    assert resume_refusal(dict(rec, failed_node=None), workspace=dead.workspace).kind == "other"
+    smaller = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "tools": "default", "next": None}]})
+    gone = resume_refusal(rec, workspace=dead.workspace, workflow=smaller)
+    assert gone.kind == "step_gone" and isinstance(gone, str) and "'c'" in gone
+    with_mcp = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "mcps": ["tracker"], "next": None}]})
+    mcp = mcp_tools_refusal(dict(rec, surface="agent"), with_mcp, workspace=dead.workspace)
+    assert mcp.kind == "mcp_tools" and mcp == MCP_TOOLS_REFUSAL
+    shutil.rmtree(dead.workspace / ".workflow" / "r1")
+    assert resume_refusal(rec, workspace=dead.workspace,
+                          workflow=parse_workflow(CHAIN)).kind == "folder_pruned"
+
+
+def test_a_run_a_later_one_took_over_is_refused_as_superseded(tmp_path):
+    keyed = {driver.WORK_KEY_ENV: "ticket-7"}
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c", env=keyed)
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    run_to_end(tmp_path, CHAIN, env={**keyed, driver.RUN_ID_ENV: "r2"})
+    assert resume_refusal(rec, workspace=dead.workspace,
+                          workflow=parse_workflow(CHAIN)).kind == "superseded"
+
+
+def test_a_failed_run_in_a_parallel_node_is_refused_for_another_reason(tmp_path):
+    rec = {"status": "aborted", "failed_node": "p", "runs": []}
+    assert resume_refusal(rec).kind == "other"
+
+
+def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch):
+    from durin.utils import process_tree
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    # the record of the killed script, whose process the harness ended
+    assert run_log.dead_run_refusal(dead.workspace, rec) is None
+
+    # a record that changed since it was read: another caller got there first
+    assert run_log.dead_run_refusal(dead.workspace, dict(rec, task="other")).kind == "lost_race"
+
+    # a crashed record that still names a live process as the one running it
+    marked = dict(rec, owner=process_tree.process_identity())
+    run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), marked)
+    refusal = run_log.dead_run_refusal(dead.workspace, marked)
+    assert refusal.kind == "owner_alive"
+    run_log._write_json(run_log._record_path(dead.workspace, "w", "r1"), rec)
+
+    # a script that may still run
+    path = run_log.record_script(folder, "r1", pid=2**22 + 5, started="x", node_id="b")
+    for state in ("alive", "unknown"):
+        monkeypatch.setattr(process_tree, "left_script_state",
+                            lambda pid, started, state=state, **kw: (state, [7], [8]))
+        refusal = run_log.dead_run_refusal(dead.workspace, rec)
+        assert refusal.kind == "script_alive"
+    # a script record nobody can read
+    path.write_text("{not json", encoding="utf-8")
+    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "other"
+    path.unlink()
+
+    # a sub-workflow run still recorded as running
+    run_log.start_run(dead.workspace, "kid", "r-kid", root_session_key="s", started_at=2.0,
+                      parent_run_id="r1")
+    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "child_running"
+
+
+def test_a_lost_claim_is_a_refusal_with_its_reason(tmp_path):
+    from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    ResumeClaim.take(dead.workspace, "w", "r1", expected=rec)
+    with pytest.raises(ResumeLostError) as lost:
+        ResumeClaim.take(dead.workspace, "w", "r1", expected=rec)
+    assert lost.value.kind == "lost_race" and "already resumed" in str(lost.value)
+
+
+def test_a_write_back_put_back_before_a_resumed_walk_is_counted(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, LOGS, stop_in=None, env={HANG_IN_APPLY_ENV: "1"})
+    _resume(dead, LOGS)
+    assert payloads(telemetry_dir, "workflow.writeback_restored") == [
+        {"workflow": "w", "run_id": "r1", "step": "fan"}]
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_resume_with_no_write_back_to_put_back_counts_none(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    _resume(dead)
+    assert payloads(telemetry_dir, "workflow.writeback_restored") == []

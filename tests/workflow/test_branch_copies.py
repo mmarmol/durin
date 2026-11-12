@@ -84,7 +84,6 @@ def test_clearing_all_removes_every_runs_copies(tmp_path):
     root = workspace_fork.branches_root(work)
     (root / "r1").mkdir(parents=True)
     (root / "r2").mkdir()
-    (root / ".dead-r3-abc").mkdir()
     workspace_fork.clear_branches(work)
     assert not root.exists()
     assert (work / "keep.txt").read_text() == "k"
@@ -103,21 +102,6 @@ def test_a_copy_does_not_contain_other_copies_or_the_resume_store(tmp_path):
     for copy in (first, second):
         assert sorted(p.name for p in copy.iterdir()) == ["a.txt"]
     assert workspace_fork.snapshot(work) == {"a.txt": workspace_fork._hash(b"a")}
-
-
-def test_retiring_a_runs_copies_renames_them_out_of_the_runs_name(tmp_path):
-    work = _work(tmp_path)
-    root = workspace_fork.branches_root(work)
-    (root / "r1" / "left-x").mkdir(parents=True)
-    (root / "r2").mkdir()
-    retired = workspace_fork.retire_branches(work, "r1")
-    assert retired is not None and retired.parent == root
-    assert retired.name.startswith(".dead-r1-") and (retired / "left-x").is_dir()
-    assert not (root / "r1").exists() and (root / "r2").is_dir()
-    assert workspace_fork.retire_branches(work, "r1") is None      # nothing left to retire
-    assert workspace_fork.retire_branches(tmp_path / "project" / "work", "r1") is None
-    workspace_fork.cleanup(retired)
-    assert not retired.exists()
 
 
 def test_a_copy_is_made_exactly_under_branches_and_a_plain_run_id(tmp_path):
@@ -158,5 +142,4 @@ def test_a_symlink_at_branches_or_the_runs_copies_is_never_followed(tmp_path, li
         workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1")
     workspace_fork.clear_branches(work, "r1")
     workspace_fork.clear_branches(work)
-    assert workspace_fork.retire_branches(work, "r1") is None
     assert sentinel.read_text() == "x" and _tree(outside) == before

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import time
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -441,7 +442,8 @@ def _with_notice(text: str, notice: str) -> str:
     return f"{text}\n\n{notice}" if notice else text
 
 
-# How many cut runs a launch looks at (the newest), and how many of them it names.
+# How many of the newest cut runs a launch looks at, and how many of them it names.
+# The count includes cut runs the note then skips because they cannot be resumed.
 _CUT_RUNS_EXAMINED = 10
 _CUT_RUNS_NAMED = 3
 
@@ -450,68 +452,52 @@ def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
                     work_key: str | None = None) -> str:
     """What a fresh launch on ``work_key`` (None: no key) tells about the runs of
     ``name`` that the conversation ``session_key`` started and that a process
-    ending cut short, or "" when there is nothing to say. Only the newest few that
-    are recorded ``crashed`` or ``running`` are looked at. A run recorded as
-    running whose process is gone is converted first, as a resume does (which
-    also ends the scripts that run left). What decides a run is named, in order:
-    something of it may still be there (a script, a sub-workflow run, a process
-    that seems alive) - named whether or not it could ever be resumed, since a
-    new run works beside it; else it can be resumed - named with the way to do
-    it, unless it ran on the same work key as this launch: once the launch's run
-    starts it takes over that key's folder, after which a resume of the cut run is
-    refused, so the note says that instead, as a condition (a launch refused
-    before its run starts leaves the cut run resumable). Not named: a run nothing of which is left and that
-    can never be resumed (its step is gone, its folder was pruned, its record is
-    incomplete, an automation started it), one another caller is acting on, one
-    whose process is alive, and one that ended, paused or aborted. The closing
-    sentences hold whether or not this launch gets as far as recording a run.
-    Observes processes and waits on locks: an event loop calls it through a
-    thread."""
-    from durin.workflow import run_log
-    from durin.workflow.engine import resumable_kind, resume_refusal
+    ending cut short, or "" when there is nothing to say.
 
-    candidates = [r for r in run_log.runs_launched_by(workspace, name, session_key)
-                  if r.get("status") in ("crashed", "running")][:_CUT_RUNS_EXAMINED]
+    It only reads: no record is written, no lock is taken or waited on, and no
+    process is ended. The runs the conversation launched are walked newest first
+    and the walk stops at the first one that is not cut, so a conversation that
+    launched again after being told is not told again. A run is cut when it is
+    recorded ``crashed``, or ``running`` with an owner that is proven gone (one
+    that cannot be observed counts as alive). A ``crashed`` run that a resume
+    would refuse is cut but not named. The text promises nothing a later check
+    could take back: a ``running`` record's refusals are only known once it is
+    converted, and a script it left is looked at by the resume. When the cut run
+    is on the work key of this launch, the text says that once this call's run
+    starts it takes over that folder and the cut run can no longer be resumed."""
+    from durin.workflow import run_log
+    from durin.workflow.engine import resume_refusal
+
+    now = time.time()
     paragraphs: list[str] = []
-    for candidate in candidates:
-        run_id = candidate.get("run_id")
-        record, reason = run_log.settle_dead_run(workspace, name, run_id)
-        if not isinstance(record, dict) or record.get("status") != "crashed":
+    examined = 0
+    for record in run_log.runs_launched_by(workspace, name, session_key):
+        status = record.get("status")
+        if status == "running":
+            if not run_log.owner_gone(record, now, run_log.RECONCILE_AGE_S):
+                break
+        elif status != "crashed":
+            break
+        examined += 1
+        if examined > _CUT_RUNS_EXAMINED:
+            break
+        if status == "crashed" and resume_refusal(
+                record, workspace=workspace, workflow=workflow) is not None:
             continue
-        if reason in run_log.DEAD_RUN_RACE_REFUSALS:
-            continue
-        resumable = (resumable_kind(record) == "dead"
-                     and resume_refusal(record, workspace=workspace, workflow=workflow) is None)
+        run_id = record.get("run_id")
         head = (f"Note: run {run_id} of '{name}', started from this conversation, was cut "
-                "short")
-        same_key = bool(work_key) and record.get("work_key") == work_key
-        # Conditional: this call's run takes the key's folder over only once it
-        # starts, and a launch refused before that (its pre-flight check) leaves the
-        # cut run resumable.
-        takeover = ("It is on the same work key as this call: once this call's run starts, "
-                    "it takes over that folder")
-        beside = "This call did not resume it; a new run would work beside what it left."
-        if reason:
-            fact = getattr(reason, "fact", "something of it may still be there")
-            if resumable and same_key:
-                paragraphs.append(
-                    f"{head} and {fact}. {takeover} and that run can no longer be resumed.")
-            elif resumable:
-                paragraphs.append(
-                    f"{head} and {fact}. It can be resumed once that is gone. {beside}")
-            elif same_key:
-                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {takeover}.")
-            else:
-                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {beside}")
-        elif resumable and same_key:
+                "short when its process ended")
+        if work_key and record.get("work_key") == work_key:
+            # Conditional: this call's run takes the key's folder over only once it
+            # starts, and a launch refused before that leaves the cut run resumable.
             paragraphs.append(
-                f"{head} when its process ended. {takeover} and that run can no longer be "
-                "resumed.")
-        elif resumable:
+                f"{head}. It is on the same work key as this call: once this call's run "
+                "starts, it takes over that folder and that run can no longer be resumed.")
+        else:
             paragraphs.append(
-                f"{head} when its process ended and has not been resumed. It can be resumed "
-                f"with resume_run_id='{run_id}' (it enters node '{record.get('failed_node')}' "
-                "again; finished nodes do not run again). This call did not resume it.")
+                f"{head} and has not been resumed. resume_run_id='{run_id}' asks to enter it "
+                "again at the step it was in, and says why if it cannot; this call did not "
+                "resume it.")
     shown = paragraphs[:_CUT_RUNS_NAMED]
     if len(paragraphs) > len(shown):
         shown.append(f"and {len(paragraphs) - len(shown)} more.")
@@ -681,8 +667,9 @@ class RunWorkflowTool(Tool, ContextAware):
         # re-checks the run against it.
         accepted_record: dict | None = None
         if resume_run_id:
-            from durin.workflow import run_log
+            from durin.workflow import resume_events, run_log
             from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
+            from durin.workflow.refusal import kind_of
             # A run still recorded as running whose process is gone is a dead
             # run: it is recorded as one first, its dead sub-workflow runs too,
             # and the scripts the dead process left are checked. All of it off
@@ -692,13 +679,17 @@ class RunWorkflowTool(Tool, ContextAware):
             manifest, scripts_refusal = await asyncio.to_thread(
                 run_log.settle_dead_run, self._workspace, name, resume_run_id)
             if manifest is None:
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
             kind = resumable_kind(manifest)
             refusal = (resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
                        or scripts_refusal)
             if refusal:
+                resume_events.refused(name, resume_run_id, surface="agent",
+                                      reason=kind_of(refusal))
                 return f"Error: run '{resume_run_id}' cannot be resumed — {refusal}"
             if kind is None:
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return (f"Error: run '{resume_run_id}' has status "
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
                         f"needs_input run (with the answers as task), an aborted run "
@@ -709,6 +700,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 # value in this tool call is the model's claim, never evidence
                 # that anyone agreed. People resume it through the workflows
                 # service (the webui's runs view, or the API).
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return _approval_refusal(name, resume_run_id, manifest.get("needs_input_node"))
             resume = build_resume_state(manifest, task, workspace=self._workspace)
             task = manifest.get("task") or task
@@ -717,8 +709,8 @@ class RunWorkflowTool(Tool, ContextAware):
         # A fresh launch from a conversation tells about the runs of this workflow
         # that conversation had started and a process ending cut short: a turn
         # replayed after a restart would otherwise start the workflow a second
-        # time without knowing. Off the event loop (it observes processes); a
-        # failure only means no notice.
+        # time without knowing. Off the event loop (it reads the workflow's run
+        # records); a failure only means no notice.
         cut_notice = ""
         calling_session = self._session_key.get()
         if not resume_run_id and calling_session:
@@ -866,12 +858,17 @@ class RunWorkflowTool(Tool, ContextAware):
         claim = None
         walk = engine.run
         if accepted_record is not None:
+            from durin.workflow import resume_events
+            from durin.workflow.engine import resumable_kind
             from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
             try:
                 claim = ResumeClaim.take(
                     self._workspace, name, resume_run_id, expected=accepted_record)
             except ResumeLostError as exc:
+                resume_events.refused(name, resume_run_id, surface="agent", reason=exc.kind)
                 return f"Error: {exc}"
+            resume_events.resumed(name, resume_run_id, kind=resumable_kind(accepted_record),
+                                  surface="agent")
             walk = claim.guard(engine.run)
 
         async def _walk_on_a_thread(paced: bool) -> Any:
