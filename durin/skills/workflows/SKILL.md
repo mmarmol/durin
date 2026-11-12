@@ -163,7 +163,12 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   started that was resumed elsewhere — from the dashboard, the API or another conversation;
   its first line says so (`... started from this conversation, was resumed from ... and
   finished`). Treat it like any result: summarize the outcome for the user and follow what
-  the summary says about continuing the run. Do NOT wait for it with
+  the summary says about continuing the run. The other way round, when you resume a run
+  another conversation started, that conversation is told only if the process you run in
+  serves its channel (the gateway serves the web chat and the chat channels switched on;
+  the terminal UI serves none, and nothing serves a terminal or `/v1` API conversation):
+  it may not hear about it, so if its person needs to know, say so to your user and
+  point to the run's record. Do NOT wait for it with
   sleep+status polling: tell the user the workflow is running and **end your turn** — the
   follow-up wakes you, and the user watches live per-node progress in the Work panel.
   Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or

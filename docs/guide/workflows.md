@@ -542,20 +542,42 @@ dashboard or the API; when the agent started such a run, its later `mcps`
 steps then run without their MCP tools, as in any run started from the
 dashboard.
 
-**Where a resumed run's result goes.** A run the agent started from a chat
-reports to that chat how a resume made elsewhere came out, with the limits
-listed below. Resumed from the dashboard or the API, the result arrives there
-as a message the agent reads and summarizes, saying the run was resumed from
-the dashboard or the API; the dashboard or API caller also gets the result. Resumed by the agent
-from another chat, the starting chat gets the same message, saying the run was
-resumed from another conversation, and the chat that resumed it gets the result
-as usual. Resumed from the chat that started it, the result arrives once, as for
-any run. Only a resume that actually ran reports: one that was refused, or that
-another resume beat, reports nothing. Answering an approval from the dashboard
-counts: the chat receives the result of the steps that ran after it, and a
-rejection, or an approval of the last step, is reported as the run's end. Runs
-started by an automation, the dashboard or the API report nothing to a chat this
-way.
+**Where a resumed run's result goes.** When a run the agent started from a
+chat is resumed somewhere else — from the dashboard, the API, or another
+conversation — the chat that started it is told how the resume came out, as a
+message the agent reads and summarizes. That happens only when the process
+that carries out the resume runs that chat's channel. The running gateway runs
+the web chat and the chat channels that are switched on (Slack, Telegram and
+the others); the terminal UI and a one-shot `durin agent -m` run none.
+
+- Resumed from the dashboard or the API, the gateway carries it out: the
+  message says the run was resumed from the dashboard or the API, and the
+  dashboard or API caller also gets the result.
+- Resumed by the agent from another chat, the message says the run was resumed
+  from another conversation, and the chat that resumed it gets the result as
+  for any run.
+- Resumed from the chat that started it, that chat gets the result once, as for
+  any run, wherever it runs.
+- Answering an approval from the dashboard counts: the chat is told the result
+  of the steps that ran after it, and a rejection, or an approval of the last
+  step, is reported as the run's end.
+
+The chat that started the run is not told when:
+
+- it is not on a channel the gateway runs: a terminal UI conversation, a
+  scheduled job's turn that names no channel to deliver to, or a conversation
+  through the OpenAI-compatible `/v1` API;
+- the run is resumed from the terminal UI or a one-shot `durin agent -m` by a
+  conversation other than the one that started it;
+- the resume did not run: it was refused, or another resume of the same run got
+  there first;
+- whoever resumed the run stopped waiting before it ended, such as an agent turn
+  stopped while it waited on a resumed run.
+
+Runs started by an automation, the dashboard or the API have no chat to tell.
+Where the chat is not told, the result is in the run's record and in the
+Workflows section's **Runs** pane, and whoever resumed the run gets it as their
+answer unless they stopped waiting for it.
 
 A crashed run an [automation](automations.md) started is not resumed by hand:
 the agent's `run_workflow`, the dashboard and the API all refuse it. The
@@ -573,12 +595,9 @@ Known limits: files that a `read` parallel step's branches or a fan-out's
 workers wrote in the shared folder before the process died are still there when
 the step runs again. A process that dies right after a `choose` or `union` step
 finished writing its result, before the run moved on, runs the step again on a
-folder that already holds that result. A run started from a chat is not
-reported to that chat when whoever resumed it stops waiting for it before it
-ends, such as an agent turn stopped while it waited on a resumed run. Nor is it
-reported there when it was started from a chat the gateway serves and resumed
-from the terminal UI: its result is in the run's record and in the
-conversation that resumed it.
+folder that already holds that result. A chat that started a run is not always
+told how a resume made elsewhere came out; "Where a resumed run's result goes"
+above says when it is.
 
 **Approval gates.** Set `"approval": true` on a work node to pause the run
 after it for a person's sign-off: the run ends `needs_input` with the node's

@@ -1332,9 +1332,11 @@ the folder that already holds its result. A run started from a chat is not repor
 to that chat when the call that resumed it stops waiting before the walk ends (a
 foreground `run_workflow` turn stopped with `/stop`, a cancelled `execute()`): the
 report is made by that call, and the walk finishes on its thread unreported. Nor is it
-reported when the process that resumed it does not serve that chat's channel, such as a
-run started from a chat the gateway serves and resumed from the terminal UI; its result
-is in the run's record and in the conversation that resumed it (§4g).
+reported when the process carrying out the resume does not serve that chat's channel:
+a run launched from a terminal UI conversation, a scheduled turn with no channel to
+deliver to, or a `/v1` API conversation, and any run resumed from the terminal UI or a
+one-shot `durin agent -m` by another conversation. Its result is in the run's record
+and goes to whoever resumed it (§4g).
 
 **Resume claim.** Every resume claims its run first, on every surface — the
 workflows service (webui, API, automations) and the agent's `run_workflow` tool —
@@ -1644,7 +1646,8 @@ stop button has visible context while the agent digests the result. The `backgro
 
 **A resumed run reports to the conversation that launched it.** A run the agent
 launched from a conversation keeps that conversation on its record (`launch`, §4a),
-and a resume made anywhere else reports its result there with the message a
+and a resume made anywhere else reports its result there — when the process carrying
+out the resume serves that conversation's channel (below) — with the message a
 background result travels as (`durin/workflow/delivery.py`): one `channel="system"`
 inbound message keyed to the launch conversation's session key, with
 `injected_event: "workflow_background_result"`, which starts a turn there. Its first
@@ -1676,10 +1679,18 @@ only when the launch conversation has one, and the same closing instruction.
   `durin/service/wiring.py` (the process's channel manager runs a channel of that
   name): the gateway's callback checks it directly, and the gateway hands it to its
   agent loop (`AgentLoop.serves_channel`), whose `run_workflow` tool gets it through
-  `ToolContext.serves_channel`. A process with no channel manager, such as the
-  terminal UI, serves no channel. When the channel is not served, nothing is posted
-  and the log says the result was not delivered and why; the conversation that
-  resumed the run still gets what it gets from the tool.
+  `ToolContext.serves_channel`. Only the gateway sets `AgentLoop.serves_channel`;
+  it defaults to None, which serves no channel, so the terminal UI and a one-shot
+  `durin agent -m` post into no launch conversation but the one making the resume
+  (that one gets its result from the tool, unchecked). The gateway serves the
+  channels its channel manager runs: the web chat (`websocket`) and the chat
+  channels that are switched on. No channel manager runs `cli` (terminal UI
+  conversations, and a scheduled job's turn that names no channel to deliver to)
+  or `api` (the OpenAI-compatible `/v1` conversations), so a run launched from one
+  of those is reported only to a resume made in that same conversation. When the
+  channel is not served, nothing is posted and the log says the result was not
+  delivered and why; the result stays in the run's record, and the conversation
+  that resumed the run still gets what it gets from the tool.
 - Of the resumes that reach the engine, only one whose walk ran reports (`ResumeClaim.took_over`). A resume that is
   refused, that loses its claim to another resumer, that is given up before its
   walk, or that the engine ends before writing the run's record (a preflight
