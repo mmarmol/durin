@@ -681,8 +681,9 @@ class RunWorkflowTool(Tool, ContextAware):
         # re-checks the run against it.
         accepted_record: dict | None = None
         if resume_run_id:
-            from durin.workflow import run_log
+            from durin.workflow import resume_events, run_log
             from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
+            from durin.workflow.refusal import kind_of
             # A run still recorded as running whose process is gone is a dead
             # run: it is recorded as one first, its dead sub-workflow runs too,
             # and the scripts the dead process left are checked. All of it off
@@ -692,13 +693,17 @@ class RunWorkflowTool(Tool, ContextAware):
             manifest, scripts_refusal = await asyncio.to_thread(
                 run_log.settle_dead_run, self._workspace, name, resume_run_id)
             if manifest is None:
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
             kind = resumable_kind(manifest)
             refusal = (resume_refusal(manifest, workspace=self._workspace, workflow=workflow)
                        or scripts_refusal)
             if refusal:
+                resume_events.refused(name, resume_run_id, surface="agent",
+                                      reason=kind_of(refusal))
                 return f"Error: run '{resume_run_id}' cannot be resumed — {refusal}"
             if kind is None:
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return (f"Error: run '{resume_run_id}' has status "
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
                         f"needs_input run (with the answers as task), an aborted run "
@@ -709,6 +714,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 # value in this tool call is the model's claim, never evidence
                 # that anyone agreed. People resume it through the workflows
                 # service (the webui's runs view, or the API).
+                resume_events.refused(name, resume_run_id, surface="agent", reason="other")
                 return _approval_refusal(name, resume_run_id, manifest.get("needs_input_node"))
             resume = build_resume_state(manifest, task, workspace=self._workspace)
             task = manifest.get("task") or task
@@ -866,12 +872,17 @@ class RunWorkflowTool(Tool, ContextAware):
         claim = None
         walk = engine.run
         if accepted_record is not None:
+            from durin.workflow import resume_events
+            from durin.workflow.engine import resumable_kind
             from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
             try:
                 claim = ResumeClaim.take(
                     self._workspace, name, resume_run_id, expected=accepted_record)
             except ResumeLostError as exc:
+                resume_events.refused(name, resume_run_id, surface="agent", reason=exc.kind)
                 return f"Error: {exc}"
+            resume_events.resumed(name, resume_run_id, kind=resumable_kind(accepted_record),
+                                  surface="agent")
             walk = claim.guard(engine.run)
 
         async def _walk_on_a_thread(paced: bool) -> Any:

@@ -15,6 +15,8 @@ from durin.workflow import run_log
 from durin.workflow.loader import workflows_dir
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.resume_claim import ResumeClaim
+from tests.workflow.telemetry_capture import assert_clean, payloads, recorded
+from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 
 def _tool(tmp_path):
@@ -1954,3 +1956,68 @@ async def test_a_failure_building_the_notice_does_not_stop_the_launch(tmp_path, 
     monkeypatch.setattr(run_log, "runs_launched_by", boom)
     reply = await _launch(tmp_path)
     assert reply.startswith("Workflow 'qa' started in the background") and "Note:" not in reply
+
+
+# ── what the agent's resume and refusal leave in telemetry ──
+
+@pytest.mark.asyncio
+async def test_the_run_tool_counts_a_claimed_resume(tmp_path, telemetry_dir):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"})
+    fake = MagicMock(spec=LLMProvider)
+    fake.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake):
+        await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1",
+                                      background=False)
+    assert payloads(telemetry_dir, "workflow.run_resumed") == [
+        {"workflow": "doer", "run_id": "r1", "kind": "dead", "surface": "agent"}]
+    assert payloads(telemetry_dir, "workflow.resume_refused") == []
+    assert [p["run_id"] for p in payloads(telemetry_dir, "workflow.run_found_dead")] == ["r1"]
+    assert_clean(recorded(telemetry_dir), "original task")
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_counts_a_refusal_by_its_word(tmp_path, telemetry_dir):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo again"},
+               root_session_key="automation:nightly")
+    with patch("durin.workflow.engine.WorkflowEngine.run"):
+        await _tool(tmp_path).execute(name="doer", task="", resume_run_id="r1",
+                                      background=False)
+    assert payloads(telemetry_dir, "workflow.resume_refused") == [
+        {"workflow": "doer", "run_id": "r1", "surface": "agent", "reason": "automation"}]
+    assert payloads(telemetry_dir, "workflow.run_resumed") == []
+    assert_clean(recorded(telemetry_dir), "nightly", "automation:")
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_counts_a_lost_claim_as_lost_race(tmp_path, telemetry_dir):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    tool = _tool(tmp_path)
+
+    def _provider_while_another_resume_claims(*_a, **_kw):
+        ResumeClaim.take(tmp_path, "doer", "r1",
+                         expected=run_log.read_manifest(tmp_path, "doer", "r1"))
+        fake = MagicMock(spec=LLMProvider)
+        fake.get_default_model.return_value = "m"
+        return fake
+
+    with patch("durin.providers.factory.make_provider",
+               side_effect=_provider_while_another_resume_claims), \
+         patch("durin.workflow.engine.WorkflowEngine.run"):
+        await tool.execute(name="doer", task="", resume_run_id="r1", background=False)
+    assert [p["reason"] for p in payloads(telemetry_dir, "workflow.resume_refused")] == [
+        "lost_race"]
+    assert payloads(telemetry_dir, "workflow.run_resumed") == []
+
+
+@pytest.mark.asyncio
+async def test_the_run_tool_counts_an_approval_it_leaves_to_a_person_as_other(
+        tmp_path, telemetry_dir):
+    _dead_doer(tmp_path, {"kind": "script", "command": "echo ok"})
+    f = tmp_path / "workflows-runs" / "doer" / "r1.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec.update(status="needs_input", needs_input_node="only", ask_kind="approval",
+               owner=None, active_node=None)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    await _tool(tmp_path).execute(name="doer", task="yes", resume_run_id="r1",
+                                  background=False)
+    assert [p["reason"] for p in payloads(telemetry_dir, "workflow.resume_refused")] == ["other"]

@@ -29,6 +29,7 @@ from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
+from durin.workflow.refusal import Refusal, kind_of
 
 __all__ = ["ResumeClaim", "ResumeLostError"]
 
@@ -38,6 +39,11 @@ _T = TypeVar("_T")
 class ResumeLostError(RuntimeError):
     """The record changed between the caller's read and its claim: someone else
     resumed, cancelled or finalized the run first."""
+
+    @property
+    def kind(self) -> str:
+        """The refusal word for a lost claim."""
+        return kind_of(self.args[0] if self.args else None)
 
 
 class ResumeClaim:
@@ -72,9 +78,9 @@ class ResumeClaim:
         it still equals `expected`, then move it to `running` owned by this process."""
         with cross_process_lock(run_log.run_lock_target(workspace, name, run_id)):
             if run_log.read_manifest(workspace, name, run_id) != expected:
-                raise ResumeLostError(
+                raise ResumeLostError(Refusal(
                     f"run {run_id!r} of workflow {name!r} cannot be resumed — it was "
-                    "cancelled, or already resumed, before this reached it.")
+                    "cancelled, or already resumed, before this reached it.", "lost_race"))
             claimed = run_log.claim_for_resume(workspace, name, run_id)
         return cls(workspace, name, run_id, prior=expected, claimed=claimed)
 

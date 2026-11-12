@@ -1297,6 +1297,26 @@ folder after it. This run's `finished_at` is not the bound, because a dead run's
 the time the conversion ran, which can come after a later run took the key. A refusal
 only reads; the record stays byte for byte as it was.
 
+**What is logged and counted.** Each refusal above is a `refusal.Refusal`: a `str` equal
+to its sentence, with a `kind` fixed where the sentence is made (`LeftBehind`, the
+refusal that names what the earlier process left, is one, with its `fact`). The word is
+never worked out from the sentence's wording. The words are `script_alive` (a script
+may still run), `folder_pruned`, `step_gone`, `superseded` (a later run took the
+key's folder), `automation`, `mcp_tools`, `child_running`, `lost_race` (the record
+changed, was removed, or a lock stayed busy; a lost claim is a `ResumeLostError` whose
+`kind` is the same word) and `other` for the rest. The events go through
+`resume_events`, which binds a telemetry logger of its own (session `workflow:resume`)
+when the caller has none, so a conversion on the sweep thread, which runs outside any
+turn, is recorded; a logger the caller already bound is used as it is. None of the
+payloads holds a path, a process id or task text, and none sets a session key of its own:
+
+| Event | Payload | Emitted |
+|---|---|---|
+| `workflow.run_found_dead` | `workflow`, `run_id`, `status` (`crashed` or `cancelled`), `step` (the position's step, or `null`), `scripts_recorded` (the script records it left beside its record, counted when it was converted; no process is observed for the count) | once per conversion, with one info log line |
+| `workflow.run_resumed` | `workflow`, `run_id`, `kind` (`resumable_kind`'s answer), `surface` (`service` or `agent`) | once per claimed resume |
+| `workflow.resume_refused` | `workflow`, `run_id`, `surface`, `reason` (one of the words above) | once per refused resume, including a lost claim, a run that allows no kind of resume, and an approval the run tool leaves to a person (`other`) |
+| `workflow.writeback_restored` | `workflow`, `run_id`, `step` | when a write-back a dead process left cut was put back before the walk used the folder (`step` is the step it resumes at, `null` for a run that was not resumed) or before a parallel step ran (that step) |
+
 `build_resume_state(record, answers, workspace=...)` enters a dead run at its position's
 step. The step receives the input stored whole for the position's `seq`, or the record's
 capped `resume_upstream` when no workspace is given or the file is gone. For every kind,

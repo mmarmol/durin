@@ -19,6 +19,12 @@ from tests.workflow.crash_harness import (
     run_to_end,
     run_until_killed,
 )
+from tests.workflow.telemetry_capture import (
+    assert_clean,
+    payloads,
+    recorded,
+)
+from tests.workflow.telemetry_capture import telemetry_dir_fixture as _telemetry_dir  # noqa: F401
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "a", "kind": "work", "tools": "default", "next": "b"},
@@ -734,3 +740,186 @@ def test_a_cut_parallel_step_reading_long_branch_ids_starts_the_same_branches(tm
     assert _resume(dead, definition, rec=rec).status == "completed"
     m = marks(dead.workspace)
     assert (m["left"], m["right"], m["pick"]) == (2, 2, 1) and "spare" not in m
+
+
+# ── what a dead run's conversion, refusals and write-back undo leave in telemetry ──
+
+def test_a_conversion_is_logged_and_counted_once(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    recorded_scripts = len(run_log.script_records(dead.workspace, "w", "r1"))
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1") is not None
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1") is None      # already converted
+    assert payloads(telemetry_dir, "workflow.run_found_dead") == [
+        {"workflow": "w", "run_id": "r1", "status": "crashed", "step": "b",
+         "scripts_recorded": recorded_scripts}]
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_conversion_counts_the_script_records_the_run_left(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+    already = len(run_log.script_records(dead.workspace, "w", "r1"))
+    for pid in (2**22 + 11, 2**22 + 12):                   # long-gone processes
+        run_log.record_script(folder, "r1", pid=pid, started="never", node_id="b")
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["scripts_recorded"] == already + 2
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_run_someone_stopped_is_counted_as_cancelled(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    assert run_log.request_stop(dead.workspace, "w", "r1", hard=False)
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["status"] == "cancelled" and found["step"] == "b"
+
+
+def test_a_conversion_on_the_sweep_thread_is_recorded_not_dropped(tmp_path, telemetry_dir):
+    import threading
+    import time
+
+    from durin.telemetry.logger import current_telemetry
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    seen: list = []
+
+    def sweep():
+        seen.append(current_telemetry())          # nothing is bound on this thread
+        run_log.reconcile_running(dead.workspace, now=time.time(),
+                                  max_age_s=run_log.RECONCILE_AGE_S)
+        seen.append(current_telemetry())
+
+    thread = threading.Thread(target=sweep)
+    thread.start()
+    thread.join(30)
+    assert seen == [None, None]                   # and none is left bound after it
+    [found] = payloads(telemetry_dir, "workflow.run_found_dead")
+    assert found["run_id"] == "r1"
+    assert list(telemetry_dir.glob("*.jsonl"))    # on disk, in the instance's telemetry
+
+
+def test_a_conversion_inside_a_bound_session_goes_to_that_sessions_log(tmp_path, telemetry_dir):
+    from durin.telemetry.logger import bind_telemetry, reset_telemetry
+
+    class Sink:
+        def __init__(self):
+            self.events = []
+
+        def log(self, event_type, data):
+            self.events.append((event_type, dict(data)))
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    sink = Sink()
+    token = bind_telemetry(sink)
+    try:
+        run_log.mark_dead_run(dead.workspace, "w", "r1")
+    finally:
+        reset_telemetry(token)
+    assert [t for t, _ in sink.events] == ["workflow.run_found_dead"]
+    assert not telemetry_dir.exists() or not list(telemetry_dir.glob("*.jsonl"))
+
+
+def _refusal_of(dead, definition=CHAIN, **over):
+    rec = run_log.read_manifest(dead.workspace, definition["name"], "r1")
+    return resume_refusal(dict(rec, **over), workspace=dead.workspace,
+                          workflow=parse_workflow(definition))
+
+
+def test_each_refusal_of_a_dead_run_names_its_reason(tmp_path):
+    from durin.workflow.engine import (
+        AUTOMATION_RUN_REFUSAL,
+        INCOMPLETE_RECORD_REFUSAL,
+        MCP_TOOLS_REFUSAL,
+        mcp_tools_refusal,
+    )
+
+    dead = run_until_killed(tmp_path / "a", CHAIN, stop_in="c")
+    run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert _refusal_of(dead, launch={"kind": "automation"}).kind == "automation"
+    assert _refusal_of(dead, launch={"kind": "automation"}) == AUTOMATION_RUN_REFUSAL
+    assert _refusal_of(dead, incomplete=True).kind == "other"
+    assert _refusal_of(dead, incomplete=True) == INCOMPLETE_RECORD_REFUSAL
+    assert _refusal_of(dead, parent_run_id="p").kind == "other"
+    rec = run_log.read_manifest(dead.workspace, "w", "r1")
+    no_position = {k: v for k, v in rec.items() if k != "position"}
+    assert resume_refusal(no_position, workspace=dead.workspace).kind == "other"
+    assert resume_refusal(dict(rec, failed_node=None), workspace=dead.workspace).kind == "other"
+    smaller = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "tools": "default", "next": None}]})
+    gone = resume_refusal(rec, workspace=dead.workspace, workflow=smaller)
+    assert gone.kind == "step_gone" and isinstance(gone, str) and "'c'" in gone
+    with_mcp = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "mcps": ["tracker"], "next": None}]})
+    mcp = mcp_tools_refusal(dict(rec, surface="agent"), with_mcp, workspace=dead.workspace)
+    assert mcp.kind == "mcp_tools" and mcp == MCP_TOOLS_REFUSAL
+    shutil.rmtree(dead.workspace / ".workflow" / "r1")
+    assert resume_refusal(rec, workspace=dead.workspace,
+                          workflow=parse_workflow(CHAIN)).kind == "folder_pruned"
+
+
+def test_a_run_a_later_one_took_over_is_refused_as_superseded(tmp_path):
+    keyed = {driver.WORK_KEY_ENV: "ticket-7"}
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="c", env=keyed)
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    run_to_end(tmp_path, CHAIN, env={**keyed, driver.RUN_ID_ENV: "r2"})
+    assert resume_refusal(rec, workspace=dead.workspace,
+                          workflow=parse_workflow(CHAIN)).kind == "superseded"
+
+
+def test_a_failed_run_in_a_parallel_node_is_refused_for_another_reason(tmp_path):
+    rec = {"status": "aborted", "failed_node": "p", "runs": []}
+    assert resume_refusal(rec).kind == "other"
+
+
+def test_what_a_dead_process_left_behind_names_its_reason(tmp_path, monkeypatch):
+    from durin.utils import process_tree
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    folder = run_log._record_path(dead.workspace, "w", "r1").parent
+
+    # a record that changed since it was read: another caller got there first
+    assert run_log.dead_run_refusal(dead.workspace, dict(rec, task="other")).kind == "lost_race"
+
+    # a script that may still run
+    path = run_log.record_script(folder, "r1", pid=2**22 + 5, started="x", node_id="b")
+    for state in ("alive", "unknown"):
+        monkeypatch.setattr(process_tree, "left_script_state",
+                            lambda pid, started, members, state=state, **kw: (state, [7], [8]))
+        refusal = run_log.dead_run_refusal(dead.workspace, rec)
+        assert refusal.kind == "script_alive" and refusal.fact
+    # a script record nobody can read
+    path.write_text("{not json", encoding="utf-8")
+    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "other"
+    path.unlink()
+
+    # a sub-workflow run still recorded as running
+    run_log.start_run(dead.workspace, "kid", "r-kid", root_session_key="s", started_at=2.0,
+                      parent_run_id="r1")
+    assert run_log.dead_run_refusal(dead.workspace, rec).kind == "child_running"
+
+
+def test_a_lost_claim_is_a_refusal_with_its_reason(tmp_path):
+    from durin.workflow.resume_claim import ResumeClaim, ResumeLostError
+
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    ResumeClaim.take(dead.workspace, "w", "r1", expected=rec)
+    with pytest.raises(ResumeLostError) as lost:
+        ResumeClaim.take(dead.workspace, "w", "r1", expected=rec)
+    assert lost.value.kind == "lost_race" and "already resumed" in str(lost.value)
+
+
+def test_a_write_back_put_back_before_a_resumed_walk_is_counted(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, LOGS, stop_in=None, env={HANG_IN_APPLY_ENV: "1"})
+    _resume(dead, LOGS)
+    assert payloads(telemetry_dir, "workflow.writeback_restored") == [
+        {"workflow": "w", "run_id": "r1", "step": "fan"}]
+    assert_clean(recorded(telemetry_dir))
+
+
+def test_a_resume_with_no_write_back_to_put_back_counts_none(tmp_path, telemetry_dir):
+    dead = run_until_killed(tmp_path, CHAIN, stop_in="b")
+    _resume(dead)
+    assert payloads(telemetry_dir, "workflow.writeback_restored") == []
