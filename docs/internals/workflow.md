@@ -1512,8 +1512,9 @@ beside what it left.`) holds whether or not the launch got as far as recording a
 run, since the note is also appended to a foreground result whose launch was
 refused before that. The note is a fact for the model, not an offer: unless it
 is refused, the launch it comes with starts a new run, and the workflows skill
-tells the model not to resume the cut run while the new one runs the same work
-(stopping the new run first when the cut one is to be continued). Under unified
+tells the model to tell the person and not to resume the cut run on its own, since
+the new run does or has done the same work; it resumes the cut run only when the
+person asks, after stopping the new run if that one is still running. Under unified
 sessions every chat shares one session key, so a launch from one chat can name a
 run cut in another and call it started from this conversation.
 

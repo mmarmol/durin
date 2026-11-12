@@ -525,9 +525,10 @@ launches the workflow again is told about the cut run: the reply to a new launch
 names the runs of that workflow started from the same conversation that a
 process ending cut short (a few of the most recent, newest first). By then the
 launch has started a new run (unless it was refused), so two runs of the same
-work may exist. The agent tells you, and does not resume the cut run while the
-new one is running the same work: to continue the cut run instead, the new run is
-stopped first and then the cut run resumed. When the new launch uses the same
+work may exist. The agent is instructed to tell you and to leave the cut run
+alone, because the new run does or has done the same work and resuming the cut
+one would repeat it; it resumes the cut run only when you ask, after stopping the
+new run if that one is still running. When the new launch uses the same
 `work_key` as the cut run, the note says that once the new run starts it takes
 over that key's folder and the cut run can no longer be resumed; a launch refused
 before its run starts (a missing input file, say) leaves the cut run resumable.

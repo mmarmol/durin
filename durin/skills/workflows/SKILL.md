@@ -223,14 +223,16 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   conversation, was cut short…`: a run of that workflow this conversation had started was
   cut short by a restart, and the call that carried the note already started a new run
   (unless its result says it was refused), so there may now be two runs of the same
-  work. Tell the person. Do NOT resume the cut run while the new one is running the same
-  work: that runs the work twice, effects outside durin included. To continue the cut run
-  instead, stop the new run first
-  (`tasks(action="stop", id=<new run id>)`), then resume the cut one with
-  `resume_run_id`. When the note says the cut run is on the same work key as this call,
-  once this call's run has started it has taken over that folder and there is nothing
-  to resume; only if this call's result says it was refused before its run started is
-  the cut run still resumable. When the note says something of
+  work. Tell the person. Do NOT resume the cut run on your own: the new run does, or has
+  already done, the same work, so resuming the cut one runs that work twice, effects
+  outside durin included — also after the new run has finished. Resume it only when the
+  person asks for that; if the new run is still running then, stop it first
+  (`tasks(action="stop", id=<new run id>)`) and wait until it shows as cancelled before
+  calling `run_workflow` with `resume_run_id`. When nobody can be asked (a scheduled or
+  replayed turn with no person present), leave the cut run as it is and say in your reply
+  that it exists. When the note says the cut run is on the same work key as this call,
+  do not try to resume it: once this call's run has started it has taken over that
+  folder. When the note says something of
   the cut run is still there (a script, a sub-workflow run, a process that seems alive),
   with or without saying the run cannot be resumed, tell the person; do not treat the new
   run as safe to repeat work beside it, and never end processes or delete files yourself.
