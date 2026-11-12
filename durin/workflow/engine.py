@@ -336,7 +336,8 @@ def resume_refusal(manifest: dict, *, workspace: str | Path | None = None,
     in its working folder. It is refused when its record is ``incomplete``
     (rewritten by ``run_log.update_run`` with no record to carry from, so what
     the run was started with is gone). It is refused when an automation started
-    it (its ``root_session_key`` is ``automation:<name>``): the automation keeps a record
+    it (its ``launch`` says so, or its ``root_session_key`` is ``automation:<name>``;
+    the tool restamps the root when it resumes a run, the launch stays): the automation keeps a record
     of the run and never resumes it, so a resume by hand would run its steps
     outside it. A paused run's answer and a failed step's retry are not refused
     on that account. It is refused when it was recorded before records kept a
@@ -380,7 +381,9 @@ def _dead_run_refusal(manifest: dict, *, workspace: str | Path | None,
         # resume could not enter it where it ran.
         return INCOMPLETE_RECORD_REFUSAL
     root = manifest.get("root_session_key")
-    if isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX):
+    launched = manifest.get("launch")
+    if (isinstance(launched, dict) and launched.get("kind") == "automation") or (
+            isinstance(root, str) and root.startswith(AUTOMATION_ROOT_PREFIX)):
         return AUTOMATION_RUN_REFUSAL
     if "position" not in manifest:
         return ("it was recorded before a run kept the step it was in. Start a new "
@@ -874,6 +877,7 @@ class WorkflowEngine:
         work_dir_override: str | None = None,
         parent_run_id: str | None = None,
         work_key: str | None = None,
+        launch: dict | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -912,7 +916,10 @@ class WorkflowEngine:
         used, and "same run_id" alone only guarantees that for the per-run-id default;
         a keyed folder is a function of (workflow name, work_key), not run_id, so
         without this a resumed keyed run would silently abandon whatever its pre-pause
-        nodes wrote. An explicit ``work_key`` argument on the resume call still wins."""
+        nodes wrote. An explicit ``work_key`` argument on the resume call still wins.
+
+        ``launch`` says where the run was launched from (see ``run_log.start_run``);
+        a resume ignores it, since the record keeps the first walk's."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
         # See the work_key paragraph above: a caller-supplied work_key always wins;
         # absent that, a resume falls back to whatever the ORIGINAL run recorded.
@@ -995,7 +1002,7 @@ class WorkflowEngine:
                 resumed=resume is not None,
                 start_at=None if nested else (resume.start_at if resume else workflow.start),
                 start_upstream=resume.upstream if resume else None,
-                store=store)
+                store=store, launch=launch)
             sources = run_log.source_nodes(workflow)
             stored_rows = 0
             # One tracker per run for launch-and-continue (detached) nodes. Every exit
@@ -1227,7 +1234,7 @@ class WorkflowEngine:
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
                         parent_run_id=None, work_dir=None, work_key=None,
                         resumed=False, start_at=None, start_upstream=None,
-                        store=None) -> int:
+                        store=None, launch=None) -> int:
         """Write the run's first record, naming ``start_at`` as its position (none
         when ``start_at`` is None), and return that position's sequence number. A
         fresh run starts at 1; a resumed walk continues one past the sequence its
@@ -1276,7 +1283,8 @@ class WorkflowEngine:
                               durin_version=provenance.durin_version(),
                               resumed=resumed,
                               position=position,
-                              surface=self._launch_surface)
+                              surface=self._launch_surface,
+                              launch=launch)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
         return seq

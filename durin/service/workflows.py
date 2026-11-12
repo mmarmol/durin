@@ -670,6 +670,7 @@ class WorkflowsService:
             input_files=cmd.input_files or None,
             output_format=cmd.output_format or None,
             resume_run_id=cmd.resume_run_id or None,
+            launch={"kind": "service", "subject": principal.subject or ""},
         )
         return WorkflowRunResult(
             status=result.status,
@@ -750,6 +751,7 @@ class WorkflowsService:
                 await self.execute(
                     cmd.name, cmd.task, run_id=run_id, root_session_key=root_session_key,
                     work_key=cmd.work_key or None,
+                    launch={"kind": "service", "subject": principal.subject or ""},
                 )
             except Exception:
                 logger.exception(
@@ -773,6 +775,7 @@ class WorkflowsService:
         root_session_key: str | None = None,
         work_key: str | None = None,
         paced: bool = False,
+        launch: dict | None = None,
     ) -> WorkflowResult:
         # paced: the caller holds a slot of a capped lane for the whole run (a
         # cron job firing a scheduled automation), so the run starts on a thread
@@ -1046,6 +1049,7 @@ class WorkflowsService:
                 output_format=output_format,
                 resume=resume,
                 work_key=work_key,
+                launch=launch,
             )
         except BaseException:
             if claim is not None:

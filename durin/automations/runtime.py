@@ -297,7 +297,8 @@ class AutomationsRuntime:
         try:
             try:
                 result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
-                                           root_session_key=f"automation:{spec.name}")
+                                           root_session_key=f"automation:{spec.name}",
+                                           launch={"kind": "automation", "name": spec.name})
             except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
                 rec = run_log.finalize_run(self._ws, spec.name, run_id, status="failed", detail=str(exc),
                                             workflow_run_id=record["workflow_run_id"])
@@ -618,7 +619,8 @@ class AutomationsRuntime:
                     else None)
         try:
             result = await self._exec(spec.workflow, task, run_id=wf_run_id, work_key=work_key,
-                                       root_session_key=f"automation:{spec.name}", paced=paced)
+                                       root_session_key=f"automation:{spec.name}", paced=paced,
+                                       launch={"kind": "automation", "name": spec.name})
         except Exception as exc:  # noqa: BLE001 — any execution failure ends the run honestly
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="failed",
                                            detail=str(exc), workflow_run_id=wf_run_id)

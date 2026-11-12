@@ -133,6 +133,7 @@ async def test_launch_manifest_carries_root_session_key_naming_the_principal(tmp
         manifest = await _wait_for_manifest(tmp_path, "w1", result.run_id)
 
     assert manifest["root_session_key"] == "api:tok-abc123"
+    assert manifest["launch"] == {"kind": "service", "subject": "tok-abc123"}
 
 
 @pytest.mark.asyncio

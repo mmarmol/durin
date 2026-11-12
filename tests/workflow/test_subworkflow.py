@@ -320,3 +320,14 @@ def test_the_hard_cancel_poll_reaches_a_nested_run_s_work_nodes(tmp_path):
     engine.run(parent_wf, "t")
 
     assert captured["a"] is hard, "the nested work node was handed no hard-cancel poll"
+
+
+def test_a_nested_run_records_no_launch(tmp_path):
+    from durin.workflow import run_log
+
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)(
+        "child", "t", parent_run_id="parent1")
+    run_id = next((tmp_path / "workflows-runs" / "child").glob("*.json")).stem
+    assert run_log.read_manifest(tmp_path, "child", run_id).get("launch") is None

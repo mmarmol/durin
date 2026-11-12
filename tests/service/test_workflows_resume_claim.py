@@ -322,7 +322,7 @@ async def test_an_aborted_run_resumed_through_the_service_runs_once(tmp_path):
 
 
 def _dead_run(tmp_path, node: dict, *, surface: str | None = None,
-              root_session_key: str = "s") -> dict:
+              root_session_key: str = "s", launch: dict | None = None) -> dict:
     """Run ``dead1`` of workflow ``wf`` left ``running`` by a process that died
     in its only step: its position names that step, whose input is stored, and
     its working folder exists. Returns the record as left."""
@@ -339,7 +339,7 @@ def _dead_run(tmp_path, node: dict, *, surface: str | None = None,
     resume_store.save_input(resume_store.store_dir(tmp_path, "dead1"), 1, "only", "")
     run_log.start_run(tmp_path, "wf", "dead1", root_session_key=root_session_key,
                       started_at=1.0, task="the task", work_dir=str(work_dir),
-                      position={"node": "only", "seq": 1}, surface=surface)
+                      position={"node": "only", "seq": 1}, surface=surface, launch=launch)
     f = tmp_path / "workflows-runs" / "wf" / "dead1.json"
     rec = json.loads(f.read_text(encoding="utf-8"))
     rec.update(owner=_DEAD_OWNER, active_node={
@@ -573,3 +573,54 @@ async def test_a_dead_run_is_not_resumed_while_a_descendant_is_still_running(tmp
                                           "still recorded as running"):
         await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
     assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
+
+
+_AGENT_LAUNCH = {"kind": "session", "session_key": "websocket:chatA", "channel": "websocket",
+                 "chat_id": "chatA"}
+
+
+@pytest.mark.asyncio
+async def test_a_service_resume_of_an_agent_run_keeps_where_it_was_launched_from(tmp_path):
+    from durin.service.principal import Scope
+    from durin.service.workflows import WorkflowRunCommand
+
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"}, surface="agent",
+              root_session_key="websocket:chatA", launch=_AGENT_LAUNCH)
+    principal = Principal.remote("tok-dash", frozenset({Scope.WORKFLOWS_WRITE.value}))
+    with _provider():
+        result = await _svc(tmp_path).run(
+            WorkflowRunCommand(name="wf", task="", resume_run_id="dead1"), principal)
+    assert result.status == "completed"
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["launch"] == _AGENT_LAUNCH
+
+
+@pytest.mark.asyncio
+async def test_a_dead_run_an_automation_launched_is_refused_whatever_its_root(tmp_path):
+    _dead_run(tmp_path, {"kind": "script", "command": "echo ok"},
+              root_session_key="websocket:x",
+              launch={"kind": "automation", "name": "nightly"})
+    with _provider(), patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError) as refused:
+            await _svc(tmp_path).execute("wf", "", resume_run_id="dead1")
+    assert str(refused.value).startswith(
+        "run 'dead1' of workflow 'wf' cannot be resumed — it was started by an automation")
+    fake_run.assert_not_called()
+    assert run_log.read_manifest(tmp_path, "wf", "dead1")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_a_run_the_dashboard_launches_records_the_token_subject(tmp_path):
+    from durin.service.principal import Scope
+    from durin.service.workflows import WorkflowRunCommand
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wf.json").write_text(json.dumps(
+        {"name": "wf", "start": "only",
+         "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}]}),
+        encoding="utf-8")
+    principal = Principal.remote("tok-dash", frozenset({Scope.WORKFLOWS_WRITE.value}))
+    with _provider():
+        result = await _svc(tmp_path).run(WorkflowRunCommand(name="wf", task="go"), principal)
+    assert run_log.read_manifest(tmp_path, "wf", result.run_id)["launch"] == {
+        "kind": "service", "subject": "tok-dash"}

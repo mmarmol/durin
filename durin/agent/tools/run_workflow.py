@@ -730,6 +730,10 @@ class RunWorkflowTool(Tool, ContextAware):
             "chat_id": self._chat_id.get() or "",
             "session_key": root_session_key,
         }
+        # Where the run was launched from, kept on its record across every
+        # resume: the same address the background result goes to. A call with no
+        # calling session has no conversation to report to.
+        launch = {"kind": "session", **inject_target} if root_session_key else None
 
         # Claim a resumed run once nothing is left to build: move it to running
         # under the per-run lock, so a second resume (from here or from the
@@ -758,6 +762,7 @@ class RunWorkflowTool(Tool, ContextAware):
                     output_format=output_format or None,
                     resume=resume,
                     work_key=work_key or None,
+                    launch=launch,
                 )
             except BaseException:
                 # Given up on before the walk started (cancelled while it

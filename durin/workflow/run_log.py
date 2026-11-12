@@ -269,6 +269,7 @@ def start_run(
     resumed: bool = False,
     position: dict | None = None,
     surface: str | None = None,
+    launch: dict | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -288,7 +289,14 @@ def start_run(
     ``history`` (bounded), with per-step pass counts in ``passes``.
     ``position`` is the step the walk enters first, ``{"node", "seq"}``.
     ``surface`` is the surface that launched the run (``"agent"``, ``"service"``
-    or None); a resumed walk keeps the value its record already has instead."""
+    or None); a resumed walk keeps the value its record already has instead.
+    ``launch`` says where the run was launched from (``{"kind": "session",
+    "session_key", "channel", "chat_id"}`` for the agent's tool, ``{"kind":
+    "automation", "name"}`` for an automation, ``{"kind": "service", "subject"}``
+    for the dashboard and the API); it is written once, by the first walk: a
+    resumed walk ignores the argument and keeps what its record has, none
+    included, while ``root_session_key`` follows whoever resumes. A run with no
+    calling conversation, and a sub-workflow's own run, record none."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -328,6 +336,9 @@ def start_run(
         # The surface that launched the run, from its first walk: a resume keeps
         # it, since the steps had the tools of the surface that launched them.
         "surface": prior.get("surface") if resumed else surface,
+        # Where the run was launched from, from its first walk: a resume keeps it
+        # (see the docstring), so a later reader still knows who started the run.
+        "launch": prior.get("launch") if resumed else launch,
         # Sticky once set: every later rewrite carries it, and every resume of the
         # run sets it again, so a reader knows ``runs`` covers only the last walk.
         "resumed": resumed,
@@ -384,7 +395,7 @@ def update_run(
     writing it is alive, so the crash sweep leaves it alone while it runs and
     finds it dead once this process is gone. What only ``start_run`` knew
     (``root_session_key``, ``parent_run_id``, ``work_dir``, ``work_key``,
-    ``task``, ``surface``) is not recoverable here and is left empty, so the
+    ``task``, ``surface``, ``launch``) is not recoverable here and is left empty, so the
     record is marked ``incomplete: True``, carried by every later rewrite: a
     dead run with that mark is never resumed (``engine.resume_refusal``), since
     a resume would enter it as a top-level run, in another folder, under no
@@ -418,6 +429,7 @@ def update_run(
         "spec_hash": base.get("spec_hash"),
         "durin_version": base.get("durin_version"),
         "surface": base.get("surface"),
+        "launch": base.get("launch"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
         "history": base.get("history") or [],
@@ -508,6 +520,7 @@ def finalize_run(
         "spec_hash": prior.get("spec_hash"),
         "durin_version": prior.get("durin_version"),
         "surface": prior.get("surface"),
+        "launch": prior.get("launch"),
         "resumed": prior.get("resumed", False),
         "earlier_nodes": prior.get("earlier_nodes") or [],
         "history": prior.get("history") or [],

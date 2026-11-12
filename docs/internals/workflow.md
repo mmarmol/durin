@@ -758,7 +758,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, surface, resumed, earlier_nodes, history, passes, shared_session, position, detached_active}`, the position naming the step the walk enters first.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version, surface, launch, resumed, earlier_nodes, history, passes, shared_session, position, detached_active}`, the position naming the step the walk enters first.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, keeps `status: "running"`, and names the step to enter next (`position`), so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -811,6 +811,16 @@ The engine takes it from `WorkflowEngine(..., launch_surface=...)`; a
 sub-workflow's run gets its caller's (the surface hands the same value to its
 `SubworkflowRunner`). The run's first walk writes it, every resume keeps it, and
 every rewrite carries it; a record written before it existed lacks it;
+`launch` — where the run was launched from, which a resume never changes (while
+`root_session_key` follows whoever resumes through the tool): `{kind: "session",
+session_key, channel, chat_id}` for the `run_workflow` tool (the address its background
+result goes to; a call with no calling session records none), `{kind: "automation",
+name}` for an automation, `{kind: "service", subject}` for the dashboard and the API
+(`subject` is the caller's token subject, `""` when it has none). A sub-workflow's own
+run records none, since its result goes to its caller, and a record written before the
+field existed lacks it. The first walk writes it, a resume ignores what its caller
+passes and keeps what the record has, and every rewrite carries it, the crash
+conversion included;
 `resumed` — `true` when the walk re-enters an existing run (a failure-resume,
 or a reply to a pause that goes back into the engine). A resume starts `runs` empty
 again, so on a resumed run they hold only the last walk's rows, not the earlier
@@ -1019,7 +1029,7 @@ record: when it finds no record to carry from (one read failed, or its folder mo
 rename refuses a workflow with a run in flight, but not one whose run starts after its
 check), the record it writes names the writing process as its owner and the time of that
 write as its start, and it carries none of what only the first write knew
-(`root_session_key`, `parent_run_id`, `work_dir`, `work_key`, `task`, `surface`). Every
+(`root_session_key`, `parent_run_id`, `work_dir`, `work_key`, `task`, `surface`, `launch`). Every
 key the first write has is also written by `update_run`, so no missing field marks such a
 record; it is marked `incomplete: true` instead, carried by every later rewrite, and a dead
 run with that mark is refused (below).
@@ -1249,7 +1259,7 @@ in the workflows skill:
 | Case | Reason (after "cannot be resumed — ") |
 |---|---|
 | its record is marked `incomplete` (rewritten by `update_run` with no record to carry from, so its root, parent, folder and task are gone) | `its record is incomplete: it was rewritten without what the run was started with.` |
-| an automation started it (`root_session_key` is `automation:<name>`): the automation keeps its own record of the run, which its orphan sweep ends `interrupted` with no replacement once the run's process is gone (while the automation still exists), and nothing in the automation resumes the dead run. Only a dead run is refused on this account; a paused run's answer and a failed step's retry are not | `it was started by an automation, and a run an automation started is not resumed by hand: the automation does not resume it, and its next run starts anew.` |
+| an automation started it (`launch.kind` is `automation`, or `root_session_key` is `automation:<name>`; the tool restamps the root on a resume, the launch stays): the automation keeps its own record of the run, which its orphan sweep ends `interrupted` with no replacement once the run's process is gone (while the automation still exists), and nothing in the automation resumes the dead run. Only a dead run is refused on this account; a paused run's answer and a failed step's retry are not | `it was started by an automation, and a run an automation started is not resumed by hand: the automation does not resume it, and its next run starts anew.` |
 | no `position` key (recorded before positions existed) | `it was recorded before a run kept the step it was in. Start a new run instead.` |
 | a `position` of `null`, or one the conversion did not name as `failed_node` (a started detached step, a walk that had ended, a step whose input could not be stored, the minimal mark) | `the step it was in cannot be entered again. Start a new run instead.` |
 | the current definition has no step of that id | `its step '<id>' is no longer in the workflow's definition. Start a new run instead.` |
