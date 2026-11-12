@@ -61,6 +61,9 @@ class ResumeClaim:
         # this process writes exactly the record this one wrote, so a second
         # release could not tell them apart and would undo that later claim.
         self._released = False
+        # Whether the release put the record back because the engine never
+        # wrote the run's own record.
+        self._put_back = False
 
     @classmethod
     def take(cls, workspace: str | Path, name: str, run_id: str, *,
@@ -91,6 +94,15 @@ class ResumeClaim:
                 self._release()
         return _guarded
 
+    @property
+    def took_over(self) -> bool:
+        """Whether the engine took the run over: the walk started and the engine
+        wrote the run's own record, so the record was not put back. Meaningful
+        once the guarded walk has returned or raised; False for a claim dropped
+        before its walk, or released because the engine ended before writing
+        the record (a rejected input or script, a busy ``work_key``)."""
+        return self._started and not self._put_back
+
     def drop(self) -> None:
         """The caller is giving up before the walk started (cancelled while
         waiting for a thread, or before its task ran at all): put the record
@@ -111,7 +123,7 @@ class ResumeClaim:
             self._released = True
         try:
             with cross_process_lock(run_log.run_lock_target(self._workspace, self._name, self._run_id)):
-                run_log.release_resume_claim(
+                self._put_back = run_log.release_resume_claim(
                     self._workspace, self._name, self._run_id,
                     prior=self._prior, claimed=self._claimed)
         except Exception:  # noqa: BLE001 - never masks the run's own outcome

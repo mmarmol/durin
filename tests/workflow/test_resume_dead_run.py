@@ -6,12 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from durin.workflow import run_log
+from durin.utils.file_lock import cross_process_lock
+from durin.workflow import run_log, workspace_fork
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
 from durin.workflow.spec import parse_workflow
 from tests.workflow import _crash_driver as driver
-from tests.workflow.crash_harness import engine, marks, run_to_end, run_until_killed
+from tests.workflow.crash_harness import (
+    HANG_IN_APPLY_ENV,
+    engine,
+    marks,
+    run_to_end,
+    run_until_killed,
+)
 
 CHAIN = {"name": "w", "start": "a", "nodes": [
     {"id": "a", "kind": "work", "tools": "default", "next": "b"},
@@ -102,6 +109,146 @@ def test_a_parallel_step_that_was_cut_runs_all_its_branches_again(tmp_path):
     assert _attempts(dead.workspace, "w", "fan") == [(1, True), (2, False)]
 
 
+def _writing_fan(reconcile):
+    fan = {"id": "fan", "kind": "parallel", "branches": ["left", "right"],
+           "reconcile": reconcile, "next": "after"}
+    if reconcile == "choose":
+        fan["criteria"] = "any"
+    return {"name": "w", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "next": "fan"}, fan,
+        {"id": "left", "kind": "work", "tools": "default"},
+        {"id": "right", "kind": "work", "tools": "default"},
+        {"id": "after", "kind": "work", "next": None}]}
+
+
+def _copies(dead, run_id="r1", name="w"):
+    """The run's branch-copies folder for ``run_id`` (it may not exist)."""
+    work = Path(run_log.read_manifest(dead.workspace, name, "r1")["work_dir"])
+    return workspace_fork.branches_root(work) / run_id
+
+
+@pytest.mark.parametrize("reconcile", ["union", "choose"])
+def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversion_removes_them(
+        tmp_path, reconcile):
+    definition = _writing_fan(reconcile)
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    # The dead process's copies are in its run's folder, none in its temporary directory.
+    assert not list((tmp_path / "tmp").glob("durin_wf_branch_*"))
+    assert list((tmp_path / "tmp").iterdir()) == []
+    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
+
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+    assert rec["status"] == "crashed"
+    assert not copies.exists()
+    assert [p for p in copies.parent.iterdir()] == []        # no retired leftover either
+
+    done = _resume(dead, definition, rec)
+    assert done.status == "completed"
+    assert list(copies.parent.iterdir()) == []
+
+
+def test_a_directory_made_for_the_run_after_the_conversion_survives_the_delayed_delete(
+        tmp_path, monkeypatch):
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    real_cleanup = workspace_fork.cleanup
+    removed: list[Path] = []
+
+    def after_the_lock_is_released(path):
+        # A resume claimed the run and its step made new copies in the time between
+        # the conversion and this delayed delete.
+        assert path.name.startswith(".dead-r1-") and path != copies
+        (copies / "left-new").mkdir(parents=True)
+        (copies / "left-new" / "x.txt").write_text("fresh")
+        removed.append(path)
+        real_cleanup(path)
+
+    monkeypatch.setattr(workspace_fork, "cleanup", after_the_lock_is_released)
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+
+    assert len(removed) == 1 and not removed[0].exists()
+    assert (copies / "left-new" / "x.txt").read_text() == "fresh"
+
+
+def test_the_copies_are_renamed_while_the_lock_is_held_and_the_record_already_reads_crashed(
+        tmp_path, monkeypatch):
+    import threading
+
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    real_retire = workspace_fork.retire_branches
+    seen: dict = {}
+
+    def at_the_rename(work_dir, run_id):
+        def try_the_lock():
+            try:
+                with cross_process_lock(run_log.run_lock_target(dead.workspace, "w", "r1"),
+                                        timeout=0.3):
+                    seen["lock_free"] = True
+            except TimeoutError:
+                seen["lock_free"] = False
+        # A lock is held per thread, so another thread tells whether it is held at all.
+        other = threading.Thread(target=try_the_lock)
+        other.start()
+        other.join()
+        seen["status"] = run_log.read_manifest(dead.workspace, "w", "r1")["status"]
+        return real_retire(work_dir, run_id)
+
+    monkeypatch.setattr(workspace_fork, "retire_branches", at_the_rename)
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+    assert seen == {"lock_free": False, "status": "crashed"}
+
+
+def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path, monkeypatch):
+    definition = _writing_fan("union")
+    dead = run_until_killed(tmp_path, definition, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    copies = _copies(dead)
+    still = {"pid": 1, "started": "x", "node_id": "left", "members": [], "unchecked": False}
+    monkeypatch.setattr(run_log, "_end_recorded_scripts", lambda *a, **k: ([still], []))
+
+    rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
+
+    assert rec["scripts_left"] == [still]
+    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
+
+
+def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):
+    parent = {"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "sub"},
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "z"},
+        {"id": "z", "kind": "work", "next": None}]}
+    child = {"name": "child", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["left", "right"],
+         "reconcile": "union", "next": None},
+        {"id": "left", "kind": "work", "tools": "default"},
+        {"id": "right", "kind": "work", "tools": "default"}]}
+    flows = tmp_path / "ws" / "workflows"
+    flows.mkdir(parents=True)
+    (flows / "child.json").write_text(json.dumps(child), encoding="utf-8")
+
+    dead = run_until_killed(tmp_path, parent, stop_in="right",
+                            env={driver.HANG_AFTER_ENV: "left"})
+    [kid] = run_log.list_runs(dead.workspace, "child")
+    kid_record = run_log.read_manifest(dead.workspace, "child", kid["run_id"])
+    work = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
+    assert kid_record["work_dir"] == str(work)          # the child works in its parent's folder
+    kid_copies = workspace_fork.branches_root(work) / kid["run_id"]
+    assert kid_copies.is_dir() and any(kid_copies.iterdir())
+
+    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
+
+    assert run_log.read_manifest(dead.workspace, "child", kid["run_id"])["status"] == "crashed"
+    assert not kid_copies.exists()
+    assert not any(p.name.startswith(".dead-") for p in kid_copies.parent.iterdir())
+
+
 @pytest.mark.parametrize("reconcile", ["read", "choose", "union"])
 def test_each_kind_of_static_parallel_step_runs_whole_again(tmp_path, reconcile):
     fan = {"id": "fan", "kind": "parallel", "branches": ["left", "right"],
@@ -119,6 +266,77 @@ def test_each_kind_of_static_parallel_step_runs_whole_again(tmp_path, reconcile)
     assert done.status == "completed"
     m = marks(dead.workspace)
     assert (m["left"], m["right"], m["pre"], m["after"]) == (2, 2, 1, 1)
+
+
+LOGS = {"name": "w", "start": "seed", "nodes": [
+    {"id": "seed", "kind": "script", "command": "echo seed > a.log; echo seed > b.log",
+     "next": "fan"},
+    {"id": "fan", "kind": "parallel", "branches": ["left", "right"], "reconcile": "union",
+     "next": "after"},
+    {"id": "left", "kind": "script", "command": "echo a >> a.log"},
+    {"id": "right", "kind": "script", "command": "echo b >> b.log"},
+    {"id": "after", "kind": "script", "command": "cat a.log b.log", "next": None}]}
+
+
+def test_a_union_killed_while_writing_back_resumes_from_the_folder_before_it(tmp_path):
+    whole, _ = run_to_end(tmp_path / "whole", LOGS)
+    whole_dir = Path(whole["work_dir"])
+    dead = run_until_killed(tmp_path / "cut", LOGS, stop_in=None,
+                            env={HANG_IN_APPLY_ENV: "1"})
+    folder = Path(dead.record["work_dir"])
+    # Killed after the first real file of the write-back was written.
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed"]
+    assert (workspace_fork.pending_dir(folder) / "journal.json").is_file()
+
+    done = _resume(dead, LOGS)
+    assert done.status == "completed"
+    assert _lines(folder / "a.log") == ["seed", "a"] == _lines(whole_dir / "a.log")
+    assert _lines(folder / "b.log") == ["seed", "b"] == _lines(whole_dir / "b.log")
+    assert not workspace_fork.pending_dir(folder).exists()
+
+
+def test_a_sub_workflow_killed_while_writing_back_is_undone_before_its_first_step(tmp_path):
+    # The child writes into its caller's folder. Its first step records what the
+    # folder holds, outside the folder; the union's own entry would also undo the
+    # cut write-back, but only after that first step has run.
+    seen = tmp_path / "seen.log"
+    parent = {"name": "w", "start": "seed", "nodes": [
+        {"id": "seed", "kind": "script", "command": "echo seed > a.log; echo seed > b.log",
+         "next": "sub"},
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "after"},
+        {"id": "after", "kind": "script", "command": "cat a.log b.log", "next": None}]}
+    child = {"name": "child", "start": "look", "nodes": [
+        {"id": "look", "kind": "script",
+         "command": f"cat a.log b.log >> '{seen}'; echo -- >> '{seen}'", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["left", "right"], "reconcile": "union",
+         "next": "end"},
+        {"id": "left", "kind": "script", "command": "echo a >> a.log"},
+        {"id": "right", "kind": "script", "command": "echo b >> b.log"},
+        {"id": "end", "kind": "script", "command": "true", "next": None}]}
+    flows = tmp_path / "ws" / "workflows"
+    flows.mkdir(parents=True)
+    (flows / "child.json").write_text(json.dumps(child), encoding="utf-8")
+
+    dead = run_until_killed(tmp_path, parent, stop_in=None, env={HANG_IN_APPLY_ENV: "1"})
+    folder = Path(dead.record["work_dir"])
+    [first_child] = run_log.list_runs(dead.workspace, "child")
+    child_record = run_log.read_manifest(dead.workspace, "child", first_child["run_id"])
+    assert Path(child_record["work_dir"]) == folder
+    # Killed after the first real file of the child's write-back was written.
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed"]
+    assert (workspace_fork.pending_dir(folder) / "journal.json").is_file()
+    assert _lines(seen) == ["seed", "seed", "--"]
+
+    assert run_log.mark_dead_run(dead.workspace, "child", first_child["run_id"]) is not None
+    done = _resume(dead, parent)
+    assert done.status == "completed", done.final_output
+    # The child's first step, run again, saw the folder as it was before the write-back.
+    assert _lines(seen) == ["seed", "seed", "--", "seed", "seed", "--"]
+    assert _lines(folder / "a.log") == ["seed", "a"]
+    assert _lines(folder / "b.log") == ["seed", "b"]
+    assert not workspace_fork.pending_dir(folder).exists()
 
 
 def test_a_fan_out_that_was_cut_runs_every_worker_again(tmp_path):

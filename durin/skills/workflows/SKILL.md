@@ -159,7 +159,17 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the rest); the final output; the files; and last the node list, a fan-out's workers
   folded into one line. **`completed` does not mean every worker succeeded** — a fan-out
   completes as long as one worker does, so read the failed count and the failures before
-  you use or report the output. Do NOT wait for it with
+  you use or report the output. A result message can also arrive for a run THIS conversation
+  started that was resumed elsewhere — from the dashboard, the API or another conversation;
+  its first line says so (`... started from this conversation, was resumed from ...`); the
+  summary below it says how the run ended. Treat it like any result: summarize the
+  outcome for the user and follow what the summary says about continuing the run. The
+  other way round, when you resume a run another conversation started, that conversation
+  is told only if the process you run in serves its channel (the gateway serves the web
+  chat when it is switched on and the chat channels switched on; the terminal UI serves
+  none, and nothing serves a terminal or `/v1` API conversation):
+  it may not hear about it, so if its person needs to know, say so to your user and
+  point to the run's record. Do NOT wait for it with
   sleep+status polling: tell the user the workflow is running and **end your turn** — the
   follow-up wakes you, and the user watches live per-node progress in the Work panel.
   Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or
@@ -208,10 +218,56 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the code deliberately does not signal them. Tell the person which process ids are left
   and that they should check these are the script's before ending them; the run can be
   resumed once they have ended. Do not start a new run of the workflow meanwhile without
-  telling the person that the old script may still be working. When the reason is that
-  another caller is acting on it, that it was already resumed, or that its record no longer
-  exists, nothing the old process left is in the way: look at the run's status before
-  trying again. A crashed run you started whose workflow (or a sub-workflow it
+  telling the person that the old script may still be working. A launch reply (or a
+  foreground result) can end with `Note: run <id> of '<workflow>', started from this
+  conversation, was cut short…`: a run of that workflow this conversation had started was
+  cut short by a restart, and the call that carried the note already started a new run
+  (unless its result says it was refused), so there may now be two runs of the same
+  work. Tell the person. Do NOT resume the cut run on your own: the new run does, or has
+  already done, the same work, so resuming the cut one runs that work twice, effects
+  outside durin included — also after the new run has finished. Resume it only when the
+  person asks for that; if the new run is still running then, stop it first
+  (`tasks(action="stop", id=<new run id>)`) and wait until it shows as cancelled before
+  calling `run_workflow` with `resume_run_id`. When nobody can be asked (a scheduled or
+  replayed turn with no person present), leave the cut run as it is and say in your reply
+  that it exists. When the note says the cut run is on the same work key as this call,
+  do not try to resume it: once this call's run has started it has taken over that
+  folder. When the note says something of
+  the cut run is still there (a script, a sub-workflow run, a process that seems alive),
+  with or without saying the run cannot be resumed, tell the person; do not treat the new
+  run as safe to repeat work beside it, and never end processes or delete files yourself.
+  When the reason is that another caller is acting on it, that it was already resumed, or
+  that its record no longer exists, nothing the old process left is in the way: look at
+  the run's status before trying again. A run can also stop because a write of a
+  `choose`/`union` result into its folder was cut and putting the folder back cannot be
+  done now: `the working folder
+  holds changes of an earlier parallel step that could not be undone (<path>): <reason>.
+  The earlier content of the files that step changed is kept in <folder>; removing the
+  journal file discards it when a run next starts in that folder. It can run once a person
+  has checked the folder and removed that file.`, or `… could not be undone yet (<path>):
+  <error>. The earlier content … is kept in <folder>; … A retry undoes them once the cause
+  is gone.` NEVER remove that file or anything else, or touch the folder, yourself:
+  tell the person which file the reason names, the reason or error, and the folder
+  where the earlier content is kept (removing the journal file throws that content
+  away), then retry with `resume_run_id` once the person says the cause is gone. When
+  the same reason ends `A new run can start once a person has checked the folder and
+  removed that file.` or `A new run undoes them once the cause is gone.`, the run stopped
+  before its first step and cannot be resumed: start a new run once the person says the
+  cause is gone. A run stopped with `writing the branches' result back failed: <error>`
+  could not write a `choose`/`union` result into its folder (a read-only folder, a full
+  disk). When the reason stops there, the folder was put back, except for a path someone
+  else changed meanwhile in a way the undo can tell from the write-back's own, which is
+  left as it is and named in a warning; when it goes on to say the changes could not be
+  undone yet, the folder has not been put back, and the retry puts it back once the cause
+  is gone. Either way, tell the person the error; once the cause it names is gone, retry
+  with `resume_run_id`. A `choose`/`union` step whose result
+  would turn a file into a folder (or a folder into a file), write, delete or go through
+  a link, write a file that is not regular, reach another volume, or touch a path that
+  cannot be examined, ends the run like a union conflict: `the branches' result cannot be
+  written back: '<path>' …` — change the branches so they do not, and start a new run.
+  The same ending with `the run's working folder is a link` or `… is on another volume
+  than the run's area` means the run's working folder itself cannot take the result: tell
+  the person, and do not move or replace the folder yourself. A crashed run you started whose workflow (or a sub-workflow it
   calls) has a step with `mcps` can only be resumed by you, through `run_workflow`: the
   dashboard and API refuse it. A crashed run an automation started is not resumed by hand
   on any surface: the automation does not resume it, and its next run starts anew. A

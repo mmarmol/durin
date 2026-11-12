@@ -274,7 +274,7 @@ async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         return WorkflowResult(
             status="needs_input", run_id="r1", final_output="what env?",
             needs_input_node="a", runs=[], output_files=["a.md"],
@@ -297,7 +297,7 @@ async def test_run_response_of_an_aborted_run_names_its_failed_node(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         return WorkflowResult(
             status="aborted", run_id="r1", final_output="node 'a' failed: boom",
             failed_node="a", runs=[NodeRun(node_id="a", iteration=1, output="",
@@ -325,7 +325,7 @@ async def test_run_response_carries_producer_fields(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         return WorkflowResult(
             status="completed", run_id="r1", final_output="ok",
             runs=[NodeRun(node_id="a", iteration=1, output="x", status="reused",
@@ -362,7 +362,7 @@ async def test_run_response_serializes_legacy_rows_with_producer_fields_absent(t
     )
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[legacy_row])
 
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
@@ -393,7 +393,7 @@ async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_pat
     captured = {}
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         captured["task"] = task
         captured["resume"] = resume
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
@@ -435,7 +435,7 @@ async def test_resume_carries_the_parked_runs_work_key_with_none_supplied(tmp_pa
     captured = {}
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None, work_key=None):
+                 output_format=None, resume=None, work_key=None, launch=None):
         captured["resume"] = resume
         captured["work_key_arg"] = work_key   # execute()'s own arg — None, not re-supplied
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
@@ -604,7 +604,7 @@ def test_cancel_and_resume_racing_the_same_run_exactly_one_wins(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_engine_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                        output_format=None, resume=None, work_key=None):
+                        output_format=None, resume=None, work_key=None, launch=None):
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
 
     outcomes: dict[str, object] = {}

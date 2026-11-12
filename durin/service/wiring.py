@@ -18,6 +18,19 @@ from loguru import logger
 from durin.service.registry import ServiceRegistry
 
 
+def channel_server(channel_manager: Any) -> Callable[[str], bool] | None:
+    """Whether this process serves a channel: its channel manager runs a channel
+    of that name. A message meant for a conversation on a channel this process
+    does not serve — a terminal UI session (``cli:``) owned by another process,
+    or a chat the gateway runs while this is the terminal UI — is not this
+    process's to post: running a turn in it here would write to that
+    conversation behind its owner's back. None when there is no channel
+    manager: such a process serves no channel."""
+    if channel_manager is None:
+        return None
+    return lambda name: channel_manager.get_channel(name) is not None
+
+
 def build_service_registry(
     *,
     config: Any,
@@ -35,6 +48,7 @@ def build_service_registry(
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
     approval_deps: Callable[[], Any] | None = None,
+    workflow_deliver_result: Callable[..., Awaitable[None]] | None = None,
     reconcile_runs: bool = True,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
@@ -75,6 +89,12 @@ def build_service_registry(
     ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
     surfaces without one (the websocket channel's shim registry) leave it
     ``None`` and those two routes report unavailable.
+
+    ``workflow_deliver_result`` is optional: the gateway passes the callback
+    that reports a resumed workflow run's result to the conversation that
+    launched it (see ``WorkflowsService``'s ``deliver_result``). The gateway's
+    registry serves the dashboard and the API, so it is the one that gets it;
+    a registry that serves no workflow route leaves it ``None``.
 
     ``approval_deps`` is optional: the gateway passes
     ``AgentLoop.approval_exec_deps`` so an approval decided through
@@ -164,7 +184,7 @@ def build_service_registry(
     registry.register("auth", AuthService(ApiTokenStore()))
     registry.register("workflows", WorkflowsService(
         workspace=_workspace(), app_config=config, sessions=session_manager,
-        config_loader=_live_config))
+        config_loader=_live_config, deliver_result=workflow_deliver_result))
     from durin.service.tasks import TasksService
     # Unlike subagent_manager/session_manager, a JobRegistry is a stateless
     # database handle rather than live in-memory state, so a fresh instance
@@ -179,9 +199,7 @@ def build_service_registry(
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
     registry.register("approvals", ApprovalsService(
         workspace_resolver=_workspace, exec_deps=approval_deps, bus=bus,
-        serves_channel=(
-            (lambda name: channel_manager.get_channel(name) is not None)
-            if channel_manager is not None else None)))
+        serves_channel=channel_server(channel_manager)))
     registry.register("pending", PendingService(workspace_resolver=_workspace))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural

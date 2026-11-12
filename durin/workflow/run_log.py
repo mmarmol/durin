@@ -45,7 +45,7 @@ from loguru import logger
 
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import resume_store
+from durin.workflow import resume_store, workspace_fork
 
 
 def runs_root(workspace: str | Path) -> Path:
@@ -269,6 +269,7 @@ def start_run(
     resumed: bool = False,
     position: dict | None = None,
     surface: str | None = None,
+    launch: dict | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -288,7 +289,14 @@ def start_run(
     ``history`` (bounded), with per-step pass counts in ``passes``.
     ``position`` is the step the walk enters first, ``{"node", "seq"}``.
     ``surface`` is the surface that launched the run (``"agent"``, ``"service"``
-    or None); a resumed walk keeps the value its record already has instead."""
+    or None); a resumed walk keeps the value its record already has instead.
+    ``launch`` says where the run was launched from (``{"kind": "session",
+    "session_key", "channel", "chat_id"}`` for the agent's tool, ``{"kind":
+    "automation", "name"}`` for an automation, ``{"kind": "service", "subject"}``
+    for the dashboard and the API); it is written once, by the first walk: a
+    resumed walk ignores the argument and keeps what its record has, none
+    included, while ``root_session_key`` follows whoever resumes. A run with no
+    calling conversation, and a sub-workflow's own run, record none."""
     prior = read_manifest(workspace, name, run_id) or {}
     if parent_run_id is None:
         parent_run_id = prior.get("parent_run_id")
@@ -328,6 +336,9 @@ def start_run(
         # The surface that launched the run, from its first walk: a resume keeps
         # it, since the steps had the tools of the surface that launched them.
         "surface": prior.get("surface") if resumed else surface,
+        # Where the run was launched from, from its first walk: a resume keeps it
+        # (see the docstring), so a later reader still knows who started the run.
+        "launch": prior.get("launch") if resumed else launch,
         # Sticky once set: every later rewrite carries it, and every resume of the
         # run sets it again, so a reader knows ``runs`` covers only the last walk.
         "resumed": resumed,
@@ -384,7 +395,7 @@ def update_run(
     writing it is alive, so the crash sweep leaves it alone while it runs and
     finds it dead once this process is gone. What only ``start_run`` knew
     (``root_session_key``, ``parent_run_id``, ``work_dir``, ``work_key``,
-    ``task``, ``surface``) is not recoverable here and is left empty, so the
+    ``task``, ``surface``, ``launch``) is not recoverable here and is left empty, so the
     record is marked ``incomplete: True``, carried by every later rewrite: a
     dead run with that mark is never resumed (``engine.resume_refusal``), since
     a resume would enter it as a top-level run, in another folder, under no
@@ -418,6 +429,7 @@ def update_run(
         "spec_hash": base.get("spec_hash"),
         "durin_version": base.get("durin_version"),
         "surface": base.get("surface"),
+        "launch": base.get("launch"),
         "resumed": base.get("resumed", False),
         "earlier_nodes": base.get("earlier_nodes") or [],
         "history": base.get("history") or [],
@@ -508,6 +520,7 @@ def finalize_run(
         "spec_hash": prior.get("spec_hash"),
         "durin_version": prior.get("durin_version"),
         "surface": prior.get("surface"),
+        "launch": prior.get("launch"),
         "resumed": prior.get("resumed", False),
         "earlier_nodes": prior.get("earlier_nodes") or [],
         "history": prior.get("history") or [],
@@ -795,6 +808,24 @@ def _pids(pids: list[int]) -> str:
     return ", ".join(str(p) for p in pids)
 
 
+class LeftBehind(str):
+    """A refusal that names something the dead process left. It reads as its
+    text everywhere a refusal is used; ``fact`` is the same thing as a clause
+    that is true on its own (what is still there), for a caller that says it in
+    words of its own."""
+
+    fact: str
+
+    def __new__(cls, text: str, fact: str) -> "LeftBehind":
+        out = super().__new__(cls, text)
+        out.fact = fact
+        return out
+
+    def __reduce__(self) -> tuple:
+        # Copying and pickling rebuild it with both of its arguments.
+        return (LeftBehind, (str(self), self.fact))
+
+
 def _left_script_refusal(node: object, state: str, own: list[int],
                          group: list[int]) -> str | None:
     """The refusal for one script a dead run left, or None when nothing of it
@@ -805,20 +836,32 @@ def _left_script_refusal(node: object, state: str, own: list[int],
     must not end processes or remove files on its account."""
     if state == "alive":
         if own and group:
-            return (f"the script of its step '{node}' from the earlier process is still "
-                    f"running (pid {_pids(own)}), and so are processes in its former "
-                    f"process group (pid {_pids(group)}), which may not be that script's. "
-                    "It can be resumed once they have all ended.")
+            return LeftBehind(
+                f"the script of its step '{node}' from the earlier process is still "
+                f"running (pid {_pids(own)}), and so are processes in its former "
+                f"process group (pid {_pids(group)}), which may not be that script's. "
+                "It can be resumed once they have all ended.",
+                f"the script of its step '{node}' is still running (pid {_pids(own)}), "
+                f"and so are processes in its former process group (pid {_pids(group)}), "
+                "which may not be that script's")
         if own:
-            return (f"the script of its step '{node}' from the earlier process is still "
-                    f"running (pid {_pids(own)}). It can be resumed once it has ended.")
-        return (f"processes in the former process group of the script of its step "
-                f"'{node}' are still running (pid {_pids(group)}); they may not be that "
-                "script's. It can be resumed once they have ended.")
+            return LeftBehind(
+                f"the script of its step '{node}' from the earlier process is still "
+                f"running (pid {_pids(own)}). It can be resumed once it has ended.",
+                f"the script of its step '{node}' is still running (pid {_pids(own)})")
+        return LeftBehind(
+            f"processes in the former process group of the script of its step "
+            f"'{node}' are still running (pid {_pids(group)}); they may not be that "
+            "script's. It can be resumed once they have ended.",
+            f"processes in the former process group of the script of its step '{node}' "
+            f"are still running (pid {_pids(group)}), which may not be that script's")
     if state == "unknown":
-        return (f"whether the script of its step '{node}' from the earlier process left "
-                f"anything running could not be checked (pid {_pids(group)}). It can be "
-                "resumed once nothing of that script is left.")
+        return LeftBehind(
+            f"whether the script of its step '{node}' from the earlier process left "
+            f"anything running could not be checked (pid {_pids(group)}). It can be "
+            "resumed once nothing of that script is left.",
+            f"whether the script of its step '{node}' ended could not be checked "
+            f"(pid {_pids(group)})")
     return None
 
 
@@ -836,9 +879,12 @@ DEAD_RUN_RACE_REFUSALS = frozenset({_TAKEN_REFUSAL, _GONE_REFUSAL, _BUSY_REFUSAL
 
 
 def _unreadable_script_refusal(path: Path) -> str:
-    return (f"a record of one of its scripts, {path}, cannot be read, so whether that "
-            "script still runs cannot be checked. It can be resumed once a person has "
-            "made sure nothing of that script is left and has removed that file.")
+    return LeftBehind(
+        f"a record of one of its scripts, {path}, cannot be read, so whether that "
+        "script still runs cannot be checked. It can be resumed once a person has "
+        "made sure nothing of that script is left and has removed that file.",
+        f"a record of one of its scripts, {path}, cannot be read, so whether that "
+        "script still runs cannot be checked")
 
 
 def _script_checks(workspace: str | Path, name: str,
@@ -937,7 +983,8 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
     ``_TAKEN_REFUSAL`` (``_GONE_REFUSAL`` when the record was removed); a
     sub-workflow run's record, or a script record, that changed meanwhile gives
     ``_BUSY_REFUSAL``, as does a lock that stays busy. These three are
-    ``DEAD_RUN_RACE_REFUSALS``.
+    ``DEAD_RUN_RACE_REFUSALS``. Every other answer is a ``LeftBehind``: the
+    refusal text, with the fact it rests on in ``fact``.
 
     Observes processes and may wait for a lock, so a caller on an event loop
     runs it off the loop."""
@@ -959,14 +1006,19 @@ def dead_run_refusal(workspace: str | Path, record: dict) -> str | None:
             return _TAKEN_REFUSAL
         if owner_alive:
             pid = owner.get("pid") if isinstance(owner, dict) else owner
-            return (f"it was marked interrupted while the process that was running it "
-                    f"(pid {pid}) still seems alive. It can be resumed once that process "
-                    "has ended.")
+            return LeftBehind(
+                f"it was marked interrupted while the process that was running it "
+                f"(pid {pid}) still seems alive. It can be resumed once that process "
+                "has ended.",
+                f"the process that was running it (pid {pid}) still seems alive")
         if running:
             child_name, child = running
-            return (f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
-                    "is still recorded as running. It can be resumed once that run has ended "
-                    "or been found dead.")
+            return LeftBehind(
+                f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
+                "is still recorded as running. It can be resumed once that run has ended "
+                "or been found dead.",
+                f"its sub-workflow run '{child.get('run_id')}' of workflow '{child_name}' "
+                "is still recorded as running")
         return _settle_scripts(checks)
 
     refusal = _with_run_lock(workspace, name, run_id, act_on_run)
@@ -1186,6 +1238,41 @@ def runs_for_session(workspace: str | Path, root_session_key: str) -> list[dict]
             if rec.get("root_session_key") == root_session_key:
                 out.append(rec)
     out.sort(key=lambda r: r.get("ts", 0.0), reverse=True)
+    return out
+
+
+def runs_launched_by(workspace: str | Path, name: str, session_key: str) -> list[dict]:
+    """The full records of workflow ``name`` that the conversation ``session_key``
+    launched, newest first. A record says so by its ``launch`` (a session launch
+    names the conversation; any other launch names none); a record written before
+    launches were kept says so by its ``root_session_key``. A sub-workflow's own
+    run is never one. Reads only that workflow's folder and skips a file that
+    cannot be read; blocking, so an event loop calls it through a thread."""
+    folder = _wf_dir(workspace, name)
+    if not session_key or not folder.is_dir():
+        return []
+    out: list[dict] = []
+    for f in folder.glob("*.json"):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        if not isinstance(rec, dict) or not isinstance(rec.get("run_id"), str):
+            continue
+        if rec.get("parent_run_id"):
+            continue
+        launch = rec.get("launch")
+        if launch is None:
+            launched_from = rec.get("root_session_key")
+        elif isinstance(launch, dict) and launch.get("kind") == "session":
+            launched_from = launch.get("session_key")
+        else:
+            launched_from = None
+        if launched_from == session_key:
+            out.append(rec)
+    out.sort(key=lambda r: r.get("started_at") or r.get("ts") or 0.0, reverse=True)
     return out
 
 
@@ -1425,6 +1512,16 @@ def mark_dead_run(
     resume until nothing of it is left. Only the records of scripts proven over
     are removed, once the converted record is written.
 
+    The private copies the run's parallel step (``choose``/``union``) was
+    writing in are removed with the conversion, in two moves: under the lock
+    they are renamed out of the run's name (``workspace_fork.retire_branches``),
+    and once the lock is released the renamed directory is deleted. The delete
+    cannot take the copies of a resume that claimed the run right after the
+    conversion, since those are made under the run's name. Copies stay when
+    ``scripts_left`` is set: a script may still be writing in one, and the step
+    removes them when it is entered again. Each run id handles its own copies,
+    so a converted sub-workflow run (below) clears its own.
+
     Then the dead sub-workflow runs under this run (``running`` records whose
     ``parent_run_id`` leads back to it) are converted the same way, so their
     scripts end too before a resume runs the sub-workflow step again.
@@ -1465,6 +1562,7 @@ def mark_dead_run(
             _drop_stop_request(stop_path)
             for path in ended:
                 forget_script(path)
+            retired = _retire_copies(out, record, run_id)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
@@ -1473,10 +1571,26 @@ def mark_dead_run(
         logger.exception("run {} of workflow {!r}: could not write the dead run's record",
                          run_id, name)
         return None
+    if retired is not None:
+        workspace_fork.cleanup(retired)
     if out["status"] in UNRESUMABLE_ENDS:
         _drop_resume_files(workspace, out)
     _mark_dead_children(workspace, run_id, now=now, max_age_s=max_age_s)
     return out
+
+
+def _retire_copies(out: dict, record: dict, run_id: str) -> Path | None:
+    """Under the run's lock: rename the private copies of the dead run's parallel
+    step (``branches/<run_id>`` beside its working folder) out of the run's name,
+    and return the new path. The caller deletes it once the lock is released: a
+    resume claims the run under the same lock and its step makes new copies under
+    ``branches/<run_id>``, so a delete after the claim would remove those. With
+    ``scripts_left`` a script may still be writing in a copy, so they stay (the
+    step removes them when it is entered again)."""
+    work_dir = out.get("work_dir") or record.get("work_dir")
+    if not work_dir or out.get("scripts_left"):
+        return None
+    return workspace_fork.retire_branches(work_dir, run_id)
 
 
 def _mark_dead_children(workspace: str | Path, run_id: str, *, now: float,

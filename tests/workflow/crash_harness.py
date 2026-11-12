@@ -4,8 +4,9 @@ step is running, so a test sees exactly what a dead process leaves on disk.
 Layout under the test's ``tmp_path``: the workspace is ``ws`` (the definition is
 written to ``ws/workflows/<name>.json``, so a test can place other workflows
 beside it before the run), ``home``, ``durin-home`` and ``tmp`` are the child's
-``HOME``, ``DURIN_HOME`` and ``TMPDIR`` (the private copies of parallel branches
-a killed child leaves stay there), and ``driver.log`` collects the child's output.
+``HOME``, ``DURIN_HOME`` and ``TMPDIR`` (a killed child leaves the private
+copies of its parallel branches in its run's folder under ``ws/.workflow/``, not
+in ``tmp``), and ``driver.log`` collects the child's output.
 ``env`` adds the driver's switches (``_crash_driver``) to the child's environment.
 
 Every process a test starts here is tracked, and ``reap`` (run after each test
@@ -29,6 +30,11 @@ from durin.utils.process_tree import process_identity, process_state
 from durin.workflow import run_log
 from durin.workflow.engine import WorkflowEngine
 from tests.workflow import _crash_driver as driver
+
+# Ends the child right after the k-th real file of a parallel step's write-back
+# into the working folder is written (``env={HANG_IN_APPLY_ENV: "<k>"}``, with
+# ``stop_in=None``).
+HANG_IN_APPLY_ENV = driver.HANG_IN_APPLY_ENV
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DRIVER = Path(driver.__file__).resolve()
@@ -90,8 +96,9 @@ def run_until_killed(tmp_path: Path, definition: dict, *, stop_in: str | None,
                      keep_scripts: bool = False) -> Dead:
     """Run `definition` in a child process and end the process while step
     `stop_in` is running (None: while the step `env` makes hang, such as a
-    fan-out worker by its task). `how`: "kill" (SIGKILL), "term" (SIGTERM, then
-    wait), "exec" (the child replaces its own image, keeping its pid).
+    fan-out worker by its task, or inside a write-back with `HANG_IN_APPLY_ENV`).
+    `how`: "kill" (SIGKILL), "term" (SIGTERM, then wait), "exec" (the child
+    replaces its own image, keeping its pid).
 
     The script processes the child leaves behind are killed at once, unless
     `keep_scripts`: they then stay alive for the test, which is what a dead

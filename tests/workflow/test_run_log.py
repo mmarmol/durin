@@ -758,3 +758,162 @@ def test_manifest_carries_work_dir_and_duration(tmp_path):
     m = run_log.read_manifest(tmp_path, "wf", "r9")
     assert m["work_dir"] == str(tmp_path / "wd")   # survives the terminal rewrite
     assert m["runs"][0]["duration_s"] == 2.5
+
+
+# --- where a run was launched from ------------------------------------------
+
+_LAUNCH = {"kind": "session", "session_key": "websocket:a", "channel": "websocket",
+           "chat_id": "a"}
+_DEAD = {"pid": 2**22 + 4242, "started": "never"}
+
+
+def _launched(tmp_path, launch=_LAUNCH):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="websocket:a", started_at=1.0,
+                      launch=launch)
+
+
+def _launch_of(tmp_path):
+    return run_log.read_manifest(tmp_path, "wf", "r1").get("launch")
+
+
+def test_the_first_write_records_the_launch_and_a_resume_keeps_it(tmp_path):
+    _launched(tmp_path)
+    run_log.start_run(
+        tmp_path, "wf", "r1", root_session_key="slack:b", started_at=2.0, resumed=True,
+        launch={"kind": "session", "session_key": "slack:b", "channel": "slack",
+                "chat_id": "b"})
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["launch"] == _LAUNCH
+    assert rec["root_session_key"] == "slack:b"
+
+
+def test_a_resume_of_a_run_recorded_without_a_launch_gets_none(tmp_path):
+    _launched(tmp_path, launch=None)
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="slack:b", started_at=2.0,
+                      resumed=True, launch={"kind": "service", "subject": "t"})
+    assert _launch_of(tmp_path) is None
+
+
+def test_update_run_carries_the_launch(tmp_path):
+    _launched(tmp_path)
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def test_finalize_run_carries_the_launch(tmp_path):
+    _launched(tmp_path)
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key="websocket:a",
+                         started_at=1.0, finished_at=2.0)
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def test_finalize_short_circuit_carries_the_launch(tmp_path):
+    _launched(tmp_path)
+    run_log.finalize_short_circuit(tmp_path, "wf", "r1", status="cancelled",
+                                   final_output="no")
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def test_claiming_and_releasing_a_resume_carry_the_launch(tmp_path):
+    _launched(tmp_path)
+    prior = run_log.read_manifest(tmp_path, "wf", "r1")
+    claimed = run_log.claim_for_resume(tmp_path, "wf", "r1")
+    assert claimed["launch"] == _LAUNCH and _launch_of(tmp_path) == _LAUNCH
+    assert run_log.release_resume_claim(tmp_path, "wf", "r1", prior=prior, claimed=claimed)
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def _die(tmp_path):
+    path = run_log._record_path(tmp_path, "wf", "r1")
+    run_log._write_json(path, {**run_log.read_manifest(tmp_path, "wf", "r1"), "owner": _DEAD})
+
+
+def test_the_conversion_of_a_dead_run_carries_the_launch(tmp_path):
+    _launched(tmp_path)
+    _die(tmp_path)
+    assert run_log.mark_dead_run(tmp_path, "wf", "r1")["status"] == "crashed"
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def test_the_minimal_mark_of_a_dead_run_carries_the_launch(tmp_path, monkeypatch):
+    def broken(*_a, **_kw):
+        raise ValueError("cannot be converted")
+
+    _launched(tmp_path)
+    _die(tmp_path)
+    monkeypatch.setattr(run_log, "_dead_run_record", broken)
+    assert run_log.mark_dead_run(tmp_path, "wf", "r1")["status"] == "crashed"
+    assert _launch_of(tmp_path) == _LAUNCH
+
+
+def test_a_record_without_launch_is_rewritten_without_one(tmp_path):
+    _launched(tmp_path, launch=None)
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    assert _launch_of(tmp_path) is None
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key="websocket:a",
+                         started_at=1.0, finished_at=2.0)
+    assert _launch_of(tmp_path) is None
+
+
+def test_a_record_written_from_nothing_has_no_launch(tmp_path, monkeypatch):
+    _launched(tmp_path)
+    monkeypatch.setattr(run_log, "read_manifest", lambda *_a, **_kw: None)
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    monkeypatch.undo()
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["incomplete"] is True and rec.get("launch") is None
+
+
+def _started(tmp_path, name, run_id, *, started_at, launch=..., root=None, parent=None):
+    run_log.start_run(tmp_path, name, run_id, root_session_key=root, started_at=started_at,
+                      parent_run_id=parent, launch=None if launch is ... else launch)
+
+
+def test_runs_launched_by_matches_the_launch_session_newest_first(tmp_path):
+    here = {"kind": "session", "session_key": "websocket:a", "channel": "websocket", "chat_id": "a"}
+    other = {**here, "session_key": "websocket:b"}
+    _started(tmp_path, "wf", "old", started_at=1.0, launch=here, root="websocket:a")
+    _started(tmp_path, "wf", "new", started_at=3.0, launch=here, root="websocket:a")
+    _started(tmp_path, "wf", "else", started_at=2.0, launch=other, root="websocket:b")
+    got = run_log.runs_launched_by(tmp_path, "wf", "websocket:a")
+    assert [r["run_id"] for r in got] == ["new", "old"]
+
+
+def test_runs_launched_by_follows_the_launch_not_the_root_the_resume_restamped(tmp_path):
+    here = {"kind": "session", "session_key": "websocket:a", "channel": "websocket", "chat_id": "a"}
+    _started(tmp_path, "wf", "r1", started_at=1.0, launch=here, root="websocket:b")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["r1"]
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:b") == []
+
+
+def test_runs_launched_by_matches_a_record_without_launch_by_its_root(tmp_path):
+    _started(tmp_path, "wf", "old", started_at=1.0, root="websocket:a")
+    service = {"kind": "service", "subject": "tok"}
+    _started(tmp_path, "wf", "svc", started_at=2.0, launch=service, root="websocket:a")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["old"]
+
+
+def test_runs_launched_by_excludes_child_runs_and_reads_only_that_workflow(tmp_path):
+    _started(tmp_path, "wf", "kid", started_at=1.0, root="websocket:a", parent="top")
+    _started(tmp_path, "other", "r9", started_at=1.0, root="websocket:a")
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:a") == []
+
+
+def test_runs_launched_by_skips_unreadable_files_and_a_missing_folder(tmp_path):
+    assert run_log.runs_launched_by(tmp_path, "wf", "websocket:a") == []
+    _started(tmp_path, "wf", "ok", started_at=1.0, root="websocket:a")
+    folder = tmp_path / "workflows-runs" / "wf"
+    (folder / "bad.json").write_text("{not json", encoding="utf-8")
+    (folder / "list.json").write_text("[1]", encoding="utf-8")
+    assert [r["run_id"] for r in run_log.runs_launched_by(tmp_path, "wf", "websocket:a")] == ["ok"]
+
+
+def test_a_left_behind_refusal_survives_copy_deepcopy_and_pickle():
+    import copy
+    import pickle
+
+    original = run_log.LeftBehind("it cannot run yet.", "a script may still run")
+    for other in (copy.copy(original), copy.deepcopy(original),
+                  pickle.loads(pickle.dumps(original))):
+        assert type(other) is run_log.LeftBehind
+        assert other == original and other.fact == original.fact

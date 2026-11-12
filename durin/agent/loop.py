@@ -813,6 +813,11 @@ class AgentLoop:
         # may want post-compaction off (too aggressive) but
         # session-close on (low frequency, safe).
         self.on_session_close: Callable[[str], None] | None = None
+        # Whether this process serves a channel. The gateway sets it once its
+        # channel manager exists; a process that runs no channels (the
+        # terminal UI) leaves it None and serves none. Tools read it through
+        # ``_serves_channel`` so a late assignment still reaches them.
+        self.serves_channel: Callable[[str], bool] | None = None
 
         # Wire memory background services. Both default ON; opt-out per
         # ``cfg.memory.{file_watcher,health_check}.enabled``. Failures here
@@ -1433,6 +1438,7 @@ class AgentLoop:
             # McpService so an agent reconnect has a real approved-config
             # record to check against instead of always seeing no runtime.
             mcp_runtime=McpRuntime(self),
+            serves_channel=self._serves_channel,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
@@ -1445,6 +1451,9 @@ class AgentLoop:
             registered.append("my")
 
         logger.info("Registered {} tools: {}", len(registered), registered)
+
+    def _serves_channel(self, name: str) -> bool:
+        return self.serves_channel is not None and self.serves_channel(name)
 
     def register_automations_tool(self, automations_runtime: Any) -> None:
         """Add the ``automations`` tool once the gateway's AutomationsRuntime is ready.

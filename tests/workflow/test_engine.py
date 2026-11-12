@@ -497,6 +497,988 @@ def test_parallel_fork_copies_the_working_folder_not_the_workspace(tmp_path):
     assert seen and not any(seen.values()), f"state dirs leaked into branch forks: {seen}"
 
 
+# ── where a writing branch's private copy lives and when it goes ──
+
+def _copies_wf(reconcile, **extra):
+    """pre -> fan(a, b): `pre` seeds the working folder before the parallel step."""
+    return parse_workflow({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "tools": "default", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "reconcile": reconcile,
+         "next": None, **extra},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"},
+    ]})
+
+
+def _branches(tmp_path, run="r1"):
+    return tmp_path / ".workflow" / run / "branches" / run
+
+
+def _copy_engine(tmp_path, runner):
+    return WorkflowEngine(node_runner=runner, run_id_factory=lambda: "r1",
+                          workspace=str(tmp_path), pick_runner=lambda c, o, m: 0)
+
+
+def test_a_branch_copy_lives_under_the_runs_folder_and_not_in_the_system_temp(tmp_path, monkeypatch):
+    import tempfile
+    sys_tmp = tmp_path / "sys-tmp"
+    sys_tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(sys_tmp))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    seen: dict[str, Path] = {}
+
+    def node_runner(req):
+        if req.workspace_override:
+            copy = Path(req.workspace_override)
+            seen[req.node.id] = copy
+            assert copy.parent == tmp_path / ".workflow" / "r1" / "branches" / "r1"
+            assert copy.name.startswith("b-")
+            (copy / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "completed" and set(seen) == {"a", "b"}
+    assert list(sys_tmp.iterdir()) == []
+    assert not _branches(tmp_path).exists()
+
+
+def test_copies_are_removed_when_a_branch_fails(tmp_path):
+    def node_runner(req):
+        if req.node.id == "b":
+            raise RuntimeError("boom")
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted"
+    assert not _branches(tmp_path).exists()
+
+
+def test_copies_are_removed_on_a_union_conflict(tmp_path):
+    def node_runner(req):
+        if req.workspace_override:
+            Path(req.workspace_override, "same.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and "conflict" in res.final_output
+    assert not _branches(tmp_path).exists()
+
+
+def test_copies_are_removed_when_the_step_is_cancelled(tmp_path):
+    from durin.workflow.engine import NodeExecutionError, WorkInterruptedError
+
+    def node_runner(req):
+        if req.node.id == "b":
+            raise NodeExecutionError("b", 1, None, WorkInterruptedError("stopped"))
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "cancelled"
+    assert not _branches(tmp_path).exists()
+
+
+def test_copies_are_removed_after_a_choose_too(tmp_path):
+    def node_runner(req):
+        if req.workspace_override:
+            Path(req.workspace_override, "x.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("choose", criteria="any"), "t")
+    assert res.status == "completed"
+    assert not _branches(tmp_path).exists()
+
+
+def test_a_copy_whose_creation_failed_midway_is_removed(tmp_path, monkeypatch):
+    import shutil
+    import threading
+
+    from durin.workflow import workspace_fork
+    real = shutil.copy2
+    lock, calls = threading.Lock(), [0]
+
+    def flaky(src, dst, *a, **kw):
+        with lock:
+            calls[0] += 1
+            n = calls[0]
+        if n == 2:
+            raise OSError("disk full")
+        return real(src, dst, *a, **kw)
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "one.txt").write_text("1")
+            (Path(req.output_dir) / "two.txt").write_text("2")
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    monkeypatch.setattr(workspace_fork.shutil, "copy2", flaky)
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and calls[0] >= 2
+    assert not _branches(tmp_path).exists()
+
+
+def test_entering_the_step_removes_what_an_earlier_attempt_left(tmp_path):
+    planted = tmp_path / ".workflow" / "r1" / "branches" / "old-run" / "left-zzz" / "junk"
+    retired = tmp_path / ".workflow" / "r1" / "branches" / ".dead-old-run-q1" / "junk"
+    seen: list[tuple[bool, bool]] = []
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            for p in (planted, retired):
+                p.parent.mkdir(parents=True)
+                p.write_text("junk")
+        elif req.workspace_override:
+            seen.append((planted.parent.exists(), retired.parent.exists()))
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "completed"
+    assert seen == [(False, False), (False, False)]
+
+
+def test_a_branchs_file_tools_work_inside_its_copy(tmp_path):
+    """The real tool set a branch gets, run on a copy whose path contains `.workflow`."""
+    import asyncio
+
+    from durin.workflow import workspace_fork
+
+    work = tmp_path / "ws" / ".workflow" / "r1" / "work"
+    work.mkdir(parents=True)
+    (work / "seed.txt").write_text("seeded")
+    copy = workspace_fork.fork(work, into=workspace_fork.branches_root(work) / "r1")
+    assert ".workflow" in copy.parts
+
+    registry = _branch_tools(tmp_path, copy)
+
+    async def use():
+        wrote = await registry.execute("write_file", {"path": "made.txt", "content": "needle-42"})
+        read = await registry.execute("read_file", {"path": "made.txt"})
+        grep = await registry.execute("grep", {"pattern": "needle-42", "path": "."})
+        listing = await registry.execute("list_dir", {"path": "."})
+        return wrote, read, grep, listing
+
+    wrote, read, grep, listing = asyncio.run(use())
+    assert (copy / "made.txt").read_text() == "needle-42", wrote
+    assert "needle-42" in str(read)
+    assert "made.txt" in str(grep)
+    assert "made.txt" in str(listing) and "seed.txt" in str(listing)
+
+
+@pytest.mark.parametrize("where", ["none", "outside"])
+def test_a_writing_parallel_step_without_a_run_folder_aborts(tmp_path, where):
+    # Where a fallback to the workspace root would act: a `branches` beside the workspace.
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sentinels = [tmp_path / "branches" / "mine.txt"]
+    work_dir = None
+    if where == "outside":
+        work_dir = str(tmp_path / "project" / "work")
+        sentinels.append(tmp_path / "project" / "branches" / "mine.txt")
+    for keep in sentinels:
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_text("x")
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+    ran = []
+
+    def node_runner(req):
+        ran.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    eng = _copy_engine(workspace, node_runner)
+    wf = _writing_wf("union")
+    merged, abort = eng._run_parallel(wf, wf.nodes["fan"], "t", "r1", 1, None, "", [],
+                                      work_dir=work_dir)
+    assert merged == ""
+    assert abort == "parallel node 'fan': reconcile='union' needs the run's working folder"
+    assert ran == [] and all(k.read_text() == "x" for k in sentinels)
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == before
+
+
+def _branch_tools(tmp_path, copy):
+    from unittest.mock import MagicMock
+
+    from durin.agent.runner import AgentRunner  # noqa: F401 - completes the config models
+    from durin.session.manager import SessionManager
+    from durin.workflow.node_runner import AgentNodeRunner
+
+    runner = AgentNodeRunner(MagicMock(), SessionManager(workspace=tmp_path / "ws"),
+                             default_model="test-model")
+    node = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "tools": "default"}]}).nodes["a"]
+    return runner._build_tools(node, str(copy), str(copy))
+
+
+def test_a_branch_id_never_reaches_its_copys_path_or_the_shell_deny_rules(tmp_path):
+    import asyncio
+
+    wf = parse_workflow({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "tools": "default", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["reboot-check", "shutdown"],
+         "reconcile": "union", "next": None},
+        {"id": "reboot-check", "kind": "work", "tools": "default"},
+        {"id": "shutdown", "kind": "work", "tools": "default"}]})
+    paths: dict[str, str] = {}
+
+    def node_runner(req):
+        if req.workspace_override:
+            paths[req.node.id] = req.workspace_override
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(wf, "t")
+    assert res.status == "completed" and set(paths) == {"reboot-check", "shutdown"}
+    for bid, path in paths.items():
+        assert bid not in path.replace(str(tmp_path), "")
+
+    copy = Path(paths["reboot-check"])
+    copy.mkdir(parents=True, exist_ok=True)
+    out = asyncio.run(_branch_tools(tmp_path, copy).execute(
+        "exec", {"command": f"ls {copy}"}))
+    assert "blocked" not in str(out).lower() and "denied" not in str(out).lower(), out
+
+
+def test_pruning_a_runs_folder_removes_its_copies(tmp_path):
+    import os
+    import time
+
+    from durin.workflow.artifacts import KEYED_WORK_MAX_AGE_DAYS, prune_runs
+
+    for run in ("old1", "new1"):
+        (tmp_path / ".workflow" / run / "work").mkdir(parents=True)
+        (tmp_path / ".workflow" / run / "branches" / run / "left-x").mkdir(parents=True)
+    past = time.time() - 1000
+    for p in (tmp_path / ".workflow" / "old1").rglob("*"):
+        os.utime(p, (past, past))
+    os.utime(tmp_path / ".workflow" / "old1", (past, past))
+    prune_runs(tmp_path, keep=1)
+    assert not (tmp_path / ".workflow" / "old1").exists()
+    assert (tmp_path / ".workflow" / "new1" / "branches" / "new1" / "left-x").is_dir()
+
+    key_dir = tmp_path / ".workflow" / "keys" / "wf" / "k1"
+    (key_dir / "work").mkdir(parents=True)
+    (key_dir / "branches" / "r9" / "left-x").mkdir(parents=True)
+    stale = time.time() - (KEYED_WORK_MAX_AGE_DAYS + 1) * 86400
+    for p in [*key_dir.rglob("*"), key_dir]:
+        os.utime(p, (stale, stale))
+    prune_runs(tmp_path, keep=5)
+    assert not key_dir.exists()
+
+
+# ── a write-back of a parallel step's result is undone when it was cut ──
+
+def _files(folder: Path) -> dict[str, bytes]:
+    return {p.relative_to(folder).as_posix(): p.read_bytes()
+            for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+def _cut_writes_at(monkeypatch, n):
+    """Make the n-th real-file write of a write-back raise."""
+    from durin.workflow import workspace_fork
+    real, calls = workspace_fork._write_file, [0]
+
+    def write(target, content, *rest):
+        calls[0] += 1
+        if calls[0] == n:
+            raise OSError("disk full")
+        return real(target, content, *rest)
+
+    monkeypatch.setattr(workspace_fork, "_write_file", write)
+    return calls
+
+
+def _seeding_runner(seen_before=None):
+    """`pre` seeds the folder; each branch edits the seed and adds a file of its own."""
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "seed.txt").write_text("s1")
+            (Path(req.output_dir) / "keep.txt").write_text("k")
+        elif req.workspace_override:
+            copy = Path(req.workspace_override)
+            if req.node.id == "a":
+                (copy / "seed.txt").write_text("s-a")
+            (copy / f"{req.node.id}" / "made.txt").parent.mkdir()
+            (copy / f"{req.node.id}" / "made.txt").write_text(req.node.id)
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+    return node_runner
+
+
+def _cut_write_back_leaves_the_folder_as_it_was(tmp_path, monkeypatch, wf):
+    from durin.workflow import workspace_fork
+    calls = _cut_writes_at(monkeypatch, 2)
+    res = _copy_engine(tmp_path, _seeding_runner()).run(wf, "t")
+    assert res.status == "aborted" and calls[0] == 2
+    work = tmp_path / ".workflow" / "r1" / "work"
+    assert _files(work) == {"keep.txt": b"k", "seed.txt": b"s1"}
+    assert not (work / "a").exists() and not (work / "b").exists()
+    assert not workspace_fork.pending_dir(work).exists()
+
+
+def test_a_union_that_fails_while_writing_back_leaves_the_folder_as_it_was(tmp_path, monkeypatch):
+    _cut_write_back_leaves_the_folder_as_it_was(tmp_path, monkeypatch, _copies_wf("union"))
+
+
+def test_a_choose_winner_is_written_back_through_the_journal(tmp_path, monkeypatch):
+    _cut_write_back_leaves_the_folder_as_it_was(
+        tmp_path, monkeypatch, _copies_wf("choose", criteria="any"))
+
+
+def test_a_parallel_step_undoes_a_cut_write_back_before_it_snapshots_or_copies(tmp_path,
+                                                                               monkeypatch):
+    from durin.workflow import workspace_fork
+    work = tmp_path / ".workflow" / "r1" / "work"
+    copies: dict[str, dict] = {}
+    written: list[set[str]] = []
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            # What a dead attempt of `fan` would have left: new.txt already
+            # written, a.txt not yet, and the journal saying how to undo it.
+            (work / "a.txt").write_text("a1")
+            cs = workspace_fork.ChangeSet(created={"new.txt": b"n"},
+                                          modified={"a.txt": b"half"}, deleted=set())
+            with monkeypatch.context() as m:
+                _cut_writes_at(m, 2)
+                with pytest.raises(OSError):
+                    workspace_fork.apply_all([cs], work, run_id="r1", node_id="fan")
+            assert (work / "new.txt").exists()
+        elif req.workspace_override:
+            copies[req.node.id] = _files(Path(req.workspace_override))
+            (Path(req.workspace_override) / f"{req.node.id}-made.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    real_apply = workspace_fork.apply_all
+
+    def recording_apply(changesets, root, **kw):
+        written.append({p for cs in changesets for p in cs.paths})
+        return real_apply(changesets, root, **kw)
+
+    monkeypatch.setattr(workspace_fork, "apply_all", recording_apply)
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "completed"
+    # The copies were made from the folder as the cut attempt found it ...
+    assert copies == {"a": {"a.txt": b"a1"}, "b": {"a.txt": b"a1"}}
+    # ... and so was the snapshot: the write-back holds only the branches' own files.
+    assert written[-1] == {"a-made.txt", "b-made.txt"}
+    assert _files(work) == {"a.txt": b"a1", "a-made.txt": b"a", "b-made.txt": b"b"}
+
+
+def _cut_keyed_write_back(tmp_path, monkeypatch, name="d", key="k1"):
+    """A keyed folder holding a.txt="a1", left mid write-back by a dead run."""
+    from durin.workflow import workspace_fork
+    from durin.workflow.artifacts import keyed_work_dir
+    work = keyed_work_dir(tmp_path, name, key)       # made by the call
+    (work / "a.txt").write_text("a1")
+    cs = workspace_fork.ChangeSet(created={"new.txt": b"n"}, modified={"a.txt": b"a2"},
+                                  deleted=set())
+    with monkeypatch.context() as m:
+        _cut_writes_at(m, 2)
+        with pytest.raises(OSError):
+            workspace_fork.apply_all([cs], work, run_id="old", node_id="fan")
+    assert (work / "new.txt").exists() or (work / "a.txt").read_text() == "a2"
+    assert (workspace_fork.pending_dir(work) / "journal.json").is_file()
+    return work
+
+
+def test_a_run_on_the_same_key_starts_from_the_folder_before_the_dead_write_back(tmp_path,
+                                                                                 monkeypatch):
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    seen: dict[str, dict] = {}
+
+    def node_runner(req):
+        seen[req.node.id] = _files(Path(req.output_dir))
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    wf = parse_workflow({"name": "d", "start": "look", "nodes": [
+        {"id": "look", "kind": "work", "tools": "default", "next": None}]})
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r2",
+                         workspace=str(tmp_path))
+    res = eng.run(wf, "t", work_key="k1")
+    assert res.status == "completed"
+    assert {k: v for k, v in seen["look"].items() if not k.startswith(".")} == {"a.txt": b"a1"}
+    assert not workspace_fork.pending_dir(work).exists()
+
+
+def _shape_wf_runner(case):
+    """pre seeds the folder; the branches change it so the union's result would turn
+    a file into a folder (x/y under x) or a folder into a file (d), or two branches
+    write p and p/q."""
+    import shutil
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "x").write_text("the person's x")
+            (Path(req.output_dir) / "d").mkdir()
+            (Path(req.output_dir) / "d" / "a").write_text("a")
+            (Path(req.output_dir) / "same.txt").write_text("s")
+        elif req.workspace_override:
+            copy = Path(req.workspace_override)
+            if case == "file-to-folder":
+                (copy / "x").unlink()              # a: deletes x; b: makes x a folder
+                if req.node.id == "b":
+                    (copy / "x").mkdir()
+                    (copy / "x" / "y").write_text("y")
+            elif case == "folder-to-file" and req.node.id == "a":
+                shutil.rmtree(copy / "d")
+                (copy / "d").write_text("now a file")
+            elif case == "file-and-file-inside":
+                (copy / ("p" if req.node.id == "a" else "p/q")).parent.mkdir(exist_ok=True)
+                (copy / ("p" if req.node.id == "a" else "p/q")).write_text(req.node.id)
+            elif case == "conflict":
+                (copy / "same.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+    return node_runner
+
+
+def _record_shape(tmp_path, res):
+    from durin.workflow import run_log
+    from durin.workflow.engine import resumable_kind
+    rec = run_log.read_manifest(tmp_path, "d", "r1")
+    return {"status": res.status, "failed_node": res.failed_node,
+            "record_failed_node": rec["failed_node"], "resumable": resumable_kind(rec),
+            "rows": sorted((r["node_id"], r["status"], r.get("branch_id")) for r in rec["runs"])}
+
+
+@pytest.mark.parametrize("case,text", [
+    ("file-to-folder", "parallel node 'fan': the branches' result cannot be written back: "
+                       "'x/y' would turn a file into a folder or a folder into a file"),
+    ("folder-to-file", "parallel node 'fan': the branches' result cannot be written back: "
+                       "'d' would turn a file into a folder or a folder into a file"),
+    ("file-and-file-inside", "parallel node 'fan': union conflict on ['p', 'p/q']"),
+])
+def test_a_union_whose_result_changes_a_shape_ends_like_a_union_conflict(tmp_path, case, text):
+    from durin.workflow import workspace_fork
+    conflict_ws = tmp_path / "conflict"
+    conflict = _copy_engine(conflict_ws, _shape_wf_runner("conflict")).run(
+        _copies_wf("union"), "t")
+    assert conflict.status == "aborted" and "union conflict on ['same.txt']" in conflict.final_output
+
+    ws = tmp_path / "shape"
+    work = ws / ".workflow" / "r1" / "work"
+    seen = {}
+
+    def runner(req):
+        out = _shape_wf_runner(case)(req)
+        if req.node.id == "pre":
+            seen["before"] = _files(work)
+        return out
+
+    res = _copy_engine(ws, runner).run(_copies_wf("union"), "t")
+    assert res.final_output == text
+    assert _record_shape(ws, res) == _record_shape(conflict_ws, conflict)
+    assert _files(work) == seen["before"]                     # nothing applied
+    assert not (work / "d").is_file() and (work / "x").is_file()
+    assert not (workspace_fork.run_area(work) / "pending-apply").exists()
+
+
+def test_a_write_back_that_fails_beside_a_detached_steps_file_is_retried(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from durin.workflow import run_log, workspace_fork
+    from durin.workflow.engine import build_resume_state, resumable_kind
+
+    wf = parse_workflow({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "tools": "default", "next": "det"},
+        {"id": "det", "kind": "work", "tools": "default", "detached": True, "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "reconcile": "union",
+         "next": None},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"}]})
+    work = tmp_path / ".workflow" / "r1" / "work"
+    det_wrote = threading.Event()
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "seed.txt").write_text("s")
+        elif req.node.id == "det":
+            # A side-effect step writing its report under out/ once the folder exists.
+            for _ in range(500):
+                if (work / "out").is_dir():
+                    break
+                time.sleep(0.01)
+            (work / "out").mkdir(exist_ok=True)
+            (work / "out" / "det-report.txt").write_text("detached step output")
+            det_wrote.set()
+        elif req.workspace_override:
+            (Path(req.workspace_override) / "out").mkdir(exist_ok=True)
+            (Path(req.workspace_override) / "out" / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    real = workspace_fork._write_file
+    full = [True]
+
+    def write(target, content, *rest):
+        real(target, content, *rest)
+        if full[0]:
+            det_wrote.wait(5)
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(workspace_fork, "_write_file", write)
+    eng = _copy_engine(tmp_path, node_runner)
+    res = eng.run(wf, "t")
+    assert res.status == "aborted" and res.failed_node == "fan", res.final_output
+    assert "writing the branches' result back failed: [Errno 28] No space left on device" \
+        in res.final_output
+    assert (work / "out" / "det-report.txt").read_text() == "detached step output"
+    assert not workspace_fork.pending_dir(work).exists()      # the undo left out/ and finished
+    rec = run_log.read_manifest(tmp_path, "d", "r1")
+    assert resumable_kind(rec) == "failed"
+
+    full[0] = False                                             # the disk has room again
+    retry = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+    assert retry.status == "completed", retry.final_output
+    assert _files(work) == {"seed.txt": b"s", "out/a.txt": b"a", "out/b.txt": b"b",
+                            "out/det-report.txt": b"detached step output"}
+
+
+def test_a_read_only_folder_fails_the_write_back_the_same_way_on_every_retry(tmp_path):
+    import os
+
+    from durin.workflow import run_log, workspace_fork
+    from durin.workflow.engine import build_resume_state, resumable_kind
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    work = tmp_path / ".workflow" / "r1" / "work"
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "ro").mkdir()
+            (work / "ro" / "f.txt").write_text("f1")
+            (work / "keep.txt").write_text("k")
+            os.chmod(work / "ro", 0o555)
+        elif req.workspace_override and req.node.id == "a":
+            (Path(req.workspace_override) / "ro" / "f.txt").write_text("f2")
+            (Path(req.workspace_override) / "keep.txt").unlink()
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    eng = _copy_engine(tmp_path, node_runner)
+    wf = _copies_wf("union")
+    try:
+        res = eng.run(wf, "t")
+        before = _files(work)
+        for attempt in range(2):
+            assert res.status == "aborted" and res.failed_node == "fan", res.final_output
+            assert "writing the branches' result back failed: [Errno 13] Permission denied" \
+                in res.final_output
+            assert "could not be undone" not in res.final_output
+            assert not workspace_fork.pending_dir(work).exists()
+            assert _files(work) == before == {"ro/f.txt": b"f1", "keep.txt": b"k"}
+            rec = run_log.read_manifest(tmp_path, "d", "r1")
+            assert resumable_kind(rec) == "failed"
+            if attempt == 0:
+                res = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+        os.chmod(work / "ro", 0o755)                 # the cause is gone
+        done = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+        assert done.status == "completed", done.final_output
+        assert _files(work) == {"ro/f.txt": b"f2"}
+    finally:
+        if (work / "ro").is_dir():
+            os.chmod(work / "ro", 0o755)
+
+
+def test_a_branch_file_under_a_folder_link_of_the_real_folder_is_refused(tmp_path):
+    import os
+    import stat
+
+    from durin.workflow import workspace_fork
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.txt").write_text("outside x")
+    os.chmod(outside / "x.txt", 0o640)
+    work = tmp_path / ".workflow" / "r1" / "work"
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "dl").symlink_to(outside)
+        elif req.workspace_override and req.node.id == "a":
+            copy = Path(req.workspace_override)
+            assert not os.path.lexists(copy / "dl")      # the copy skips the folder link
+            (copy / "dl").mkdir()
+            (copy / "dl" / "new.txt").write_text("n")
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output == ("parallel node 'fan': the branches' result cannot be written "
+                                "back: 'dl/new.txt' is reached through a link")
+    assert sorted(p.name for p in outside.iterdir()) == ["x.txt"]
+    assert (outside / "x.txt").read_text() == "outside x"
+    assert stat.S_IMODE(os.stat(outside / "x.txt").st_mode) == 0o640
+    assert not workspace_fork.pending_dir(work).exists()
+
+
+def _linked_work(tmp_path, keyed: bool):
+    """The run's working folder made a link to a project folder outside the run area
+    holding one file; returns (working folder, project folder)."""
+    from durin.workflow.artifacts import keyed_work_dir
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "existing.txt").write_text("mine")
+    if keyed:
+        work = keyed_work_dir(tmp_path, "d", "k1")
+        work.rmdir()
+    else:
+        work = tmp_path / ".workflow" / "r1" / "work"
+        work.parent.mkdir(parents=True)
+    work.symlink_to(project)
+    return work, project
+
+
+def _snapshot(folder: Path) -> dict[str, tuple]:
+    import os
+    import stat
+    out = {}
+    for p in sorted(folder.rglob("*")):
+        st = os.lstat(p)
+        out[p.relative_to(folder).as_posix()] = (
+            p.read_bytes() if stat.S_ISREG(st.st_mode) else stat.S_IFMT(st.st_mode),
+            stat.S_IMODE(st.st_mode))
+    return out
+
+
+@pytest.mark.parametrize("keyed", [False, True], ids=["unkeyed", "keyed"])
+def test_a_linked_working_folder_does_not_stop_a_run_without_a_parallel_step(tmp_path, keyed):
+    from durin.workflow import workspace_fork
+    work, project = _linked_work(tmp_path, keyed)
+
+    def node_runner(req):
+        (Path(req.output_dir) / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    wf = parse_workflow({"name": "d", "start": "only", "nodes": [
+        {"id": "only", "kind": "work", "tools": "default", "next": None}]})
+    res = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                         workspace=str(tmp_path)).run(wf, "t", work_key="k1" if keyed else None)
+    assert res.status == "completed", res.final_output
+    files = _files(project)                  # the step wrote through the link
+    assert files["existing.txt"] == b"mine" and b"only" in files.values()
+    assert not (workspace_fork.run_area(work) / "pending-apply").exists()
+
+
+@pytest.mark.parametrize("why,text", [
+    ("link", "the run's working folder is a link"),
+    ("volume", "the run's working folder is on another volume than the run's area"),
+])
+def test_a_write_back_into_a_linked_or_mounted_working_folder_is_refused(tmp_path, monkeypatch,
+                                                                         why, text):
+    import os
+
+    from durin.workflow import workspace_fork
+    if why == "link":
+        work, project = _linked_work(tmp_path, keyed=False)
+    else:
+        work = project = tmp_path / ".workflow" / "r1" / "work"
+        real_lstat = os.lstat
+
+        def other_device(path, *a, **kw):
+            st = real_lstat(path, *a, **kw)
+            if os.fspath(path) == str(work):
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev + 1, *tuple(st)[3:10]))
+            return st
+
+        monkeypatch.setattr(os, "lstat", other_device)
+    seen = {}
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (Path(req.output_dir) / "seed.txt").write_text("s")
+            seen["before"] = _snapshot(project)
+        elif req.workspace_override:
+            (Path(req.workspace_override) / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output == f"parallel node 'fan': the branches' result cannot be written back: {text}"
+    monkeypatch.undo()
+    assert _snapshot(project) == seen["before"]
+    assert not os.path.lexists(workspace_fork.run_area(work) / "pending-apply")
+
+
+def test_a_folder_that_loses_its_search_permission_while_the_branches_run_is_refused(tmp_path):
+    import os
+
+    from durin.workflow import workspace_fork
+    if os.geteuid() == 0:
+        pytest.skip("permissions do not bind the superuser")
+    import threading
+    work = tmp_path / ".workflow" / "r1" / "work"
+    # A branch's runner is called once its copy of the folder exists; the real
+    # folder loses its permission only after both runners were entered, so neither
+    # copy is made from a folder that can no longer be read. A barrier that times
+    # out breaks, and the branch fails loudly instead of hanging.
+    both_copied = threading.Barrier(2, timeout=10)
+
+    def node_runner(req):
+        if req.node.id == "pre":
+            (work / "ns").mkdir()
+            (work / "ns" / "f.txt").write_text("f1")
+        elif req.workspace_override:
+            both_copied.wait()
+            if req.node.id == "a":
+                (Path(req.workspace_override) / "ns" / "f.txt").write_text("f2")
+                os.chmod(work / "ns", 0o600)      # the real folder loses its search permission
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    try:
+        res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t")
+    finally:
+        os.chmod(work / "ns", 0o755)
+    assert res.status == "aborted" and res.failed_node is None
+    assert res.final_output.startswith("parallel node 'fan': the branches' result cannot be "
+                                       "written back: 'ns/f.txt' cannot be examined: [Errno 13]")
+    assert (work / "ns" / "f.txt").read_text() == "f1"
+    assert not workspace_fork.pending_dir(work).exists()
+
+
+def test_a_journal_beside_a_linked_working_folder_names_the_journal(tmp_path, monkeypatch):
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    journal = workspace_fork.pending_dir(work) / "journal.json"
+    outside = tmp_path / "outside"
+    for rel in ("a.txt", "new.txt"):
+        (outside / rel).parent.mkdir(parents=True, exist_ok=True)
+        (outside / rel).write_bytes(b"OUTSIDE " + rel.encode())
+    shutil.move(str(work), str(tmp_path / "kept-work"))
+    work.symlink_to(outside)
+    before = _snapshot(outside)
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    assert res.final_output == _FRESH_UNUSABLE.format(
+        path=journal, reason="the working folder is a link", pre=journal.parent / "pre")
+    assert _snapshot(outside) == before and journal.is_file()
+
+
+def test_a_journal_folder_that_is_a_link_names_the_link_and_where_the_content_is(
+        tmp_path, monkeypatch):
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    link = workspace_fork.run_area(work) / "pending-apply"
+    shutil.move(str(link), str(tmp_path / "kept-pending"))
+    link.symlink_to(tmp_path / "kept-pending")
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    # Removing the link would not discard what it leads to: the text does not say so.
+    assert res.final_output == (
+        "the working folder holds changes of an earlier parallel step that could not be "
+        f"undone ({link}): the journal folder is a symlink. The earlier content of the files "
+        f"that step changed is kept in {link / 'pre'}, where that link leads. A new run can "
+        "start once a person has checked the folder and removed that file.")
+    assert link.is_symlink() and (tmp_path / "kept-pending" / "journal.json").is_file()
+
+
+
+@pytest.mark.parametrize("kind", ["unreadable", "bad-path", "missing-copy", "linked-folder"])
+def test_the_text_for_an_unusable_journal_carries_its_reason(tmp_path, monkeypatch, kind):
+    import json
+    import shutil
+
+    from durin.workflow import workspace_fork
+    work = _cut_keyed_write_back(tmp_path, monkeypatch)
+    pending = workspace_fork.pending_dir(work)
+    journal = pending / "journal.json"
+    data = json.loads(journal.read_text())
+    named, kept = journal, _KEPT.format(pre=pending / "pre")
+    if kind == "unreadable":
+        journal.write_text("{")
+        reason = _unreadable("{")
+    elif kind == "bad-path":
+        data["entries"][0]["path"] = "../outside.txt"
+        journal.write_text(json.dumps(data))
+        reason = f"entry {data['entries'][0]!r} names no path inside the folder"
+    elif kind == "missing-copy":
+        [stored] = [e["pre"] for e in data["entries"] if e.get("pre") is not None]
+        (pending / "pre" / stored).unlink()
+        reason = f"the stored copy {str(pending / 'pre' / stored)!r} is missing"
+    else:
+        shutil.move(str(pending), str(tmp_path / "kept-pending"))
+        pending.symlink_to(tmp_path / "kept-pending")
+        named = pending
+        reason = "the journal folder is a symlink"
+        kept = ("The earlier content of the files that step changed is kept in "
+                f"{pending / 'pre'}, where that link leads.")
+    started = []
+
+    def node_runner(req):
+        started.append(req.node.id)
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    res = _copy_engine(tmp_path, node_runner).run(_copies_wf("union"), "t", work_key="k1")
+    assert res.status == "aborted" and started == []
+    assert res.final_output == (
+        "the working folder holds changes of an earlier parallel step that could not be "
+        f"undone ({named}): {reason}. {kept} A new run can start once a person has checked "
+        "the folder and removed that file.")
+
+
+_KEPT = ("The earlier content of the files that step changed is kept in {pre}; removing "
+         "the journal file discards it when a run next starts in that folder.")
+_UNUSABLE = ("the working folder holds changes of an earlier parallel step that could not "
+             "be undone ({path}): {reason}. " + _KEPT + " It can run once a person has checked "
+             "the folder and removed that file.")
+_UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could not "
+               "be undone yet ({path}): {error}. " + _KEPT + " A retry undoes them once the "
+               "cause is gone.")
+_FRESH_UNUSABLE = ("the working folder holds changes of an earlier parallel step that could "
+                   "not be undone ({path}): {reason}. " + _KEPT + " A new run can start once a "
+                   "person has checked the folder and removed that file.")
+_FRESH_UNDONE_YET = ("the working folder holds changes of an earlier parallel step that could "
+                     "not be undone yet ({path}): {error}. " + _KEPT + " A new run undoes them "
+                     "once the cause is gone.")
+
+
+def _unreadable(text):
+    """The reason a journal holding ``text`` cannot be used: it does not parse."""
+    import json
+    try:
+        json.loads(text)
+    except ValueError as exc:
+        return f"it cannot be read ({exc})"
+    raise AssertionError(f"{text!r} parses")
+
+
+def _fail_undo(monkeypatch):
+    """Make every undo of a write-back stop with a full disk."""
+    from durin.workflow import workspace_fork
+
+    def full(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(workspace_fork, "_put_back", full)
+
+
+@pytest.mark.parametrize("where,kind", [
+    ("fresh-start", "unusable"), ("fresh-start", "undo-fails"),
+    ("resumed-start", "unusable"), ("resumed-start", "undo-fails"),
+    ("step-entry", "unusable"), ("step-entry", "undo-fails"),
+    ("after-write-back", "undo-fails"),
+])
+def test_a_journal_that_cannot_be_used_or_undone_aborts_the_run_with_the_file_named(
+        tmp_path, monkeypatch, where, kind):
+    from durin.workflow import run_log, workspace_fork
+    from durin.workflow.artifacts import keyed_work_dir
+    from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
+
+    wf = _copies_wf("union")
+    keyed = where in ("fresh-start", "resumed-start")
+    work = (keyed_work_dir(tmp_path, "d", "k1") if keyed
+            else tmp_path / ".workflow" / "r1" / "work")
+    journal = workspace_fork.run_area(work) / "pending-apply" / "journal.json"
+    started: list[tuple[str, str | None]] = []
+    branch_fails = [where == "resumed-start"]
+
+    def plant():
+        (work / "a.txt").write_text("a1")
+        if kind == "unusable":
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            journal.write_text("{")
+            (work / "a.txt").write_text("half")
+            return
+        # new.txt and a.txt written, the third write cut: the undo has a.txt to put back.
+        cs = workspace_fork.ChangeSet(created={"new.txt": b"n"},
+                                      modified={"a.txt": b"half", "late.txt": b"l"},
+                                      deleted=set())
+        with monkeypatch.context() as m:
+            _cut_writes_at(m, 3)
+            with pytest.raises(OSError):
+                workspace_fork.apply_all([cs], work, run_id="old", node_id="fan")
+
+    def node_runner(req):
+        started.append((req.node.id, req.upstream_output))
+        if req.node.id == "pre":
+            (work / "a.txt").write_text("a1")
+            if where == "step-entry":
+                plant()                       # what a dead attempt of `fan` would have left
+        elif req.workspace_override:
+            if req.node.id == "b" and branch_fails[0]:
+                from durin.workflow.engine import NodeExecutionError
+                raise NodeExecutionError("b", req.iteration, None, RuntimeError("flaky"))
+            (Path(req.workspace_override) / f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+
+    ids = iter(["r1", "r2"])
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: next(ids),
+                         workspace=str(tmp_path), pick_runner=lambda c, o, m: 0)
+    if where == "resumed-start":
+        first = eng.run(wf, "t", work_key="k1")
+        assert first.status == "aborted" and first.failed_node == "fan"
+        branch_fails[0] = False
+    if where in ("fresh-start", "resumed-start"):
+        plant()
+    with monkeypatch.context() as m:
+        if kind == "undo-fails":
+            _fail_undo(m)
+        if where == "after-write-back":
+            _cut_writes_at(m, 2)
+        del started[:]
+        if where == "resumed-start":
+            rec = run_log.read_manifest(tmp_path, "d", "r1")
+            res = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+        else:
+            res = eng.run(wf, "t", work_key="k1" if keyed else None)
+
+    fresh = where == "fresh-start"
+    error = "'a.txt': disk full"                # the path the undo could not put back
+    pre = journal.parent / "pre"
+    text = ((_FRESH_UNUSABLE if fresh else _UNUSABLE).format(
+                path=journal, reason=_unreadable("{"), pre=pre) if kind == "unusable"
+            else (_FRESH_UNDONE_YET if fresh else _UNDONE_YET).format(
+                path=journal, error=error, pre=pre))
+    if where == "after-write-back":
+        text = f"writing the branches' result back failed: disk full; {text}"
+    assert res.status == "aborted"
+    assert journal.exists()                     # left for the person, or for a retry
+    if kind == "undo-fails":
+        # The folder the text names holds what a.txt held before the write-back.
+        assert b"a1" in [f.read_bytes() for f in pre.iterdir()]
+    rec = run_log.read_manifest(tmp_path, "d", "r1")
+    if where == "fresh-start":
+        # A fresh run that cannot start is not retried: a new run is started.
+        assert res.final_output == text and res.failed_node is None
+        assert rec["failed_node"] is None and resumable_kind(rec) is None
+        assert resume_refusal(rec, workspace=tmp_path, workflow=wf) is None   # not resumable:
+        assert started == []                                                   # nothing to refuse
+    else:
+        assert text in res.final_output and res.failed_node == "fan"
+        assert rec["status"] == "aborted" and rec["failed_node"] == "fan"
+        assert resumable_kind(rec) == "failed"
+        assert resume_refusal(rec, workspace=tmp_path, workflow=wf) is None
+        # The branches run concurrently: their start order is not fixed.
+        assert sorted(started) == sorted(
+            [] if where == "resumed-start"
+            else [("pre", None)] + ([("a", "out-pre"), ("b", "out-pre")]
+                                    if where == "after-write-back" else []))
+
+    # The cause goes: the person removes the unusable file, or the disk has room.
+    if kind == "unusable":
+        journal.unlink()
+    del started[:]
+    if where == "fresh-start":
+        again = eng.run(wf, "t", work_key="k1")
+    else:
+        again = eng.run(wf, "t", resume=build_resume_state(rec, "", workspace=tmp_path))
+    assert again.status == "completed", again.final_output
+    assert not journal.exists()
+    assert not (work / "new.txt").exists() or where == "fresh-start" and kind == "unusable"
+    if where in ("step-entry", "after-write-back", "resumed-start"):
+        assert sorted(s for s, _ in started) == ["a", "b"]       # the retry enters `fan`
+
+
 def test_node_exception_aborts_with_partial_trace():
     wf = parse_workflow({"name": "d", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "b"},

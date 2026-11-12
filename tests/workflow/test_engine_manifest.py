@@ -361,3 +361,41 @@ def test_on_run_end_exception_does_not_break_the_run(tmp_path):
     assert res.status == "completed"
     rec = run_log.read_manifest(tmp_path, "w", "r1")
     assert rec["status"] == "completed"
+
+
+def test_the_launch_is_recorded_from_the_first_write_to_the_last(tmp_path):
+    launch = {"kind": "session", "session_key": "sess:1", "channel": "websocket",
+              "chat_id": "c"}
+    seen = {}
+
+    def runner(req):
+        if req.node.id == "b":
+            seen["mid"] = run_log.read_manifest(tmp_path, "w", "r1")["launch"]
+        return NodeRunResponse(output="x", session_key=f"workflow:r1:{req.node.id}:1")
+
+    WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1").run(
+        _two_node_wf(), "go", root_session_key="sess:1", launch=launch)
+    assert seen["mid"] == launch
+    assert run_log.read_manifest(tmp_path, "w", "r1")["launch"] == launch
+
+
+def test_a_run_given_no_launch_records_none(tmp_path):
+    WorkflowEngine(lambda req: NodeRunResponse(output="x"), workspace=str(tmp_path),
+                   run_id_factory=lambda: "r1").run(_two_node_wf(), "go")
+    assert run_log.read_manifest(tmp_path, "w", "r1").get("launch") is None
+
+
+def test_a_dead_run_an_automation_launched_is_refused_whatever_its_root(tmp_path):
+    from durin.workflow.engine import AUTOMATION_RUN_REFUSAL, resume_refusal
+
+    crashed = {"status": "crashed", "root_session_key": "websocket:x",
+               "launch": {"kind": "automation", "name": "nightly"},
+               "position": {"node": "a", "seq": 1}}
+    assert resume_refusal(crashed) == AUTOMATION_RUN_REFUSAL
+    # An automation's root alone still refuses; another launch kind does not.
+    assert resume_refusal({**crashed, "launch": None,
+                           "root_session_key": "automation:nightly"}) == AUTOMATION_RUN_REFUSAL
+    assert resume_refusal({**crashed, "launch": {"kind": "service", "subject": ""}}) \
+        != AUTOMATION_RUN_REFUSAL
+    # A paused run's answer and a failed step's retry are not refused on that account.
+    assert resume_refusal({**crashed, "status": "needs_input", "needs_input_node": "a"}) is None

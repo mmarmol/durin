@@ -21,6 +21,8 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
 
+from loguru import logger
+
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.workflow.run_threads import run_on_workflow_thread
@@ -339,6 +341,16 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
                 f"\nTo continue, call run_workflow again with "
                 f"resume_run_id='{result.run_id}' and the answers as the task."
             )
+    elif getattr(result, "rejected", False):
+        # A person declined the proposal at an approval step: the run ended
+        # there by their decision, which is not a failure.
+        lines.append(
+            "A person REJECTED the proposal at the workflow's approval step, so the run "
+            "ended there — it did not fail. Tell the user; do not resume it or reach the "
+            "same effect another way."
+        )
+        if result.final_output:
+            outcome.append(f"\nRejected proposal:\n{bounded(result.final_output)}")
     elif result.status != "completed":
         if result.status == "aborted" and getattr(result, "failed_node", None):
             lines.append(
@@ -412,6 +424,100 @@ def _format_result(result: Any, output_files: bool = False, *, human_reachable: 
     return "\n".join(lines)
 
 
+def result_summary(result: Any, *, output_files: bool, session_key: str | None) -> str:
+    """The summary of a finished run as it is delivered in a message to a
+    conversation: sized for one message, and sending the agent to the person
+    only when ``session_key`` names a conversation a person is in.
+    ``output_files`` says whether the workflow declares that it outputs files."""
+    from durin.agent.approval import is_interactive
+    return _format_result(
+        result, output_files=output_files,
+        human_reachable=is_interactive(session_key),
+        max_chars=_MAX_INJECT_SUMMARY_CHARS,
+    )
+
+
+def _with_notice(text: str, notice: str) -> str:
+    return f"{text}\n\n{notice}" if notice else text
+
+
+# How many cut runs a launch looks at (the newest), and how many of them it names.
+_CUT_RUNS_EXAMINED = 10
+_CUT_RUNS_NAMED = 3
+
+
+def cut_runs_notice(workspace: str, name: str, session_key: str, workflow: Any,
+                    work_key: str | None = None) -> str:
+    """What a fresh launch on ``work_key`` (None: no key) tells about the runs of
+    ``name`` that the conversation ``session_key`` started and that a process
+    ending cut short, or "" when there is nothing to say. Only the newest few that
+    are recorded ``crashed`` or ``running`` are looked at. A run recorded as
+    running whose process is gone is converted first, as a resume does (which
+    also ends the scripts that run left). What decides a run is named, in order:
+    something of it may still be there (a script, a sub-workflow run, a process
+    that seems alive) - named whether or not it could ever be resumed, since a
+    new run works beside it; else it can be resumed - named with the way to do
+    it, unless it ran on the same work key as this launch: once the launch's run
+    starts it takes over that key's folder, after which a resume of the cut run is
+    refused, so the note says that instead, as a condition (a launch refused
+    before its run starts leaves the cut run resumable). Not named: a run nothing of which is left and that
+    can never be resumed (its step is gone, its folder was pruned, its record is
+    incomplete, an automation started it), one another caller is acting on, one
+    whose process is alive, and one that ended, paused or aborted. The closing
+    sentences hold whether or not this launch gets as far as recording a run.
+    Observes processes and waits on locks: an event loop calls it through a
+    thread."""
+    from durin.workflow import run_log
+    from durin.workflow.engine import resumable_kind, resume_refusal
+
+    candidates = [r for r in run_log.runs_launched_by(workspace, name, session_key)
+                  if r.get("status") in ("crashed", "running")][:_CUT_RUNS_EXAMINED]
+    paragraphs: list[str] = []
+    for candidate in candidates:
+        run_id = candidate.get("run_id")
+        record, reason = run_log.settle_dead_run(workspace, name, run_id)
+        if not isinstance(record, dict) or record.get("status") != "crashed":
+            continue
+        if reason in run_log.DEAD_RUN_RACE_REFUSALS:
+            continue
+        resumable = (resumable_kind(record) == "dead"
+                     and resume_refusal(record, workspace=workspace, workflow=workflow) is None)
+        head = (f"Note: run {run_id} of '{name}', started from this conversation, was cut "
+                "short")
+        same_key = bool(work_key) and record.get("work_key") == work_key
+        # Conditional: this call's run takes the key's folder over only once it
+        # starts, and a launch refused before that (its pre-flight check) leaves the
+        # cut run resumable.
+        takeover = ("It is on the same work key as this call: once this call's run starts, "
+                    "it takes over that folder")
+        beside = "This call did not resume it; a new run would work beside what it left."
+        if reason:
+            fact = getattr(reason, "fact", "something of it may still be there")
+            if resumable and same_key:
+                paragraphs.append(
+                    f"{head} and {fact}. {takeover} and that run can no longer be resumed.")
+            elif resumable:
+                paragraphs.append(
+                    f"{head} and {fact}. It can be resumed once that is gone. {beside}")
+            elif same_key:
+                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {takeover}.")
+            else:
+                paragraphs.append(f"{head} and cannot be resumed, and {fact}. {beside}")
+        elif resumable and same_key:
+            paragraphs.append(
+                f"{head} when its process ended. {takeover} and that run can no longer be "
+                "resumed.")
+        elif resumable:
+            paragraphs.append(
+                f"{head} when its process ended and has not been resumed. It can be resumed "
+                f"with resume_run_id='{run_id}' (it enters node '{record.get('failed_node')}' "
+                "again; finished nodes do not run again). This call did not resume it.")
+    shown = paragraphs[:_CUT_RUNS_NAMED]
+    if len(paragraphs) > len(shown):
+        shown.append(f"and {len(paragraphs) - len(shown)} more.")
+    return "\n\n".join(shown)
+
+
 @tool_parameters(_PARAMETERS)
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
@@ -421,13 +527,18 @@ class RunWorkflowTool(Tool, ContextAware):
     _scopes = {"core"}
 
     def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None,
-                 bus: Any = None, config_loader: Callable[[], Any] | None = None) -> None:
+                 bus: Any = None, config_loader: Callable[[], Any] | None = None,
+                 serves_channel: Callable[[str], bool] | None = None) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
         self._config_loader = config_loader
         self._live_tool_registry = live_tool_registry
         self._bus = bus
+        # Whether this process serves a channel: a resume made outside the
+        # conversation that launched the run reports there only when it does.
+        # None serves none.
+        self._serves_channel = serves_channel
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
         self._chat_id: ContextVar[str | None] = ContextVar("run_workflow_chat_id", default=None)
         self._channel: ContextVar[str | None] = ContextVar("run_workflow_channel", default=None)
@@ -460,6 +571,7 @@ class RunWorkflowTool(Tool, ContextAware):
             live_tool_registry=getattr(ctx, "live_tool_registry", None),
             bus=getattr(ctx, "bus", None),
             config_loader=config_loader,
+            serves_channel=getattr(ctx, "serves_channel", None),
         )
 
     def _live_config(self) -> Any:
@@ -499,7 +611,7 @@ class RunWorkflowTool(Tool, ContextAware):
         )
 
     async def _inject_result(
-        self, summary: str, *, name: str, inject_target: dict,
+        self, summary: str, *, name: str, run_id: str, inject_target: dict,
     ) -> None:
         """Inject a finished background-workflow result back to the agent.
 
@@ -507,35 +619,21 @@ class RunWorkflowTool(Tool, ContextAware):
         session_key_override routes it into the parent session's pending queue so
         the agent picks it up mid-turn (or as its next turn) and acts on it —
         including a needs_input result, which carries its own ask-and-re-run guidance.
+        A call with no session key is keyed to its ``<channel>:<chat_id>``.
 
         The summary arrives already sized for one readable message (the caller
         formats it with the delivery limit), so it is delivered whole: cutting
         it here would drop whatever came last, and the result and its files
         come before the node list for exactly that reason.
         """
-        if self._bus is None:
-            return
-        from durin.bus.events import InboundMessage
+        from durin.workflow import delivery
         channel = inject_target.get("channel") or "websocket"
         chat_id = inject_target.get("chat_id") or ""
-        override = inject_target.get("session_key") or f"{channel}:{chat_id}"
-        content = (
-            f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
-            "Summarize the outcome for the user, and follow what the summary says about "
-            "continuing the run."
-        )
-        msg = InboundMessage(
-            channel="system",
-            sender_id="workflow_background",
-            chat_id=f"{channel}:{chat_id}",
-            content=content,
-            session_key_override=override,
-            metadata={"injected_event": "workflow_background_result", "workflow": name},
-        )
-        try:
-            await self._bus.publish_inbound(msg)
-        except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
-            pass
+        target = {
+            "kind": "session", "channel": channel, "chat_id": chat_id,
+            "session_key": inject_target.get("session_key") or f"{channel}:{chat_id}",
+        }
+        await delivery.deliver(self._bus, target, name=name, run_id=run_id, summary=summary)
 
     async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "", work_key: str = "") -> str:  # type: ignore[override]
         from durin.agent.approval import is_interactive
@@ -615,6 +713,22 @@ class RunWorkflowTool(Tool, ContextAware):
             resume = build_resume_state(manifest, task, workspace=self._workspace)
             task = manifest.get("task") or task
             accepted_record = manifest
+
+        # A fresh launch from a conversation tells about the runs of this workflow
+        # that conversation had started and a process ending cut short: a turn
+        # replayed after a restart would otherwise start the workflow a second
+        # time without knowing. Off the event loop (it observes processes); a
+        # failure only means no notice.
+        cut_notice = ""
+        calling_session = self._session_key.get()
+        if not resume_run_id and calling_session:
+            try:
+                cut_notice = await asyncio.to_thread(
+                    cut_runs_notice, self._workspace, name, calling_session, workflow,
+                    work_key or None)
+            except Exception:  # noqa: BLE001 - the launch goes on without the notice
+                logger.opt(exception=True).warning(
+                    "workflow {}: looking for the runs {} had cut failed", name, calling_session)
 
         # Snapshot the current definitions into the workflow version history (captures
         # any edit since the last run). Best-effort: never blocks the run.
@@ -730,6 +844,18 @@ class RunWorkflowTool(Tool, ContextAware):
             "chat_id": self._chat_id.get() or "",
             "session_key": root_session_key,
         }
+        # Where the run was launched from, kept on its record across every
+        # resume: the same address the background result goes to. A call with no
+        # calling session has no conversation to report to.
+        launch = {"kind": "session", **inject_target} if root_session_key else None
+
+        # A resume made outside the conversation that launched the run also
+        # reports its result there, once its walk ran: that conversation is not
+        # the one waiting on this call. Same conversation = same session key.
+        from durin.workflow import delivery
+        launch_record = (accepted_record or {}).get("launch")
+        launch_key = delivery.launch_session_key(launch_record)
+        report_to_launch = launch_key is not None and launch_key != root_session_key
 
         # Claim a resumed run once nothing is left to build: move it to running
         # under the per-run lock, so a second resume (from here or from the
@@ -758,6 +884,7 @@ class RunWorkflowTool(Tool, ContextAware):
                     output_format=output_format or None,
                     resume=resume,
                     work_key=work_key or None,
+                    launch=launch,
                 )
             except BaseException:
                 # Given up on before the walk started (cancelled while it
@@ -766,28 +893,45 @@ class RunWorkflowTool(Tool, ContextAware):
                     claim.drop()
                 raise
 
+        async def _report_to_launch(result: Any = None, failure: BaseException | None = None) -> None:
+            # Only a resume whose walk ran reports: one refused, lost to another
+            # resumer, given up before its walk or ended by the engine before it
+            # wrote the run's record left the run as it was.
+            if not report_to_launch or claim is None or not claim.took_over:
+                return
+            try:
+                summary = (f"Workflow run failed: {failure}" if failure is not None
+                           else result_summary(result, output_files=output_files,
+                                               session_key=launch_key))
+                await delivery.deliver(self._bus, launch_record, name=name, run_id=run_id,
+                                       summary=summary, resumed_from="another conversation",
+                                       serves=self._serves_channel or (lambda _channel: False))
+            except Exception:  # noqa: BLE001 - best-effort; never changes the resume's outcome
+                logger.opt(exception=True).warning(
+                    "workflow {} run {}: reporting the resume to {} failed", name, run_id, launch_key)
+
         if background:
             async def _run_and_inject() -> None:
+                result = failure = None
                 try:
                     result = await _walk_on_a_thread(paced=False)
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result))
-                    summary = _format_result(
-                        result, output_files=output_files,
-                        human_reachable=is_interactive(root_session_key),
-                        max_chars=_MAX_INJECT_SUMMARY_CHARS,
-                    )
+                    summary = result_summary(result, output_files=output_files,
+                                             session_key=root_session_key)
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
                     if progress_emit is not None:
                         progress_emit({"run_id": run_id, "nodes": [], "done": True, "status": "failed"})
                     summary = f"Workflow run failed in background: {exc}"
+                    failure = exc
                 finally:
                     # Drop the cancel flag now the run is over (whether or not it was set).
                     _clear_cancel(run_id)
                 await self._inject_result(
-                    summary, name=name, inject_target=inject_target,
+                    summary, name=name, run_id=run_id, inject_target=inject_target,
                 )
+                await _report_to_launch(result, failure)
 
             task_handle = asyncio.create_task(_run_and_inject())
             # Keep a reference so the task isn't garbage-collected mid-flight.
@@ -802,7 +946,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 resume_claim = claim
                 task_handle.add_done_callback(
                     lambda t: resume_claim.drop() if t.cancelled() else None)
-            return _background_launch_message(name, run_id)
+            return _with_notice(_background_launch_message(name, run_id), cut_notice)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         # Paced: the calling turn waits on this run, and a chat turn keeps its
@@ -818,6 +962,9 @@ class RunWorkflowTool(Tool, ContextAware):
             # (the worker thread would keep running headless with no handle);
             # instead the engine is stopped cooperatively below.
             result = await asyncio.shield(engine_future)
+        except Exception as exc:
+            await _report_to_launch(failure=exc)
+            raise
         except asyncio.CancelledError:
             # A turn cancelled because this process is shutting down is not a
             # stop: nothing is asked of the run, which ends with the process
@@ -845,7 +992,11 @@ class RunWorkflowTool(Tool, ContextAware):
             raise
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))
-        return _format_result(
-            result, output_files=output_files,
-            human_reachable=is_interactive(root_session_key),
+        await _report_to_launch(result)
+        return _with_notice(
+            _format_result(
+                result, output_files=output_files,
+                human_reachable=is_interactive(root_session_key),
+            ),
+            cut_notice,
         )

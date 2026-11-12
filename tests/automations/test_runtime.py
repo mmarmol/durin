@@ -73,10 +73,11 @@ def _mk_runtime(tmp_path, results, *, on_help_ask=None, on_counterpart_ask=None,
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         calls["exec"].append({"name": name, "task": task, "resume_run_id": resume_run_id,
                               "run_id": run_id, "work_key": work_key,
-                              "root_session_key": root_session_key, "paced": paced})
+                              "root_session_key": root_session_key, "launch": launch,
+                              "paced": paced})
         return results.pop(0)
 
     ids = iter([f"r{i}" for i in range(200)])
@@ -105,6 +106,7 @@ async def test_completed_but_not_achieved_stays_completed(tmp_path):
     assert m["status"] == "completed"
     assert calls["exec"][0]["name"] == "w1"
     assert calls["exec"][0]["root_session_key"] == "automation:a1"
+    assert calls["exec"][0]["launch"] == {"kind": "automation", "name": "a1"}
 
 
 async def test_workflow_run_id_persisted_before_launch(tmp_path):
@@ -114,7 +116,7 @@ async def test_workflow_run_id_persisted_before_launch(tmp_path):
     seen = {}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         seen["mid_flight"] = rl.read_run(tmp_path, "a1", "run0").get("workflow_run_id")
         seen["run_id"] = run_id
         seen["root_session_key"] = root_session_key
@@ -194,7 +196,7 @@ async def test_fire_reports_the_run_start_before_the_workflow_finishes(tmp_path)
     seen = []
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         seen.append("workflow")
         return WorkflowResult(status="completed", final_output="out", run_id=run_id)
 
@@ -239,7 +241,7 @@ async def test_workflow_exec_exception_finalizes_failed_with_detail(tmp_path):
     _save(tmp_path)
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         raise RuntimeError("boom")
 
     ids = iter([f"r{i}" for i in range(10)])
@@ -600,6 +602,7 @@ async def test_answer_action_approve_resumes_with_approve_text_and_records_appro
     # the engine's own re-stamp-on-resume clobbers the manifest's attribution
     # with a synthesized workflow:<run_id>:root, losing the automation origin.
     assert calls["exec"][1]["root_session_key"] == "automation:a1"
+    assert calls["exec"][1]["launch"] == {"kind": "automation", "name": "a1"}
 
     record = rl.read_run(tmp_path, "a1", m["run_id"])
     assert record["approval"] == {"action": "approve", "by": "alice", "at_ms": record["approval"]["at_ms"]}
@@ -715,7 +718,7 @@ async def test_answer_nowait_records_approval_even_when_the_resume_then_fails(tm
     _save(tmp_path)
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         if resume_run_id is None:
             return _wr("needs_input", out="proceed?", ask_kind="approval")
         raise RuntimeError("boom")
@@ -798,7 +801,7 @@ async def test_stop_running_run_requests_cancel_and_stamps_the_request(tmp_path)
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None, paced=False):
+                             work_key=None, root_session_key=None, launch=None, paced=False):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)
@@ -837,7 +840,7 @@ async def test_stop_running_run_keeps_the_stop_beside_the_workflow_runs_record(t
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None, paced=False):
+                             work_key=None, root_session_key=None, launch=None, paced=False):
         wf_run_log.start_run(tmp_path, name, run_id, root_session_key=root_session_key,
                              started_at=time.time())
         started.set()
@@ -874,7 +877,7 @@ async def test_an_automation_stop_is_kept_even_when_its_caller_is_cancelled(tmp_
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None, paced=False):
+                             work_key=None, root_session_key=None, launch=None, paced=False):
         wf_run_log.start_run(tmp_path, name, run_id, root_session_key=root_session_key,
                              started_at=time.time())
         started.set()
@@ -926,7 +929,7 @@ async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
     released = asyncio.Event()
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                             work_key=None, root_session_key=None, paced=False):
+                             work_key=None, root_session_key=None, launch=None, paced=False):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)
@@ -1138,7 +1141,7 @@ async def test_chain_uses_failure_summary_when_there_is_no_final_output(tmp_path
     calls = []
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
-                            work_key=None, root_session_key=None, paced=False):
+                            work_key=None, root_session_key=None, launch=None, paced=False):
         calls.append((name, task))
         if name == "w1":
             raise RuntimeError("boom")
