@@ -150,8 +150,7 @@ def fork(root: str | Path, *, into: str | Path) -> Path:
     name carries no branch id: the path is quoted in shell commands, whose deny
     rules match words in it. *into* must be exactly ``branches_root(root) / <run id>``
     (a plain run id, no symlink on the way), otherwise ``ValueError`` and nothing is
-    created. The caller owns removal (``clear_branches``, or ``cleanup`` for one
-    copy)."""
+    created. The caller owns removal (``clear_branches``)."""
     src = Path(root)
     target_parent = Path(os.path.abspath(into))
     if _runs_copies(src, target_parent.name) != target_parent:
@@ -166,8 +165,8 @@ def fork(root: str | Path, *, into: str | Path) -> Path:
 
 
 def clear_branches(work_dir: str | Path, run_id: str | None = None) -> None:
-    """Remove one run's copies (``branches/<run_id>``), or every run's and every
-    retired leftover (the whole ``branches`` folder) when *run_id* is None.
+    """Remove one run's copies (``branches/<run_id>``), or every run's (the whole
+    ``branches`` folder) when *run_id* is None.
     Best-effort and never raises; a folder ``run_area`` refuses, a run id that is
     not a plain name and a symlink at ``branches`` or ``branches/<run_id>`` are
     left alone."""
@@ -180,25 +179,6 @@ def clear_branches(work_dir: str | Path, run_id: str | None = None) -> None:
             shutil.rmtree(_runs_copies(work_dir, run_id), ignore_errors=True)
     except Exception:  # noqa: BLE001 - a clean-up never stops the caller
         pass
-
-
-def retire_branches(work_dir: str | Path, run_id: str) -> Path | None:
-    """Rename one run's copies to a name nothing else uses
-    (``branches/.dead-<run_id>-XXXX``) and return it, or None when there is
-    nothing to rename or the folder is refused (see ``clear_branches``). A rename
-    is fast, so it can be done under a lock; the caller removes the returned
-    directory afterwards (``cleanup``) without racing a new attempt that makes
-    copies under ``branches/<run_id>``. Never raises."""
-    try:
-        copies = _runs_copies(work_dir, run_id)
-        if not copies.is_dir():
-            return None
-        retired = Path(tempfile.mkdtemp(prefix=f".dead-{run_id}-", dir=copies.parent))
-        retired.rmdir()                       # mkdtemp only reserves the unique name
-        copies.rename(retired)
-        return retired
-    except Exception:  # noqa: BLE001 - a clean-up never stops the caller
-        return None
 
 
 def diff(base: dict[str, str], fork_dir: str | Path) -> ChangeSet:
@@ -825,9 +805,3 @@ def restore_pending(work_dir: str | Path) -> bool:
                        str(journal), left)
     shutil.rmtree(pending, ignore_errors=True)
     return True
-
-
-def cleanup(fork_dir: str | Path) -> None:
-    """Best-effort removal of a branch fork directory."""
-    shutil.rmtree(fork_dir, ignore_errors=True)
-

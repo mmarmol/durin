@@ -502,18 +502,13 @@ under `.workflow/` aborts (`reconcile='…' needs the run's working folder`) rat
 copy anywhere else, so nothing outside a run's area is ever created or removed. The
 copies go when the step ends, on every path (`clear_branches` removes the run's whole
 `branches/<run id>` folder, so a copy whose creation failed midway goes too). A process
-that dies mid-step leaves them in the run's area, and they are removed when the dead run
-is converted (`mark_dead_run`, which every surface and the sweep use, and which also
-converts a dead sub-workflow run, each clearing its own run id), when the step is entered
-again (it removes everything under `branches/`, retired leftovers included, before it
-copies the folder, so private copies of an unfinished step never outlive its next
-attempt), and when the run's folder or the key's folder is pruned, which removes the
-`branches/` folder with it. The conversion first renames the run's copies, under the
-run's lock, to `branches/.dead-<run id>-XXXX` (a rename is fast, and a
-resume that claims the run right after makes its new copies under `branches/<run id>`),
-and once the lock is released that renamed directory is deleted. A conversion of a run
-that left a script record beside its record keeps the copies, since that script may
-still be writing in one; the step removes them when it is entered again.
+that dies mid-step leaves them in the run's area. The conversion of the dead run
+(`mark_dead_run`) leaves them where they are, and they are removed when the step is
+entered again (it removes everything under `branches/` before it copies the folder, so
+private copies of an unfinished step never outlive its next attempt) or when the run's
+folder or the key's folder is pruned, which removes the `branches/` folder with it. The
+same holds for a dead sub-workflow run's copies, which sit in the same `branches/`
+folder under its own run id.
 
 The reconciled result — a `choose` winner's changes, or every branch's for a `union` —
 is written into the real folder only by `workspace_fork.apply_all`, which keeps an undo
@@ -2297,7 +2292,7 @@ End-to-end for a single `run_workflow` call:
 | `store_dir`, `store_dir_of`, `save_input`, `load_input`, `save_source`, `load_sources`, `discard` | `durin/workflow/resume_store.py` | What a run's next step receives, kept whole beside its working folder (`.workflow/<run_id>/resume/`, or `resume/<run_id>/` beside a work key's shared folder): the input of the step the record's `position` names (and of the one before it) and the last output of every step another step reads by name. `store_dir_of` finds the folder from a record. Removed when a run ends in a state no resume can enter. The record keeps only capped copies, for its readers. |
 | `run_evidence_dir` | `durin/workflow/artifacts.py` | `<work_dir>/runs/<run_id>/` — where a keyed run's own copy of whatever it created or overwrote ad hoc is preserved, so a later run sharing the same `work_key` cannot silently destroy it. Not created ahead of time; a reader falls back to the flat `work_dir` layout when it is absent. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
-| `run_area`, `branches_root`, `fork`, `clear_branches`, `retire_branches`, `diff`, `conflicts`, `pending_dir`, `apply_all`, `restore_pending`, `PendingApplyError`, `UndoError`, `WriteBackRefusedError` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel; the write-back into the real folder refuses a linked working folder, one on another volume than its run area, and a result that changes a path's shape, meets a link, a file that is not regular, another volume or a path that cannot be examined, and keeps an undo journal (`pending-apply/`) that `restore_pending` uses to undo a write-back a dead process cut, leaving any path someone else changed since. |
+| `run_area`, `branches_root`, `fork`, `clear_branches`, `diff`, `conflicts`, `pending_dir`, `apply_all`, `restore_pending`, `PendingApplyError`, `UndoError`, `WriteBackRefusedError` | `durin/workflow/workspace_fork.py` | Per-branch working-folder isolation (copies live in the run's area) + reconciliation (choose/union) for writing-in-parallel; the write-back into the real folder refuses a linked working folder, one on another volume than its run area, and a result that changes a path's shape, meets a link, a file that is not regular, another volume or a path that cannot be examined, and keeps an undo journal (`pending-apply/`) that `restore_pending` uses to undo a write-back a dead process cut, leaving any path someone else changed since. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |

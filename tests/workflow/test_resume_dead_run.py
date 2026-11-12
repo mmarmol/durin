@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.engine import build_resume_state, resumable_kind, resume_refusal
@@ -134,8 +133,8 @@ def _copies(dead, run_id="r1", name="w"):
 
 
 @pytest.mark.parametrize("reconcile", ["union", "choose"])
-def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversion_removes_them(
-        tmp_path, reconcile):
+def test_a_dead_runs_copies_stay_until_the_resume_enters_the_step_and_it_starts_clean(
+        tmp_path, monkeypatch, reconcile):
     definition = _writing_fan(reconcile)
     dead = run_until_killed(tmp_path, definition, stop_in="right",
                             env={driver.HANG_AFTER_ENV: "left"})
@@ -143,77 +142,36 @@ def test_a_killed_parallel_step_leaves_its_copies_under_the_run_and_the_conversi
     # The dead process's copies are in its run's folder, none in its temporary directory.
     assert not list((tmp_path / "tmp").glob("durin_wf_branch_*"))
     assert list((tmp_path / "tmp").iterdir()) == []
-    assert len(list(copies.iterdir())) == 2 and all(p.name.startswith("b-") for p in copies.iterdir())
+    left_over = sorted(p.name for p in copies.iterdir())
+    assert len(left_over) == 2 and all(n.startswith("b-") for n in left_over)
+    (copies / left_over[0] / "stale.txt").write_text("from the dead attempt")
 
     rec = run_log.mark_dead_run(dead.workspace, "w", "r1")
     assert rec["status"] == "crashed"
-    assert not copies.exists()
-    assert [p for p in copies.parent.iterdir()] == []        # no retired leftover either
+    assert sorted(p.name for p in copies.iterdir()) == left_over
+    assert (copies / left_over[0] / "stale.txt").is_file()
 
+    real_fork = workspace_fork.fork
+    on_disk_at_each_fork: list[list[str]] = []
+
+    def watching(root, *, into):
+        on_disk_at_each_fork.append(sorted(p.name for p in Path(into).parent.rglob("*")
+                                           if p.name == "stale.txt" or p.name in left_over))
+        return real_fork(root, into=into)
+
+    monkeypatch.setattr(workspace_fork, "fork", watching)
     done = _resume(dead, definition, rec)
     assert done.status == "completed"
+    assert len(on_disk_at_each_fork) == 2
+    assert on_disk_at_each_fork[0] == [], "the step's first copy started beside the dead run's"
+    folder = Path(run_log.read_manifest(dead.workspace, "w", "r1")["work_dir"])
+    assert not (folder / "stale.txt").exists()
     assert list(copies.parent.iterdir()) == []
-
-
-def test_a_directory_made_for_the_run_after_the_conversion_survives_the_delayed_delete(
-        tmp_path, monkeypatch):
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    copies = _copies(dead)
-    real_cleanup = workspace_fork.cleanup
-    removed: list[Path] = []
-
-    def after_the_lock_is_released(path):
-        # A resume claimed the run and its step made new copies in the time between
-        # the conversion and this delayed delete.
-        assert path.name.startswith(".dead-r1-") and path != copies
-        (copies / "left-new").mkdir(parents=True)
-        (copies / "left-new" / "x.txt").write_text("fresh")
-        removed.append(path)
-        real_cleanup(path)
-
-    monkeypatch.setattr(workspace_fork, "cleanup", after_the_lock_is_released)
-    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
-
-    assert len(removed) == 1 and not removed[0].exists()
-    assert (copies / "left-new" / "x.txt").read_text() == "fresh"
-
-
-def test_the_copies_are_renamed_while_the_lock_is_held_and_the_record_already_reads_crashed(
-        tmp_path, monkeypatch):
-    import threading
-
-    definition = _writing_fan("union")
-    dead = run_until_killed(tmp_path, definition, stop_in="right",
-                            env={driver.HANG_AFTER_ENV: "left"})
-    real_retire = workspace_fork.retire_branches
-    seen: dict = {}
-
-    def at_the_rename(work_dir, run_id):
-        def try_the_lock():
-            try:
-                with cross_process_lock(run_log.run_lock_target(dead.workspace, "w", "r1"),
-                                        timeout=0.3):
-                    seen["lock_free"] = True
-            except TimeoutError:
-                seen["lock_free"] = False
-        # A lock is held per thread, so another thread tells whether it is held at all.
-        other = threading.Thread(target=try_the_lock)
-        other.start()
-        other.join()
-        seen["status"] = run_log.read_manifest(dead.workspace, "w", "r1")["status"]
-        return real_retire(work_dir, run_id)
-
-    monkeypatch.setattr(workspace_fork, "retire_branches", at_the_rename)
-    assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
-    assert seen == {"lock_free": False, "status": "crashed"}
 
 
 def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path):
     """A script record the dead run left means a script may still be writing in
-    a copy: the conversion leaves the copies, and the step removes them when it
-    is entered again."""
+    a copy; the step removes them when it is entered again."""
     definition = _writing_fan("union")
     dead = run_until_killed(tmp_path, definition, stop_in="right",
                             env={driver.HANG_AFTER_ENV: "left"})
@@ -230,7 +188,7 @@ def test_copies_stay_while_a_script_of_the_dead_run_may_still_run(tmp_path):
     assert list(copies.parent.iterdir()) == []
 
 
-def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_path):
+def test_a_dead_sub_workflow_runs_copies_are_left_by_its_conversion_too(tmp_path):
     parent = {"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "sub"},
         {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "z"},
@@ -257,8 +215,7 @@ def test_a_dead_sub_workflow_runs_copies_are_removed_by_its_own_conversion(tmp_p
     assert run_log.mark_dead_run(dead.workspace, "w", "r1")["status"] == "crashed"
 
     assert run_log.read_manifest(dead.workspace, "child", kid["run_id"])["status"] == "crashed"
-    assert not kid_copies.exists()
-    assert not any(p.name.startswith(".dead-") for p in kid_copies.parent.iterdir())
+    assert kid_copies.is_dir() and any(kid_copies.iterdir())
 
 
 @pytest.mark.parametrize("reconcile", ["read", "choose", "union"])

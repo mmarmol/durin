@@ -1,9 +1,10 @@
 """Tests for per-branch workspace isolation + reconciliation (pure file logic)."""
 
+import shutil
 from pathlib import Path
 
 from durin.workflow import workspace_fork as wf
-from durin.workflow.workspace_fork import cleanup, diff, fork, snapshot
+from durin.workflow.workspace_fork import diff, fork, snapshot
 
 
 def _write(root: Path, rel: str, text: str) -> None:
@@ -41,7 +42,7 @@ def test_fork_of_a_working_folder_roundtrips_edits(tmp_path):
         assert "draft.md" in cs.modified
         assert "new.md" in cs.created
     finally:
-        cleanup(fork_dir)
+        shutil.rmtree(fork_dir, ignore_errors=True)
 
 
 def test_fork_copies_files_and_excludes_heavy_dirs(tmp_path):
@@ -55,7 +56,7 @@ def test_fork_copies_files_and_excludes_heavy_dirs(tmp_path):
         assert not (fork / ".git").exists()          # heavy/managed dirs excluded
         assert not (fork / "node_modules").exists()
     finally:
-        wf.cleanup(fork)
+        shutil.rmtree(fork, ignore_errors=True)
 
 
 def test_diff_detects_created_modified_deleted(tmp_path):
@@ -72,7 +73,7 @@ def test_diff_detects_created_modified_deleted(tmp_path):
         (fork / "gone.txt").unlink()                   # deleted
         cs = wf.diff(base, fork)
     finally:
-        wf.cleanup(fork)
+        shutil.rmtree(fork, ignore_errors=True)
 
     assert set(cs.created) == {"new.txt"}
     assert cs.created["new.txt"] == b"brand new"
@@ -131,8 +132,8 @@ def test_choose_applies_one_branch_discards_others(tmp_path):
         cs_b = wf.diff(base, fork_b)
         wf.apply_all([cs_b], work, run_id="r1", node_id="fan")   # judge picked B
     finally:
-        wf.cleanup(fork_a)
-        wf.cleanup(fork_b)
+        shutil.rmtree(fork_a, ignore_errors=True)
+        shutil.rmtree(fork_b, ignore_errors=True)
     assert (work / "result.txt").read_text() == "approach B"   # only the winner applied
 
 
@@ -149,7 +150,7 @@ def test_union_applies_disjoint_branches(tmp_path):
         assert wf.conflicts([cs_a, cs_b]) == set()    # disjoint
         wf.apply_all([cs_a, cs_b], work, run_id="r1", node_id="fan")
     finally:
-        wf.cleanup(fork_a)
-        wf.cleanup(fork_b)
+        shutil.rmtree(fork_a, ignore_errors=True)
+        shutil.rmtree(fork_b, ignore_errors=True)
     assert (work / "module_x.py").read_text() == "X"
     assert (work / "module_y.py").read_text() == "Y"

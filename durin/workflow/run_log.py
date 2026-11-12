@@ -45,7 +45,7 @@ from loguru import logger
 
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
-from durin.workflow import resume_events, resume_store, workspace_fork
+from durin.workflow import resume_events, resume_store
 from durin.workflow.refusal import Refusal
 
 
@@ -1418,15 +1418,9 @@ def mark_dead_run(
     (``record_script``) are left as they are, and so are their record files.
     ``dead_run_refusal`` refuses the resume while one of them may still run.
 
-    The private copies the run's parallel step (``choose``/``union``) was
-    writing in are removed with the conversion, in two moves: under the lock
-    they are renamed out of the run's name (``workspace_fork.retire_branches``),
-    and once the lock is released the renamed directory is deleted. The delete
-    cannot take the copies of a resume that claimed the run right after the
-    conversion, since those are made under the run's name. Copies stay when
-    the run left a script record: a script may still be writing in one, and the
-    step removes them when it is entered again. Each run id handles its own copies,
-    so a converted sub-workflow run (below) clears its own.
+    The private copies the run's parallel step (``choose``/``union``) was writing
+    in are left where they are: the step removes everything under ``branches/``
+    when it is entered again, and pruning the run's area removes them with it.
 
     Then the dead sub-workflow runs under this run (``running`` records whose
     ``parent_run_id`` leads back to it) are converted the same way.
@@ -1460,7 +1454,6 @@ def mark_dead_run(
             scripts_recorded = len(script_records(workspace, name, run_id))
             _write_json(_record_path(workspace, name, run_id), out)
             _drop_stop_request(stop_path)
-            retired = None if scripts_recorded else _retire_copies(out, record, run_id)
     except TimeoutError:
         logger.warning("run {} of workflow {!r}: its lock stayed busy; the crash sweep "
                        "leaves it for its next round", run_id, name)
@@ -1476,24 +1469,10 @@ def mark_dead_run(
                 scripts_recorded)
     resume_events.found_dead(name, run_id, status=out["status"], step=step,
                              scripts_recorded=scripts_recorded)
-    if retired is not None:
-        workspace_fork.cleanup(retired)
     if out["status"] in UNRESUMABLE_ENDS:
         _drop_resume_files(workspace, out)
     _mark_dead_children(workspace, run_id, now=now, max_age_s=max_age_s)
     return out
-
-
-def _retire_copies(out: dict, record: dict, run_id: str) -> Path | None:
-    """Under the run's lock: rename the private copies of the dead run's parallel
-    step (``branches/<run_id>`` beside its working folder) out of the run's name,
-    and return the new path. The caller deletes it once the lock is released: a
-    resume claims the run under the same lock and its step makes new copies under
-    ``branches/<run_id>``, so a delete after the claim would remove those."""
-    work_dir = out.get("work_dir") or record.get("work_dir")
-    if not work_dir:
-        return None
-    return workspace_fork.retire_branches(work_dir, run_id)
 
 
 def _mark_dead_children(workspace: str | Path, run_id: str, *, now: float,
