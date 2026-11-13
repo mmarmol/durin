@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from durin.utils.process_tree import process_identity, process_state
 from durin.memory.embed_server import (
     EmbedResultCache,
     build_embed_app,
@@ -22,6 +21,7 @@ from durin.memory.embed_server import (
     read_discovery,
     write_discovery,
 )
+from durin.utils.process_tree import process_identity, process_state
 
 
 class _CountingProvider:

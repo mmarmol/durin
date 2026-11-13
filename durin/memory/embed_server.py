@@ -171,8 +171,8 @@ def clear_discovery(*, token: str | None = None) -> None:
     With a ``token``, remove it only when the record holds that token: a
     server clears its own record and never the record of a server started
     after it. A missing, unreadable, undecodable or foreign record is left
-    alone. With no
-    token the file goes unconditionally (the supervisor's teardown).
+    alone. With no token the file goes unconditionally (the supervisor's
+    teardown).
     """
     path = _discovery_path()
     if token is not None:
@@ -345,8 +345,8 @@ def run_embed_server(
     is still alive ``_PARENT_EXIT_GRACE_S`` later. With no HTTP server yet it
     ends at once, and a server that finds the parent gone just before it
     would publish returns without publishing. The watch starts before the
-    model loads, so a parent that dies during the warm-up is noticed too. ``None`` names no parent and the server runs until told
-    to stop.
+    model loads, so a parent that dies during the warm-up is noticed too.
+    ``None`` names no parent and the server runs until told to stop.
     """
     import secrets
     import socket
@@ -397,7 +397,7 @@ def run_embed_server(
     sock.bind(("127.0.0.1", port))
     bound_port = sock.getsockname()[1]
     if parent_is_gone.is_set():
-        # Publishing now could overwrite the record of a newer server.
+        # Publishing at this point could overwrite the record of a newer server.
         sock.close()
         return
     write_discovery(port=bound_port, token=token, model=provider.model_name)
