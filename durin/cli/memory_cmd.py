@@ -1189,9 +1189,10 @@ def cmd_embed_server(
 
     Internal worker entry point: the gateway spawns and supervises it so one
     warm model copy serves every durin process (gateway, dream worker, TUI)
-    over loopback HTTP. Exits cleanly on SIGTERM, and by itself once the
-    process named by --parent-pid is gone; the discovery file is removed on
-    shutdown while it still names this server.
+    over loopback HTTP. Ends on SIGTERM, and by itself once the process
+    named by --parent-pid is gone. The server removes its own discovery
+    record when it ends by itself; after a stop by signal the supervisor
+    removes it, and a reader ignores a record whose owner is gone.
     """
     from durin.memory.embed_server import run_embed_server
 

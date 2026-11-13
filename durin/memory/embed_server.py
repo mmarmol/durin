@@ -170,14 +170,15 @@ def clear_discovery(*, token: str | None = None) -> None:
 
     With a ``token``, remove it only when the record holds that token: a
     server clears its own record and never the record of a server started
-    after it. A missing, unreadable or foreign record is left alone. With no
+    after it. A missing, unreadable, undecodable or foreign record is left
+    alone. With no
     token the file goes unconditionally (the supervisor's teardown).
     """
     path = _discovery_path()
     if token is not None:
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             return
         if not isinstance(rec, dict) or rec.get("token") != token:
             return
@@ -339,10 +340,12 @@ def run_embed_server(
 
     ``parent_pid`` names the process that started this server. When that
     process is gone, however it ended, the server stops its HTTP server and
-    ends; if the process is still alive ``_PARENT_EXIT_GRACE_S`` later (the
-    HTTP server did not stop, or was not up yet) it ends outright. The watch
-    starts before the model loads, so a parent that dies during the warm-up
-    is noticed too. ``None`` names no parent and the server runs until told
+    ends. With the HTTP server up, the server first drops its own discovery
+    record, asks the HTTP server to stop, and ends outright if the process
+    is still alive ``_PARENT_EXIT_GRACE_S`` later. With no HTTP server yet it
+    ends at once, and a server that finds the parent gone just before it
+    would publish returns without publishing. The watch starts before the
+    model loads, so a parent that dies during the warm-up is noticed too. ``None`` names no parent and the server runs until told
     to stop.
     """
     import secrets
@@ -356,14 +359,25 @@ def run_embed_server(
 
     token = secrets.token_hex(16)
     server: uvicorn.Server | None = None
+    parent_is_gone = threading.Event()
 
     def parent_gone() -> None:
-        logger.warning("embed server: parent process {} is gone", parent_pid)
-        if server is not None:
-            server.should_exit = True
-        time.sleep(_PARENT_EXIT_GRACE_S)
-        clear_discovery(token=token)
-        os._exit(0)
+        # Whatever fails below, the process must end: a server whose parent
+        # is gone must never be left running.
+        parent_is_gone.set()
+        try:
+            logger.warning("embed server: parent process {} is gone", parent_pid)
+            # Drop this server's record first, so no client finds a server
+            # that is closing.
+            clear_discovery(token=token)
+            if server is not None:
+                server.should_exit = True
+                time.sleep(_PARENT_EXIT_GRACE_S)
+                clear_discovery(token=token)
+        except Exception:
+            logger.exception("embed server: closing after the parent went failed")
+        finally:
+            os._exit(0)
 
     if parent_pid is not None:
         exit_when_parent_is_gone(parent_pid, parent_gone)
@@ -382,6 +396,10 @@ def run_embed_server(
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", port))
     bound_port = sock.getsockname()[1]
+    if parent_is_gone.is_set():
+        # Publishing now could overwrite the record of a newer server.
+        sock.close()
+        return
     write_discovery(port=bound_port, token=token, model=provider.model_name)
     logger.info(
         "embed server ready (port={} model={})", bound_port, provider.model_name)

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from durin.utils.process_tree import process_identity, process_state
 from durin.memory.embed_server import (
     EmbedResultCache,
     build_embed_app,
@@ -187,6 +188,8 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return True  # a process exists under that pid, though not ours
     return True
 
 
@@ -199,62 +202,81 @@ def _wait_gone(pid: int, timeout: float) -> bool:
     return not _alive(pid)
 
 
-def _start_watched(mode: str, ready: Path):
-    """Start an intermediate process that starts a process watching it.
+class _Watched:
+    """An intermediate process that starts a process watching it.
 
-    Returns once the watching process has started its watch (the import of
-    durin takes seconds, and a parent killed earlier would go unnoticed
-    only because the test was too quick).
+    ``start`` returns once the watching process has started its watch (the
+    import of durin takes seconds, and a parent killed earlier would go
+    unnoticed only because the test was too quick). ``close`` ends whatever
+    is left and signals the watching process only while it is still the
+    process first seen under that pid.
     """
-    env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
-    inter = subprocess.Popen(
-        [sys.executable, "-c", _INTERMEDIATE, _WATCHED, mode, str(ready)],
-        stdout=subprocess.PIPE, env=env, text=True)
-    child_pid = int(inter.stdout.readline())
-    deadline = time.monotonic() + 60.0
-    while not ready.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert ready.exists(), "the watching process never started its watch"
-    return inter, child_pid
 
+    def __init__(self, mode: str, ready: Path) -> None:
+        self.mode = mode
+        self.ready = ready
+        self.inter: subprocess.Popen | None = None
+        self.child_pid: int | None = None
+        self.child_started: str | None = None
 
-def _cleanup(inter, child_pid: int) -> None:
-    for pid in (inter.pid, child_pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    inter.wait(timeout=10)
-    inter.stdout.close()
+    def start(self) -> None:
+        env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
+        self.inter = subprocess.Popen(
+            [sys.executable, "-c", _INTERMEDIATE, _WATCHED, self.mode,
+             str(self.ready)],
+            stdout=subprocess.PIPE, env=env, text=True)
+        self.child_pid = int(self.inter.stdout.readline())
+        self.child_started = process_identity(self.child_pid)["started"]
+        deadline = time.monotonic() + 60.0
+        while not self.ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert self.ready.exists(), "the watching process never started its watch"
+
+    def close(self) -> None:
+        if self.child_pid is not None and self.child_started is not None:
+            if process_state(self.child_pid, self.child_started) == "alive":
+                try:
+                    os.kill(self.child_pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        if self.inter is not None:
+            if self.inter.poll() is None:
+                self.inter.kill()
+            self.inter.wait(timeout=10)
+            if self.inter.stdout is not None:
+                self.inter.stdout.close()
 
 
 def test_watched_process_ends_when_its_parent_is_killed(tmp_path):
-    inter, child_pid = _start_watched("wait", tmp_path / "ready")
+    w = _Watched("wait", tmp_path / "ready")
     try:
-        assert _alive(child_pid)
-        inter.kill()
-        inter.wait(timeout=10)
-        assert _wait_gone(child_pid, 8.0), "watched process outlived its parent"
+        w.start()
+        assert _alive(w.child_pid)
+        w.inter.kill()
+        w.inter.wait(timeout=10)
+        assert _wait_gone(w.child_pid, 8.0), "watched process outlived its parent"
     finally:
-        _cleanup(inter, child_pid)
+        w.close()
 
 
 def test_watched_process_ends_when_its_parent_exits_normally(tmp_path):
-    inter, child_pid = _start_watched("exit", tmp_path / "ready")
+    w = _Watched("exit", tmp_path / "ready")
     try:
-        inter.wait(timeout=10)
-        assert _wait_gone(child_pid, 8.0), "watched process outlived its parent"
+        w.start()
+        w.inter.wait(timeout=10)
+        assert _wait_gone(w.child_pid, 8.0), "watched process outlived its parent"
     finally:
-        _cleanup(inter, child_pid)
+        w.close()
 
 
 def test_watched_process_is_untouched_while_its_parent_lives(tmp_path):
-    inter, child_pid = _start_watched("wait", tmp_path / "ready")
+    w = _Watched("wait", tmp_path / "ready")
     try:
+        w.start()
         time.sleep(1.5)  # several poll intervals
-        assert _alive(child_pid)
+        assert _alive(w.child_pid)
     finally:
-        _cleanup(inter, child_pid)
+        w.close()
 
 
 def test_the_watch_fires_at_once_when_the_parent_is_already_gone():
@@ -297,6 +319,10 @@ def test_clear_discovery_with_a_token_removes_only_its_own_record(
     clear_discovery(token="mine")
     assert path.exists()
 
+    path.write_bytes(b"\xff\xfe\x00 not utf-8")
+    clear_discovery(token="mine")
+    assert path.exists()
+
     write_discovery(port=1, token="other", model="m")
     clear_discovery()
     assert not path.exists()
@@ -305,14 +331,23 @@ def test_clear_discovery_with_a_token_removes_only_its_own_record(
 class _FakeProvider:
     model_name = "fake/test-embed"
     _isolation = "service"
+    on_embed = None
 
     def embed(self, texts):
+        if self.on_embed is not None:
+            self.on_embed()
         return [[0.0] for _ in texts]
 
 
 @pytest.fixture()
 def run_env(tmp_path, monkeypatch):
-    """run_embed_server with the model, uvicorn and the watch patched out."""
+    """run_embed_server with the model, uvicorn and the watch patched out.
+
+    ``fire()`` runs the parent-gone handler on a thread the fixture keeps;
+    at teardown, before any patch is undone, every such thread is joined
+    and must have ended, so a handler can never reach the real
+    ``os._exit`` or another test's state.
+    """
     import uvicorn
 
     import durin.config
@@ -320,15 +355,25 @@ def run_env(tmp_path, monkeypatch):
     import durin.memory.embedding
 
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    record = tmp_path / "embed-server.json"
+    provider = _FakeProvider()
+    state: dict = {
+        "exits": [], "released": threading.Event(), "events": [],
+        "threads": [], "provider": provider, "record": record,
+    }
+
     monkeypatch.setattr(durin.config, "load_config", lambda: object())
-    monkeypatch.setattr(
-        durin.memory.embedding, "provider_from_config",
-        lambda config, model=None: _FakeProvider())
+
+    def fake_provider(config, model=None):
+        state["events"].append("provider")
+        return provider
+
+    monkeypatch.setattr(durin.memory.embedding, "provider_from_config",
+                        fake_provider)
     monkeypatch.setattr(es, "embed_server_config", lambda app: object())
 
-    state: dict = {"exits": [], "released": threading.Event()}
-
     def fake_watch(parent_pid, on_gone, **kw):
+        state["events"].append("watch")
         state["parent_pid"] = parent_pid
         state["on_gone"] = on_gone
         return None
@@ -338,8 +383,7 @@ def run_env(tmp_path, monkeypatch):
     def fake_exit(code):
         state["exits"].append(code)
         state["record_at_exit"] = (
-            json.loads((tmp_path / "embed-server.json").read_text("utf-8"))
-            if (tmp_path / "embed-server.json").exists() else None)
+            json.loads(record.read_text("utf-8")) if record.exists() else None)
         state["released"].set()
 
     monkeypatch.setattr(es.os, "_exit", fake_exit)
@@ -348,19 +392,45 @@ def run_env(tmp_path, monkeypatch):
     class _Server:
         def __init__(self, config):
             state["server"] = self
-            self.should_exit = False
+            self._should_exit = False
+
+        @property
+        def should_exit(self):
+            return self._should_exit
+
+        @should_exit.setter
+        def should_exit(self, value):
+            state["record_when_stop_asked"] = (
+                json.loads(record.read_text("utf-8"))
+                if record.exists() else None)
+            self._should_exit = value
 
         def run(self, sockets=None):
+            state["ran"] = True
             state["run"](self)
 
     monkeypatch.setattr(uvicorn, "Server", _Server)
+
+    def fire():
+        t = threading.Thread(target=state["on_gone"], daemon=True)
+        state["threads"].append(t)
+        t.start()
+        return t
+
+    state["fire"] = fire
     state["es"] = es
-    return state
+    yield state
+    stuck = []
+    for t in state["threads"]:
+        t.join(5.0)
+        if t.is_alive():
+            stuck.append(t)
+    assert not stuck, "a parent-gone handler thread is still running"
 
 
 def test_parent_gone_asks_the_http_server_to_stop(run_env):
     def run(server):
-        threading.Thread(target=run_env["on_gone"], daemon=True).start()
+        run_env["fire"]()
         deadline = time.monotonic() + 2.0
         while not server.should_exit and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -371,12 +441,21 @@ def test_parent_gone_asks_the_http_server_to_stop(run_env):
     run_env["es"].run_embed_server(parent_pid=4242)
     assert run_env["parent_pid"] == 4242
     assert run_env["should_exit_seen"] is True
-    assert not (Path(os.environ["DURIN_HOME"]) / "embed-server.json").exists()
+    assert not run_env["record"].exists()
+
+
+def test_the_own_record_goes_before_the_http_server_is_asked_to_stop(run_env):
+    def run(server):
+        run_env["fire"]().join(5.0)
+
+    run_env["run"] = run
+    run_env["es"].run_embed_server(parent_pid=4242)
+    assert run_env["record_when_stop_asked"] is None
 
 
 def test_a_server_that_does_not_stop_is_ended_after_the_grace(run_env):
     def run(server):
-        threading.Thread(target=run_env["on_gone"], daemon=True).start()
+        run_env["fire"]()
         run_env["released"].wait(5.0)
 
     run_env["run"] = run
@@ -389,15 +468,73 @@ def test_the_hard_exit_leaves_a_newer_servers_record(run_env):
     def run(server):
         # A server started after this one published its own record.
         write_discovery(port=2, token="newer", model="m")
-        threading.Thread(target=run_env["on_gone"], daemon=True).start()
+        run_env["fire"]()
         run_env["released"].wait(5.0)
 
     run_env["run"] = run
     run_env["es"].run_embed_server(parent_pid=4242)
     assert run_env["exits"] == [0]
     assert run_env["record_at_exit"]["token"] == "newer"
-    path = Path(os.environ["DURIN_HOME"]) / "embed-server.json"
-    assert json.loads(path.read_text("utf-8"))["token"] == "newer"
+    assert json.loads(run_env["record"].read_text("utf-8"))["token"] == "newer"
+    assert run_env["record_when_stop_asked"]["token"] == "newer"
+
+
+def test_the_exit_happens_even_when_clearing_the_record_fails(
+        run_env, monkeypatch):
+    def run(server):
+        run_env["fire"]()
+        run_env["released"].wait(5.0)
+
+    def boom(*, token=None):
+        raise RuntimeError("clear failed")
+
+    run_env["run"] = run
+    monkeypatch.setattr(run_env["es"], "clear_discovery", boom)
+    try:
+        run_env["es"].run_embed_server(parent_pid=4242)
+    except RuntimeError:
+        pass  # the failing clear in the main thread's finally
+    assert run_env["exits"] == [0]
+
+
+def test_a_parent_gone_during_the_warm_up_ends_the_process_at_once(run_env):
+    newer = run_env["record"]
+    write_discovery(port=2, token="newer", model="m")
+    run_env["provider"].on_embed = lambda: run_env["fire"]().join(5.0)
+    run_env["run"] = lambda server: pytest.fail("the HTTP server must not run")
+
+    run_env["es"].run_embed_server(parent_pid=4242)
+
+    assert run_env["exits"] == [0]
+    assert "ran" not in run_env
+    assert json.loads(newer.read_text("utf-8"))["token"] == "newer"
+
+
+def test_nothing_is_published_once_the_parent_is_known_to_be_gone(
+        run_env, monkeypatch):
+    es = run_env["es"]
+    real_build = es.build_embed_app
+
+    def build_then_parent_gone(*args, **kwargs):
+        app = real_build(*args, **kwargs)
+        run_env["fire"]().join(5.0)
+        return app
+
+    monkeypatch.setattr(es, "build_embed_app", build_then_parent_gone)
+    write_discovery(port=2, token="newer", model="m")
+    run_env["run"] = lambda server: pytest.fail("the HTTP server must not run")
+
+    es.run_embed_server(parent_pid=4242)
+
+    assert run_env["exits"] == [0]
+    assert "ran" not in run_env
+    assert json.loads(run_env["record"].read_text("utf-8"))["token"] == "newer"
+
+
+def test_the_watch_starts_before_the_provider_is_built(run_env):
+    run_env["run"] = lambda server: None
+    run_env["es"].run_embed_server(parent_pid=4242)
+    assert run_env["events"][:2] == ["watch", "provider"]
 
 
 def test_no_parent_named_starts_no_watch(run_env):

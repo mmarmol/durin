@@ -123,13 +123,18 @@ and never returns that memory to the OS. Two config knobs on
   arena-reclaim mechanism. The gateway names its own pid to the server
   (`--parent-pid`), and the server ends by itself once the process that
   started it is gone, however that process ended (a kill, an out-of-memory
-  kill, a crash): it compares its parent pid with the named one every few
-  seconds, asks its HTTP server to stop, and ends outright if that has not
-  finished within a grace period. A server started by hand names no parent
-  and runs until stopped. On the way out a server removes the discovery file
-  only while it still holds that server's own token, so it never erases the
-  record of a server started after it. Clients with no discovered server quietly use
-  the `"process"` pool per call (pure-TUI setups lose nothing); a
+  kill, a crash). It compares its parent pid with the named one every few
+  seconds, which relies on the parent pid changing when the parent ends
+  (it does on Linux and macOS). With its HTTP server up it drops its own
+  discovery record, asks the HTTP server to stop, and ends outright if that
+  has not finished within a grace period; before the HTTP server is up it
+  ends at once and publishes nothing. A server started by hand names no
+  parent and runs until stopped. The server removes the discovery file only
+  while it still holds that server's own token, so it never erases the
+  record of a server started after it, and it does so when it ends by
+  itself; after a stop by signal the supervisor removes the file, and a
+  reader ignores a record whose owner is gone. Clients with no discovered
+  server quietly use the `"process"` pool per call (pure-TUI setups lose nothing); a
   discovered-but-unreachable server degrades the provider to `"process"`
   for the life of the process, loudly (`memory.embedding.service_fallback`).
   A service provider does not check its model against fastembed's catalog
