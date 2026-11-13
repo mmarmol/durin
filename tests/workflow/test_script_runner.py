@@ -6,6 +6,7 @@ import pytest
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, ScriptCancelledError
 from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
+from tests.workflow.self_signal import self_signal_command
 
 
 def _req(node, upstream=None, tmp_path=None, iteration=1, cancel_check=None,
@@ -64,6 +65,56 @@ def test_binary_gate_nonzero_is_fail_with_stderr_feedback(tmp_path):
     resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
     assert resp.route_label == "FAIL" and resp.exit_code == 3
     assert "partial" in resp.output and "boom" in resp.output and "exit code 3" in resp.output
+
+
+@pytest.mark.parametrize("sig,name", [
+    ("TERM", "SIGTERM"), ("INT", "SIGINT"), ("HUP", "SIGHUP"),
+    ("QUIT", "SIGQUIT"), ("KILL", "SIGKILL")])
+def test_binary_gate_stopped_by_a_signal_is_a_failed_step(tmp_path, sig, name):
+    node = ScriptNode(id="g", command=self_signal_command(sig, before="echo started"),
+                      on_pass=None, on_fail="g")
+    with pytest.raises(NodeExecutionError) as err:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "script was ended by signal" in str(err.value.cause)
+    assert name in str(err.value.cause)
+    assert err.value.exit_code < 0
+    assert "started" in err.value.stdout
+
+
+@pytest.mark.parametrize("sig,num,name", [("SEGV", 11, "SIGSEGV"), ("ABRT", 6, "SIGABRT")])
+def test_binary_gate_that_crashes_on_a_signal_is_a_fail_naming_it(tmp_path, sig, num, name):
+    node = ScriptNode(id="g", command=self_signal_command(sig, before="echo partial"),
+                      on_pass=None, on_fail="g")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path, fail_loops_back=True))
+    assert resp.route_label == "FAIL" and resp.exit_code == -num
+    assert "partial" in resp.output
+    assert f"script was ended by signal {num} ({name})" in resp.output
+    assert "exit code" not in resp.output
+
+
+@pytest.mark.parametrize("node", [
+    ScriptNode(id="s", command=self_signal_command("TERM"), next=None),
+    ScriptNode(id="s", command=self_signal_command("TERM"), cases={"A": None, "B": "s"}),
+])
+def test_linear_and_multiway_script_ended_by_a_signal_names_the_signal(tmp_path, node):
+    with pytest.raises(NodeExecutionError) as err:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "script was ended by signal 15 (SIGTERM)" in str(err.value.cause)
+
+
+def test_linear_script_exiting_nonzero_still_names_the_exit_code(tmp_path):
+    node = ScriptNode(id="s", command="exit 3", next=None)
+    with pytest.raises(NodeExecutionError) as err:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "script exited with code 3" in str(err.value.cause)
+
+
+@pytest.mark.parametrize("command,label,code", [
+    ("exit 0", "PASS", 0), ("exit 1", "FAIL", 1), ("exit 143", "FAIL", 143)])
+def test_binary_gate_exit_codes_still_route(tmp_path, command, label, code):
+    node = ScriptNode(id="g", command=command, on_pass=None, on_fail="g")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.route_label == label and resp.exit_code == code
 
 
 def test_binary_gate_fail_looping_back_is_framed_as_a_failed_gate(tmp_path):

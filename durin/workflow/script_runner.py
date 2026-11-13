@@ -96,6 +96,26 @@ _exiting = False
 _REAP_LOCK_WAIT_S = 1.0
 
 
+# The signals that ask a process to stop. A script ended by one of these was
+# stopped by something else, not by what it checks.
+_STOP_SIGNALS = frozenset(int(s) for s in (
+    signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGKILL))
+
+
+def _script_failure_detail(rc: int, stderr_tail: str) -> str:
+    """Why a script that ended on its own is a failed step: the exit code it
+    returned, or, for a negative code, the signal that ended it."""
+    if rc < 0:
+        try:
+            what = f"signal {-rc} ({signal.Signals(-rc).name})"
+        except ValueError:
+            what = f"signal {-rc}"
+        head = f"script was ended by {what}"
+    else:
+        head = f"script exited with code {rc}"
+    return head + (f": {stderr_tail}" if stderr_tail else "")
+
+
 def _wait_for_exit() -> NoReturn:
     """Hold this thread until the process ends: it has nothing left to do,
     since anything it did now could record the outcome of a script the
@@ -469,14 +489,25 @@ class ScriptNodeRunner:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
                                        route_label="PASS", exit_code=rc,
                                        output_truncated=truncated, **logs)
+            if -rc in _STOP_SIGNALS:
+                # Something asked the script to stop and it did, so it never
+                # answered: a gate's FAIL is a verdict the check reached. Taking
+                # the FAIL route here would carry on down the wrong path as if
+                # the check had run and said no. Any other ending (a positive
+                # code, or a crash signal of the check's own making) is a verdict
+                # the check gave, and stays a FAIL.
+                detail = _script_failure_detail(rc, stderr_tail)
+                raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
+                                         exit_code=rc, **logs)
             # A non-zero exit's output is what the check printed plus its stderr
             # tail and exit code. Into a step that leads back to this gate on a
             # route of its own (req.fail_loops_back), it is loop-back feedback and
             # says the gate failed; otherwise it is the check's normal "no", so the
             # note stays a plain exit code instead of reporting a failure that never
             # happened.
-            exit_note = (f"[script gate failed: exit code {rc}]" if req.fail_loops_back
-                         else f"[exit code {rc}]")
+            ending = f"exit code {rc}" if rc > 0 else _script_failure_detail(rc, "")
+            exit_note = (f"[script gate failed: {ending}]" if req.fail_loops_back
+                         else f"[{ending}]")
             parts = [p for p in (
                 self._cap(stdout).strip(),
                 f"[stderr]\n{stderr_tail}" if stderr_tail else "",
@@ -489,7 +520,7 @@ class ScriptNodeRunner:
         if rc != 0:
             # Linear or multi-way node: a non-zero exit is an error, not a verdict —
             # continuing with half-produced output would poison the rest of the run.
-            detail = f"script exited with code {rc}" + (f": {stderr_tail}" if stderr_tail else "")
+            detail = _script_failure_detail(rc, stderr_tail)
             raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
                                      exit_code=rc, **logs)
 

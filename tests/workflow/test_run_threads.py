@@ -308,8 +308,25 @@ def test_the_scripts_of_the_runs_end_right_before_the_exit(monkeypatch, end_scri
     assert end_scripts_calls == ["end_scripts", "exit"]
 
 
+def test_a_way_out_on_an_error_exits_with_the_code_it_is_given(monkeypatch, end_scripts_calls):
+    """A process leaving its runs because something failed must not exit 0:
+    the code it is given is the code it exits with."""
+    assert _left_with_a_run_thread(monkeypatch, end_scripts_calls, code=1) == 1
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
 def test_with_no_run_left_no_script_is_ended(monkeypatch, end_scripts_calls):
     _REAL_LEAVE_UNFINISHED_RUNS()
+    assert end_scripts_calls == []
+
+
+def test_with_no_run_left_a_code_does_not_end_the_process(monkeypatch, end_scripts_calls):
+    """No run on a thread: the caller's own way out (an exception propagating,
+    with its traceback and exit code) stays the one taken."""
+    codes: list[int] = []
+    monkeypatch.setattr(run_threads.os, "_exit", codes.append)
+    _REAL_LEAVE_UNFINISHED_RUNS(code=1)
+    assert codes == []
     assert end_scripts_calls == []
 
 

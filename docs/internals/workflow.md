@@ -237,10 +237,19 @@ read.
 
 **Script routing is exit-code-driven, not text-parsed.** A binary script gate
 (`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
-non-zero is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
+anything else is `FAIL` (except a stop signal, below), and the node's output becomes stdout plus a stderr tail plus an
 explicit exit-code note, so the loop-back feedback explains what failed. The note follows
 the same `fail_loops_back` rule as the engine's framing: `[script gate failed: exit code N]`
-when the fail is a loop-back, a plain `[exit code N]` on a forward route. A multi-way
+when the fail is a loop-back, a plain `[exit code N]` on a forward route. A script that
+one of the stop signals (`SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT`, `SIGKILL`) ended (a
+negative `returncode`) never reached a verdict: it is a failed step, the same
+`NodeExecutionError` a linear script's failure raises, naming the signal. Any other ending
+is `FAIL`: a crash signal of the check's own making (`SIGSEGV`, `SIGABRT`, ...) hands the
+signal's name on in the feedback note in place of the exit code. A `command` that is one
+simple command is that process, so a signal that ends it is the script's own ending; when
+the command has more after it, the shell survives a signal that ends only the inner command
+and reports a positive code (128 plus the signal number), which durin cannot tell from a
+deliberate exit code, so it is `FAIL`. A multi-way
 script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
 agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
 a `cases` node, or on a plain linear node with no routing, is a node failure
@@ -1140,7 +1149,15 @@ wait for it, and ends the run's scripts right before it exits, as described belo
 warning log line names the runs it leaves and how many workflow scripts the process still
 holds as it ends them; the TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
-the dashboard, since their log line is usually disabled). The run's record stays
+the dashboard, since their log line is usually disabled). A way out that fails takes the
+same exit: when the gateway crashed while serving or its shutdown raises, the gateway
+logs the traceback, flushes its log and then re-execs if a `/restart` asked for it, or
+leaves its runs; when the TUI or the REPL ends on an exception, the traceback is printed
+before the runs are left. Nothing raised by that logging, flush or print skips the re-exec
+or the leaving. A process that leaves its runs on an error exits with the code the error
+carries: a `SystemExit`'s own code, 130 for a `KeyboardInterrupt`, 1 for anything else
+(the gateway's crash included). With no run on a thread the error propagates with its own
+traceback and exit code, and a gateway that crashed exits 1. The run's record stays
 `running` until a process that can tell finds its process gone. Once the process has
 exited, any finder can: the gateway's crash sweep (at its start and periodically, in a
 gateway with the websocket channel), the `tasks` tool when asked about that run, or a
@@ -1218,7 +1235,8 @@ with no script of it running. That holds because the process ends its scripts it
 its last act. A supervisor that sends the stop signal to every process of the service
 (systemd's default `KillMode=control-group`, for one), not only to the gateway's main
 process, reaches a script before that: a script that ends on it before the last act is
-recorded as its outcome, a failed step, or `FAIL` for a gate.
+recorded as its outcome: a failed step, for a gate too (the signals that ask a process to
+stop are SIGTERM, SIGINT, SIGHUP, SIGQUIT and SIGKILL).
 
 Nothing else ever signals a script: a conversion of a dead run (`mark_dead_run`), a sweep,
 a `tasks` call, a resume and a launch only observe processes (signal 0 is an existence
@@ -1479,7 +1497,8 @@ navigable in full.
 **Script node failures.** A script node has no agent turn to raise, but two of its own
 failure paths land on the same `NodeExecutionError` → `node_failed` path as an agent
 node: a non-zero exit from a linear or multi-way (`cases`) script (a binary gate's
-non-zero exit is a `FAIL` verdict instead, not a failure — see §2 and §4d), and a
+positive exit code is a `FAIL` verdict instead, not a failure — see §2 and §4d; a signal
+that ended a gate is a failure), and a
 timeout (the process group is killed and reaped before the error is raised). Both
 record a `node_failed` `NodeRun` with no `session_key` (a script node has no session)
 and abort the run the same way an agent node's failure does. The non-zero-exit path

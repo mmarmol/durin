@@ -216,7 +216,8 @@ that layout); see [configuration.md](configuration.md#the-config-file).
 >   the daily one, set distinct ports in the dev instance's config
 >   (`channels.websocket.port` and `gateway.port`). Ports are authoritative and
 >   never moved automatically; if a configured port is already in use the daemon
->   exits with clear guidance instead of crashing or silently relocating.
+>   exits with clear guidance and exit code 1 instead of crashing or silently
+>   relocating.
 > - **Tests:** each test runs in a throwaway `DURIN_HOME` (the suite never
 >   touches `~/.durin`).
 >

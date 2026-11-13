@@ -92,7 +92,9 @@ The I/O contract is plain Unix:
   failing gate folds a tail of it into the loop-back feedback so whoever
   re-runs sees why it failed.
 - **The exit code decides pass/fail.** On a routing script node
-  (`on_pass`/`on_fail`), exit `0` is `PASS`; anything else is `FAIL`. On a
+  (`on_pass`/`on_fail`), exit `0` is `PASS`; anything else is `FAIL`, except a script that was stopped
+  by a signal (`SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT` or `SIGKILL`), which never
+  answered: that is a failed step, with the signal named. On a
   `cases` (multi-way) script node, the **last line of stdout that equals one
   of its case labels** picks the case, but the process must still exit `0` —
   a non-zero exit there (or on a plain, non-routing script node) ends the run
@@ -554,9 +556,9 @@ place (`/restart`), it ends the scripts its runs were running, right before it
 exits, and those runs can be resumed at the step they were in. A service manager
 should send its stop signal to the gateway's main process only (with systemd,
 `KillMode=mixed`): one that signals every process of the service reaches the scripts
-first, and a script that ends that way counts as its step's outcome, a failed step or
-a gate's `FAIL`. `durin gateway stop` gives the gateway five seconds to exit and
-then kills it outright. A run that was cut still shows as running until durin
+first, and a script that ends that way counts as its step's outcome: a failed step,
+for a gate too (when it is a stop signal). `durin gateway stop` gives the gateway ninety seconds to shut down by
+itself and then kills it outright. A run that was cut still shows as running until durin
 finds its process gone: when a gateway that serves the dashboard starts, on its periodic check,
 when the agent's `tasks` tool is asked about it, or when it is resumed. It then
 shows as `crashed`. A run that someone had asked to stop before its process ended

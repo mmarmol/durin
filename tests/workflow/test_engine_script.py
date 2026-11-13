@@ -15,6 +15,7 @@ from durin.workflow.engine import (
 )
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
+from tests.workflow.self_signal import self_signal_command
 
 
 def fake_agent_runner(outputs):
@@ -81,6 +82,20 @@ def test_script_gate_fail_loops_back_with_feedback(tmp_path):
     assert "missing marker" in (passes[1] or "") and "exit code 1" in (passes[1] or "")
     assert "Reviewer feedback (address this):" in passes[1]
     assert "[script gate failed: exit code 1]" in passes[1]
+
+
+def test_script_gate_ended_by_a_signal_aborts_instead_of_taking_the_fail_route(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "g", "nodes": [
+        {"id": "g", "kind": "script", "command": self_signal_command("TERM"),
+         "on_pass": None, "on_fail": "fix"},
+        {"id": "fix", "prompt": "fix it", "next": None},
+    ]})
+    eng = engine_for(tmp_path, ["fixed"])
+    result = eng.run(wf, "task")
+    assert result.status == "aborted"
+    assert result.failed_node == "g"
+    assert [r.node_id for r in result.runs if r.node_id == "fix"] == []
+    assert eng._node_runner.calls == []
 
 
 def test_script_check_failing_into_a_first_visit_target_is_neutral_context(tmp_path):

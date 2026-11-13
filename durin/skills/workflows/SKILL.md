@@ -94,8 +94,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   threads the node's feedback — the text it sent with the verdict — into the producer's
   next run so it knows what to fix; `max_visits` caps loops. Any case may route to the reserved
   **`__needs_input__`** terminal, which ends the run asking the caller for more information.
-  **A script node routes deterministically**: exit code 0 = PASS / non-zero = FAIL (its
-  stderr becomes the loop-back feedback), or its last stdout line as the case label — the
+  **A script node routes deterministically**: exit code 0 = PASS / anything else = FAIL (its
+  stderr becomes the loop-back feedback; a script stopped by `SIGTERM`, `SIGINT`,
+  `SIGHUP`, `SIGQUIT` or `SIGKILL` is a failed step instead), or its last stdout line as the case label — the
   ideal gate for "do the tests pass?"-style checks, where an agent gate would cost a turn
   and could be swayed.
 - **Pass/fail is for checks that can fail; a normal branch is a `cases` route.** A check
