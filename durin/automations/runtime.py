@@ -482,6 +482,22 @@ class AutomationsRuntime:
             try:
                 spec = load_automation(self._ws, automation_name)
             except AutomationNotFoundError:
+                # Deleted while the gateway was down. Left `running`, the run
+                # would hold a concurrency slot for any automation later
+                # created under the same name. With no definition there is
+                # nothing to route an outcome with, so none is delivered and no
+                # chain fires; the run is only ended and reported finished.
+                detail = "interrupted by a restart; its automation was deleted"
+                record = run_log.finalize_run(
+                    self._ws, automation_name, run_id, status="interrupted",
+                    workflow_run_id=rec.get("workflow_run_id"), detail=detail)
+                logger.info("automations: reconciled orphaned run {} of deleted automation '{}' "
+                            "as interrupted", run_id, automation_name)
+                emit_tool_event("automations.run_finished", {
+                    "automation": automation_name, "run_id": run_id, "status": "interrupted",
+                    "final_route_label": record.get("final_route_label"),
+                })
+                handled.append(run_id)
                 continue
 
             wf_run_id = rec.get("workflow_run_id")

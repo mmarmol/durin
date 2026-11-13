@@ -461,7 +461,11 @@ reserved and named in the interrupted notice. If the automation was disabled whi
 the gateway was down, the run finalizes `"interrupted"` with no replacement and says
 why — `fire` itself ignores `enabled` (a manual run-now must still work on a paused
 automation), so this sweep is the one place that switch is honored for a run nobody
-explicitly asked for. Every orphan in a sweep pass is finalized and its outcome
+explicitly asked for. If the automation was deleted while the gateway was down, there
+is no definition to route an outcome with: the run finalizes `"interrupted"` ("its
+automation was deleted"), `automations.run_finished` is emitted, and nothing is delivered
+and no chain fires. It must not stay `"running"`, or it would hold the concurrency slot of
+any automation later created under that name. Every other orphan in a sweep pass is finalized and its outcome
 delivered (through the same `_post_finish` path as an ordinary terminal run) *before*
 any relaunch starts — a slow relaunch must not stall the notify step of every other
 orphan behind it, and a `single`-concurrency automation's still-`"running"` manifest

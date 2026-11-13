@@ -1297,16 +1297,74 @@ async def test_sweep_ignores_a_live_run(tmp_path):
     assert await rt.sweep_orphans() == []
 
 
-async def test_sweep_skips_an_orphan_whose_automation_was_deleted(tmp_path):
-    rt, _ = _mk_runtime(tmp_path, [])
-    rl.start_run(tmp_path, "ghost", "dead", cause={"kind": "cron", "excerpt": "t", "trigger_index": None})
-    rl.update_run(tmp_path, "ghost", "dead", workflow_run_id="wf1",
+def _orphan(tmp_path, automation, run_id, **fields):
+    rl.start_run(tmp_path, automation, run_id,
+                 cause={"kind": "cron", "excerpt": "t", "trigger_index": None})
+    rl.update_run(tmp_path, automation, run_id, workflow_run_id="wf1",
+                  owner={"pid": 999999, "started": "long ago"}, **fields)
+
+
+async def test_sweep_ends_an_orphan_whose_automation_was_deleted(tmp_path):
+    from durin.telemetry.logger import bind_telemetry, reset_telemetry
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [], on_outcome=on_outcome)
+    _orphan(tmp_path, "ghost", "dead")
+    fake = _RecordingTelemetry()
+    token = bind_telemetry(fake)
+    try:
+        handled = await rt.sweep_orphans()
+    finally:
+        reset_telemetry(token)
+    await _drain()
+
+    assert handled == ["dead"]
+    final = rl.read_run(tmp_path, "ghost", "dead")
+    assert final["status"] == "interrupted"
+    assert final["detail"] == "interrupted by a restart; its automation was deleted"
+    assert rl.active_runs(tmp_path, "ghost") == []
+    # No definition to route an outcome with: nothing delivered, nothing relaunched.
+    assert outcomes == [] and calls["exec"] == []
+    finished = [d for t, d in fake.events if t == "automations.run_finished"]
+    assert finished == [{"automation": "ghost", "run_id": "dead", "status": "interrupted",
+                         "final_route_label": None}]
+
+    # A second sweep finds nothing to do.
+    assert await rt.sweep_orphans() == []
+    assert rl.read_run(tmp_path, "ghost", "dead") == final
+
+
+async def test_a_single_automation_recreated_after_its_orphan_was_ended_can_fire(tmp_path):
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+    _orphan(tmp_path, "ghost", "dead")
+    await rt.sweep_orphans()
+
+    _save(tmp_path, name="ghost", concurrency="single")
+    m = await rt.fire("ghost", source="manual")
+
+    assert m["status"] == "completed"
+    assert len(calls["exec"]) == 1
+
+
+async def test_sweep_still_handles_other_orphans_beside_a_deleted_automations(tmp_path):
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+    _save(tmp_path)
+    _orphan(tmp_path, "ghost", "dead0")
+    rl.start_run(tmp_path, "a1", "dead1", cause={"kind": "cron", "excerpt": "t", "trigger_index": None})
+    rl.update_run(tmp_path, "a1", "dead1", workflow_run_id="wf-never-started",
                   owner={"pid": 999999, "started": "long ago"})
 
     handled = await rt.sweep_orphans()
+    await _drain()
 
-    assert handled == []
-    assert rl.read_run(tmp_path, "ghost", "dead")["status"] == "running"
+    assert set(handled) == {"dead0", "dead1"}
+    assert rl.read_run(tmp_path, "ghost", "dead0")["status"] == "interrupted"
+    assert rl.read_run(tmp_path, "a1", "dead1")["status"] == "interrupted"
+    assert len(calls["exec"]) == 1 and calls["exec"][0]["name"] == "w1"   # a1's relaunch
 
 
 async def test_sweep_does_not_relaunch_a_run_with_a_pending_stop_request(tmp_path):
