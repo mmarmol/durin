@@ -120,7 +120,15 @@ and never returns that memory to the OS. Two config knobs on
   content costs nothing. The gateway respawns it on death (giving up after
   repeated instant exits) and restarts it above an RSS cap
   (`service_max_rss_mb`, 0 = auto) — the supervised restart is the
-  arena-reclaim mechanism. Clients with no discovered server quietly use
+  arena-reclaim mechanism. The gateway names its own pid to the server
+  (`--parent-pid`), and the server ends by itself once the process that
+  started it is gone, however that process ended (a kill, an out-of-memory
+  kill, a crash): it compares its parent pid with the named one every few
+  seconds, asks its HTTP server to stop, and ends outright if that has not
+  finished within a grace period. A server started by hand names no parent
+  and runs until stopped. On the way out a server removes the discovery file
+  only while it still holds that server's own token, so it never erases the
+  record of a server started after it. Clients with no discovered server quietly use
   the `"process"` pool per call (pure-TUI setups lose nothing); a
   discovered-but-unreachable server degrades the provider to `"process"`
   for the life of the process, loudly (`memory.embedding.service_fallback`).

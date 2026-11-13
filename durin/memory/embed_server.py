@@ -28,12 +28,20 @@ import json
 import os
 import sqlite3
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 DISCOVERY_FILENAME = "embed-server.json"
+
+# How often a server started by a supervisor checks that its parent lives,
+# and how long it waits for the HTTP server to stop on its own once the
+# parent is gone before ending the process outright.
+_PARENT_POLL_S = 5.0
+_PARENT_EXIT_GRACE_S = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +165,54 @@ def read_discovery() -> dict[str, Any] | None:
     return rec
 
 
-def clear_discovery() -> None:
+def clear_discovery(*, token: str | None = None) -> None:
+    """Remove the discovery file.
+
+    With a ``token``, remove it only when the record holds that token: a
+    server clears its own record and never the record of a server started
+    after it. A missing, unreadable or foreign record is left alone. With no
+    token the file goes unconditionally (the supervisor's teardown).
+    """
+    path = _discovery_path()
+    if token is not None:
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(rec, dict) or rec.get("token") != token:
+            return
     try:
-        _discovery_path().unlink()
+        path.unlink()
     except OSError:
         pass
+
+
+def exit_when_parent_is_gone(
+    parent_pid: int,
+    on_gone: Callable[[], None],
+    *,
+    poll_s: float = _PARENT_POLL_S,
+) -> threading.Thread:
+    """Call ``on_gone`` once, the first time this process's parent is not
+    ``parent_pid``.
+
+    Checks at once and then every ``poll_s``. When the parent dies the
+    kernel reparents the process (to init, or to a subreaper), so
+    ``os.getppid()`` no longer equals the pid that started it, whichever way
+    the parent ended. Returns the started daemon thread; nothing escapes it.
+    """
+    def watch() -> None:
+        while os.getppid() == parent_pid:
+            time.sleep(poll_s)
+        try:
+            on_gone()
+        except Exception:
+            logger.exception("embed server: parent-gone handler failed")
+
+    thread = threading.Thread(
+        target=watch, daemon=True, name="embed-server-parent-watch")
+    thread.start()
+    return thread
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +328,22 @@ def embed_server_config(app: Any) -> Any:
     return uvicorn.Config(app, log_level="warning", access_log=False, ws="none")
 
 
-def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
+def run_embed_server(
+    *, port: int = 0, model: str | None = None, parent_pid: int | None = None,
+) -> None:
     """Blocking entry point for the ``durin memory embed-server`` CLI.
 
     Binds loopback-only. ``port=0`` lets the OS pick; the bound port is
-    published via the discovery file, which is removed on shutdown.
+    published via the discovery file, which this server removes on shutdown
+    only while the file still holds its own token.
+
+    ``parent_pid`` names the process that started this server. When that
+    process is gone, however it ended, the server stops its HTTP server and
+    ends; if the process is still alive ``_PARENT_EXIT_GRACE_S`` later (the
+    HTTP server did not stop, or was not up yet) it ends outright. The watch
+    starts before the model loads, so a parent that dies during the warm-up
+    is noticed too. ``None`` names no parent and the server runs until told
+    to stop.
     """
     import secrets
     import socket
@@ -292,6 +354,20 @@ def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
     from durin.config.home import durin_home
     from durin.memory.embedding import provider_from_config
 
+    token = secrets.token_hex(16)
+    server: uvicorn.Server | None = None
+
+    def parent_gone() -> None:
+        logger.warning("embed server: parent process {} is gone", parent_pid)
+        if server is not None:
+            server.should_exit = True
+        time.sleep(_PARENT_EXIT_GRACE_S)
+        clear_discovery(token=token)
+        os._exit(0)
+
+    if parent_pid is not None:
+        exit_when_parent_is_gone(parent_pid, parent_gone)
+
     config = load_config()
     provider = provider_from_config(config, model=model)
     # This process IS the isolation boundary — hold the model inline and
@@ -299,7 +375,6 @@ def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
     provider._isolation = "inline"
     provider.embed(["warmup"])
 
-    token = secrets.token_hex(16)
     cache = EmbedResultCache(durin_home() / "embed-cache.sqlite")
     app = build_embed_app(provider, token=token, cache=cache)
 
@@ -311,9 +386,10 @@ def run_embed_server(*, port: int = 0, model: str | None = None) -> None:
     logger.info(
         "embed server ready (port={} model={})", bound_port, provider.model_name)
     try:
-        uvicorn.Server(embed_server_config(app)).run(sockets=[sock])
+        server = uvicorn.Server(embed_server_config(app))
+        server.run(sockets=[sock])
     finally:
-        clear_discovery()
+        clear_discovery(token=token)
 
 
 def service_embed(texts: list[str], *, rec: dict) -> list[list[float]]:

@@ -1181,14 +1181,19 @@ def cmd_embed_server(
         "discovery file)."),
     model: str = typer.Option(
         "", help="Embedding model override; empty = the configured model."),
+    parent_pid: int = typer.Option(
+        0, help="Pid of the process that started this server; the server "
+        "ends when that process is gone. 0 = no parent named."),
 ) -> None:
     """Run the standing embedding service in THIS process.
 
     Internal worker entry point: the gateway spawns and supervises it so one
     warm model copy serves every durin process (gateway, dream worker, TUI)
-    over loopback HTTP. Exits cleanly on SIGTERM; the discovery file is
-    removed on shutdown.
+    over loopback HTTP. Exits cleanly on SIGTERM, and by itself once the
+    process named by --parent-pid is gone; the discovery file is removed on
+    shutdown while it still names this server.
     """
     from durin.memory.embed_server import run_embed_server
 
-    run_embed_server(port=port, model=model or None)
+    run_embed_server(
+        port=port, model=model or None, parent_pid=parent_pid or None)
