@@ -33,9 +33,13 @@ previous tag — highlights first, then changes grouped by area.
 #### Upgrading
 
 - An embedding server left behind by a gateway killed on an earlier version
-  watches nothing and is not ended by the upgrade. `pgrep -fl "memory
-  embed-server"` lists the servers; one whose parent process is 1 has no
-  gateway and can be ended.
+  watches nothing and is not ended by the upgrade. This lists the servers with
+  their parent process; one whose parent is not a running gateway can be
+  ended:
+
+  ```bash
+  ps -eo pid,ppid,args | grep "memory embed-server"
+  ```
 
 ## 0.14.1 — 2026-11-13
 
