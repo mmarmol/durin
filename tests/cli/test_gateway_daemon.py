@@ -12,6 +12,8 @@ import os
 import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -193,6 +195,51 @@ def test_stop_daemon_terminates_running_process(isolated_home: Path) -> None:
                 p.wait(timeout=3)
         except Exception:
             pass
+
+
+def test_stop_daemon_lets_a_slow_graceful_shutdown_finish(isolated_home: Path, tmp_path: Path) -> None:
+    """A gateway that takes longer than a few seconds to shut down by itself is
+    waited for, not killed: its last act (the marker) is written before it exits."""
+    marker = tmp_path / "shut-down-cleanly"
+    ready = tmp_path / "ready"
+    code = (
+        "import pathlib, signal, sys, time\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        "def on_term(*_):\n"
+        "    time.sleep(7)\n"
+        "    marker.write_text('done')\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, on_term)\n"
+        "ready.write_text('up')\n"
+        "time.sleep(60)\n"
+    )
+    p = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ready.exists()
+        daemon_pid_path().write_text(str(p.pid), encoding="utf-8")
+        # The real daemon is not this process's child; reaping here keeps the
+        # exited child from lingering as a zombie that still looks alive.
+        threading.Thread(target=p.wait, daemon=True).start()
+        started = time.monotonic()
+        s = stop_daemon()
+        elapsed = time.monotonic() - started
+        assert s.state == "not_running"
+        p.wait(timeout=3)
+        assert p.returncode == 0
+        assert marker.read_text() == "done"
+        assert 6 < elapsed < 20
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait(timeout=3)
 
 
 def test_stop_daemon_handles_stale_pid_file(isolated_home: Path) -> None:

@@ -505,7 +505,7 @@ log file's). An uninstall checks the status after it lists what it removes. The 
 releases it automatically on exit, providing crash-safe singleton enforcement
 that the PID file alone cannot guarantee.
 
-`stop_daemon` sends SIGTERM, polls for exit within a grace window (default 5 s),
+`stop_daemon` sends SIGTERM, polls for exit within a grace window (default 30 s),
 escalates to SIGKILL if needed, then removes the PID file.
 
 **Startup timing.** `_run_gateway` (`durin/cli/commands.py`) logs one INFO

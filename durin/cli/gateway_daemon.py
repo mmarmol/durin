@@ -261,11 +261,23 @@ def _resolve_durin_argv() -> list[str]:
     return [sys.executable, "-m", "durin"]
 
 
-def stop_daemon(*, grace_seconds: float = 5.0) -> DaemonStatus:
+# How long a stop waits for the gateway to shut down by itself before it kills
+# it. A normal stop (uvicorn's exit, the channels, the session flush) takes a
+# few seconds, so this is several times that. It does not cover the worst
+# case of the gateway's teardown: that is a series of steps, each with its own
+# bound (uvicorn's exit, the janitor, the dream and embed workers, the turn
+# drain, the channels, the log flush) whose bounds add up to more than this,
+# and closing the MCP connections and flushing the sessions have none. A
+# gateway still running after this is stuck, and the kill is the backstop.
+_STOP_GRACE_SECONDS = 30.0
+
+
+def stop_daemon(*, grace_seconds: float = _STOP_GRACE_SECONDS) -> DaemonStatus:
     """Send SIGTERM to the daemon and wait up to ``grace_seconds`` for it to exit.
 
-    Escalates to SIGKILL if the process is still alive after the grace
-    window. Returns the final :class:`DaemonStatus` after cleanup.
+    Returns as soon as the process is gone. Escalates to SIGKILL if it is
+    still alive after the grace window. Returns the final
+    :class:`DaemonStatus` after cleanup.
     """
     status = daemon_status()
     if status.state == "not_running":
