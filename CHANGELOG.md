@@ -5,6 +5,38 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.14.2 — 2026-11-13
+
+### Highlights
+
+- **The embedding server ends with the gateway that started it.** A gateway
+  that was killed outright — a hard kill, an out-of-memory kill, a crash —
+  left its embedding server running, with the model loaded and nothing using
+  it, and every such kill left one more. The gateway now names itself to the
+  server it starts, and that server ends by itself within seconds of the
+  gateway being gone, however it ended. (#749)
+
+### Changes
+
+#### Memory
+
+- The embedding server removes the discovery record only while the record is
+  still its own, so a server that ends late does not erase the record of one
+  started after it. (#749)
+- A server that finds its gateway gone before it is serving ends at once and
+  publishes nothing. (#749)
+- `durin memory embed-server` takes `--parent-pid`, which the gateway passes.
+  A server started by hand without it runs until stopped. (#749)
+- The watch relies on the operating system giving a process a new parent when
+  the old one ends, which Linux and macOS do. (#749)
+
+#### Upgrading
+
+- An embedding server left behind by a gateway killed on an earlier version
+  watches nothing and is not ended by the upgrade. `pgrep -fl "memory
+  embed-server"` lists the servers; one whose parent process is 1 has no
+  gateway and can be ended.
+
 ## 0.14.1 — 2026-11-13
 
 ### Highlights
