@@ -1144,7 +1144,12 @@ wait for it, and ends the run's scripts right before it exits, as described belo
 warning log line names the runs it leaves and how many workflow scripts the process still
 holds as it ends them; the TUI and the REPL also write one line to stderr naming how many runs
 were left and that they can be resumed with `run_workflow` and `resume_run_id` or from
-the dashboard, since their log line is usually disabled). The run's record stays
+the dashboard, since their log line is usually disabled). A way out that fails takes the
+same exit: when the gateway's shutdown raises, the gateway logs the traceback and then
+re-execs if a `/restart` asked for it, or leaves its runs; when the TUI or the REPL ends
+on an exception, the traceback is printed before the runs are left. A process that leaves
+its runs on an error exits with code 1; with no run on a thread the error propagates with
+its own traceback and exit code. The run's record stays
 `running` until a process that can tell finds its process gone. Once the process has
 exited, any finder can: the gateway's crash sweep (at its start and periodically, in a
 gateway with the websocket channel), the `tasks` tool when asked about that run, or a

@@ -2470,8 +2470,22 @@ def _run_gateway(
             if flushed:
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
+    # A teardown step that raises leaves asyncio.run with the exception. The
+    # way out below is still taken, or a run on its thread would hold the
+    # interpreter's exit: logged first, since a re-exec or the leaving of the
+    # runs never returns, and a failure that leaves the runs exits non-zero.
+    # The log is flushed right away: the file sink queues its writes, and a
+    # re-exec drops whatever is still queued. With nothing to re-exec or
+    # leave, the exception propagates as raised.
+    failure: BaseException | None = None
     try:
         asyncio.run(run())
+    except BaseException as exc:
+        failure = exc
+        logger.opt(exception=exc).error("Gateway: exiting on an error")
+        from durin.utils.restart import _flush_logs_before_exit
+
+        _flush_logs_before_exit()
     finally:
         set_restart_handler(None)
     if _restart_requested:
@@ -2480,7 +2494,26 @@ def _run_gateway(
         reexec()
     from durin.workflow.run_threads import leave_unfinished_runs
 
-    leave_unfinished_runs()
+    leave_unfinished_runs(code=0 if failure is None else 1)
+    if failure is not None:
+        raise failure
+
+
+def _leave_unfinished_runs_on_error() -> None:
+    """Called while an exception leaves the terminal UI or the REPL.
+
+    With a run still on its thread the interpreter's exit would wait for it,
+    so the traceback is printed and the process leaves the run, exiting with
+    code 1. With none this returns, and the caller re-raises the exception.
+    """
+    import traceback
+
+    from durin.workflow import run_threads
+
+    if not run_threads.runs_in_flight():
+        return
+    traceback.print_exc()
+    run_threads.leave_unfinished_runs(tell_user=True, code=1)
 
 
 # ============================================================================
@@ -2606,19 +2639,26 @@ def agent(
             else:
                 tui_channel, tui_chat_id = "cli", "direct"
 
-        run_durin_tui(
-            agent_loop=agent_loop,
-            cli_channel=tui_channel,
-            cli_chat_id=tui_chat_id,
-            markdown=markdown,
-            auto_resume=auto_resume,
-        )
         # Quitting is a shutdown, not a stop of the runs in flight: a run
         # still on its thread would hold the exit until it ended, so the
         # process leaves it, resumable, and tells the person so on stderr
-        # (the log line is usually disabled here).
+        # (the log line is usually disabled here). An exception can still
+        # leave app.run() after the app unmounted (a second SIGINT while it
+        # unmounts): with a run on its thread, its traceback is printed and the
+        # process leaves the run with a non-zero code; otherwise it propagates.
         from durin.workflow import run_threads
 
+        try:
+            run_durin_tui(
+                agent_loop=agent_loop,
+                cli_channel=tui_channel,
+                cli_chat_id=tui_chat_id,
+                markdown=markdown,
+                auto_resume=auto_resume,
+            )
+        except BaseException:
+            _leave_unfinished_runs_on_error()
+            raise
         run_threads.leave_unfinished_runs(tell_user=True)
         return
 
@@ -2938,14 +2978,18 @@ def agent(
         # A run still on its thread would hold the exit until it ended; on a
         # quit (a normal return, or the signal handler's exit) the process
         # leaves it instead, resumable, and tells the person so on stderr (the
-        # log line is usually disabled here). An error keeps its traceback and
-        # exit code.
+        # log line is usually disabled here). On an error it leaves the run
+        # too, once the traceback is printed, with a non-zero code; with no
+        # run on a thread the error propagates with its own traceback and code.
         from durin.workflow import run_threads
 
         try:
             asyncio.run(run_interactive())
         except SystemExit:
             run_threads.leave_unfinished_runs(tell_user=True)
+            raise
+        except BaseException:
+            _leave_unfinished_runs_on_error()
             raise
         run_threads.leave_unfinished_runs(tell_user=True)
 

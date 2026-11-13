@@ -115,8 +115,9 @@ def runs_in_flight() -> list[str]:
         if thread.name.startswith(prefix))
 
 
-def leave_unfinished_runs(*, tell_user: bool = False) -> None:
-    """End a stopped process now if a run is still executing on its thread.
+def leave_unfinished_runs(*, tell_user: bool = False, code: int = 0) -> None:
+    """End a stopped process now, with exit code ``code``, if a run is still
+    executing on its thread.
 
     A run's thread is no daemon, so an interpreter exit would wait for it, and
     the run could reach nothing while it waits: executors refuse new work once
@@ -128,6 +129,10 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
     was in. The scripts the runs started are ended right before the exit
     (``script_runner.end_scripts_for_exit``). With no run executing this
     returns and the interpreter exits as usual.
+
+    ``code`` is non-zero when the process is going down on an error, so the
+    exit still reports the failure when a run makes it leave instead of
+    letting the error propagate.
 
     ``tell_user`` also writes one line to stderr naming how many runs were left
     and how to resume them: the terminal UI and the REPL, where a person is
@@ -166,4 +171,4 @@ def leave_unfinished_runs(*, tell_user: bool = False) -> None:
 
             script_runner.end_scripts_for_exit()
         finally:
-            os._exit(0)
+            os._exit(code)
