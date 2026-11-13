@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import signal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -999,8 +1000,13 @@ def test_quitting_the_tui_tells_the_person_about_runs_left(
     assert calls == [{"tell_user": True}]
 
 
-def _run_repl_whose_exit_fails(mock_agent_runtime, tmp_path: Path):
-    """The legacy REPL quitting, with the MCP close in its way out raising."""
+def _mcp_did_not_close() -> BaseException:
+    return RuntimeError("the MCP servers did not close")
+
+
+def _run_repl_whose_exit_fails(mock_agent_runtime, tmp_path: Path, raised=_mcp_did_not_close):
+    """The legacy REPL quitting, with the MCP close in its way out raising
+    ``raised()``."""
     agent_loop = mock_agent_runtime["agent_loop"]
 
     async def _run() -> None:
@@ -1008,7 +1014,7 @@ def _run_repl_whose_exit_fails(mock_agent_runtime, tmp_path: Path):
 
     agent_loop.run = _run
     agent_loop.workspace = tmp_path
-    agent_loop.close_mcp = AsyncMock(side_effect=RuntimeError("the MCP servers did not close"))
+    agent_loop.close_mcp = AsyncMock(side_effect=raised())
     with patch("durin.cli.commands._init_prompt_session"), \
          patch("durin.cli.commands._read_interactive_input_async",
                AsyncMock(side_effect=EOFError)), \
@@ -1073,10 +1079,78 @@ def test_a_tui_interrupted_on_its_way_out_with_a_run_in_flight_exits_non_zero(
         thread.join(5)
 
     assert isinstance(result.exception, _ProcessExitedError), result.output
-    assert codes == [1]
+    assert codes == [130]
     assert end_scripts_calls == ["end_scripts", "exit"]
     assert "KeyboardInterrupt" in result.stderr
     assert "left 1 workflow run" in result.stderr
+
+
+@pytest.mark.parametrize(("raised", "code"), [
+    (KeyboardInterrupt, 130),
+    (lambda: SystemExit(3), 3),
+])
+def test_a_repl_leaving_its_runs_exits_with_the_code_its_failure_carries(
+    mock_agent_runtime, tmp_path: Path, monkeypatch, end_scripts_calls, raised, code,
+):
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+    release, thread = _a_run_thread_alive()
+    try:
+        result = _run_repl_whose_exit_fails(mock_agent_runtime, tmp_path, raised)
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert isinstance(result.exception, _ProcessExitedError), result.output
+    assert codes == [code]
+
+
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, BrokenPipeError, lambda: SystemExit(0)])
+def test_a_failing_traceback_print_does_not_skip_the_repls_way_out(
+    mock_agent_runtime, tmp_path: Path, monkeypatch, end_scripts_calls, raised,
+):
+    """The traceback print can fail (a closed stderr pipe), and the REPL's own
+    signal handlers are still installed, so a signal during it raises
+    SystemExit(0) there: neither may skip the leaving of the runs."""
+    import traceback
+
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+    printed: list[str] = []
+    monkeypatch.setattr(traceback, "print_exception", _interrupt_once(raised, printed, "print"))
+    release, thread = _a_run_thread_alive()
+    try:
+        result = _run_repl_whose_exit_fails(mock_agent_runtime, tmp_path)
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert printed == ["print"]
+    assert isinstance(result.exception, _ProcessExitedError), result.output
+    assert codes == [1]
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, BrokenPipeError])
+def test_a_failing_traceback_print_does_not_skip_the_tuis_way_out(
+    mock_agent_runtime, tmp_path: Path, monkeypatch, end_scripts_calls, raised,
+):
+    import traceback
+
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+    printed: list[str] = []
+    monkeypatch.setattr(traceback, "print_exception", _interrupt_once(raised, printed, "print"))
+    mock_agent_runtime["agent_loop"].workspace = tmp_path
+    release, thread = _a_run_thread_alive()
+    try:
+        with patch("durin.cli.tui.run_durin_tui", side_effect=KeyboardInterrupt):
+            result = runner.invoke(app, ["agent", "--new"])
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert printed == ["print"]
+    assert isinstance(result.exception, _ProcessExitedError), result.output
+    assert codes == [130]
+    assert end_scripts_calls == ["end_scripts", "exit"]
 
 
 def test_a_tui_interrupted_on_its_way_out_with_no_run_raises_it(
@@ -2396,6 +2470,9 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def stop(self) -> None:
             return None
 
+        def stop_intake(self) -> None:
+            return None
+
     class _FakeChannelManager:
         def __init__(self, _config, _bus, **_kwargs) -> None:
             self.enabled_channels = ["telegram", "discord"]
@@ -2439,7 +2516,9 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
             return False
 
         async def serve_forever(self) -> None:
-            raise _StopGatewayError("stop")
+            # Stops the gateway the way `durin gateway stop` does.
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.Event().wait()
 
     async def _fake_start_server(handler, host: str, port: int):
         captured["handler"] = handler
@@ -2568,6 +2647,9 @@ def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path:
         def stop(self) -> None:
             return None
 
+        def stop_intake(self) -> None:
+            return None
+
     class _FakeChannelManager:
         def __init__(self, _config, _bus, **_kwargs) -> None:
             self.enabled_channels = ["telegram", "discord"]
@@ -2612,7 +2694,9 @@ def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path:
             return False
 
         async def serve_forever(self) -> None:
-            raise _StopGatewayError("stop")
+            # Stops the gateway the way `durin gateway stop` does.
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.Event().wait()
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
@@ -3134,10 +3218,19 @@ def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
     assert calls.count("agent.drain_inbound_for_shutdown") == 1
 
 
-def _run_gateway_whose_teardown_fails(monkeypatch, tmp_path: Path, *, restart: bool):
+def _channels_did_not_stop() -> BaseException:
+    return RuntimeError("the channels did not stop")
+
+
+def _run_gateway_whose_teardown_fails(
+    monkeypatch, tmp_path: Path, *, restart: bool,
+    teardown_raises=_channels_did_not_stop, serving_raises=None,
+):
     """Boot the gateway, stop it (SIGTERM, or ``/restart`` when ``restart``)
-    with the channels' stop raising in its teardown, and return the CLI
-    result and the error lines logged."""
+    with the channels' stop raising ``teardown_raises()`` in its teardown, and
+    return the CLI result and the error lines logged. With ``serving_raises``
+    the channels' start raises it instead of a stop arriving (after asking for
+    the restart, when ``restart``): a crash while the gateway serves."""
     import signal
 
     from loguru import logger
@@ -3180,6 +3273,8 @@ def _run_gateway_whose_teardown_fails(monkeypatch, tmp_path: Path, *, restart: b
             return None
 
         async def run(self) -> None:
+            if serving_raises is not None:
+                await asyncio.Event().wait()
             if restart:
                 restart_mod.request_restart()
             else:
@@ -3204,10 +3299,15 @@ def _run_gateway_whose_teardown_fails(monkeypatch, tmp_path: Path, *, restart: b
             self.enabled_channels = ["slack"]
 
         async def start_all(self) -> None:
+            if serving_raises is not None:
+                if restart:
+                    restart_mod.request_restart()
+                raise serving_raises()
             await asyncio.Event().wait()
 
         async def stop_all(self) -> None:
-            raise RuntimeError("the channels did not stop")
+            if teardown_raises is not None:
+                raise teardown_raises()
 
         def get_channel(self, _name: str):
             return None
@@ -3334,6 +3434,143 @@ def test_a_restart_whose_teardown_fails_still_reexecs(
 
     assert end_scripts_calls[:3] == ["flush", "end_scripts", "execv"], result.output
     assert any("RuntimeError: the channels did not stop" in line for line in errors), errors
+
+
+def _interrupt_once(exc_type: type[BaseException], calls: list[str], name: str):
+    """A stand-in that raises ``exc_type`` on its first call only, recording it
+    in ``calls`` under ``name``."""
+    raised: list[bool] = []
+
+    def _call(*_a, **_k) -> None:
+        calls.append(name)
+        if not raised:
+            raised.append(True)
+            raise exc_type()
+
+    return _call
+
+
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, OSError])
+@pytest.mark.parametrize("restart", [False, True])
+def test_a_failing_log_flush_does_not_skip_the_gateways_way_out(
+    monkeypatch, tmp_path: Path, end_scripts_calls, raised, restart,
+) -> None:
+    """Once asyncio.run has returned, SIGINT is Python's default handler again,
+    so a Ctrl+C during the flush raises out of it, and the flush's thread start
+    can raise too. Neither may skip the re-exec or the leaving of the runs."""
+    from durin.utils import restart as restart_mod
+
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+
+    def _execv(*_a) -> None:
+        end_scripts_calls.append("execv")
+        raise _ProcessExitedError
+
+    monkeypatch.setattr(restart_mod.os, "execv", _execv)
+    monkeypatch.setattr(restart_mod, "_flush_logs_before_exit",
+                        _interrupt_once(raised, end_scripts_calls, "flush"))
+    release, thread = _a_run_thread_alive()
+    try:
+        result, _errors = _run_gateway_whose_teardown_fails(
+            monkeypatch, tmp_path, restart=restart)
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert end_scripts_calls[0] == "flush", result.output
+    if restart:
+        assert end_scripts_calls[1:3] == ["end_scripts", "execv"], end_scripts_calls
+    else:
+        assert end_scripts_calls[1:] == ["end_scripts", "exit"], end_scripts_calls
+        assert codes == [1]
+
+
+@pytest.mark.parametrize(("raised", "code", "logged"), [
+    (lambda: SystemExit(3), 3, True),
+    (lambda: SystemExit(0), 0, False),
+    (KeyboardInterrupt, 130, True),
+    (_channels_did_not_stop, 1, True),
+])
+def test_a_gateway_leaving_its_runs_exits_with_the_code_its_failure_carries(
+    monkeypatch, tmp_path: Path, end_scripts_calls, raised, code, logged,
+) -> None:
+    """An integer SystemExit code is kept (uvicorn's startup failure is 3, and a
+    SystemExit(0) is no error), a KeyboardInterrupt exits 130 as the
+    command-line framework reports it, and anything else exits 1."""
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+    release, thread = _a_run_thread_alive()
+    try:
+        result, errors = _run_gateway_whose_teardown_fails(
+            monkeypatch, tmp_path, restart=False, teardown_raises=raised)
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert isinstance(result.exception, _ProcessExitedError), result.output
+    assert codes == [code]
+    assert any("Gateway: exiting on an error" in line for line in errors) is logged, errors
+
+
+def _serving_crashed() -> BaseException:
+    return RuntimeError("the channels crashed while serving")
+
+
+def test_a_gateway_that_crashed_while_serving_exits_1(
+    monkeypatch, tmp_path: Path, end_scripts_calls,
+) -> None:
+    """A crash while serving is caught inside the gateway, printed and logged,
+    and the gateway then shut down normally: the process exited 0, as if it had
+    been asked to stop."""
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+
+    result, errors = _run_gateway_whose_teardown_fails(
+        monkeypatch, tmp_path, restart=False, teardown_raises=None,
+        serving_raises=_serving_crashed)
+
+    assert result.exit_code == 1, result.output
+    assert codes == []
+    assert "Gateway crashed unexpectedly" in result.output
+    assert any("the channels crashed while serving" in line for line in errors), errors
+
+
+def test_a_gateway_that_crashed_while_serving_with_a_run_in_flight_exits_1(
+    monkeypatch, tmp_path: Path, end_scripts_calls,
+) -> None:
+    codes = _observe_process_exit(monkeypatch, end_scripts_calls)
+    release, thread = _a_run_thread_alive()
+    try:
+        result, _errors = _run_gateway_whose_teardown_fails(
+            monkeypatch, tmp_path, restart=False, teardown_raises=None,
+            serving_raises=_serving_crashed)
+    finally:
+        release.set()
+        thread.join(5)
+
+    assert isinstance(result.exception, _ProcessExitedError), result.output
+    assert codes == [1]
+    assert end_scripts_calls == ["end_scripts", "exit"]
+
+
+def test_a_gateway_that_crashed_while_restarting_reexecs(
+    monkeypatch, tmp_path: Path, end_scripts_calls,
+) -> None:
+    from durin.utils import restart as restart_mod
+
+    _observe_process_exit(monkeypatch, end_scripts_calls)
+
+    def _execv(*_a) -> None:
+        end_scripts_calls.append("execv")
+        raise _ProcessExitedError
+
+    monkeypatch.setattr(restart_mod.os, "execv", _execv)
+    monkeypatch.setattr(restart_mod, "_flush_logs_before_exit",
+                        lambda *_a, **_k: end_scripts_calls.append("flush"))
+
+    result, _errors = _run_gateway_whose_teardown_fails(
+        monkeypatch, tmp_path, restart=True, teardown_raises=None,
+        serving_raises=_serving_crashed)
+
+    assert end_scripts_calls[:3] == ["flush", "end_scripts", "execv"], result.output
 
 
 def _run_gateway_with_fake_uvicorn(
@@ -3854,6 +4091,9 @@ def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
         def stop(self) -> None:
             return None
 
+        def stop_intake(self) -> None:
+            return None
+
     class _FakeChannelManager:
         def __init__(self, _config, _bus, **_kwargs) -> None:
             self.enabled_channels = ["telegram", "discord"]
@@ -3894,7 +4134,9 @@ def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
             return False
 
         async def serve_forever(self) -> None:
-            raise _StopGatewayError("stop")
+            # Stops the gateway the way `durin gateway stop` does.
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.Event().wait()
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
@@ -4034,6 +4276,9 @@ def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
         def stop(self) -> None:
             return None
 
+        def stop_intake(self) -> None:
+            return None
+
     class _FakeChannelManager:
         def __init__(self, _config, _bus, **_kwargs) -> None:
             self.enabled_channels = []
@@ -4080,7 +4325,9 @@ def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
             return False
 
         async def serve_forever(self) -> None:
-            raise _StopGatewayError("stop")
+            # Stops the gateway the way `durin gateway stop` does.
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.Event().wait()
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
@@ -4099,10 +4346,8 @@ def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
     # Unlike _setup_automations_wiring_test's early-stop scaffold (a RAISING
     # fake ChannelManager, whose _StopGatewayError propagates straight out of
-    # gateway_root), this boot runs the coroutine far enough that
-    # _StopGatewayError instead surfaces inside run()'s own top-level
-    # exception handler ("Gateway crashed unexpectedly", logged, swallowed)
-    # — mirroring _setup_full_boot_gateway_test's identical assertion.
+    # gateway_root), this boot runs the gateway until it serves and then stops
+    # it with SIGTERM, so it exits 0 — a crash on the way would exit 1.
     assert result.exit_code == 0
     return seen
 

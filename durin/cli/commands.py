@@ -1802,6 +1802,11 @@ def _run_gateway(
     # restart into a plain stop, and nothing here should still re-exec.
     _restart_timer: threading.Timer | None = None
 
+    # The exception the gateway crashed on while serving: run() catches it,
+    # prints and logs it, and shuts down as for a stop; the process then
+    # exits non-zero.
+    _crashed: Exception | None = None
+
     automations_runtime = AutomationsRuntime(
         config.workspace_path,
         workflow_exec=_automations_workflows_service.execute,
@@ -2198,7 +2203,7 @@ def _run_gateway(
         # Same reason as the dream registration just above: a service-path
         # workflow run's progress frames are published from a worker thread
         # (see _publish_workflow_progress) and need this loop to hop back onto.
-        nonlocal _workflow_progress_loop
+        nonlocal _workflow_progress_loop, _crashed
         _workflow_progress_loop = asyncio.get_running_loop()
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
@@ -2431,9 +2436,10 @@ def _run_gateway(
             await gathered
         except (KeyboardInterrupt, asyncio.CancelledError):
             console.print("\nShutting down...")
-        except Exception:
+        except Exception as exc:
             import traceback
 
+            _crashed = exc
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
@@ -2470,41 +2476,67 @@ def _run_gateway(
             if flushed:
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
-    # A teardown step that raises leaves asyncio.run with the exception. The
-    # way out below is still taken, or a run on its thread would hold the
-    # interpreter's exit: logged first, since a re-exec or the leaving of the
-    # runs never returns, and a failure that leaves the runs exits non-zero.
-    # The log is flushed right away: the file sink queues its writes, and a
-    # re-exec drops whatever is still queued. With nothing to re-exec or
-    # leave, the exception propagates as raised.
+    # A teardown step that raises leaves asyncio.run with the exception; a
+    # crash while serving was caught, printed and logged inside run(). Either
+    # way the way out below is still taken, or a run on its thread would hold
+    # the interpreter's exit, and the exit code reports the failure. The log
+    # is flushed first: the file sink queues its writes, and a re-exec drops
+    # whatever is still queued. Nothing raised by the logging or the flush
+    # skips the re-exec or the leaving of the runs. With neither ending the
+    # process, the exception propagates as raised, or a crash exits 1.
     failure: BaseException | None = None
     try:
         asyncio.run(run())
     except BaseException as exc:
         failure = exc
-        logger.opt(exception=exc).error("Gateway: exiting on an error")
-        from durin.utils.restart import _flush_logs_before_exit
-
-        _flush_logs_before_exit()
     finally:
         set_restart_handler(None)
-    if _restart_requested:
-        # Every subsystem is down now, as a graceful stop leaves it; a fresh
-        # process takes this one's place.
-        reexec()
-    from durin.workflow.run_threads import leave_unfinished_runs
+    if failure is not None:
+        code = _exit_code_of(failure)
+    else:
+        code = 0 if _crashed is None else 1
+    try:
+        if failure is not None and code != 0:
+            logger.opt(exception=failure).error("Gateway: exiting on an error")
+        if code != 0:
+            from durin.utils.restart import _flush_logs_before_exit
 
-    leave_unfinished_runs(code=0 if failure is None else 1)
+            _flush_logs_before_exit()
+    finally:
+        if _restart_requested:
+            # Every subsystem is down now, as a graceful stop leaves it; a
+            # fresh process takes this one's place.
+            reexec()
+        from durin.workflow.run_threads import leave_unfinished_runs
+
+        leave_unfinished_runs(code=code)
     if failure is not None:
         raise failure
+    if _crashed is not None:
+        raise typer.Exit(1)
 
 
-def _leave_unfinished_runs_on_error() -> None:
-    """Called while an exception leaves the terminal UI or the REPL.
+def _exit_code_of(failure: BaseException) -> int:
+    """The exit code a process ending on ``failure`` reports: a SystemExit's
+    own integer code (none is 0), 130 for a KeyboardInterrupt (what the
+    command-line framework exits with for one), and 1 for anything else."""
+    if isinstance(failure, SystemExit):
+        if failure.code is None:
+            return 0
+        return failure.code if isinstance(failure.code, int) else 1
+    if isinstance(failure, KeyboardInterrupt):
+        return 130
+    return 1
+
+
+def _leave_unfinished_runs_on_error(failure: BaseException) -> None:
+    """Called while ``failure`` leaves the terminal UI or the REPL.
 
     With a run still on its thread the interpreter's exit would wait for it,
     so the traceback is printed and the process leaves the run, exiting with
-    code 1. With none this returns, and the caller re-raises the exception.
+    the code ``failure`` carries. The leaving runs whatever the print does: a
+    closed stderr pipe fails it, and a signal during it raises there. With no
+    run on a thread this returns, and the caller re-raises the exception.
     """
     import traceback
 
@@ -2512,8 +2544,10 @@ def _leave_unfinished_runs_on_error() -> None:
 
     if not run_threads.runs_in_flight():
         return
-    traceback.print_exc()
-    run_threads.leave_unfinished_runs(tell_user=True, code=1)
+    try:
+        traceback.print_exception(failure)
+    finally:
+        run_threads.leave_unfinished_runs(tell_user=True, code=_exit_code_of(failure))
 
 
 # ============================================================================
@@ -2656,8 +2690,8 @@ def agent(
                 markdown=markdown,
                 auto_resume=auto_resume,
             )
-        except BaseException:
-            _leave_unfinished_runs_on_error()
+        except BaseException as exc:
+            _leave_unfinished_runs_on_error(exc)
             raise
         run_threads.leave_unfinished_runs(tell_user=True)
         return
@@ -2985,11 +3019,11 @@ def agent(
 
         try:
             asyncio.run(run_interactive())
-        except SystemExit:
-            run_threads.leave_unfinished_runs(tell_user=True)
+        except SystemExit as exc:
+            run_threads.leave_unfinished_runs(tell_user=True, code=_exit_code_of(exc))
             raise
-        except BaseException:
-            _leave_unfinished_runs_on_error()
+        except BaseException as exc:
+            _leave_unfinished_runs_on_error(exc)
             raise
         run_threads.leave_unfinished_runs(tell_user=True)
 
