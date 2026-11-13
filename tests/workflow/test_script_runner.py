@@ -77,6 +77,23 @@ def test_binary_gate_ended_by_a_signal_is_a_failed_step(tmp_path, sig, name):
     assert "started" in err.value.stdout
 
 
+@pytest.mark.parametrize("node", [
+    ScriptNode(id="s", command="kill -TERM $$", next=None),
+    ScriptNode(id="s", command="kill -TERM $$", cases={"A": None, "B": "s"}),
+])
+def test_linear_and_multiway_script_ended_by_a_signal_names_the_signal(tmp_path, node):
+    with pytest.raises(NodeExecutionError) as err:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "script was ended by signal 15 (SIGTERM)" in str(err.value.cause)
+
+
+def test_linear_script_exiting_nonzero_still_names_the_exit_code(tmp_path):
+    node = ScriptNode(id="s", command="exit 3", next=None)
+    with pytest.raises(NodeExecutionError) as err:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "script exited with code 3" in str(err.value.cause)
+
+
 @pytest.mark.parametrize("command,label,code", [
     ("exit 0", "PASS", 0), ("exit 1", "FAIL", 1), ("exit 143", "FAIL", 143)])
 def test_binary_gate_exit_codes_still_route(tmp_path, command, label, code):

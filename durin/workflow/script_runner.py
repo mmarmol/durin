@@ -96,6 +96,20 @@ _exiting = False
 _REAP_LOCK_WAIT_S = 1.0
 
 
+def _script_failure_detail(rc: int, stderr_tail: str) -> str:
+    """Why a script that ended on its own is a failed step: the exit code it
+    returned, or, for a negative code, the signal that ended it."""
+    if rc < 0:
+        try:
+            what = f"signal {-rc} ({signal.Signals(-rc).name})"
+        except ValueError:
+            what = f"signal {-rc}"
+        head = f"script was ended by {what}"
+    else:
+        head = f"script exited with code {rc}"
+    return head + (f": {stderr_tail}" if stderr_tail else "")
+
+
 def _wait_for_exit() -> NoReturn:
     """Hold this thread until the process ends: it has nothing left to do,
     since anything it did now could record the outcome of a script the
@@ -474,12 +488,7 @@ class ScriptNodeRunner:
                 # a verdict the script reached and exited with. Taking the FAIL
                 # route here would carry on down the wrong path as if the check had
                 # run and said no.
-                try:
-                    signame = f"{-rc} ({signal.Signals(-rc).name})"
-                except ValueError:
-                    signame = str(-rc)
-                detail = f"script was ended by signal {signame}" + (
-                    f": {stderr_tail}" if stderr_tail else "")
+                detail = _script_failure_detail(rc, stderr_tail)
                 raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
                                          exit_code=rc, **logs)
             # A non-zero exit's output is what the check printed plus its stderr
@@ -502,7 +511,7 @@ class ScriptNodeRunner:
         if rc != 0:
             # Linear or multi-way node: a non-zero exit is an error, not a verdict —
             # continuing with half-produced output would poison the rest of the run.
-            detail = f"script exited with code {rc}" + (f": {stderr_tail}" if stderr_tail else "")
+            detail = _script_failure_detail(rc, stderr_tail)
             raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
                                      exit_code=rc, **logs)
 

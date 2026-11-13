@@ -262,14 +262,15 @@ def _resolve_durin_argv() -> list[str]:
 
 
 # How long a stop waits for the gateway to shut down by itself before it kills
-# it. A normal stop (uvicorn's exit, the channels, the session flush) takes a
-# few seconds, so this is several times that. It does not cover the worst
-# case of the gateway's teardown: that is a series of steps, each with its own
-# bound (uvicorn's exit, the janitor, the dream and embed workers, the turn
-# drain, the channels, the log flush) whose bounds add up to more than this,
-# and closing the MCP connections and flushing the sessions have none. A
-# gateway still running after this is stuck, and the kill is the backstop.
-_STOP_GRACE_SECONDS = 30.0
+# it. A normal stop takes a few seconds (about 4.7 s measured on a gateway with
+# chat channels) and the call returns as soon as the process is gone, so this
+# is only ever spent on a slow shutdown. It is above the sum of the bounds of
+# the teardown's bounded steps (uvicorn's exit, the janitor, the dream and
+# embed workers, the turn drain, the channels, the log flush), and equals a
+# service manager's default stop timeout. Two steps have no bound: closing the
+# MCP connections and flushing the sessions. A gateway still running after this
+# is stuck, and the kill is the backstop.
+_STOP_GRACE_SECONDS = 90.0
 
 
 def stop_daemon(*, grace_seconds: float = _STOP_GRACE_SECONDS) -> DaemonStatus:

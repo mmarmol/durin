@@ -557,7 +557,7 @@ exits, and those runs can be resumed at the step they were in. A service manager
 should send its stop signal to the gateway's main process only (with systemd,
 `KillMode=mixed`): one that signals every process of the service reaches the scripts
 first, and a script that ends that way counts as its step's outcome: a failed step,
-for a gate too. `durin gateway stop` gives the gateway thirty seconds to shut down by
+for a gate too. `durin gateway stop` gives the gateway ninety seconds to shut down by
 itself and then kills it outright. A run that was cut still shows as running until durin
 finds its process gone: when a gateway that serves the dashboard starts, on its periodic check,
 when the agent's `tasks` tool is asked about it, or when it is resumed. It then
