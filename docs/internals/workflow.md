@@ -237,14 +237,19 @@ read.
 
 **Script routing is exit-code-driven, not text-parsed.** A binary script gate
 (`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
-a positive exit code is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
+anything else is `FAIL` (except a stop signal, below), and the node's output becomes stdout plus a stderr tail plus an
 explicit exit-code note, so the loop-back feedback explains what failed. The note follows
 the same `fail_loops_back` rule as the engine's framing: `[script gate failed: exit code N]`
-when the fail is a loop-back, a plain `[exit code N]` on a forward route. A script that a
-signal ended (a negative `returncode`) never reached a verdict: it is a failed step, the
-same `NodeExecutionError` a linear script's failure raises, naming the signal. A shell that
-reports its child's death as `128 + N` exits with that positive code, which durin cannot
-tell from a deliberate exit code, so it stays `FAIL`. A multi-way
+when the fail is a loop-back, a plain `[exit code N]` on a forward route. A script that
+one of the stop signals (`SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT`, `SIGKILL`) ended (a
+negative `returncode`) never reached a verdict: it is a failed step, the same
+`NodeExecutionError` a linear script's failure raises, naming the signal. Any other ending
+is `FAIL`: a crash signal of the check's own making (`SIGSEGV`, `SIGABRT`, ...) hands the
+signal's name on in the feedback note in place of the exit code. A `command` that is one
+simple command is that process, so a signal that ends it is the script's own ending; when
+the command has more after it, the shell survives a signal that ends only the inner command
+and reports a positive code (128 plus the signal number), which durin cannot tell from a
+deliberate exit code, so it is `FAIL`. A multi-way
 script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
 agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
 a `cases` node, or on a plain linear node with no routing, is a node failure
@@ -1230,7 +1235,8 @@ with no script of it running. That holds because the process ends its scripts it
 its last act. A supervisor that sends the stop signal to every process of the service
 (systemd's default `KillMode=control-group`, for one), not only to the gateway's main
 process, reaches a script before that: a script that ends on it before the last act is
-recorded as its outcome: a failed step, for a gate too.
+recorded as its outcome: a failed step, for a gate too (the signals that ask a process to
+stop are SIGTERM, SIGINT, SIGHUP, SIGQUIT and SIGKILL).
 
 Nothing else ever signals a script: a conversion of a dead run (`mark_dead_run`), a sweep,
 a `tasks` call, a resume and a launch only observe processes (signal 0 is an existence

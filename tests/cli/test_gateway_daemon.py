@@ -242,6 +242,25 @@ def test_stop_daemon_lets_a_slow_graceful_shutdown_finish(isolated_home: Path, t
             p.wait(timeout=3)
 
 
+def test_gateway_stop_says_it_is_waiting_before_it_waits(capsys) -> None:
+    from durin.cli import commands
+    from durin.cli.gateway_daemon import DaemonStatus
+
+    pid_file, log_file = Path("/nonexistent/pid"), Path("/nonexistent/log")
+    seen: list[str] = []
+
+    def fake_stop() -> DaemonStatus:
+        seen.append(capsys.readouterr().out)
+        return DaemonStatus("not_running", None, pid_file, log_file)
+
+    with patch("durin.cli.gateway_daemon.daemon_status",
+               return_value=DaemonStatus("running", 4242, pid_file, log_file)), \
+            patch("durin.cli.gateway_daemon.stop_daemon", fake_stop):
+        commands.gateway_stop()
+
+    assert "Stopping the gateway (pid 4242)" in seen[0]
+
+
 def test_stop_daemon_handles_stale_pid_file(isolated_home: Path) -> None:
     daemon_pid_path().write_text("999999", encoding="utf-8")
     s = stop_daemon()

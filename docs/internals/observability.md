@@ -505,7 +505,7 @@ log file's). An uninstall checks the status after it lists what it removes. The 
 releases it automatically on exit, providing crash-safe singleton enforcement
 that the PID file alone cannot guarantee.
 
-`stop_daemon` sends SIGTERM, polls for exit within a grace window (default 90 s),
+`stop_daemon` sends SIGTERM, polls for exit within a grace window (`_STOP_GRACE_SECONDS`),
 escalates to SIGKILL if needed, then removes the PID file.
 
 **Startup timing.** `_run_gateway` (`durin/cli/commands.py`) logs one INFO
@@ -565,9 +565,10 @@ stop; a shutdown step that raises ends it there, and that exception is logged
 with its traceback ("Gateway: exiting on an error"). Either way the log is then
 flushed, since its file sink queues writes that a re-exec would drop, and the
 gateway re-execs when a `/restart` was requested; otherwise it exits with the
-code the failure carries, whether or not it leaves a run on its thread: a
+code the failure carries when it leaves a run on its thread: a
 `SystemExit`'s own code (a `SystemExit(0)` is not logged as an error and exits
-0), 130 for a `KeyboardInterrupt`, and 1 for a crash or any other exception. A
+0), 130 for a `KeyboardInterrupt`, and 1 for a crash or any other exception. With no
+run on a thread the exception propagates and the command-line framework sets the code. A
 failure in that logging or flush does not skip the re-exec or the exit.
 
 ---

@@ -262,14 +262,16 @@ def _resolve_durin_argv() -> list[str]:
 
 
 # How long a stop waits for the gateway to shut down by itself before it kills
-# it. A normal stop takes a few seconds and the call returns as soon as the
-# process is gone, so this is only ever spent on a slow shutdown. It is above
-# the sum of the bounds of the teardown's bounded steps (uvicorn's exit, the
+# it. A normal stop takes a few seconds (about 4.7 s measured on a gateway with
+# chat channels) and the call returns as soon as the process is gone, so this
+# is only ever spent on a slow shutdown. It is well above a normal stop, and
+# above the bounds of the teardown's bounded steps (uvicorn's exit, the
 # janitor, the dream and embed workers, the turn drain, the channels, the log
-# flush), and equals a
-# service manager's default stop timeout. Two steps have no bound: closing the
-# MCP connections and flushing the sessions. A gateway still running after this
-# is stuck, and the kill is the backstop.
+# flush) when at most one dream worker is running; each further running dream
+# worker adds its own bound. It is not a guarantee: closing the MCP
+# connections, flushing the sessions and the event loop's own teardown have no
+# bound. A gateway still running after this is stuck, and the kill is the
+# backstop.
 _STOP_GRACE_SECONDS = 90.0
 
 

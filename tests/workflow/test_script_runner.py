@@ -66,8 +66,10 @@ def test_binary_gate_nonzero_is_fail_with_stderr_feedback(tmp_path):
     assert "partial" in resp.output and "boom" in resp.output and "exit code 3" in resp.output
 
 
-@pytest.mark.parametrize("sig,name", [("TERM", "SIGTERM"), ("KILL", "SIGKILL")])
-def test_binary_gate_ended_by_a_signal_is_a_failed_step(tmp_path, sig, name):
+@pytest.mark.parametrize("sig,name", [
+    ("TERM", "SIGTERM"), ("INT", "SIGINT"), ("HUP", "SIGHUP"),
+    ("QUIT", "SIGQUIT"), ("KILL", "SIGKILL")])
+def test_binary_gate_stopped_by_a_signal_is_a_failed_step(tmp_path, sig, name):
     node = ScriptNode(id="g", command=f"echo started; kill -{sig} $$", on_pass=None, on_fail="g")
     with pytest.raises(NodeExecutionError) as err:
         runner(tmp_path)(_req(node, tmp_path=tmp_path))
@@ -75,6 +77,16 @@ def test_binary_gate_ended_by_a_signal_is_a_failed_step(tmp_path, sig, name):
     assert name in str(err.value.cause)
     assert err.value.exit_code < 0
     assert "started" in err.value.stdout
+
+
+@pytest.mark.parametrize("sig,num,name", [("SEGV", 11, "SIGSEGV"), ("ABRT", 6, "SIGABRT")])
+def test_binary_gate_that_crashes_on_a_signal_is_a_fail_naming_it(tmp_path, sig, num, name):
+    node = ScriptNode(id="g", command=f"echo partial; kill -{sig} $$", on_pass=None, on_fail="g")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path, fail_loops_back=True))
+    assert resp.route_label == "FAIL" and resp.exit_code == -num
+    assert "partial" in resp.output
+    assert f"script was ended by signal {num} ({name})" in resp.output
+    assert "exit code" not in resp.output
 
 
 @pytest.mark.parametrize("node", [

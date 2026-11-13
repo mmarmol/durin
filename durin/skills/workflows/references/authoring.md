@@ -137,7 +137,7 @@ buffer (the buffer passes through it untouched).
 | `inputs_from` | array of strings | `[]` | Same named-inputs contract as a work node's `inputs_from` (see above); the composed blocks arrive on the script's stdin. |
 
 **Routing semantics (all deterministic):**
-- **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, positive exit code = FAIL** (a script ended by a signal is a failed step, not a FAIL); on FAIL the loop-back
+- **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, anything else = FAIL**, except a script stopped by a signal (`SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT`, `SIGKILL`), which is a failed step; on FAIL the loop-back
   feedback is the script's output plus its stderr tail and exit code, so the producer knows
   what to fix. `command: "run-my-tests"` as a gate is the canonical use. The exit note reads
   `[script gate failed: exit code N]` only when that framing is "Reviewer feedback" (above);
@@ -148,7 +148,7 @@ buffer (the buffer passes through it untouched).
 - **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
   A non-zero exit on a `cases` node is a node failure, not a route.
 - **Linear** (`next`): exit 0 continues with stdout as the edge; **non-zero aborts the run**
-  naming the node and exit code — in a gate a non-zero exit is a verdict, in a linear step
+  naming the node and exit code — in a gate a non-zero exit is a verdict (a stop signal aside), in a linear step
   it is an error.
 - Agent-only fields (`model`, `persona`, `prompt`, `mode`, `tools`, `context`, `session`,
   `skills`, `mcps`, `max_turns`, `max_reentries`, `reentry_prompt`) are **rejected** on a script node.

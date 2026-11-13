@@ -96,6 +96,12 @@ _exiting = False
 _REAP_LOCK_WAIT_S = 1.0
 
 
+# The signals that ask a process to stop. A script ended by one of these was
+# stopped by something else, not by what it checks.
+_STOP_SIGNALS = frozenset(int(s) for s in (
+    signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGKILL))
+
+
 def _script_failure_detail(rc: int, stderr_tail: str) -> str:
     """Why a script that ended on its own is a failed step: the exit code it
     returned, or, for a negative code, the signal that ended it."""
@@ -483,11 +489,13 @@ class ScriptNodeRunner:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
                                        route_label="PASS", exit_code=rc,
                                        output_truncated=truncated, **logs)
-            if rc < 0:
-                # A signal ended the script, so it never answered: a gate's FAIL is
-                # a verdict the script reached and exited with. Taking the FAIL
-                # route here would carry on down the wrong path as if the check had
-                # run and said no.
+            if -rc in _STOP_SIGNALS:
+                # Something asked the script to stop and it did, so it never
+                # answered: a gate's FAIL is a verdict the check reached. Taking
+                # the FAIL route here would carry on down the wrong path as if
+                # the check had run and said no. Any other ending (a positive
+                # code, or a crash signal of the check's own making) is a verdict
+                # the check gave, and stays a FAIL.
                 detail = _script_failure_detail(rc, stderr_tail)
                 raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
                                          exit_code=rc, **logs)
@@ -497,8 +505,9 @@ class ScriptNodeRunner:
             # says the gate failed; otherwise it is the check's normal "no", so the
             # note stays a plain exit code instead of reporting a failure that never
             # happened.
-            exit_note = (f"[script gate failed: exit code {rc}]" if req.fail_loops_back
-                         else f"[exit code {rc}]")
+            ending = f"exit code {rc}" if rc > 0 else _script_failure_detail(rc, "")
+            exit_note = (f"[script gate failed: {ending}]" if req.fail_loops_back
+                         else f"[{ending}]")
             parts = [p for p in (
                 self._cap(stdout).strip(),
                 f"[stderr]\n{stderr_tail}" if stderr_tail else "",

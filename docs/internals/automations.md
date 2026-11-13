@@ -461,7 +461,7 @@ reserved and named in the interrupted notice. If the automation was disabled whi
 the gateway was down, the run finalizes `"interrupted"` with no replacement and says
 why — `fire` itself ignores `enabled` (a manual run-now must still work on a paused
 automation), so this sweep is the one place that switch is honored for a run nobody
-explicitly asked for. If the automation was deleted while the gateway was down, there
+explicitly asked for. If the automation was deleted since the run started, there
 is no definition to route an outcome with: the run finalizes `"interrupted"` ("its
 automation was deleted"), `automations.run_finished` is emitted, and nothing is delivered
 and no chain fires. It must not stay `"running"`, or it would hold the concurrency slot of

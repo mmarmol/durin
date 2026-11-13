@@ -1138,6 +1138,7 @@ def gateway_stop() -> None:
         )
         stop_daemon()
         return
+    console.print(f"Stopping the gateway (pid {before.pid})...")
     after = stop_daemon()
     if after.state == "not_running":
         console.print(f"[green]✓[/green] Gateway stopped (was pid {before.pid})")

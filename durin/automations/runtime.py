@@ -482,7 +482,7 @@ class AutomationsRuntime:
             try:
                 spec = load_automation(self._ws, automation_name)
             except AutomationNotFoundError:
-                # Deleted while the gateway was down. Left `running`, the run
+                # Deleted since the run started. Left `running`, the run
                 # would hold a concurrency slot for any automation later
                 # created under the same name. With no definition there is
                 # nothing to route an outcome with, so none is delivered and no
