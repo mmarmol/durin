@@ -469,6 +469,19 @@ class ScriptNodeRunner:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
                                        route_label="PASS", exit_code=rc,
                                        output_truncated=truncated, **logs)
+            if rc < 0:
+                # A signal ended the script, so it never answered: a gate's FAIL is
+                # a verdict the script reached and exited with. Taking the FAIL
+                # route here would carry on down the wrong path as if the check had
+                # run and said no.
+                try:
+                    signame = f"{-rc} ({signal.Signals(-rc).name})"
+                except ValueError:
+                    signame = str(-rc)
+                detail = f"script was ended by signal {signame}" + (
+                    f": {stderr_tail}" if stderr_tail else "")
+                raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
+                                         exit_code=rc, **logs)
             # A non-zero exit's output is what the check printed plus its stderr
             # tail and exit code. Into a step that leads back to this gate on a
             # route of its own (req.fail_loops_back), it is loop-back feedback and
