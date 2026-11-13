@@ -1807,6 +1807,10 @@ def _run_gateway(
     # exits non-zero.
     _crashed: Exception | None = None
 
+    # Set when a configured port is already in use: the gateway starts nothing,
+    # and the process exits non-zero.
+    _ports_taken = False
+
     automations_runtime = AutomationsRuntime(
         config.workspace_path,
         workflow_exec=_automations_workflows_service.execute,
@@ -2203,7 +2207,7 @@ def _run_gateway(
         # Same reason as the dream registration just above: a service-path
         # workflow run's progress frames are published from a worker thread
         # (see _publish_workflow_progress) and need this loop to hop back onto.
-        nonlocal _workflow_progress_loop, _crashed
+        nonlocal _workflow_progress_loop, _crashed, _ports_taken
         _workflow_progress_loop = asyncio.get_running_loop()
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
@@ -2213,6 +2217,7 @@ def _run_gateway(
         # handlers so SIGTERM/SIGINT/SIGHUP all trigger a logged,
         # graceful shutdown.
         if not _check_ports_free():
+            _ports_taken = True
             return
         loop = asyncio.get_running_loop()
         gathered: asyncio.Future | None = None
@@ -2512,7 +2517,7 @@ def _run_gateway(
         leave_unfinished_runs(code=code)
     if failure is not None:
         raise failure
-    if _crashed is not None:
+    if _crashed is not None or _ports_taken:
         raise typer.Exit(1)
 
 

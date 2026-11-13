@@ -2516,9 +2516,12 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
             return False
 
         async def serve_forever(self) -> None:
-            # Stops the gateway the way `durin gateway stop` does.
+            # Stops the gateway the way `durin gateway stop` does. The stop
+            # cancels this wait; a stop that does not land surfaces as a crash
+            # (exit 1) instead of hanging the test.
             signal.raise_signal(signal.SIGTERM)
-            await asyncio.Event().wait()
+            await asyncio.sleep(5)
+            raise _StopGatewayError("SIGTERM did not shut the gateway down")
 
     async def _fake_start_server(handler, host: str, port: int):
         captured["handler"] = handler
@@ -2694,9 +2697,12 @@ def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path:
             return False
 
         async def serve_forever(self) -> None:
-            # Stops the gateway the way `durin gateway stop` does.
+            # Stops the gateway the way `durin gateway stop` does. The stop
+            # cancels this wait; a stop that does not land surfaces as a crash
+            # (exit 1) instead of hanging the test.
             signal.raise_signal(signal.SIGTERM)
-            await asyncio.Event().wait()
+            await asyncio.sleep(5)
+            raise _StopGatewayError("SIGTERM did not shut the gateway down")
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
@@ -3518,9 +3524,8 @@ def _serving_crashed() -> BaseException:
 def test_a_gateway_that_crashed_while_serving_exits_1(
     monkeypatch, tmp_path: Path, end_scripts_calls,
 ) -> None:
-    """A crash while serving is caught inside the gateway, printed and logged,
-    and the gateway then shut down normally: the process exited 0, as if it had
-    been asked to stop."""
+    """A crash while serving is caught inside the gateway, printed and logged;
+    the gateway shuts down and, with no run on a thread, exits 1."""
     codes = _observe_process_exit(monkeypatch, end_scripts_calls)
 
     result, errors = _run_gateway_whose_teardown_fails(
@@ -4045,10 +4050,9 @@ def test_a_uvicorn_that_does_not_exit_is_cancelled_after_the_bound(
 
 def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
     """Shared scaffold for boot-order tests: a full gateway boot (through
-    `cron.start()` and the boot-order migrate/sync block) that reaches
-    `result.exit_code == 0` via _FakeServer.serve_forever raising
-    _StopGatewayError, mirroring test_gateway_starts_the_automations_orphan_sweep_task's
-    fixture set exactly. Returns config with an explicit, hermetic workspace."""
+    `cron.start()` and the boot-order migrate/sync block) that serves until
+    _FakeServer.serve_forever stops it with SIGTERM, so it exits 0, mirroring
+    test_gateway_starts_the_automations_orphan_sweep_task's fixture set exactly. Returns config with an explicit, hermetic workspace."""
     config_file = _write_instance_config(tmp_path)
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "ws")
@@ -4134,9 +4138,12 @@ def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
             return False
 
         async def serve_forever(self) -> None:
-            # Stops the gateway the way `durin gateway stop` does.
+            # Stops the gateway the way `durin gateway stop` does. The stop
+            # cancels this wait; a stop that does not land surfaces as a crash
+            # (exit 1) instead of hanging the test.
             signal.raise_signal(signal.SIGTERM)
-            await asyncio.Event().wait()
+            await asyncio.sleep(5)
+            raise _StopGatewayError("SIGTERM did not shut the gateway down")
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
@@ -4193,6 +4200,30 @@ def test_gateway_migration_failure_does_not_crash_boot(monkeypatch, tmp_path: Pa
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert result.exit_code == 0
+
+
+def test_a_gateway_whose_port_is_taken_exits_1(monkeypatch, tmp_path: Path) -> None:
+    """A port already in use stops the start with guidance. That is a failure:
+    the gateway serves nothing, and the exit code says so instead of 0."""
+    import socket
+
+    from durin.utils.net import port_is_available
+
+    config, config_file = _setup_full_boot_gateway_test(monkeypatch, tmp_path)
+    # The scaffold reports every port free; this test probes for real.
+    monkeypatch.setattr("durin.utils.net.port_is_available", port_is_available)
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    held.listen(1)
+    try:
+        config.gateway.host = "127.0.0.1"
+        config.gateway.port = held.getsockname()[1]
+        result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    finally:
+        held.close()
+
+    assert "already in use" in result.output
+    assert result.exit_code == 1, result.output
 
 
 def test_gateway_boot_builds_the_alias_index_in_the_background(monkeypatch, tmp_path: Path) -> None:
@@ -4325,9 +4356,12 @@ def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
             return False
 
         async def serve_forever(self) -> None:
-            # Stops the gateway the way `durin gateway stop` does.
+            # Stops the gateway the way `durin gateway stop` does. The stop
+            # cancels this wait; a stop that does not land surfaces as a crash
+            # (exit 1) instead of hanging the test.
             signal.raise_signal(signal.SIGTERM)
-            await asyncio.Event().wait()
+            await asyncio.sleep(5)
+            raise _StopGatewayError("SIGTERM did not shut the gateway down")
 
     async def _fake_start_server(handler, host: str, port: int):
         return _FakeServer()
