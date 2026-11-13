@@ -15,6 +15,7 @@ from durin.workflow.engine import (
 )
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
+from tests.workflow.self_signal import self_signal_command
 
 
 def fake_agent_runner(outputs):
@@ -85,7 +86,7 @@ def test_script_gate_fail_loops_back_with_feedback(tmp_path):
 
 def test_script_gate_ended_by_a_signal_aborts_instead_of_taking_the_fail_route(tmp_path):
     wf = parse_workflow({"name": "t", "start": "g", "nodes": [
-        {"id": "g", "kind": "script", "command": "kill -TERM $$",
+        {"id": "g", "kind": "script", "command": self_signal_command("TERM"),
          "on_pass": None, "on_fail": "fix"},
         {"id": "fix", "prompt": "fix it", "next": None},
     ]})

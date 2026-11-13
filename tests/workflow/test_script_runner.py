@@ -6,6 +6,7 @@ import pytest
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, ScriptCancelledError
 from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
+from tests.workflow.self_signal import self_signal_command
 
 
 def _req(node, upstream=None, tmp_path=None, iteration=1, cancel_check=None,
@@ -70,7 +71,8 @@ def test_binary_gate_nonzero_is_fail_with_stderr_feedback(tmp_path):
     ("TERM", "SIGTERM"), ("INT", "SIGINT"), ("HUP", "SIGHUP"),
     ("QUIT", "SIGQUIT"), ("KILL", "SIGKILL")])
 def test_binary_gate_stopped_by_a_signal_is_a_failed_step(tmp_path, sig, name):
-    node = ScriptNode(id="g", command=f"echo started; kill -{sig} $$", on_pass=None, on_fail="g")
+    node = ScriptNode(id="g", command=self_signal_command(sig, before="echo started"),
+                      on_pass=None, on_fail="g")
     with pytest.raises(NodeExecutionError) as err:
         runner(tmp_path)(_req(node, tmp_path=tmp_path))
     assert "script was ended by signal" in str(err.value.cause)
@@ -81,7 +83,8 @@ def test_binary_gate_stopped_by_a_signal_is_a_failed_step(tmp_path, sig, name):
 
 @pytest.mark.parametrize("sig,num,name", [("SEGV", 11, "SIGSEGV"), ("ABRT", 6, "SIGABRT")])
 def test_binary_gate_that_crashes_on_a_signal_is_a_fail_naming_it(tmp_path, sig, num, name):
-    node = ScriptNode(id="g", command=f"echo partial; kill -{sig} $$", on_pass=None, on_fail="g")
+    node = ScriptNode(id="g", command=self_signal_command(sig, before="echo partial"),
+                      on_pass=None, on_fail="g")
     resp = runner(tmp_path)(_req(node, tmp_path=tmp_path, fail_loops_back=True))
     assert resp.route_label == "FAIL" and resp.exit_code == -num
     assert "partial" in resp.output
@@ -90,8 +93,8 @@ def test_binary_gate_that_crashes_on_a_signal_is_a_fail_naming_it(tmp_path, sig,
 
 
 @pytest.mark.parametrize("node", [
-    ScriptNode(id="s", command="kill -TERM $$", next=None),
-    ScriptNode(id="s", command="kill -TERM $$", cases={"A": None, "B": "s"}),
+    ScriptNode(id="s", command=self_signal_command("TERM"), next=None),
+    ScriptNode(id="s", command=self_signal_command("TERM"), cases={"A": None, "B": "s"}),
 ])
 def test_linear_and_multiway_script_ended_by_a_signal_names_the_signal(tmp_path, node):
     with pytest.raises(NodeExecutionError) as err:
