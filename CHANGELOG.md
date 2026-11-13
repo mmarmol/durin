@@ -5,6 +5,58 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.14.1 — 2026-11-13
+
+### Highlights
+
+- **A gate that was stopped does not answer "no".** When the stop signal
+  reached a gate's script together with the gateway — what a service manager
+  that signals every process of the service does on a restart — the gate
+  answered `FAIL`, the run went down that route and ended `completed` on the
+  wrong path. A script ended by `SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT` or
+  `SIGKILL` is now a failed step: the run stops at the gate and can be retried
+  there. Any other ending with a non-zero status is still `FAIL`, a check that
+  crashes by itself included. (#747)
+- **`durin gateway stop` gives the gateway time to stop.** It killed the
+  gateway after five seconds, about what a gateway with chat channels needs,
+  so with a run in flight the gateway was killed before it ended its scripts.
+  It now waits ninety seconds, says it is stopping the gateway, and returns as
+  soon as the process is gone. (#747)
+
+### Changes
+
+#### Workflows
+
+- A script that a signal ended says which signal ("script was ended by signal
+  15 (SIGTERM)") instead of a negative exit code, in a failed step and in a
+  gate's feedback. (#747)
+
+#### Gateway and command line
+
+- A gateway whose shutdown fails, and a REPL or terminal UI that ends on an
+  error, exit even with a workflow run still in flight. They waited for that
+  run, which could no longer reach anything. The error is logged or printed
+  first. (#747)
+- An exit keeps the code of what caused it: 130 for an interrupt, the code of
+  an explicit exit, 1 for an error. (#747)
+- A gateway that crashed while serving, or that could not start because its
+  port was taken, exits 1. Both exited 0. A service manager that restarts on
+  failure now restarts a crashed gateway. (#747)
+
+#### Automations
+
+- A run cut by a restart whose automation was deleted meanwhile is ended as
+  interrupted. It stayed running for good, and an automation created later
+  under the same name could not start. (#747)
+
+#### Upgrading
+
+- Under a service manager that signals every process of the service, a restart
+  with a gate's script in flight now leaves that run stopped at the gate,
+  retryable, instead of completed on the wrong route. Signalling only the
+  gateway's main process (with systemd, `KillMode=mixed`) lets the gateway end
+  its scripts itself, and the run is then resumable where it was cut.
+
 ## 0.14.0 — 2026-11-12
 
 A workflow run outlives the process that was running it.
