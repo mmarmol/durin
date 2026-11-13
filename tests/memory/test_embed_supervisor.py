@@ -1,6 +1,7 @@
 """Gateway supervision of the standing embedding server."""
 from __future__ import annotations
 
+import os
 import sys
 import textwrap
 import time
@@ -131,3 +132,11 @@ def test_stop_terminates_server_and_clears_discovery(fake_server, tmp_path, monk
     sup.stop_embed_server(grace_s=2.0)
     assert proc.wait(timeout=10) is not None
     assert not (tmp_path / "embed-server.json").exists()
+
+
+def test_server_argv_names_the_supervising_process():
+    from durin.memory.embed_supervisor import _server_argv
+
+    argv = _server_argv(4321)
+    assert argv[argv.index("--parent-pid") + 1] == str(os.getpid())
+    assert argv[argv.index("--port") + 1] == "4321"

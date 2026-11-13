@@ -9,6 +9,7 @@ through the discovery file it maintains.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -38,7 +39,7 @@ _thread: threading.Thread | None = None
 def _server_argv(port: int) -> list[str]:
     return [
         sys.executable, "-m", "durin", "memory", "embed-server",
-        "--port", str(port),
+        "--port", str(port), "--parent-pid", str(os.getpid()),
     ]
 
 
