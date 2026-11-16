@@ -183,7 +183,8 @@ things the agent did to a skill during a turn:
 
 Each event payload is the call dict itself: `{skill, op, turn}`, plus `ok` on
 a `run` whose outcome is known, optionally carrying `iteration` and
-`session_key`. Because this fires per call rather than
+`session_key`. `turn` is the 1-based place of the call's message in the
+session, the numbering a transcript line is cited by. Because this fires per call rather than
 per turn, a turn that views two skills and edits one emits three separate
 `skill.used` events. `emit_skill_used` is best-effort and a no-op on an empty
 call list. `_state_save` runs after the turn's run has released its telemetry

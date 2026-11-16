@@ -185,3 +185,34 @@ def test_run_extract_for_session_skill_signals_off_logs_nothing(tmp_path):
         ws, p, llm_invoke=boom, discover=False, skill_signals=False)
     assert res["skill_signals"] == []
     assert open_observations(ws) == []
+
+
+def test_a_catalog_larger_than_the_budget_still_names_every_skill(tmp_path):
+    """A skill the pass cannot see reads as a gap. When the catalog outgrows
+    its budget the descriptions shrink; no name is dropped."""
+    from durin.agent.skill_signals import _CATALOG_CHARS, _catalog_text
+
+    names = [f"procedure-number-{i:03d}-for-some-system" for i in range(150)]
+    for name in names:
+        skill = tmp_path / "skills" / name / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(f"---\nname: {name}\ndescription: {'Does a long thing. ' * 20}\n"
+                         f"---\n# {name}\n", encoding="utf-8")
+
+    text = _catalog_text(tmp_path)
+
+    assert all(f"- {name}" in text for name in names)
+    assert "not listed" not in text
+    assert len(text) <= _CATALOG_CHARS
+
+
+def test_a_small_catalog_keeps_its_descriptions(tmp_path):
+    from durin.agent.skill_signals import _catalog_text
+
+    skill = tmp_path / "skills" / "release-runbook" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: release-runbook\ndescription: Cut a release and "
+                     "publish its notes\n---\n# Release\n", encoding="utf-8")
+
+    assert "- release-runbook: Cut a release and publish its notes" in _catalog_text(
+        tmp_path).splitlines()

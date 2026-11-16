@@ -299,3 +299,22 @@ def test_event_reports_the_number_of_flags_changed(tmp_path, monkeypatch):
     run_always_on_pass(tmp_path, token_budget=10_000)
     changed = [d["changed"] for n, d in events if n == "memory.dream.always_on"]
     assert changed == [2, 0]
+
+
+def test_a_page_removed_while_the_pass_runs_is_not_brought_back(tmp_path):
+    """The pass reads the pages, ranks them, then flags them. One removed in
+    between has nothing left to flag: writing the flag anyway would re-create
+    it as an empty page that is pinned into every prompt."""
+    _feedback(tmp_path, "practice:verify", "Verify live before claiming done.", "Verify")
+    _feedback(tmp_path, "stance:gone", "This rule is being deleted.", "Gone")
+    gone = tmp_path / "memory" / "entities" / "stance" / "gone.md"
+
+    def rank_and_remove(prompt, **kw):
+        gone.unlink()            # removed after the pass read it
+        return "practice:verify\nstance:gone"
+
+    out = run_always_on_pass(tmp_path, token_budget=10_000, llm_invoke=rank_and_remove)
+
+    assert not gone.exists()
+    assert list_always_on(tmp_path) == ["practice:verify"]
+    assert out["changed"] == 1

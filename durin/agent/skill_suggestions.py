@@ -11,6 +11,7 @@ unchanged manual skills WITHOUT writing to the user's skill files.
 from __future__ import annotations
 
 import difflib
+import functools
 import hashlib
 import json
 import logging
@@ -38,6 +39,20 @@ def _tombstones_path(workspace: Path) -> Path:
 
 def _cursor_path(workspace: Path) -> Path:
     return _skills_dir(workspace) / ".suggestion_cursor.json"
+
+
+def _under_store_lock(fn):
+    """Run ``fn`` holding the skills store's write lock. The gateway (a person
+    accepting or rejecting a suggestion) and the dream worker (the pass that
+    queues them) both read-modify-write these files; unlocked, one process's
+    update overwrites the other's. Reentrant, and the same lock the store's
+    commits take."""
+    @functools.wraps(fn)
+    def wrapper(workspace, *args, **kwargs):
+        from durin.agent.skills_store import _store
+        with _store(Path(workspace)).write_lock():
+            return fn(workspace, *args, **kwargs)
+    return wrapper
 
 
 def _normalize(s: str) -> str:
@@ -114,6 +129,7 @@ def get_suggestion(workspace: Path, fingerprint_: str) -> dict | None:
     return None
 
 
+@_under_store_lock
 def add_suggestion(workspace: Path, action: dict) -> dict:
     """Enqueue a suggestion (newest wins per fingerprint). Returns the record."""
     fp = fingerprint(action)
@@ -143,6 +159,7 @@ def add_suggestion(workspace: Path, action: dict) -> dict:
     return rec
 
 
+@_under_store_lock
 def remove_suggestion(workspace: Path, fingerprint_: str) -> None:
     p = _suggestions_path(workspace)
     if not p.exists():
@@ -160,6 +177,7 @@ def remove_suggestion(workspace: Path, fingerprint_: str) -> None:
         logger.exception("failed to rewrite suggestion queue")
 
 
+@_under_store_lock
 def add_tombstone(workspace: Path, fingerprint_: str) -> None:
     """Record a rejected conclusion with its timestamp (for TTL-based expiry)."""
     p = _tombstones_path(workspace)
@@ -177,6 +195,7 @@ def add_tombstone(workspace: Path, fingerprint_: str) -> None:
         logger.exception("failed to write suggestion tombstones")
 
 
+@_under_store_lock
 def is_tombstoned(workspace: Path, fingerprint_: str, *,
                   ttl_days: int = DEFAULT_TTL_DAYS) -> bool:
     """True when a non-expired rejection tombstone covers this conclusion.
@@ -235,6 +254,7 @@ def needs_suggestion(workspace: Path, name: str) -> bool:
     return stored != cur
 
 
+@_under_store_lock
 def mark_suggested(workspace: Path, name: str) -> None:
     cur = _body_hash(workspace, name)
     if cur is None:

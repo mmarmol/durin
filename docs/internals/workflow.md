@@ -2571,7 +2571,9 @@ End-to-end for a single `run_workflow` call:
     proposal, why the scope refused it, the diagnostic evidence) as a `kind:
     structural` recommendation. The webui renders it as an escalation card with a
     copy-for-chat action so the user can treat it in a session; `apply` refuses it in
-    code.
+    code. Its identity is what it proposes, without the `reason` sentence: the same
+    idea explained in new words on a later pass raises the record's `count` instead
+    of queueing another.
 
   Every prompt/command write lands through
   `durin/workflow/editing.py::save_workflow_definition` — the single sanctioned path

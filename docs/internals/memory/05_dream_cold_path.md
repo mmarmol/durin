@@ -300,13 +300,23 @@ skill-extract passes also do — and calls
    preferences, corrections, standing constraints, and stable project facts. It
    writes each result as a `feedback`, `stance`, or `practice` entity with
    `author="dream"` (never a `person` or other principal type). The prompt is
-   **seeded with the full set of existing learning-type entities** (via
-   `build_entity_manifest(types=[...])`) so the LLM can reuse a known ref instead
-   of minting a new slug. Each proposed ref is additionally resolved against the
-   alias index (and optionally the vector index) using the same lexical+semantic
-   canonical resolution the discover path applies: a re-worded fact updates the
-   existing entity in place rather than creating a duplicate slug. The refine pass
-   remains the cross-run backstop for any duplicates that slip through. Gated by
+   **seeded with existing learning-type entities, each with its full body**
+   (`full_body_entries`, `durin/memory/entity_manifest.py`) so the LLM can reuse a
+   known ref instead of minting a new slug. The seed is bounded: it lists the
+   types in order (`feedback`, `stance`, `practice`), each in slug order, and keeps
+   the first 40, so a workspace with more than 40 `feedback` pages shows no
+   `stance` or `practice` page.
+   Each proposed ref is additionally resolved against the alias index (and
+   optionally the vector index) using the same lexical+semantic canonical
+   resolution the discover path applies: a re-worded fact updates the existing
+   entity in place rather than creating a duplicate slug.
+
+   The write is a `body_replace`, so **a body is replaced only by an answer that
+   was shown it**. A learning can resolve to a page that was not in the seed. Such
+   a learning is not written from that answer: the piece is asked again with
+   exactly those pages shown, and only what the second answer says about them is
+   written. A page the second answer does not mention keeps its body. The refine
+   pass remains the cross-run backstop for any duplicates that slip through. Gated by
    `memory.dream.learnings_sweep_enabled` (default true). An empty piece or a
    parse failure yields an empty list without aborting the session.
 8. After the last piece, set the cursor to the total turn count via
@@ -901,6 +911,10 @@ rule.
   priority order and **drops any item contradicting a higher-priority one**. If
   the call raises or names no known ref, the order above applies.
 
+A candidate removed while the pass runs is left out: the pass flags pages it
+found on disk (`mark_always_on(..., create=False)`), so a removed page is not
+re-created as an empty one that carries only the flag.
+
 **Stability.** `mark_always_on` is a *curation write*
 (`write_entity(..., curation=True)`): on an existing page it changes neither
 `updated_at` nor the page-level author, so `updated_at` keeps meaning "the
@@ -1105,10 +1119,14 @@ on the default provider (see `docs/internals/providers.md`).
   that, past the memory gate and the shared `ReactiveDreamGate`, spawns the
   worker in `reactive` mode — the **extract pass only**.
   Separately, the consolidator itself runs a **compaction backstop**
-  (`Consolidator.extract_learnings`) immediately before firing the hook: it calls
+  (`Consolidator.extract_learnings`) right after firing the hook: it calls
   the LLM over the archived span to distil durable user learnings (preferences,
-  corrections, standing constraints, stable personal facts) and writes them as
-  `feedback`/`stance`/`practice`/`person` entities with `author="agent"`. This
+  corrections, standing constraints) and writes them as
+  `feedback`/`stance`/`practice` entities with `author="agent"`; a ref of any
+  other type is skipped. This call shows the model no existing learning, so it
+  only adds: the write is `body_if_absent`, and a ref that already holds a body
+  keeps it — refining an existing learning is the nightly sweep's job, which
+  shows the bodies it may replace. This
   catches learnings that the live-agent capture directive may not have persisted
   during the session. It is best-effort — a failure never breaks consolidation —
   and dedup is delegated to the dream's refine pass. The backstop is gated by

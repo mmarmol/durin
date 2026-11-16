@@ -410,6 +410,22 @@ _CITED_REF_MARKER_RE = re.compile(
 _CITED_REF_TOOLS = frozenset({"memory_search", "memory_drill"})
 _MAX_CITED_REFS = 20
 
+# What the compaction learnings prompt puts where the nightly sweep lists the
+# existing learnings: this call lists none, and writes none over an existing one.
+_NO_LEARNINGS_SHOWN = "(none shown)"
+
+
+def _learning_has_body(workspace: Path, ref: str) -> bool:
+    """Whether ``ref`` names an entity page that already has text in its body."""
+    from durin.memory.entity_page import EntityPage
+
+    type_, _, slug = ref.partition(":")
+    if not type_ or not slug:
+        return False
+    path = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
+    page = EntityPage.from_file(path) if path.is_file() else None
+    return page is not None and bool((page.body or "").strip())
+
 
 def extract_cited_memory_refs(messages: list[dict[str, Any]]) -> list[str]:
     """Distinct memory refs surfaced by memory tools in *messages*.
@@ -1455,9 +1471,9 @@ class Consolidator:
     ) -> list[dict[str, str]]:
         """Extract durable user learnings from a span via LLM (best-effort).
 
-        Mirrors extract_decisions but targets feedback/stance/practice/person
-        entities: preferences, corrections, standing constraints, and stable
-        personal facts about the user. Returns a list of
+        Mirrors extract_decisions but targets feedback/stance/practice
+        entities: preferences, corrections and standing constraints (the
+        caller skips a ref of any other type). Returns a list of
         {"ref": str, "name": str, "body": str} objects, or [] on empty input,
         empty LLM output, or any failure (must never crash compaction).
         """
@@ -1475,6 +1491,7 @@ class Consolidator:
                         "role": "system",
                         "content": render_template(
                             "agent/consolidator_learnings.md",
+                            existing=_NO_LEARNINGS_SHOWN,
                             strip=True,
                         ),
                     },
@@ -2011,12 +2028,19 @@ class Consolidator:
                                 ref, ref_type,
                             )
                             continue
+                        # This call shows the model no existing learning,
+                        # so it can only add. A ref that already holds a
+                        # body is left exactly as it is — no new body, no
+                        # rename, no new date: the nightly sweep, which does
+                        # show the bodies it may replace, refines those.
+                        if _learning_has_body(self.store.workspace, ref):
+                            continue
                         write_entity(
                             self.store.workspace,
                             ref,
                             [
                                 FieldPatch(
-                                    kind="body_replace",
+                                    kind="body_if_absent",
                                     value=body,
                                     author="agent",
                                     source_ref=session_ref,

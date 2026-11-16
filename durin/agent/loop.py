@@ -4355,15 +4355,6 @@ class AgentLoop:
         from durin.session.goal_state import increment_goal_turns
         increment_goal_turns(ctx.session.metadata)
 
-        # E2 Part A: durable skill-usage signal. Scan only THIS turn's new
-        # messages (the same slice _save_turn persists) so calls aren't
-        # re-counted every turn as the conversation accumulates.
-        _new_messages = ctx.all_messages[ctx.save_skip:]
-        _skill_calls = extract_skill_calls(_new_messages, workspace=self.workspace)
-        if _skill_calls:
-            ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
-            emit_skill_used(_skill_calls, session_key=ctx.session.key)
-
         # The turn's prefetch refs die with the turn: the next message gets
         # its own block, and a stale binding would silently collapse hits
         # the model never saw. None here means either no prefetch landed
@@ -4389,11 +4380,23 @@ class AgentLoop:
         )
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
-        self._save_turn(
+        saved_at = self._save_turn(
             ctx.session, ctx.all_messages, ctx.save_skip,
             turn_latency_ms=ctx.turn_latency_ms,
             tool_events=ctx.tool_events,
         )
+        # Durable skill-usage signal. Scan only THIS turn's new messages (the
+        # slice _save_turn just persisted) so calls aren't re-counted every
+        # turn as the conversation accumulates. Read from the run's own
+        # messages, whose tool results are whole, and stamp each use with the
+        # place its message was saved at.
+        _new_messages = ctx.all_messages[ctx.save_skip:]
+        _skill_calls = extract_skill_calls(
+            _new_messages, workspace=self.workspace,
+            turns=[saved_at.get(ctx.save_skip + i) for i in range(len(_new_messages))])
+        if _skill_calls:
+            ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
+            emit_skill_used(_skill_calls, session_key=ctx.session.key)
         if ctx.msg.channel == "websocket":
             self._pending_turn_latency_ms[ctx.session_key] = ctx.turn_latency_ms
         ctx.session.enforce_file_cap(
@@ -4491,8 +4494,13 @@ class AgentLoop:
         *,
         turn_latency_ms: int | None = None,
         tool_events: list[dict[str, Any]] | None = None,
-    ) -> None:
+    ) -> dict[int, int]:
         """Save new-turn messages into session, truncating large tool results.
+
+        Returns where each saved message landed: its index in ``messages``
+        mapped to its 1-based position in ``session.messages``. A message the
+        save leaves out (an empty assistant message, a user message that was
+        only runtime context) has no entry.
 
         When ``tool_events`` is provided, also writes one ``type=tool_call``
         event to the per-session meta file for each tool call emitted by
@@ -4518,7 +4526,8 @@ class AgentLoop:
         cap = self._saved_result_cap()
 
         last_assistant_idx: int | None = None
-        for m in messages[skip:]:
+        saved_at: dict[int, int] = {}
+        for offset, m in enumerate(messages[skip:]):
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
             if role == "assistant" and not content and not entry.get("tool_calls"):
@@ -4578,6 +4587,7 @@ class AgentLoop:
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
+            saved_at[skip + offset] = len(session.messages)
             assistant_idx = len(session.messages) - 1
             if role == "assistant":
                 last_assistant_idx = assistant_idx
@@ -4620,6 +4630,7 @@ class AgentLoop:
 
                 meta_path = meta_path_for(session.key, self.sessions.sessions_dir)
                 append_events_batch(meta_path, session.key, meta_events_to_write)
+        return saved_at
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         """Persist subagent follow-ups before prompt assembly so history stays durable.

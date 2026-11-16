@@ -152,7 +152,10 @@ def log_structural_suggestion(
     refused it, and the diagnostic evidence, so the user can open a session and
     treat it deliberately. NEVER auto-applied regardless of improvement_mode
     (``apply_recommendation`` refuses kind="structural")."""
-    blob = json.dumps(proposal, sort_keys=True, ensure_ascii=False)
+    # What is proposed is the idea; the sentence explaining it is reworded on
+    # every pass, and must not make the same idea a new record each time.
+    idea = {k: v for k, v in proposal.items() if k != "reason"}
+    blob = json.dumps(idea, sort_keys=True, ensure_ascii=False)
     rid = _rec_id("__structural__", "definition", blob)
     path = _path(workspace, name)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -212,8 +212,8 @@ class Workflow:
     start: str
     nodes: dict[str, Node]
     max_visits: int = 3                  # max times a single node may run (loop guard)
-    # dream-driven self-improvement: 'off' = never touched; 'manual' = dream leaves a
-    # recommendation to review; 'auto' = dream applies edits directly (later slice).
+    # dream-driven self-improvement: 'manual' = dream leaves a recommendation to
+    # review; 'auto' = dream applies in-scope edits directly.
     improvement_mode: Literal["manual", "auto"] = "manual"
     input: dict | None = None            # workflow I/O descriptors (e.g. {text: bool, file: bool})
     output: dict | None = None

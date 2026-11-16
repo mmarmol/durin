@@ -138,12 +138,23 @@ def _script_runs(command: str, workspace: Path | None) -> tuple[list[str], bool]
     return skills, len(segments) == 1
 
 
-def extract_skill_calls(messages: list[dict], workspace: Path | None = None) -> list[dict]:
+def extract_skill_calls(messages: list[dict], workspace: Path | None = None, *,
+                        first_turn: int = 1,
+                        turns: "list[int | None] | None" = None) -> list[dict]:
+    """The skill uses in ``messages``, each stamped with the turn it happened
+    on: the 1-based position of its message in the session.
+
+    ``messages`` is usually a slice of a session, so the caller says where it
+    sits: ``first_turn`` is the position of ``messages[0]`` when the slice is
+    contiguous, and ``turns`` gives each message's own position when some of
+    them are not stored (a message with no position is not a use to record)."""
     calls: list[dict] = []
     results = {m.get("tool_call_id"): m.get("content")
                for m in messages if m.get("role") == "tool" and m.get("tool_call_id")}
     for i, message in enumerate(messages):
-        turn = i + 1                       # messages[i] is turn i+1 (load_session)
+        turn = turns[i] if turns is not None else first_turn + i
+        if turn is None:
+            continue
         for tc in (message.get("tool_calls") or []):
             name, args = _tool_name_and_args(tc)
             if name == "exec":

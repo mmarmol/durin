@@ -267,7 +267,10 @@ def run_extract_for_session(
         from durin.agent.skill_usage import extract_skill_calls
         out["skill_signals"] = discover_skill_signals(
             workspace, "\n".join(read),
-            skill_loads=extract_skill_calls(new_msgs, workspace=workspace),
+            # Numbered like the turns the pass reads: by place in the whole
+            # session, not in the part after the cursor.
+            skill_loads=extract_skill_calls(new_msgs, workspace=workspace,
+                                            first_turn=cursor + 1),
             llm_invoke=llm_invoke, model=model, session=jsonl_path.stem,
         )
     # What follows the last piece is turns that produced no answer, left out.

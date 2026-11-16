@@ -434,3 +434,22 @@ def test_curate_survives_incomplete_fuse_action(tmp_path):
     assert res["applied"] == 1
     assert "body a2" in (ss.read_skill_content(ws, "a") or "")
     assert ss.read_skill_content(ws, "merged") is None
+
+
+def test_an_evolve_is_recorded_as_curations_own_edit(tmp_path):
+    """The history has to tell the nightly judge's edit from the agent's and
+    the user's: it is what a later reader counts and compares against."""
+    ws = tmp_path / "ws"
+    _mk(ws, "demo", "old body")
+
+    def fake_judge(prompt):
+        return ('{"actions": [{"type": "evolve", "name": "demo", '
+                '"old": "old body", "new": "new body", "rationale": "tighten"}]}')
+
+    assert curate_catalog(ws, judge=fake_judge)["applied"] == 1
+
+    edit = next(c for c in ss.skill_history(ws, "demo")["commits"]
+                if c["subject"].endswith("tighten"))
+    assert edit["actor"] == "curation"
+    # Not mistaken for a hand edit the judge must tread around.
+    assert ss.user_edits_since_curation(ws, "demo") == []

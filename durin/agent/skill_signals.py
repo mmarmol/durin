@@ -74,26 +74,37 @@ CONVERSATION TURNS:
 JSON:"""
 
 # Bounds on the catalog the pass reads: every skill by name, each described
-# in a line, without letting a large catalog crowd out the turns.
+# in a line, without letting a large catalog crowd out the turns. The names
+# are never cut — a skill the pass cannot see reads as a gap — so when the
+# catalog outgrows the budget it is the descriptions that shrink, all alike.
 _CATALOG_DESCRIPTION_CHARS = 140
 _CATALOG_CHARS = 8000
+# Below this a description is too short to say anything; the name stands alone.
+_CATALOG_DESCRIPTION_FLOOR = 20
 _OPEN_GAPS_SHOWN = 20
 
 
 def _catalog_text(workspace: Path) -> str:
     from durin.agent.skills_store import list_skills_info
 
-    lines: list[str] = []
-    used = 0
-    for info in sorted(list_skills_info(workspace), key=lambda s: s["name"]):
-        desc = " ".join(str(info.get("description") or "").split())[:_CATALOG_DESCRIPTION_CHARS]
-        line = f"- {info['name']}: {desc}" if desc else f"- {info['name']}"
-        if used + len(line) > _CATALOG_CHARS:
-            lines.append("- (more skills not listed)")
-            break
-        lines.append(line)
-        used += len(line) + 1
-    return "\n".join(lines) or "(none)"
+    skills = sorted(
+        ((str(info["name"]), " ".join(str(info.get("description") or "").split()))
+         for info in list_skills_info(workspace)),
+        key=lambda s: s[0])
+    if not skills:
+        return "(none)"
+    # "- name: description\n" — what the names alone cost, then what is left
+    # for each description.
+    names_cost = sum(len(name) + 5 for name, _ in skills)
+    allowance = min(_CATALOG_DESCRIPTION_CHARS,
+                    max(0, (_CATALOG_CHARS - names_cost) // len(skills)))
+    if allowance < _CATALOG_DESCRIPTION_FLOOR:
+        allowance = 0
+    lines = []
+    for name, desc in skills:
+        desc = desc[:allowance].rstrip()
+        lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+    return "\n".join(lines)
 
 
 def _open_gaps_text(workspace: Path) -> str:

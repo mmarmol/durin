@@ -233,8 +233,9 @@ def run_full_dream(
             ao = run_always_on_pass(
                 workspace, model=model,
                 token_budget=config.memory.dream.always_on_token_budget)
-            # Workflow self-improvement: inert unless a workflow opts into
-            # improvement_mode 'manual'/'auto' (off by default).
+            # Workflow self-improvement: every workflow is observed. Its
+            # improvement_mode decides what a proposal becomes — 'manual' (the
+            # default) records it for a person, 'auto' applies it.
             wi = run_workflow_improve_pass(workspace, model=model)
             logger.info(
                 "memory_dream: workflow_improve(workflows={} proposals={})",

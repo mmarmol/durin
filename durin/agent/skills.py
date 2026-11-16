@@ -350,6 +350,11 @@ class SkillsLoader:
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
         return "\n".join(lines)
 
+    def model_invocable(self, name: str) -> bool:
+        """Whether the skill may be shown to the model at all (it has not
+        opted out through its frontmatter)."""
+        return not self._is_model_invocation_disabled(self.get_skill_metadata(name) or {})
+
     @staticmethod
     def _is_model_invocation_disabled(skill_meta: dict | None) -> bool:
         """Return True when the skill opts out of being shown to the model.

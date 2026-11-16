@@ -121,3 +121,40 @@ def test_tombstone_real_time_expiry(tmp_path):
     # Expired entry must have been purged from the file
     remaining = json.loads(tombstone_path.read_text(encoding="utf-8"))
     assert fp not in remaining
+
+
+def test_an_update_keeps_other_writers_out_until_it_is_written(tmp_path, monkeypatch):
+    """The gateway and the nightly pass both rewrite these files. Each update
+    reads the file, changes it and writes it back, so another writer let in
+    between the read and the write would have its change overwritten."""
+    import threading
+
+    ws = _ws(tmp_path)
+    real_write = sg.atomic_write_text
+    kept_out: list[bool] = []
+    others: list[threading.Thread] = []
+
+    def probing_write(path, text):
+        got_in = threading.Event()
+
+        def other_writer():
+            with ss._store(ws).write_lock():
+                got_in.set()
+
+        thread = threading.Thread(target=other_writer, daemon=True)
+        thread.start()
+        thread.join(0.3)
+        kept_out.append(not got_in.is_set())
+        others.append(thread)
+        real_write(path, text)
+
+    monkeypatch.setattr(sg, "atomic_write_text", probing_write)
+    action = {"type": "evolve", "name": "x", "old": "a", "new": "b", "rationale": "r"}
+    rec = sg.add_suggestion(ws, action)
+    sg.add_tombstone(ws, rec["id"])
+    sg.remove_suggestion(ws, rec["id"])
+
+    for thread in others:
+        thread.join(5)
+    assert len(kept_out) == 3 and all(kept_out)
+    assert not any(thread.is_alive() for thread in others)

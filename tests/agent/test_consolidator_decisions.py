@@ -262,6 +262,59 @@ async def test_compaction_backstop_writes_learning_entity(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_compaction_backstop_keeps_the_body_of_a_learning_that_already_exists(tmp_path):
+    """The compaction call shows the model no existing learning, so what it
+    returns for a ref that already has a body must not replace that body."""
+    from datetime import datetime, timezone
+
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+
+    write_entity(
+        tmp_path, "feedback:spanish-replies",
+        [FieldPatch(kind="body_replace", author="agent", source_ref="earlier",
+                    value="Reply in Spanish, but keep code and commit messages in English.",
+                    at=datetime.now(timezone.utc))],
+        create=True, name="Reply in Spanish")
+
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+    cons = Consolidator(
+        store=MemoryStore(tmp_path), provider=MagicMock(), model="test-model",
+        sessions=sessions, context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100, decision_log_enabled=False,
+        compaction_learnings_enabled=True,
+    )
+    session = Session(key="test:learnings-existing")
+    for i in range(70):
+        session.add_message("user" if i in {0, 50} else "assistant", f"m{i}")
+    cons.estimate_session_prompt_tokens = MagicMock(
+        side_effect=[(1200, "tiktoken"), (400, "tiktoken")])
+    cons.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
+
+    async def fake_extract_learnings(span):
+        return [
+            {"ref": "feedback:spanish-replies", "name": "Spanish only",
+             "body": "User prefers Spanish."},
+            {"ref": "practice:tdd", "name": "TDD", "body": "Tests first."},
+        ]
+
+    cons.extract_learnings = fake_extract_learnings
+    entities = tmp_path / "memory" / "entities"
+    before = (entities / "feedback" / "spanish-replies.md").read_text()
+    await cons.maybe_consolidate_by_tokens(session)
+
+    # Not a new body, and not a new name or date either: the file is untouched.
+    assert (entities / "feedback" / "spanish-replies.md").read_text() == before
+    kept = EntityPage.from_file(entities / "feedback" / "spanish-replies.md")
+    assert kept.body.strip() == "Reply in Spanish, but keep code and commit messages in English."
+    assert EntityPage.from_file(entities / "practice" / "tdd.md").body.strip() == "Tests first."
+
+
+@pytest.mark.asyncio
 async def test_compaction_backstop_skipped_when_disabled(tmp_path):
     """With compaction_learnings_enabled=False the backstop writes no entity."""
     store = MemoryStore(tmp_path)

@@ -174,3 +174,23 @@ def test_emit_skill_used_noop_on_empty_list(monkeypatch):
                         lambda name, data: events.append((name, data)))
     emit_skill_used([])
     assert events == []
+
+
+def _view(name, call_id="c1"):
+    return {"role": "assistant", "content": "",
+            "tool_calls": [{"id": call_id, "type": "function",
+                            "function": {"name": "skill_view",
+                                         "arguments": '{"name": "%s"}' % name}}]}
+
+
+def test_a_slice_is_numbered_from_where_it_sits_in_the_session():
+    messages = [{"role": "user", "content": "go"}, _view("deploy-flow")]
+    assert extract_skill_calls(messages, first_turn=11) == [
+        {"skill": "deploy-flow", "op": "view", "turn": 12}]
+
+
+def test_each_message_can_carry_its_own_position_and_an_unstored_one_is_left_out():
+    messages = [_view("a", "c1"), _view("b", "c2"), _view("c", "c3")]
+    assert extract_skill_calls(messages, turns=[7, None, 8]) == [
+        {"skill": "a", "op": "view", "turn": 7},
+        {"skill": "c", "op": "view", "turn": 8}]

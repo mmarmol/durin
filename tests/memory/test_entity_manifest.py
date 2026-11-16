@@ -123,3 +123,16 @@ def test_query_mode_skips_bogus_and_missing_refs(tmp_path, monkeypatch):
     assert "topic:durin" in out
     assert "context#11" not in out
     assert "nobody-here" not in out
+
+
+def test_full_body_entries_by_ref_renders_exactly_those_pages(tmp_path):
+    from durin.memory.entity_manifest import full_body_entries
+
+    ws = tmp_path / "ws"
+    _seed(ws, "feedback:a", "A", "body of a")
+    _seed(ws, "feedback:b", "B", "body of b")
+
+    entries = full_body_entries(ws, refs=["feedback:b", "feedback:missing"])
+
+    assert [ref for ref, _ in entries] == ["feedback:b"]
+    assert "body of b" in entries[0][1]

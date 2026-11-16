@@ -185,7 +185,12 @@ def run_always_on_pass(
     for ref, page in [(c[0], c[1]) for c in candidates] + excluded:
         is_on = ref in selected_set
         if bool(page.attributes.get("always_on")) != is_on:
-            mark_always_on(workspace, ref, is_on)
+            try:
+                mark_always_on(workspace, ref, is_on, create=False)
+            except FileNotFoundError:
+                # Removed while the pass ran: there is nothing left to flag,
+                # and flagging it would bring it back as an empty page.
+                continue
             changed += 1
 
     out = {
