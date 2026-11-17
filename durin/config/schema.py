@@ -334,6 +334,13 @@ class MemoryDreamConfig(Base):
         description="Hindsight skill-signal extraction (extract stage 3): detect skill corrections/gaps from session turns and log them as observations for the daily curation pass",
     )
 
+    skill_gap_min_occasions: int = Field(
+        default=2,
+        ge=1,
+        validation_alias=AliasChoices("skillGapMinOccasions", "skill_gap_min_occasions"),
+        description="How many separate occasions (distinct sessions or distinct days) a logged coverage gap must be seen on before the nightly pass may author a skill for it; 1 authors from a single sighting",
+    )
+
     # ON by default: additive only (writes feedback entities);
     # `memory.dream.learnings` telemetry measures precision.
     learnings_sweep_enabled: bool = Field(

@@ -563,6 +563,7 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `curate_topics_enabled` | `true` | Curate the Library's topic index from the distilled abstracts into stable theme labels |
 | `consolidate_relations_enabled` | `true` | Canonicalise entity-relation type labels to one surface form so graph edges line up |
 | `skill_signals_enabled` | `true` | Extract skill corrections/gaps from session turns and feed the observation queue |
+| `skill_gap_min_occasions` | `2` | How many separate occasions (different conversations or different days) a missing-skill gap must be seen on before the nightly pass writes a skill for it; `1` writes one after a single sighting |
 | `learnings_sweep_enabled` | `true` | Mine each session's new turns for corrections, preferences, and project facts and write them as feedback entities |
 | `skill_suggestions_enabled` | `true` | Also evaluate manual workspace skills in the daily curation and enqueue proposed edits as suggestions (never auto-applied) |
 | `model_override` | `null` | Dream model (deprecated — prefer `agents.aux_models.memory`); `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |

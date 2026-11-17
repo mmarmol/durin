@@ -11,6 +11,7 @@ prefixed string), so counting by tool name alone over-counts.
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+from durin.agent.skill_observations import log_observation
 from durin.memory.dream_passes import run_skill_extract_pass
 from durin.providers.base import LLMResponse, ToolCallRequest
 from durin.telemetry.schema import MemoryDreamSkillExtractEvent
@@ -85,6 +86,10 @@ def test_skills_touched_counts_landed_not_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_invoke, "judge_llm_invoke", _fake_judge)
 
     _session(tmp_path, "s1", "user researched gadget opinions across many sites")
+    for seen_in in ("s1", "s2"):
+        log_observation(tmp_path, skill="new:gadget-research", kind="gap",
+                        issue="gadget opinions researched by hand",
+                        improvement="fan out over sites, then synthesize", session=seen_in)
     _workflow(tmp_path)
 
     provider = MagicMock()

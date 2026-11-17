@@ -100,31 +100,47 @@ flowchart TD
 
 ## 4. How it works
 
-### Skill-extract: sessions to reusable procedures
+### Skill-extract: recurring gaps to reusable procedures
 
 `run_skill_extract_pass` (`durin/memory/dream_passes.py`) is the only agentic
 dream pass in the skills subsystem — it spins up an `AgentRunner` sub-agent
-rather than making a single structured LLM call. `_skill_extract_messages`
-assembles its input from two sources and returns `None` (skipping the LLM call
-entirely) when both are empty:
+rather than making a single structured LLM call. Its only input is the queue
+of **logged gaps**: OPEN observations whose `skill` field starts with `new:`,
+coverage gaps flagged in hindsight by the signal pass (see below) or by the
+agent in session. It never reads a session's text to look for a procedure by
+itself, and its `skill_write` door refuses any name that is not one of the
+gaps it was handed (`only_names`), so every skill it authors has passed the
+same bar.
 
-1. **Recent sessions.** `_recent_sessions_text` renders the newest
-   `max_sessions` session transcripts (workflow session files excluded), newest
-   first. Each session gets an equal share of the input window
-   (`_SESSIONS_WINDOW_CHARS`) and is **head+tail windowed on its own**. The end
-   of a session is where the procedure that finally worked sits; trimming the
-   joined text instead would keep the oldest session's end and drop the newest
-   one's. The selection is by file modification time alone — the pass keeps no
-   cursor, so the same sessions are rendered again on every run until newer
-   ones displace them.
-2. **Logged gaps.** Any OPEN observation whose `skill` field starts with
-   `new:` — a coverage gap flagged in hindsight (see below) — is surfaced as a
-   `LOGGED GAPS` block with its working name and issue text, followed by its
-   evidence (`_gap_evidence`): the end of the sessions it was logged from and
-   the observations recorded from those sessions about existing skills, marked
-   as overriding the gap's text. A gap logged mid-session can carry that
-   slice's failed guesses; the prompt tells the extractor to encode only facts
-   a session shows working.
+**One gap per working name.** A procedure seen again is logged under the same
+working name, but its issue text is written afresh and seldom matches the
+earlier one, so one gap is usually several records. `open_gaps`
+(`durin/agent/skill_observations.py`) reads them as one, grouped by normalized
+name: the sessions it was seen in, the days it was logged on, and the newest
+record's issue and improvement.
+
+**The bar: seen on more than one occasion.** A gap is handed to the sub-agent
+once it was seen on `memory.dream.skill_gap_min_occasions` separate occasions
+(default 2). The number of occasions is the larger of its distinct sessions and
+its distinct days: a chat kept open for weeks is a single session, and two
+slices of one conversation read on the same night are a single day. A gap
+below the bar waits in the queue, untouched; one sighting says a procedure
+happened, not that it will happen again. Setting the bar to 1 authors from a
+single sighting. `_skill_extract_messages` returns `None` when no gap is over
+the bar, and the pass then makes no model call (`skipped: "no_gaps"`). A person
+who wants a skill for something done once asks for it in the conversation;
+that path does not go through this pass.
+
+Each gap over the bar is one line of the `LOGGED GAPS` block — its working
+name, the newest issue text and the number of occasions — followed by its
+evidence (`_gap_evidence`): the end of the last sessions it was seen in and the
+observations recorded from those sessions about existing skills, marked as
+overriding the gap's text. The session ends share one budget
+(`_GAP_EVIDENCE_TOTAL_CHARS`), so a single ready gap gets long ones; with more
+sessions than the budget holds, the gaps past it come with their line and
+related records only. A gap logged mid-session can carry that slice's
+failed guesses; the prompt tells the extractor to encode only facts a session
+shows working.
 
 The sub-agent (`ToolRegistry` built by `_build_skill_extract_tools`) carries
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
@@ -177,19 +193,18 @@ pass. The count of gaps closed this way travels on the pass's own telemetry
 event as
 `gaps_closed` (`03_telemetry_and_effectiveness.md`), alongside `skills_touched`.
 
-**Unchanged input is not re-run.** Because the selection has no cursor and the
-gaps stay OPEN until they close, a quiet night would send the model the same
-request as the previous one. Just before starting the sub-agent, the pass
+**Unchanged input is not re-run.** Because the gaps stay OPEN until they
+close, a quiet night would send the model the same request as the previous
+one. Just before starting the sub-agent, the pass
 hashes the whole request it is about to send — the assembled messages (system
 prompt with the doctrine, workflow catalog, authoring reference, existing and
-retired skill names and active principles; the gaps with their counts and
-evidence; the rendered sessions), the tool schemas and the model id — and
+retired skill names and active principles; the gaps over the bar with their
+occasions and evidence), the tool schemas and the model id — and
 compares it with the fingerprint stored in `memory/.skill_extract_input.json`.
 A match means no model call and no sub-agent: the pass returns at once and its
 event carries `skipped: "unchanged"`, with `skills_touched` and `gaps_closed`
-at 0. Any input reaching the prompt that changes (an edited session, a newer
-session entering the selection, a gap opened, closed or seen again, a new
-skill, retirement, principle or workflow, a different model or tool set)
+at 0. Any input reaching the prompt that changes (a gap crossing the bar, closed or seen
+again, one of its sessions moving on, a new skill, retirement, principle or workflow, a different model or tool set)
 re-runs the pass. The fingerprint is replaced, with an atomic write, only when
 the sub-agent reached its answer (`stop_reason: "completed"`); a provider
 error, an exception, an empty reply or the iteration budget leaves the stored
@@ -302,7 +317,9 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 - **`gap`** — the agent completed a multi-step procedure that no existing skill
   covers and that looks likely to recur; its `skill` field is normalized to
   `new:<working-name>`. The prompt carries the catalog (every skill's name and
-  a one-line description) and the open gaps. The catalog has a size budget and
+  a one-line description) and the open gaps — one line per working name, most
+  recently seen first — so a procedure that comes back is logged under the
+  name it already has and counts as seen again. The catalog has a size budget and
   never drops a name — a skill the pass cannot see would read as a gap — so in
   a large catalog it is the descriptions that shrink, all alike, down to names
   alone. A procedure a skill
@@ -377,7 +394,7 @@ provenance.
 - **Skill-ref validity.** A `skill` value is either an existing skill name,
   the literal `"all"` (a cross-cutting record not scoped to one skill), or
   `new:<name>` (a coverage gap, consumed by skill-extract rather than
-  curation).
+  curation, once it was seen on more than one occasion).
 
 **Cross-cutting principles.** The curation judge can promote a generalizable
 lesson into `skills/.principles.jsonl` via the `principle` action (and retract
@@ -771,8 +788,9 @@ decisions about external content are never made silently.
 
 | Symbol | File | Role |
 |---|---|---|
-| `run_skill_extract_pass` / `_skill_extract_async` | `durin/memory/dream_passes.py` | Agentic dream pass: mine sessions + logged gaps, author or acquire skills via a sub-agent. |
-| `_skill_extract_messages` | `durin/memory/dream_passes.py` | Assembles the sub-agent's input (sessions + gaps); returns `None` when there's nothing to mine. |
+| `run_skill_extract_pass` / `_skill_extract_async` | `durin/memory/dream_passes.py` | Agentic dream pass: author or acquire skills for the logged gaps over the bar, via a sub-agent. |
+| `_skill_extract_messages` | `durin/memory/dream_passes.py` | Assembles the sub-agent's input (the gaps over the bar and their evidence); returns `None` when no gap is over it. |
+| `open_gaps` | `durin/agent/skill_observations.py` | The open gaps, one per working name, with sessions, days and `occasions`; newest first. |
 | `_recent_sessions_text` | `durin/memory/dream_passes.py` | Head+tail windowing of recent session transcripts for the extract prompt. |
 | `_resolve_gap_observations` | `durin/memory/dream_passes.py` | Closes `new:*` gaps by exact or `name_key` match; declines a gap for a retired name. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Hindsight pass: detects generalizing corrections/gaps from a session's turns, tail-truncated; logs via `log_observation`. |
@@ -799,6 +817,7 @@ decisions about external content are never made silently.
 | Setting | Default | Effect |
 |---|---|---|
 | `memory.dream.skill_signals_enabled` | `true` | Gates Stage 3 of the memory extract pass (`discover_skill_signals`) — hindsight correction/gap detection. |
+| `memory.dream.skill_gap_min_occasions` | `2` | Separate occasions (distinct sessions or distinct days) a logged gap must be seen on before skill-extract may author a skill for it; `1` authors from a single sighting. |
 | `memory.dream.skill_suggestions_enabled` | `true` | Gates `suggest_manual_skills`; when off, manual skills are excluded from curation review entirely (they still receive no direct mutation regardless). |
 | `skill_curation.DEFAULT_BUDGET` | 50 | Per-day cap on how many delta-selected `auto` skills `curate_catalog` reviews; the rest defer to a later run. |
 | `skill_curation._BATCH_CHARS` / `_BATCH_SKILLS` | (module constants) | Size of one judge call's batch — skill text characters and skill count — chosen so the answer fits a preset's default output limit. |

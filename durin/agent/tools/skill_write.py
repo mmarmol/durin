@@ -91,9 +91,13 @@ class SkillWriteTool(Tool, ContextAware):
     """
 
     def __init__(self, workspace: str | Path, *, gate_mode: str = "override",
-                 composition_judge=_default_judge) -> None:
+                 composition_judge=_default_judge,
+                 only_names: list[str] | None = None) -> None:
         # gate_mode: "override" (in-session — the user's explicit word may skip
         # the composition gate) or "hard" (autonomous dream — no override).
+        # only_names: when given, the only skill names this instance creates
+        # (compared as names are everywhere: case and separators ignored).
+        self._only_names = list(only_names) if only_names is not None else None
         self._workspace = Path(workspace).expanduser()
         self._gate_mode = gate_mode
         self._composition_judge = composition_judge
@@ -127,6 +131,13 @@ class SkillWriteTool(Tool, ContextAware):
             if not isinstance(entry, dict) or "path" not in entry or "content" not in entry:
                 return json.dumps({"error": "each files entry needs path and content"})
             files[str(entry["path"])] = str(entry["content"])
+
+        if self._only_names is not None:
+            from durin.agent.skill_retirements import name_key
+            if name_key(str(kwargs.get("name", ""))) not in {name_key(n) for n in self._only_names}:
+                return json.dumps({
+                    "error": "this pass writes skills only for the gaps it was given",
+                    "allowed_names": self._only_names}, ensure_ascii=False)
 
         # A skill someone retired stays retired unless a person brings it back:
         # the dream's door never does, and in-session only the user's explicit

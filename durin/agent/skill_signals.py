@@ -108,12 +108,13 @@ def _catalog_text(workspace: Path) -> str:
 
 
 def _open_gaps_text(workspace: Path) -> str:
-    from durin.agent.skill_observations import open_observations
+    """The open gaps the pass may name again, one line per working name,
+    most recently seen first. A gap it is not shown gets a fresh name when
+    the procedure comes back, and then never counts as seen twice."""
+    from durin.agent.skill_observations import open_gaps
 
-    gaps = [r for r in open_observations(workspace)
-            if str(r.get("skill", "")).startswith("new:")][:_OPEN_GAPS_SHOWN]
-    return "\n".join(f"- {str(r['skill'])[4:]}: {str(r.get('issue', ''))[:120]}"
-                     for r in gaps) or "(none)"
+    return "\n".join(f"- {gap['skill'][4:]}: {gap['issue'][:120]}"
+                     for gap in open_gaps(workspace)[:_OPEN_GAPS_SHOWN]) or "(none)"
 
 
 def build_skill_signal_prompt(turns: str, skill_loads: list[dict], *,

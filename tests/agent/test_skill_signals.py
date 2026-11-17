@@ -83,6 +83,29 @@ def test_the_signal_pass_sees_the_catalog_and_open_gaps(tmp_path):
     assert "release-runbook" in prompts[0]
 
 
+def test_a_gap_logged_many_times_takes_one_line_of_the_open_gaps(tmp_path):
+    """A recurring gap is one record per sighting. Listed record by record
+    it filled the list, and a gap seen once was never shown — so it got a new
+    name when it came back and never counted as seen twice."""
+    from durin.agent.skill_signals import _OPEN_GAPS_SHOWN, _open_gaps_text
+
+    log_observation(tmp_path, skill="new:release-runbook", kind="gap",
+                    issue="no skill covers releases", improvement="write one",
+                    session="websocket_first")
+    for i in range(_OPEN_GAPS_SHOWN + 5):
+        log_observation(tmp_path, skill="new:ticket-triage", kind="gap",
+                        issue=f"ticket{i} customer{i} queue{i} reply{i} lookup{i} done by hand",
+                        improvement="write one", session=f"slack_{i}")
+
+    from durin.agent.skill_observations import open_observations
+    assert len(open_observations(tmp_path)) > _OPEN_GAPS_SHOWN
+
+    text = _open_gaps_text(tmp_path)
+
+    assert text.count("ticket-triage") == 1
+    assert "release-runbook" in text
+
+
 def test_a_gap_named_after_an_existing_skill_becomes_an_improvement_on_it(tmp_path):
     skill = tmp_path / "skills" / "athena-boto3-query" / "SKILL.md"
     skill.parent.mkdir(parents=True)

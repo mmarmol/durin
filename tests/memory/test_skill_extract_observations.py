@@ -1,8 +1,9 @@
 """Gap observations (new:*) and principles feed the skill-extract pass.
 
-The extractor works from distilled gaps logged in-session, not only from raw
-transcript text; new skills are born compliant with active principles; a gap
-whose working name materializes as a skill is marked applied.
+The extractor works from the logged gaps that were seen on more than one
+occasion, never from raw transcript text; new skills are born compliant with
+active principles; a gap whose working name materializes as a skill is marked
+applied.
 """
 import json
 
@@ -12,7 +13,6 @@ from durin.agent.skill_observations import (
     open_observations,
 )
 from durin.memory.dream_passes import (
-    _recent_sessions_text,
     _resolve_gap_observations,
     _skill_extract_messages,
 )
@@ -25,19 +25,26 @@ def _session(ws, key, text="USER said something"):
         json.dumps({"role": "user", "content": text}) + "\n", encoding="utf-8")
 
 
-def _gap(ws, name="release-runbook", issue="no skill covers releases"):
-    return log_observation(ws, skill=f"new:{name}", kind="gap", issue=issue,
-                           improvement="steps: build wheel, pipx reinstall, verify")
+def _gap(ws, name="release-runbook", issue="no skill covers releases",
+         sessions=("websocket_a", "websocket_b")):
+    """A gap seen once in each of ``sessions`` — two by default, which is
+    what the extractor asks for before it authors from one."""
+    for session in sessions:
+        out = log_observation(ws, skill=f"new:{name}", kind="gap", issue=issue,
+                              improvement="steps: build wheel, pipx reinstall, verify",
+                              session=session)
+    return out
 
 
-def test_messages_none_when_no_sessions_and_no_gaps(tmp_path):
-    assert _skill_extract_messages(tmp_path, max_sessions=3) is None
+def test_a_session_with_no_gap_behind_it_is_nothing_to_mine(tmp_path):
+    _session(tmp_path, "s1")
+    assert _skill_extract_messages(tmp_path) is None
 
 
 def test_gap_observations_included_in_user_content(tmp_path):
     _session(tmp_path, "s1")
     _gap(tmp_path)
-    msgs = _skill_extract_messages(tmp_path, max_sessions=3)
+    msgs = _skill_extract_messages(tmp_path)
     user = msgs[-1]["content"]
     assert "no skill covers releases" in user
     assert "release-runbook" in user
@@ -45,15 +52,15 @@ def test_gap_observations_included_in_user_content(tmp_path):
 
 def test_gaps_alone_are_enough_to_run(tmp_path):
     _gap(tmp_path)
-    msgs = _skill_extract_messages(tmp_path, max_sessions=3)
+    msgs = _skill_extract_messages(tmp_path)
     assert msgs is not None
     assert "release-runbook" in msgs[-1]["content"]
 
 
 def test_principles_included_in_system_prompt(tmp_path):
-    _session(tmp_path, "s1")
+    _gap(tmp_path)
     add_principle(tmp_path, "skills must name their verification command")
-    msgs = _skill_extract_messages(tmp_path, max_sessions=3)
+    msgs = _skill_extract_messages(tmp_path)
     assert "skills must name their verification command" in msgs[0]["content"]
 
 
@@ -85,39 +92,6 @@ def test_gap_resolution_matches_normalized_names(tmp_path):
                 if r.get("skill") == "new:Release Runbook"]
 
 
-def test_recent_sessions_text_preserves_head_and_tail_when_truncating(tmp_path):
-    """Long session windows keep both head (first 6000 chars) and tail (last 6000).
-    This ensures late-session procedures survive truncation."""
-    # Build a session with unique markers in head and tail, total > 12000 chars
-    head_marker = "===HEAD_MARKER_UNIQUE_123==="
-    tail_marker = "===TAIL_MARKER_UNIQUE_456==="
-
-    # Create a long session: head section + filler + tail section
-    head_text = f"{head_marker}\n" + "X" * 5000
-    middle_text = "MIDDLE_" * 1000  # ~7000 chars
-    tail_text = "Y" * 5500 + f"\n{tail_marker}"
-    full_text = head_text + middle_text + tail_text
-
-    sdir = tmp_path / "sessions"
-    sdir.mkdir(parents=True)
-    session_file = sdir / "s_long.jsonl"
-    session_file.write_text(
-        json.dumps({"role": "user", "content": full_text}) + "\n",
-        encoding="utf-8"
-    )
-
-    result = _recent_sessions_text(tmp_path, max_sessions=1)
-
-    # Both markers should be present
-    assert head_marker in result, f"Head marker missing from result (len={len(result)})"
-    assert tail_marker in result, f"Tail marker missing from result (len={len(result)})"
-    # Total length should be under ~12100 (6000 + separator + 6000)
-    assert len(result) <= 12100, f"Result too long: {len(result)} chars"
-    # Truncation marker should be present (when > 12000 chars)
-    if len(full_text) > 12000:
-        assert "[... middle truncated ...]" in result
-
-
 def test_a_gap_brings_its_session_end_and_what_was_corrected_there(tmp_path):
     """A gap's text can carry the session's early, failed guesses; the facts
     that held are at that session's end and in the corrections logged from it."""
@@ -136,8 +110,12 @@ def test_a_gap_brings_its_session_end_and_what_was_corrected_there(tmp_path):
                     issue="no skill runs Athena queries",
                     improvement="create athena-logs with level and contextId columns",
                     session="websocket:S1")
+    log_observation(tmp_path, skill="new:athena-logs", kind="gap",
+                    issue="Athena was queried by hand again",
+                    improvement="create athena-logs with level and contextId columns",
+                    session="websocket:S2")
 
-    msgs = _skill_extract_messages(tmp_path, max_sessions=0)
+    msgs = _skill_extract_messages(tmp_path)
 
     user = msgs[1]["content"]
     assert "FINAL_WORKING: log LIKE on logs_prod.containers" in user
@@ -145,26 +123,111 @@ def test_a_gap_brings_its_session_end_and_what_was_corrected_there(tmp_path):
     assert "only facts" in msgs[0]["content"].lower()
 
 
-def test_each_session_keeps_its_own_end(tmp_path):
-    """A session's end is where what finally worked lives. Cutting the joined
-    text kept the oldest session's end and dropped the newest one's."""
-    import os
+def test_a_gap_seen_once_waits(tmp_path):
+    """One sighting says a procedure happened, not that it will again: the
+    gap stays in the queue and the extractor is not handed it."""
+    _gap(tmp_path, name="db-backup", issue="the database was backed up by hand")
+    _gap(tmp_path, sessions=("websocket_a",))
 
-    sdir = tmp_path / "sessions"
-    sdir.mkdir(parents=True)
-    old = sdir / "s_old.jsonl"
-    new = sdir / "s_new.jsonl"
-    old.write_text(json.dumps({"role": "user",
-                               "content": "OLD_START " + "o" * 9000 + " OLD_END"}) + "\n",
-                   encoding="utf-8")
-    new.write_text(json.dumps({"role": "user",
-                               "content": "NEW_START " + "n" * 9000 + " NEW_VERIFIED_OUTCOME"}) + "\n",
-                   encoding="utf-8")
-    os.utime(old, (1_000_000, 1_000_000))
+    assert "release-runbook" not in _skill_extract_messages(tmp_path)[-1]["content"]
+    assert "new:release-runbook" in [r["skill"] for r in open_observations(tmp_path)]
 
-    result = _recent_sessions_text(tmp_path, max_sessions=2)
 
-    assert "NEW_VERIFIED_OUTCOME" in result
-    assert "NEW_START" in result
-    assert "OLD_END" in result
-    assert len(result) <= 12300
+def test_only_waiting_gaps_is_nothing_to_mine(tmp_path):
+    _gap(tmp_path, sessions=("websocket_a",))
+
+    assert _skill_extract_messages(tmp_path) is None
+
+
+def test_a_gap_seen_again_under_other_words_is_ready(tmp_path):
+    """A recurrence is logged under the same name with a fresh issue text, so
+    it lands as a second record. The two are one gap, seen twice, and the
+    extractor gets a single line for it."""
+    _gap(tmp_path, issue="no skill covers releases", sessions=("websocket_a",))
+    _gap(tmp_path, name="Release Runbook",
+         issue="the wheel was built and installed by hand once more",
+         sessions=("websocket_b",))
+    assert len(open_observations(tmp_path)) == 2
+
+    user = _skill_extract_messages(tmp_path)[-1]["content"]
+
+    assert user.count("new:release-runbook") == 1
+    assert "seen on 2 occasion(s)" in user
+    assert "built and installed by hand once more" in user
+
+
+def test_one_long_session_counts_by_the_days_it_was_seen_on(tmp_path, monkeypatch):
+    """A chat kept open for weeks is a single session; a procedure done in it
+    on two different days was still done twice."""
+    from durin.agent import skill_observations as so
+
+    monkeypatch.setattr(so, "_today", lambda: "2026-03-01")
+    _gap(tmp_path, sessions=("websocket_a",))
+    assert _skill_extract_messages(tmp_path) is None
+
+    monkeypatch.setattr(so, "_today", lambda: "2026-03-09")
+    _gap(tmp_path, sessions=("websocket_a",))
+
+    assert "release-runbook" in _skill_extract_messages(tmp_path)[-1]["content"]
+
+
+def test_two_slices_of_one_session_on_one_night_are_one_occasion(tmp_path):
+    _gap(tmp_path, issue="no skill covers releases", sessions=("websocket_a",))
+    _gap(tmp_path, issue="release steps were improvised a second time",
+         sessions=("websocket:a",))
+
+    assert _skill_extract_messages(tmp_path) is None
+
+
+def test_the_bar_is_a_setting(tmp_path):
+    _gap(tmp_path, sessions=("websocket_a",))
+
+    msgs = _skill_extract_messages(tmp_path, min_gap_occasions=1)
+
+    assert "release-runbook" in msgs[-1]["content"]
+
+
+def test_one_ready_gap_gets_long_session_ends(tmp_path):
+    """The gap's sessions are the only place the procedure is shown, so they
+    share the whole evidence budget instead of a fixed short tail each."""
+    from durin.memory import dream_passes
+
+    marker = "STEP_THAT_WORKED "
+    _session(tmp_path, "websocket_a",
+             marker + "x" * (dream_passes._GAP_SESSION_TAIL_CHARS + 1500))
+    _gap(tmp_path)
+
+    assert marker in _skill_extract_messages(tmp_path)[-1]["content"]
+
+
+def test_two_long_sessions_of_one_gap_both_arrive(tmp_path):
+    """Each session end is as long as its share of the budget; together they
+    fill it, and both must still reach the extractor."""
+    from durin.memory import dream_passes
+
+    long = "x" * dream_passes._GAP_EVIDENCE_TOTAL_CHARS
+    _session(tmp_path, "websocket_a", long + " FIRST_SESSION_END")
+    _session(tmp_path, "websocket_b", long + " SECOND_SESSION_END")
+    _gap(tmp_path)
+
+    user = _skill_extract_messages(tmp_path)[-1]["content"]
+
+    assert "FIRST_SESSION_END" in user and "SECOND_SESSION_END" in user
+
+
+def test_gaps_past_the_evidence_budget_keep_their_line(tmp_path):
+    from durin.memory import dream_passes
+
+    long = "x" * dream_passes._GAP_EVIDENCE_TOTAL_CHARS
+    names = [f"procedure-{i}" for i in range(8)]
+    for i, name in enumerate(names):
+        _session(tmp_path, f"websocket_{i}a", long + f" END_{i}A")
+        _session(tmp_path, f"websocket_{i}b", long + f" END_{i}B")
+        _gap(tmp_path, name=name, issue=f"alpha{i} beta{i} gamma{i} delta{i} done by hand",
+             sessions=(f"websocket_{i}a", f"websocket_{i}b"))
+
+    user = _skill_extract_messages(tmp_path)[-1]["content"]
+
+    assert all(f"new:{name}:" in user for name in names)
+    assert "END_" in user
+    assert len(user) < 3 * dream_passes._GAP_EVIDENCE_TOTAL_CHARS

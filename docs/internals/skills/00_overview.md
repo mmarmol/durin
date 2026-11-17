@@ -196,8 +196,8 @@ refuses a retired skill's name (in-session, unless the call carries
 `override_retired`) and a bundled file that does not parse (`_lint_bundle`).
 
 **Dream skill-extract pass.** `durin/memory/dream_passes.py::run_skill_extract_pass`
-runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
-any logged `new:*` gap observations. When the sub-agent finds a recurring
+runs a sub-agent (`AgentRunner`, `max_iterations=8`) over the logged `new:*`
+gap observations that were seen on more than one occasion. When the sub-agent finds a recurring
 multi-step procedure it calls `skill_write` — the same tool and the same quick
 ramp the in-loop agent uses. The pass returns early without an LLM call when
 there are no sessions and no gap observations. It keeps no cursor: the newest
@@ -415,8 +415,8 @@ observation. A hindsight pass during the dream extract
 **tail** of post-cursor session turns (tail-windowed, not head, so corrections
 at the end of long sessions are not missed). Observations accumulate with
 dedup-by-count; `count >= 2` is the recurrence signal the curation judge is
-told to act on (a `new:*` gap is offered to the skill-extract pass at any
-count). See `02_lifecycle_and_curation.md` for the full observation lifecycle
+told to act on (a `new:*` gap is offered to the skill-extract pass once it was seen on
+`memory.dream.skill_gap_min_occasions` separate occasions). See `02_lifecycle_and_curation.md` for the full observation lifecycle
 (OPEN/APPLIED/DECLINED, paraphrase-tolerant dedup, archival) and
 `03_telemetry_and_effectiveness.md` for how usage and observation counts reach
 the webui Skills panel.
@@ -592,7 +592,7 @@ there is no session left to credit.
 | `skill_observe` / observation queue | `durin/agent/skill_observations.py` | Task-observer pattern. In-session feedback: `correction`, `gap`, `improvement`, `simplify`. Store: `skills/.observations.jsonl`. States: OPEN → APPLIED / DECLINED. Principles: `skills/.principles.jsonl` (cap 12). |
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta-curation over `mode="auto"` workspace skills. LLM judge proposes evolve / restructure / fuse / retire / principle. Change-gated: never scales with full catalog size. |
 | `SkillPage` | `durin/memory/skill_page.py` | Memory class for skills. Wraps SKILL.md frontmatter and body for FTS and vector indexing. Enables `memory_search(kinds="skill")`. |
-| `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Daily dream pass: sub-agent mines recent sessions and gap observations, calls `skill_write` for recurring procedures. Agentic (uses `AgentRunner`). |
+| `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Daily dream pass: sub-agent works from the gap observations seen on more than one occasion, calls `skill_write` for recurring procedures. Agentic (uses `AgentRunner`). |
 | `sweep_unverified_skills` | `durin/agent/skill_lifecycle.py` | Relocates no-provenance workspace skills to quarantine, prepends `unverified_origin` finding. Attributes to `agent:session:<id>` via a path-scoped git-log read when the introducing commit carries a `Session:` trailer (emits `skill.authored`, `ramp="backstop"`), else falls back to `unverified:workspace`. Runs at ContextBuilder init and on surfaces. |
 | `compute_working_set` | `durin/agent/skill_usage.py` | Hot-tier sizing: frequent (7-day window) + recent (24-hour window) skill calls from session sidecars. Returns list of skill names. |
 | `get_always_skills` / `load_skills_for_context` | `durin/agent/skills.py` | Always-tier retrieval: filter for `always: true`, inject full bodies into stable prompt. |
@@ -626,6 +626,7 @@ there is no session left to credit.
 | `memory.dream.cron` | `"0 3 * * *"` | Schedule for the daily dream cron (all consolidation passes + skill curation). |
 | `memory.dream.max_seconds_per_run` | 3600 | Hard wall-clock cap per extract, refine and skill-review pass (extract yields after the current session and its cursor resumes on the next trigger; the skill review starts no new batch and leaves the rest unstamped for the next run). |
 | `memory.dream.skill_signals_enabled` | `true` | Run `discover_skill_signals` over post-cursor session turns during the extract pass. |
+| `memory.dream.skill_gap_min_occasions` | `2` | Occasions (distinct sessions or days) a logged gap must be seen on before the skill-extract pass may author a skill for it. |
 | `memory.dream.skill_suggestions_enabled` | `true` | When on, curation proposes actions for `mode=manual` skills as suggestions on the Pending page (accept/reject) rather than applying them directly. Disable to exclude manual skills from curation entirely. |
 
 ### CLI surfaces

@@ -326,6 +326,50 @@ def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
     return recs
 
 
+def open_gaps(workspace: Path) -> list[dict]:
+    """The open coverage gaps, one per working name, most recently seen first.
+
+    A procedure seen again is logged under the same working name, but its
+    issue text is written afresh each time and seldom matches the earlier
+    one, so one gap is usually several records. They are read as one here:
+    ``sessions`` is every session it was seen in, ``days`` every day it was
+    logged on, ``issue``/``improvement`` come from the newest record, and
+    ``skill`` is the oldest record's ref so the name stays the same.
+
+    ``occasions`` is how many separate times it was seen: the larger of the
+    two counts, because a chat kept open for weeks is a single session and
+    two slices of one conversation read on the same night are a single day.
+    """
+    from durin.agent.skill_retirements import name_key
+
+    groups: dict[str, dict] = {}
+    for rec in open_observations(workspace):
+        ref = str(rec.get("skill", ""))
+        if not ref.startswith("new:"):
+            continue
+        gap = groups.setdefault(name_key(ref[4:]), {
+            "skill": ref, "sessions": [], "days": set(), "last_seen": "", "_newest": rec})
+        seen = {_session_ref(s) for s in gap["sessions"]}
+        for session in rec.get("sessions") or []:
+            if session and _session_ref(str(session)) not in seen:
+                gap["sessions"].append(str(session))
+                seen.add(_session_ref(str(session)))
+        gap["days"].update(str(d) for d in (rec.get("first_seen"), rec.get("last_seen")) if d)
+        if str(rec.get("last_seen") or "") >= gap["last_seen"]:
+            gap["last_seen"] = str(rec.get("last_seen") or "")
+            gap["_newest"] = rec
+    gaps = []
+    for gap in groups.values():
+        newest = gap.pop("_newest")
+        gap["days"] = sorted(gap["days"])
+        gap["issue"] = str(newest.get("issue") or "")
+        gap["improvement"] = str(newest.get("improvement") or "")
+        gap["occasions"] = max(len(gap["sessions"]), len(gap["days"]), 1)
+        gaps.append(gap)
+    gaps.sort(key=lambda g: g["last_seen"], reverse=True)
+    return gaps
+
+
 @_under_store_lock
 def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
     """Resolve one OPEN observation by hand (webui/API path).

@@ -2,6 +2,7 @@
 catalog, and its subagent can see and author workflows."""
 import json
 
+from durin.agent.skill_observations import log_observation
 from durin.agent.skills_doctrine import DOCTRINE_HEADING
 from durin.memory.dream_passes import (
     _build_skill_extract_tools,
@@ -28,8 +29,12 @@ def _workflow(ws, name="research-to-answer", description="fan out searches, synt
 
 def test_system_prompt_embeds_doctrine_and_workflow_catalog(tmp_path):
     _session(tmp_path, "s1")
+    for seen_in in ("s1", "s2"):
+        log_observation(tmp_path, skill="new:gadget-research", kind="gap",
+                        issue="gadget opinions researched by hand",
+                        improvement="fan out over sites, then synthesize", session=seen_in)
     _workflow(tmp_path)
-    system = _skill_extract_messages(tmp_path, max_sessions=3)[0]["content"]
+    system = _skill_extract_messages(tmp_path)[0]["content"]
     assert DOCTRINE_HEADING in system                      # verbatim, not a paraphrase
     assert "research-to-answer" in system                  # the catalog names what exists
     assert "fan out searches, synthesize" in system
@@ -38,7 +43,11 @@ def test_system_prompt_embeds_doctrine_and_workflow_catalog(tmp_path):
 
 def test_empty_catalog_is_explicit_not_missing(tmp_path):
     _session(tmp_path, "s1")
-    system = _skill_extract_messages(tmp_path, max_sessions=3)[0]["content"]
+    for seen_in in ("s1", "s2"):
+        log_observation(tmp_path, skill="new:gadget-research", kind="gap",
+                        issue="gadget opinions researched by hand",
+                        improvement="fan out over sites, then synthesize", session=seen_in)
+    system = _skill_extract_messages(tmp_path)[0]["content"]
     assert "(no workflows installed)" in system
 
 
