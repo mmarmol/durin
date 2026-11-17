@@ -150,3 +150,38 @@ def test_cursor_past_the_end_restarts_the_conversation(tmp_path):
     assert out["new_turns"] == 4
     assert out["cursor"] == 4
     assert get_extract_cursor(p) == 4
+
+
+def test_skill_loads_are_numbered_like_the_turns_the_pass_reads(tmp_path):
+    """After a cursor, the pass reads the rest of the session with whole-session
+    turn numbers. A skill load in that rest must carry the same numbering, or
+    "loaded at turn N" points at a different line than ``[turn-N]``."""
+    ws = tmp_path / "ws"
+    view = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": "v1", "type": "function", "function": {
+            "name": "skill_view", "arguments": json.dumps({"name": "deploy-flow"})}}],
+    }
+    p = _write_session(ws, "s1", [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "deploy it"},
+        view,
+        {"role": "tool", "tool_call_id": "v1", "content": "# deploy-flow"},
+        {"role": "assistant", "content": "deployed"},
+        {"role": "user", "content": "no, staging first"},
+    ])
+    set_extract_cursor(p, 2)
+    prompts: list[str] = []
+
+    def llm(prompt, **kw):
+        prompts.append(prompt)
+        return "[]"
+
+    run_extract_for_session(ws, p, llm_invoke=llm, discover=False, learnings=False,
+                            skill_signals=True)
+
+    signal_prompt = next(pr for pr in prompts if "SKILLS LOADED" in pr)
+    # The view is the session's 4th message; the text labels it the same.
+    assert "deploy-flow@4" in signal_prompt
+    assert "[turn-3]" in signal_prompt and "[turn-4]" not in signal_prompt.split("TURNS:")[1]

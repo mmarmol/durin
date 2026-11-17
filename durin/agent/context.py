@@ -500,9 +500,11 @@ class ContextBuilder:
         if not ht.enabled:
             return None
         always = set(always_skills)
+        # A skill the model may not invoke is never listed, so it must not
+        # take a place in the set either.
         candidates = [
             e["name"] for e in self.skills.list_skills(filter_unavailable=False)
-            if e["name"] not in always
+            if e["name"] not in always and self.skills.model_invocable(e["name"])
         ]
         cand_key = frozenset(candidates)
         if self._skill_working_set is not None and cand_key == self._skill_working_set_key:

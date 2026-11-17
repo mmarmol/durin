@@ -87,17 +87,22 @@ def ensure_owner(workspace: Path, owner_ref: str, *, name: str | None = None) ->
     return True
 
 
-def mark_always_on(workspace: Path, ref: str, on: bool = True) -> None:
+def mark_always_on(workspace: Path, ref: str, on: bool = True, *,
+                   create: bool = True) -> None:
     """Mark a feedback entity always_on (dream-owned attribute).
 
     A curation write: the flag says where the page is shown, not what it
-    says, so the page keeps its ``updated_at`` and its page-level author."""
+    says, so the page keeps its ``updated_at`` and its page-level author.
+
+    ``create=False`` is for a caller that flags pages it found on disk: a page
+    removed since then raises ``FileNotFoundError`` instead of coming back as
+    an empty page that carries only the flag."""
     write_entity(
         workspace, ref,
         [FieldPatch(kind="attribute", key="always_on", value=bool(on),
                     author="dream", source_ref="hot_layer_policy",
                     at=datetime.now(timezone.utc))],
-        create=True, curation=True,
+        create=create, curation=True,
     )
 
 

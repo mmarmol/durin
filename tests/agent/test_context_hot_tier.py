@@ -111,3 +111,20 @@ def test_disabled_injects_full_catalog(tmp_path, monkeypatch):
     cb.build_system_prompt()
     block = cb._last_layer_breakdown["stable"].get("skills_catalog", "")
     assert "obscure" in block
+
+
+def test_a_skill_hidden_from_the_model_takes_no_place_in_the_set(tmp_path, monkeypatch):
+    """The set has a fixed size. A skill that is never listed must not hold one
+    of its places, or a listable skill is left out for nothing."""
+    _force_hot(monkeypatch, recent=1, frequent=1)
+    _seed_skills(tmp_path, ["hidden", "shown-a", "shown-b"])
+    hidden = tmp_path / "skills" / "hidden" / "SKILL.md"
+    hidden.write_text(hidden.read_text().replace(
+        "description: do hidden\n", "description: do hidden\ndisable_model_invocation: true\n"))
+    # The hidden skill is the most used, so it would rank first.
+    _seed_usage(tmp_path, {"hidden": 9})
+
+    names = ContextBuilder(tmp_path)._hot_tier_include([])
+
+    assert "hidden" not in names
+    assert names == {"shown-a", "shown-b"}

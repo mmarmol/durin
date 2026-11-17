@@ -605,7 +605,9 @@ def _head_and_tail(text: str, budget: int) -> str:
 
 
 def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
-    """The newest sessions' conversation text (user + assistant turns).
+    """The newest sessions' text: every message that has content, in order —
+    what was said and what the tools returned, which is where the commands
+    that worked are.
 
     Each session gets its share of the window and is trimmed on its own,
     keeping its head and its tail. A session's end is where the procedure that

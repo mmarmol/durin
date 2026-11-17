@@ -50,7 +50,7 @@ import durin.agent.context as context_module
 import durin.agent.skills as skills_module
 import durin.memory.session_summary_store as session_summary_store
 from durin.agent.loop import AgentLoop
-from durin.agent.memory import Consolidator
+from durin.agent.memory import _NO_LEARNINGS_SHOWN, Consolidator
 from durin.agent.runner import (
     _PERSISTED_MODEL_ERROR_PLACEHOLDER,
     _PERSISTED_OVERFLOW_PLACEHOLDER,
@@ -504,7 +504,8 @@ def _side_prompts() -> dict[str, str]:
     return {
         render_template("agent/consolidator_archive.md", strip=True): "archive",
         render_template("agent/consolidator_decisions.md", strip=True): "decisions",
-        render_template("agent/consolidator_learnings.md", strip=True): "learnings",
+        render_template("agent/consolidator_learnings.md",
+                        existing=_NO_LEARNINGS_SHOWN, strip=True): "learnings",
     }
 
 

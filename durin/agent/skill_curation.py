@@ -690,7 +690,8 @@ def _apply_actions(workspace: Path, actions: list, scope: list[str],
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"),
-                                    file=str(a.get("file") or "SKILL.md"))
+                                    file=str(a.get("file") or "SKILL.md"),
+                                    attribution=ss.Attribution(actor="curation"))
             # An edit that committed nothing (a no-op) changed nothing.
             ok = bool(r.get("ok")) and bool(r.get("commit"))
             applied += 1 if ok else 0

@@ -22,7 +22,7 @@ from json_repair import repair_json
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entities import SUGGESTED_TYPES_ORDERED
-from durin.memory.entity_manifest import build_entity_manifest
+from durin.memory.entity_manifest import build_entity_manifest, full_body_entries
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import default_llm_invoke, emit_parse_failure
@@ -364,6 +364,17 @@ def _resolve_semantic_ref(
     return None
 
 
+def _has_body(workspace: Path, ref: str) -> bool:
+    """Whether ``ref`` names a page with text in its body — a body a
+    ``body_replace`` would discard."""
+    type_, _, slug = ref.partition(":")
+    if not type_ or not slug:
+        return False
+    path = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
+    page = EntityPage.from_file(path) if path.is_file() else None
+    return page is not None and bool((page.body or "").strip())
+
+
 def _page_exists(workspace: Path, ref: str) -> bool:
     type_, _, slug = ref.partition(":")
     if not type_ or not slug:
@@ -533,6 +544,8 @@ def discover_entities(
 # the sweep from ever creating a person: (principal) or other entity type, even
 # if the LLM hallucinates one.
 _LEARNING_TYPES = ("feedback", "stance", "practice")
+# How many existing learnings the sweep's prompt shows in full.
+_LEARNINGS_SHOWN = 40
 
 
 def _parse_learnings(raw: str) -> list[dict[str, Any]] | None:
@@ -583,11 +596,19 @@ def mine_learnings(
     """Mine durable learnings (preferences/corrections) from a session-turn span
     and write them as feedback/stance/practice entities.
 
-    The prompt is seeded with the full set of existing learning-type entities so
-    the LLM reuses a known ref instead of minting a new slug. Each proposed ref
-    is also resolved against the alias index (and optionally the vector index)
-    before writing — a re-worded fact updates the existing entity rather than
-    creating a duplicate slug. The refine pass remains the cross-run backstop.
+    The prompt is seeded with existing learning-type entities, full body each,
+    so the LLM reuses a known ref instead of minting a new slug. Each proposed
+    ref is also resolved against the alias index (and optionally the vector
+    index) before writing — a re-worded fact updates the existing entity rather
+    than creating a duplicate slug. The refine pass remains the cross-run
+    backstop.
+
+    A body is only ever replaced by an answer that was shown it. The seed holds
+    a bounded number of pages, so a learning can resolve to a page that was not
+    among them; such a learning is not written from the first answer. The span
+    is asked again with exactly those pages shown, and only what that second
+    answer says about them is written — a page it does not mention keeps its
+    body.
 
     Empty text or an unparseable reply yield []; a model call that fails
     raises :class:`ProviderError`. Never writes a principal or other
@@ -597,20 +618,27 @@ def mine_learnings(
     llm_invoke = llm_invoke or default_llm_invoke
     if not text.strip():
         return []
-    # full_body: the learnings write is a body_replace on the matched ref, so the
-    # LLM must see each existing learning's FULL body to refine it rather than
-    # overwrite content it never saw (a one-line manifest lost nuance).
-    existing = build_entity_manifest(
-        workspace, types=list(_LEARNING_TYPES), limit=40, full_body=True)
-    prompt = (render_template("agent/consolidator_learnings.md",
-                              existing=existing or "(none yet)")
-              + "\n\nCONVERSATION SPAN:\n" + text[:PIECE_CHARS])
-    raw, resp = _ask(llm_invoke, prompt, model)
-    learnings = _parse_learnings(raw)
-    if learnings is None:
-        emit_parse_failure("learnings", source=source_ref, raw=raw,
-                           finish_reason=getattr(resp, "finish_reason", None))
-        learnings = []
+    # The learnings write is a body_replace on the matched ref, so the LLM must
+    # see each existing learning's FULL body to refine it rather than overwrite
+    # content it never saw (a one-line manifest lost nuance).
+    shown_entries = full_body_entries(
+        workspace, types=list(_LEARNING_TYPES), limit=_LEARNINGS_SHOWN)
+    shown = {ref for ref, _ in shown_entries}
+
+    def _ask_learnings(entries: list[tuple[str, str]]) -> list[dict[str, str]]:
+        existing = "\n".join(entry for _, entry in entries)
+        prompt = (render_template("agent/consolidator_learnings.md",
+                                  existing=existing or "(none yet)")
+                  + "\n\nCONVERSATION SPAN:\n" + text[:PIECE_CHARS])
+        raw, resp = _ask(llm_invoke, prompt, model)
+        parsed = _parse_learnings(raw)
+        if parsed is None:
+            emit_parse_failure("learnings", source=source_ref, raw=raw,
+                               finish_reason=getattr(resp, "finish_reason", None))
+            return []
+        return parsed
+
+    learnings = _ask_learnings(shown_entries)
     if not learnings:
         return []
 
@@ -622,10 +650,13 @@ def mine_learnings(
     now = datetime.now(timezone.utc)
     src = source_ref or "learnings_sweep"
     out: list[dict[str, Any]] = []
-    for it in learnings:
+
+    def _resolve(it: dict[str, str]) -> tuple[str, str | None] | None:
+        """``(ref to write, existing target or None)``; None for a type the
+        sweep never writes."""
         ref = it["ref"]
         if ref.split(":", 1)[0] not in _LEARNING_TYPES:
-            continue
+            return None
         target = _resolve_existing_ref(index, ref, it["name"], workspace=workspace)
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
@@ -633,7 +664,9 @@ def mine_learnings(
                 llm_invoke=llm_invoke, model=model,
                 confidence_threshold=confidence_threshold,
                 distance_threshold=semantic_distance_threshold)
-        write_ref = target or ref
+        return (target or ref), target
+
+    def _write(it: dict[str, str], write_ref: str, target: str | None) -> None:
         result = write_entity(
             workspace, write_ref,
             [FieldPatch(kind="body_replace", value=it["body"], author="dream",
@@ -647,11 +680,36 @@ def mine_learnings(
         if page is not None:
             index.refresh_for(page, slug)
         out.append({"ref": write_ref, "committed": result.committed})
+
+    # Pages a learning resolved to whose body the answer was never shown.
+    unseen: list[str] = []
+    for it in learnings:
+        resolved = _resolve(it)
+        if resolved is None:
+            continue
+        write_ref, target = resolved
+        if write_ref not in shown and _has_body(workspace, write_ref):
+            if write_ref not in unseen:
+                unseen.append(write_ref)
+            continue
+        _write(it, write_ref, target)
+
+    if unseen:
+        for it in _ask_learnings(full_body_entries(workspace, refs=unseen)):
+            resolved = _resolve(it)
+            if resolved is None:
+                continue
+            write_ref, target = resolved
+            # The second answer was asked about these pages only; what it says
+            # about anything else was already settled by the first.
+            if write_ref in unseen:
+                _write(it, write_ref, target)
     try:
         _mine_emit_tool_event("memory.dream.learnings", {
             "proposed": len(learnings),
             "written": sum(1 for r in out if r["committed"]),
             "refs": [r["ref"] for r in out],
+            "reasked": len(unseen),
         })
     except Exception:  # pragma: no cover
         pass

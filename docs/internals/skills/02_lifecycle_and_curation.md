@@ -17,8 +17,10 @@ fuse, retire, or leave alone.
 
 It exists because a skill's quality is only visible in hindsight. Whether a
 skill's steps are still accurate, whether two skills have drifted into
-duplicates, whether a skill nobody uses should be retired — none of that is
-knowable at write time. The cold path answers those questions asynchronously,
+duplicates, whether a skill is obsolete — none of that is
+knowable at write time. (Disuse alone retires nothing: the judge reads a
+skill's content, and a skill that is never used and never reported on is not
+brought back for review.) The cold path answers those questions asynchronously,
 off the interactive turn, the same way Dream's memory passes consolidate the
 entity graph (see `../memory/05_dream_cold_path.md`).
 
@@ -270,7 +272,9 @@ card (`skill_suggestions.add_gate_bounce`): the full body as a diff, the
 gate's reason, and an accept action that IS the user's explicit override
 (`apply_suggestion` replays it with `composition_override=True`, actor=user).
 A later compliant landing of the same skill name clears the stale card
-(`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation `evolve`
+(`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation's own
+`fuse` and `restructure` run the gate too, on the model curation itself runs on
+(the `memory` aux preset), not the `judge` preset. Curation `evolve`
 output is not re-gated for composition: the curation judge itself carries the doctrine and the
 catalog in its prompt, so gating its output would re-judge the same judge. It is security-scanned,
 though: an `evolve` whose result needs review is not written — the skills judge may clear a
@@ -289,7 +293,8 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 — a one-off nitpick specific to the current task is explicitly excluded:
 
 - **`correction`** — while a skill was loaded (visible in the turns'
-  `SKILLS LOADED` list, built from turn-indexed `skill_calls`; a skill opened
+  `SKILLS LOADED` list, built from turn-indexed `skill_calls` numbered like
+  the turns the pass reads — by place in the whole session; a skill opened
   with `skill_view` and one whose `SKILL.md` was read both count, and a run of
   one of its scripts shows with its outcome), the user redirected or corrected
   the output — or its script failed — in a way that implies the skill itself
@@ -297,7 +302,10 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 - **`gap`** — the agent completed a multi-step procedure that no existing skill
   covers and that looks likely to recur; its `skill` field is normalized to
   `new:<working-name>`. The prompt carries the catalog (every skill's name and
-  a one-line description, bounded) and the open gaps. A procedure a skill
+  a one-line description) and the open gaps. The catalog has a size budget and
+  never drops a name — a skill the pass cannot see would read as a gap — so in
+  a large catalog it is the descriptions that shrink, all alike, down to names
+  alone. A procedure a skill
   already covers, even in part, is a `correction` on that skill — whether or
   not the session loaded it; the record does not say which — and a
   procedure an open gap names reuses that gap's name.
@@ -478,7 +486,8 @@ before it is applied:
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
 
-**Nothing autonomous may change a skill something depends on.** A workflow work
+**Nothing autonomous may restructure, fuse away or retire a skill something
+depends on.** A workflow work
 node names skills in `skills: [...]`, so a skill is not a leaf: rewriting one
 changes what that workflow does, and removing one leaves the node pointing at a
 name that does not resolve. `_dependency_refusal` (`durin/agent/skills_store.py`)
@@ -486,6 +495,8 @@ consults the reverse graph (`durin/registry_graph.py`) and refuses
 `dream_restructure_skill` and any `dream_fuse_skills` source that is referenced;
 `retire` is guarded at its curation call site rather than inside `remove_skill`,
 because a user deleting their own skill from the CLI or the webui is entitled to.
+An `evolve` is not refused: a bounded text edit to a skill a workflow names
+lands like any other.
 The refusal carries the `dependents` back to the caller so the work can be
 surfaced to the user as a suggestion instead of discarded. This is a different
 question from the `manual` check beside it: that one answers *who may change

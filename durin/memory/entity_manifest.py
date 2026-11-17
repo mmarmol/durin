@@ -12,7 +12,7 @@ from typing import Sequence
 
 from durin.memory.entity_page import EntityPage
 
-__all__ = ["build_entity_manifest"]
+__all__ = ["build_entity_manifest", "full_body_entries"]
 
 
 def _one_line(page: EntityPage) -> str:
@@ -41,6 +41,49 @@ def _full_entry(ref: str, page: EntityPage) -> str:
     return f"{head}:\n{body}" if body else head
 
 
+def _pages_by_type(root: Path, types: Sequence[str]) -> list[tuple[str, EntityPage]]:
+    """Every page of ``types`` as ``(ref, page)``: the types in the order
+    given, each type's pages in slug order."""
+    out: list[tuple[str, EntityPage]] = []
+    for type_ in types:
+        tdir = root / type_
+        if not tdir.is_dir():
+            continue
+        for md in sorted(tdir.glob("*.md")):
+            page = EntityPage.from_file(md)
+            if page is not None:
+                out.append((f"{type_}:{md.stem}", page))
+    return out
+
+
+def full_body_entries(
+    workspace: Path,
+    *,
+    types: Sequence[str] | None = None,
+    refs: Sequence[str] | None = None,
+    limit: int | None = None,
+) -> list[tuple[str, str]]:
+    """``(ref, entry)`` pairs, each entry carrying the page's full body, for a
+    caller that may replace a body and so has to know exactly which pages it
+    showed. ``types`` walks those types (see ``_pages_by_type``) up to
+    ``limit``; ``refs`` renders exactly those pages, skipping any that does
+    not exist."""
+    root = Path(workspace) / "memory" / "entities"
+    pages: list[tuple[str, EntityPage]] = []
+    if refs is not None:
+        for ref in refs:
+            type_, _, slug = ref.partition(":")
+            path = root / type_ / f"{slug}.md"
+            page = EntityPage.from_file(path) if type_ and slug and path.is_file() else None
+            if page is not None:
+                pages.append((ref, page))
+    elif types:
+        pages = _pages_by_type(root, types)
+    if limit is not None:
+        pages = pages[:limit]
+    return [(ref, _full_entry(ref, page)) for ref, page in pages]
+
+
 def build_entity_manifest(
     workspace: Path,
     *,
@@ -52,10 +95,11 @@ def build_entity_manifest(
 ) -> str:
     """Return a compact manifest of existing entities for prompt seeding.
 
-    `types` mode: enumerate ALL entities of those types by walking
-    memory/entities/<type>/ directories directly. Suited for small
-    canonical sets (feedback, stance, practice) where exhaustive listing
-    is cheap and completeness matters more than relevance ranking.
+    `types` mode: enumerate the entities of those types by walking
+    memory/entities/<type>/ directories directly — the types in the order
+    given, each in slug order — and keep the first `limit`. Suited for small
+    canonical sets (feedback, stance, practice) where listing is cheap; a set
+    larger than `limit` is cut, so the later types can go unlisted.
 
     `query` mode: retrieve the top-k relevant entities via the search
     pipeline. Suited for large sets (person, place, topic) where
@@ -70,16 +114,9 @@ def build_entity_manifest(
     lines: list[str] = []
 
     if types:
-        for type_ in types:
-            tdir = root / type_
-            if not tdir.is_dir():
-                continue
-            for md in sorted(tdir.glob("*.md")):
-                page = EntityPage.from_file(md)
-                if page is not None:
-                    ref = f"{type_}:{md.stem}"
-                    lines.append(_full_entry(ref, page) if full_body else _line(ref, page))
-        return "\n".join(lines[:limit])
+        for ref, page in _pages_by_type(root, types)[:limit]:
+            lines.append(_full_entry(ref, page) if full_body else _line(ref, page))
+        return "\n".join(lines)
 
     if query and query.strip():
         from durin.memory.scope import ScopePredicate

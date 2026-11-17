@@ -1249,11 +1249,16 @@ class MemoryDreamLearningsEvent(TypedDict):
     wrote them as feedback/stance/practice entities. ``proposed`` is what the
     LLM returned (before type-guard filtering); ``written`` is what was
     committed. Lets dashboards measure learnings precision over time.
+
+    ``reasked`` is how many existing pages a learning resolved to without the
+    answer having been shown their body. Above zero, the span was asked a
+    second time with those pages shown, so it also counts the extra calls.
     """
 
     proposed: int
     written: int
     refs: list[str]  # the entity refs written
+    reasked: NotRequired[int]
 
 
 class MemoryDreamRunSummaryEvent(TypedDict):

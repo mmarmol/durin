@@ -234,3 +234,36 @@ def test_apply_command_recommendation_fails_when_node_also_has_script(tmp_path):
     assert next(n for n in data["nodes"] if n["id"] == "a").get("command") is None  # unchanged on disk
     recs = wr.open_recommendations(tmp_path, "wf")
     assert len(recs) == 1 and recs[0]["id"] == rid          # rec stays open
+
+
+def test_the_same_structural_idea_reworded_is_one_record(tmp_path):
+    """The model explains a proposal in new words on every pass. The proposal
+    is the idea; a new explanation of it must not queue a new record."""
+    from durin.workflow import workflow_recommendations as wr
+
+    first = wr.log_structural_suggestion(
+        tmp_path, "pipeline",
+        proposal={"target_id": "check", "field": "cases",
+                  "proposed": {"FOUND": "use", "MISSING": "make"},
+                  "reason": "The check fails on a normal route."},
+        why_rejected="outside the editable scope", diagnostic="gate_fails: check x3",
+        run_ids=["r1"])
+    second = wr.log_structural_suggestion(
+        tmp_path, "pipeline",
+        proposal={"target_id": "check", "field": "cases",
+                  "proposed": {"FOUND": "use", "MISSING": "make"},
+                  "reason": "Its FAIL is an expected branch, so route it by cases."},
+        why_rejected="outside the editable scope", diagnostic="gate_fails: check x2",
+        run_ids=["r2"])
+    other = wr.log_structural_suggestion(
+        tmp_path, "pipeline",
+        proposal={"target_id": "check", "field": "cases",
+                  "proposed": {"FOUND": "use", "MISSING": None},
+                  "reason": "The check fails on a normal route."},
+        why_rejected="outside the editable scope", diagnostic="gate_fails: check x2")
+
+    assert first == second and other != first
+    records = wr.open_recommendations(tmp_path, "pipeline")
+    repeated = next(r for r in records if r["id"] == first)
+    assert repeated["count"] == 2 and repeated["run_ids"] == ["r1", "r2"]
+    assert len(records) == 2
