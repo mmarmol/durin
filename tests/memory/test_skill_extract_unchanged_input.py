@@ -1,9 +1,9 @@
 """The skill-extract pass does not run its sub-agent when everything it would
 send the model is identical to what its last completed run sent.
 
-The pass picks the newest sessions by modification time, with no cursor, and
-adds the open skill gaps; on a night where none of that moved, a model run can
-only repeat the previous night's answer. Each test drives the real pass
+The pass reads the open skill gaps that were seen often enough, with what
+their sessions ended with; on a night where none of that moved, a model run
+can only repeat the previous night's answer. Each test drives the real pass
 function with a fake provider and counts the model calls.
 """
 import json
@@ -72,6 +72,11 @@ def ws(tmp_path):
              ("assistant", "build the wheel, reinstall it, run the doctor"), mtime=1_000)
     _session(tmp_path, "beta", ("user", "rotate the logs"),
              ("assistant", "done with logrotate"), mtime=2_000)
+    # Two gaps the pass is handed: each was seen in both sessions.
+    for session in ("alpha", "beta"):
+        _gap(tmp_path, session=session)
+        _gap(tmp_path, name="db-backup", issue="the database was backed up by hand",
+             session=session)
     return tmp_path
 
 
@@ -121,23 +126,10 @@ def test_a_corrupt_state_file_runs(ws):
 # --- every input the model receives re-runs the pass when it changes ---------
 
 
-def _edit_session(ws):
-    with (ws / "sessions" / "beta.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"role": "user", "content": "and compress the old ones"}) + "\n")
-
-
-def _new_session_enters_selection(ws):
-    _session(ws, "gamma", ("user", "draft the weekly report"), mtime=3_000)
-
-
-def _older_session_bumped_into_selection(ws):
-    # With a selection of one, "beta" (newest) is in and "alpha" is out;
-    # alpha's file moving to the front swaps who is selected.
-    os.utime(ws / "sessions" / "alpha.jsonl", (5_000, 5_000))
-
-
 def _gap_opened(ws):
-    _gap(ws, name="weekly-report", issue="no skill drafts the weekly report")
+    # Seen in two sessions: one the extractor is handed.
+    _gap(ws, name="weekly-report", issue="no skill drafts the weekly report", session="mon")
+    _gap(ws, name="weekly-report", issue="no skill drafts the weekly report", session="tue")
 
 
 def _gap_closed(ws):
@@ -146,7 +138,7 @@ def _gap_closed(ws):
 
 
 def _gap_seen_again(ws):
-    _gap(ws)  # same gap, same issue: its count goes up
+    _gap(ws, session="later")  # same gap, one more occasion
 
 
 def _gap_evidence_changed(ws):
@@ -190,8 +182,6 @@ def _workflow_installed(ws):
 
 
 CHANGES = {
-    "session_edited": _edit_session,
-    "new_session_in_selection": _new_session_enters_selection,
     "gap_opened": _gap_opened,
     "gap_closed": _gap_closed,
     "gap_seen_again": _gap_seen_again,
@@ -206,6 +196,7 @@ CHANGES = {
 def test_an_input_change_runs_the_pass(ws, change):
     _session(ws, "origin", ("user", "release it"),
              ("assistant", "built, reinstalled, doctor green"), mtime=500)
+    _gap(ws, session="earlier")
     _gap(ws, session="origin")
     provider = _answering_provider()
     run_skill_extract_pass(ws, provider=provider, model="test-model")
@@ -227,30 +218,51 @@ EVIDENCE_CHANGES = {
 
 @pytest.mark.parametrize("change", sorted(EVIDENCE_CHANGES))
 def test_a_gap_evidence_change_runs_the_pass(ws, change):
-    """With no recent-sessions selection at all, the gap's own session reaches
-    the model only as the gap's evidence: a change there still re-runs."""
+    """A gap's own session reaches the model as the gap's evidence: a change
+    there re-runs the pass."""
     _session(ws, "origin", ("user", "release it"),
              ("assistant", "built, reinstalled, doctor green"), mtime=500)
+    _gap(ws, session="earlier")
     _gap(ws, session="origin")
     provider = _answering_provider()
-    run_skill_extract_pass(ws, provider=provider, model="test-model", max_sessions=0)
+    run_skill_extract_pass(ws, provider=provider, model="test-model")
     settled = _calls(provider)
-    run_skill_extract_pass(ws, provider=provider, model="test-model", max_sessions=0)
+    run_skill_extract_pass(ws, provider=provider, model="test-model")
     assert _calls(provider) == settled
 
     EVIDENCE_CHANGES[change](ws)
-    out = run_skill_extract_pass(ws, provider=provider, model="test-model", max_sessions=0)
+    out = run_skill_extract_pass(ws, provider=provider, model="test-model")
     assert _calls(provider) > settled, change
     assert "skipped" not in out
 
 
-def test_a_session_entering_a_narrow_selection_runs_the_pass(ws):
+def test_a_session_no_gap_was_seen_in_does_not_rerun_the_pass(ws):
+    """The pass reads sessions only as a gap's evidence, so a conversation
+    with no gap behind it is not its input."""
     provider = _answering_provider()
-    run_skill_extract_pass(ws, provider=provider, model="test-model", max_sessions=1)
+    run_skill_extract_pass(ws, provider=provider, model="test-model")
     settled = _calls(provider)
-    _older_session_bumped_into_selection(ws)
-    run_skill_extract_pass(ws, provider=provider, model="test-model", max_sessions=1)
-    assert _calls(provider) > settled
+
+    _session(ws, "gamma", ("user", "draft the weekly report"), mtime=3_000)
+    out = run_skill_extract_pass(ws, provider=provider, model="test-model")
+
+    assert _calls(provider) == settled
+    assert out["skipped"] == "unchanged"
+
+
+def test_no_gap_seen_often_enough_makes_no_model_call(tmp_path, events):
+    _session(tmp_path, "alpha", ("user", "how do I cut a release?"),
+             ("assistant", "build the wheel, reinstall it, run the doctor"))
+    _gap(tmp_path, session="alpha")
+    provider = _answering_provider()
+
+    out = run_skill_extract_pass(tmp_path, provider=provider, model="test-model")
+
+    assert _calls(provider) == 0
+    assert out["skipped"] == "no_gaps" and out["skills_touched"] == 0
+    (ev,) = _extract_events(events)
+    assert ev["skipped"] == "no_gaps"
+    assert ev["gaps_waiting"] == 1
 
 
 def test_a_different_model_runs_the_pass(ws):
@@ -279,8 +291,8 @@ def test_a_changed_tool_set_runs_the_pass(ws, monkeypatch):
 
     build = dream_passes._build_skill_extract_tools
 
-    def fewer_tools(workspace, fs):
-        tools = build(workspace, fs)
+    def fewer_tools(workspace, fs, **kwargs):
+        tools = build(workspace, fs, **kwargs)
         tools.unregister("list_workflows")
         return tools
 
@@ -350,7 +362,7 @@ def test_an_aborted_state_write_keeps_the_previous_state(ws, monkeypatch):
     state = ws / "memory" / STATE_FILE
     before = state.read_bytes()
 
-    _edit_session(ws)
+    _gap_seen_again(ws)
     real = aw.atomic_write_text
     writes: list[str] = []
 
@@ -368,3 +380,27 @@ def test_an_aborted_state_write_keeps_the_previous_state(ws, monkeypatch):
     settled = _calls(provider)
     run_skill_extract_pass(ws, provider=provider, model="test-model")
     assert _calls(provider) > settled
+
+
+def test_a_gap_seen_once_is_counted_as_waiting(ws, events):
+    """The pass reports how many open gaps it was not handed, so a queue
+    that only grows is visible from the event."""
+    _gap(ws, name="weekly-report", issue="no skill drafts the weekly report", session="mon")
+
+    run_skill_extract_pass(ws, provider=_answering_provider(), model="test-model")
+
+    (ev,) = _extract_events(events)
+    assert ev["gaps_waiting"] == 1
+
+
+def test_a_gap_seen_for_the_first_time_does_not_rerun_the_pass(ws):
+    """A new gap waits to be seen again, so it changes nothing the pass reads."""
+    provider = _answering_provider()
+    run_skill_extract_pass(ws, provider=provider, model="test-model")
+    settled = _calls(provider)
+
+    _gap(ws, name="weekly-report", issue="no skill drafts the weekly report", session="mon")
+    out = run_skill_extract_pass(ws, provider=provider, model="test-model")
+
+    assert _calls(provider) == settled
+    assert out["skipped"] == "unchanged"

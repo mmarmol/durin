@@ -196,7 +196,9 @@ def run_full_dream(
                 se.get("seeded_docs", 0), se.get("entities", 0),
                 se.get("duration_ms", 0),
                 ct.get("topics", 0), ct.get("duration_ms", 0))
-            sk = run_skill_extract_pass(workspace, model=model)
+            sk = run_skill_extract_pass(
+                workspace, model=model,
+                min_gap_occasions=config.memory.dream.skill_gap_min_occasions)
             rf = run_refine_pass(
                 workspace, model=model,
                 enabled=absorb.enabled,

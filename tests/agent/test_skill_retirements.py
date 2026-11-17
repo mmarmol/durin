@@ -231,9 +231,11 @@ def test_the_extractor_is_told_which_skills_are_retired(tmp_path: Path) -> None:
     _skill(tmp_path, "athena-logs")
     ss.remove_skill(tmp_path, "athena-logs", reason="never worked",
                     replaced_by="athena-boto3-query")
-    log_observation(tmp_path, skill="new:reporting", kind="gap", issue="i", improvement="m")
+    for session in ("websocket_a", "websocket_b"):
+        log_observation(tmp_path, skill="new:reporting", kind="gap", issue="i",
+                        improvement="m", session=session)
 
-    messages = _skill_extract_messages(tmp_path, max_sessions=3)
+    messages = _skill_extract_messages(tmp_path)
 
     system = messages[0]["content"]
     assert "RETIRED SKILLS" in system

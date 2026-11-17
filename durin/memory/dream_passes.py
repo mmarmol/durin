@@ -352,11 +352,13 @@ def _emit(event: str, **data: Any) -> None:
         pass
 
 
-_SKILL_EXTRACT_PROMPT = """You are durin's skill extractor. Review the recent \
-conversation(s) below. If the user established a REUSABLE PROCEDURE for a \
-recurring task — a sequence of steps, a workflow, a how-to to follow again \
-later — capture it as a skill. A skill is a step-by-step procedure to FOLLOW, \
-not a fact and not a one-off.
+_SKILL_EXTRACT_PROMPT = """You are durin's skill extractor. Below are LOGGED \
+GAPS: procedures the agent carried out with no skill covering them, each seen \
+on more than one occasion, with a working name and what its sessions ended \
+with. Where a gap is a REUSABLE PROCEDURE for a recurring task — a sequence \
+of steps, a how-to to follow again later — capture it as a skill. A skill is \
+a step-by-step procedure to FOLLOW, not a fact and not a one-off. Author \
+skills only for the gaps listed.
 
 For each reusable procedure you find, prefer acquiring an existing published \
 skill over writing one from scratch:
@@ -364,22 +366,21 @@ skill over writing one from scratch:
 2. If a strong hit exists, call `skill_acquire_seed` with that hit's ref. The \
 security gate runs automatically, so you only ever receive SAFE, allowlisted \
 content; a risky or un-allowlisted ref returns {{"seed": null}}. If you get a \
-seed, adapt it to the conversation and save it with `skill_write`.
+seed, adapt it to what the sessions show and save it with `skill_write`.
 3. If search finds nothing usable, or `skill_acquire_seed` returns null, AUTHOR \
-the skill yourself from the conversation via `skill_write`.
+the skill yourself from the gap and its evidence via `skill_write`.
 
-Reuse/extend an existing LOCAL skill instead of duplicating it. If the \
-conversation contains no reusable procedure, do nothing — don't call any tool.
+Reuse/extend an existing LOCAL skill instead of duplicating it. If no gap \
+holds a reusable procedure, do nothing — don't call any tool.
 
 Author every skill entirely in ENGLISH — name, description, body — even when \
-the conversation is in another language. Descriptions state that their triggers \
+the sessions are in another language. Descriptions state that their triggers \
 apply regardless of the language the user writes in, instead of duplicating \
 trigger phrases per language.
 
-The input may include LOGGED GAPS — procedures the agent already flagged as \
-uncovered while working, with a working name. Treat each gap as a strong \
-candidate; when you author a skill for one, use its working name VERBATIM as \
-the skill name so the gap can be closed automatically.
+Each gap line gives how many separate occasions it was seen on. When you \
+author a skill for a gap, use its working name VERBATIM as the skill name so \
+the gap can be closed automatically.
 
 Encode only facts the session shows working: commands and queries that \
 succeeded, names and fields confirmed by real output. Never encode a failed \
@@ -437,15 +438,35 @@ CROSS-CUTTING PRINCIPLES — every skill you author or adapt must comply:
 {principles}"""
 
 
-def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict] | None:
-    """Assemble the skill-extract sub-agent's messages, or None when there is
-    nothing to mine: no recent sessions AND no logged gap observations."""
-    from durin.agent.skill_observations import active_principles, open_observations
+# A gap is handed to the extractor once it was seen on this many separate
+# occasions. One sighting says a procedure happened, not that it will again.
+_GAP_MIN_OCCASIONS = 2
 
-    sessions_text = _recent_sessions_text(workspace, max_sessions)
-    gaps = [r for r in open_observations(workspace)
-            if str(r.get("skill", "")).startswith("new:")]
-    if not sessions_text.strip() and not gaps:
+
+def _gaps_by_readiness(workspace: Path, min_occasions: int) -> tuple[list[dict], list[dict]]:
+    """The open gaps split in two: those seen often enough to author from,
+    and those still waiting to be seen again."""
+    from durin.agent.skill_observations import open_gaps
+
+    ready: list[dict] = []
+    waiting: list[dict] = []
+    for gap in open_gaps(workspace):
+        (ready if gap["occasions"] >= min_occasions else waiting).append(gap)
+    return ready, waiting
+
+
+def _skill_extract_messages(
+        workspace: Path, *, min_gap_occasions: int = _GAP_MIN_OCCASIONS) -> list[dict] | None:
+    """Assemble the skill-extract sub-agent's messages, or None when no gap
+    was seen often enough to author from.
+
+    The gaps are all the pass reads: a procedure reaches it through the
+    signal pass logging a gap, never from a session's text directly, so the
+    number of occasions is the one bar every authored skill has passed."""
+    from durin.agent.skill_observations import active_principles
+
+    gaps, _waiting = _gaps_by_readiness(workspace, min_gap_occasions)
+    if not gaps:
         return None
 
     principles = active_principles(workspace)
@@ -454,18 +475,14 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
         principles_block = _PRINCIPLES_BLOCK.format(principles="\n".join(
             f"- {p.get('text')}" for p in principles))
 
-    user_parts: list[str] = []
-    if gaps:
-        gap_lines = "\n".join(
-            f"- {r.get('skill')}: {r.get('issue')} — {r.get('improvement')}"
-            f" (seen x{r.get('count', 1)})"
-            for r in gaps)
-        user_parts.append(f"=== LOGGED GAPS ===\n{gap_lines}")
-        evidence = _gap_evidence(workspace, gaps)
-        if evidence:
-            user_parts.append(evidence)
-    if sessions_text.strip():
-        user_parts.append(sessions_text)
+    gap_lines = "\n".join(
+        f"- {gap['skill']}: {gap['issue']} — {gap['improvement']}"
+        f" (seen on {gap['occasions']} occasion(s))"
+        for gap in gaps)
+    user_parts = [f"=== LOGGED GAPS ===\n{gap_lines}"]
+    evidence = _gap_evidence(workspace, gaps)
+    if evidence:
+        user_parts.append(evidence)
 
     from durin.agent.skill_retirements import retired_skills
     from durin.agent.skills_doctrine import (
@@ -497,9 +514,12 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     ]
 
 
-_GAP_SESSION_TAIL_CHARS = 2000
-_GAP_RELATED_RECORDS = 5
+# What the ends of the gaps' sessions may take of the request in all, and the
+# least one session's end gets however many gaps share it.
 _GAP_EVIDENCE_TOTAL_CHARS = 12000
+_GAP_SESSION_TAIL_CHARS = 2000
+_GAP_SESSIONS_PER_GAP = 2
+_GAP_RELATED_RECORDS = 5
 
 
 def _session_tail(workspace: Path, ref: str, chars: int) -> str:
@@ -527,29 +547,32 @@ def _gap_evidence(workspace: Path, gaps: list[dict]) -> str:
     overriding its text."""
     from durin.agent.skill_observations import observations_from_sessions
 
+    per_gap = [[str(s) for s in (gap.get("sessions") or []) if s][-_GAP_SESSIONS_PER_GAP:]
+               for gap in gaps]
+    # The sessions are the only place the procedure itself is shown, so their
+    # ends split the whole budget: one gap alone gets long ones. With more
+    # sessions than the budget holds at the least share, the gaps past it
+    # come with their line and their related records only.
+    share = max(_GAP_SESSION_TAIL_CHARS,
+                _GAP_EVIDENCE_TOTAL_CHARS // max(1, sum(len(refs) for refs in per_gap)))
+    remaining = _GAP_EVIDENCE_TOTAL_CHARS
     blocks: list[str] = []
-    used = 0
-    for gap in gaps:
-        refs = [str(s) for s in (gap.get("sessions") or []) if s][-2:]
+    for gap, refs in zip(gaps, per_gap):
         if not refs:
             continue
         parts = []
         for ref in refs:
-            tail = _session_tail(workspace, ref, _GAP_SESSION_TAIL_CHARS)
+            tail = _session_tail(workspace, ref, min(share, remaining)) if remaining > 0 else ""
             if tail:
+                remaining -= len(tail)
                 parts.append(f"end of session {ref}:\n{tail}")
         related = observations_from_sessions(workspace, refs)[:_GAP_RELATED_RECORDS]
         if related:
             parts.append("recorded from the same session(s):\n" + "\n".join(
                 f"- {r.get('skill')} ({r.get('kind')}): {r.get('issue')} → {r.get('improvement')}"
                 for r in related))
-        if not parts:
-            continue
-        block = f"[{gap.get('skill')}]\n" + "\n".join(parts)
-        if used + len(block) > _GAP_EVIDENCE_TOTAL_CHARS:
-            break
-        blocks.append(block)
-        used += len(block)
+        if parts:
+            blocks.append(f"[{gap.get('skill')}]\n" + "\n".join(parts))
     if not blocks:
         return ""
     return ("=== EVIDENCE FOR THE GAPS ===\n"
@@ -593,50 +616,6 @@ def _resolve_gap_observations(workspace: Path) -> int:
     return apply_dispositions(workspace, done).get("applied", 0)
 
 
-_SESSIONS_WINDOW_CHARS = 12000
-
-
-def _head_and_tail(text: str, budget: int) -> str:
-    """``text`` cut to ``budget`` chars, keeping its start and its end."""
-    if len(text) <= budget:
-        return text
-    half = budget // 2
-    return text[:half] + "\n\n[... middle truncated ...]\n\n" + text[-half:]
-
-
-def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
-    """The newest sessions' text: every message that has content, in order —
-    what was said and what the tools returned, which is where the commands
-    that worked are.
-
-    Each session gets its share of the window and is trimmed on its own,
-    keeping its head and its tail. A session's end is where the procedure that
-    finally worked lives; trimming the joined text instead kept the oldest
-    session's end and dropped the newest one's."""
-    from durin.memory.extract_runner import load_session
-    sdir = Path(workspace) / "sessions"
-    if not sdir.is_dir():
-        return ""
-    files = sorted(
-        (p for p in sdir.glob("*.jsonl") if not is_workflow_session_file(p)),
-        key=lambda p: p.stat().st_mtime, reverse=True,
-    )
-    blocks: list[tuple[str, str]] = []
-    for jsonl in files[:max_sessions]:
-        _meta, msgs = load_session(jsonl)
-        turns = "\n".join(
-            f"{str(m.get('role') or '?').upper()}: {m.get('content')}"
-            for m in msgs if m.get("content")
-        )
-        if turns.strip():
-            blocks.append((f"=== session {jsonl.stem} ===\n", turns))
-    if not blocks:
-        return ""
-    share = _SESSIONS_WINDOW_CHARS // len(blocks)
-    return "\n\n".join(header + _head_and_tail(turns, share - len(header))
-                       for header, turns in blocks)
-
-
 def _list_skills(workspace: Path) -> list[str]:
     sdir = Path(workspace) / "skills"
     if not sdir.is_dir():
@@ -645,7 +624,8 @@ def _list_skills(workspace: Path) -> list[str]:
                   if p.is_dir() and (p / "SKILL.md").is_file())
 
 
-def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
+def _build_skill_extract_tools(workspace: Path, fs: Any,
+                               gap_names: list[str] | None = None) -> Any:
     """Toolset for the skill-extract sub-agent.
 
     Two ways to land a skill: AUTHOR from the conversation (Read/Edit/SkillWrite)
@@ -684,7 +664,10 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     # Autonomous authoring: the composition gate has no override here — a
     # narration-only body is rejected absolutely and the subagent must
     # restructure (delegate / bundle) before the skill can land.
-    tools.register(SkillWriteTool(workspace=workspace, gate_mode="hard"))
+    # It writes skills for the gaps it was handed and no others: the bar on
+    # how often a gap was seen holds only if nothing else can be authored.
+    tools.register(SkillWriteTool(workspace=workspace, gate_mode="hard",
+                                  only_names=gap_names))
     tools.register(SkillSearchTool(workspace=workspace, registries=registries,
                                    allowlist=allowlist, limit=limit))
     tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=allowlist))
@@ -702,8 +685,8 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
 
 
 # The fingerprint of what the last COMPLETED skill-extract run sent its model.
-# The pass picks the newest sessions with no cursor and re-reads the same open
-# gaps, so on a night where nothing moved a run can only repeat itself; the
+# The pass re-reads the same open gaps every night, so on a night where
+# nothing moved a run can only repeat itself; the
 # fingerprint lets the pass skip that run. A run that failed, raised or hit its
 # iteration budget is not recorded, so the next run tries again.
 _SKILL_EXTRACT_INPUT_FILE = ".skill_extract_input.json"
@@ -757,31 +740,42 @@ def run_skill_extract_pass(
     *,
     provider: Any | None = None,
     model: str | None = None,
-    max_sessions: int = 3,
+    min_gap_occasions: int = _GAP_MIN_OCCASIONS,
 ) -> dict:
-    """Mine recent sessions for reusable procedures and create/update skills.
+    """Turn the logged gaps that keep coming back into skills.
 
     The skills arm of the extract dream: an agentic sub-agent with
-    ``skill_write`` writes a SKILL.md when a recurring procedure appears. Sync
-    wrapper over the async AgentRunner flow (the cron calls it in a thread)."""
+    ``skill_write`` writes a SKILL.md for a logged gap once it was seen on
+    ``min_gap_occasions`` separate occasions; until then the gap waits in the
+    queue, and with none ready the pass makes no model call. Sync wrapper
+    over the async AgentRunner flow (the cron calls it in a thread)."""
     import asyncio
     return asyncio.run(_skill_extract_async(
-        workspace, provider=provider, model=model, max_sessions=max_sessions))
+        workspace, provider=provider, model=model,
+        min_gap_occasions=min_gap_occasions))
 
 
 async def _skill_extract_async(
-    workspace: Path, *, provider: Any | None, model: str | None, max_sessions: int,
+    workspace: Path, *, provider: Any | None, model: str | None,
+    min_gap_occasions: int = _GAP_MIN_OCCASIONS,
 ) -> dict:
     t0 = time.perf_counter()
-    messages = _skill_extract_messages(workspace, max_sessions=max_sessions)
+    gaps_waiting = len(_gaps_by_readiness(workspace, min_gap_occasions)[1])
+    messages = _skill_extract_messages(workspace, min_gap_occasions=min_gap_occasions)
     if messages is None:
-        return {"skills_touched": 0, "reason": "no_sessions"}
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        _emit("memory.dream.skill_extract", skills_touched=0, gaps_closed=0,
+              gaps_waiting=gaps_waiting, duration_ms=duration_ms, skipped="no_gaps")
+        return {"skills_touched": 0, "gaps_closed": 0, "duration_ms": duration_ms,
+                "skipped": "no_gaps"}
 
     from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.agent.tools.file_state import FileStates
 
     fs = FileStates()
-    tools = _build_skill_extract_tools(workspace, fs)
+    ready, _waiting = _gaps_by_readiness(workspace, min_gap_occasions)
+    tools = _build_skill_extract_tools(
+        workspace, fs, gap_names=[str(gap["skill"])[4:] for gap in ready])
 
     if provider is None or not model:
         from durin.config.loader import load_config
@@ -800,7 +794,7 @@ async def _skill_extract_async(
     if fingerprint == _last_skill_extract_fingerprint(workspace):
         duration_ms = int((time.perf_counter() - t0) * 1000)
         _emit("memory.dream.skill_extract", skills_touched=0, gaps_closed=0,
-              duration_ms=duration_ms, skipped="unchanged")
+              gaps_waiting=gaps_waiting, duration_ms=duration_ms, skipped="unchanged")
         logger.info("skill-extract dream: skipped, input unchanged since the last "
                     "completed run")
         return {"skills_touched": 0, "gaps_closed": 0, "duration_ms": duration_ms,
@@ -814,6 +808,7 @@ async def _skill_extract_async(
         ))
     except Exception as exc:  # noqa: BLE001
         _emit("memory.dream.skill_extract", skills_touched=0, gaps_closed=0,
+              gaps_waiting=gaps_waiting,
               duration_ms=int((time.perf_counter() - t0) * 1000),
               stop_reason="exception")
         return {"skills_touched": 0, "error": str(exc)}
@@ -845,8 +840,8 @@ async def _skill_extract_async(
     gaps_closed = _resolve_gap_observations(workspace)
     duration_ms = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.skill_extract", skills_touched=touched,
-          gaps_closed=gaps_closed, duration_ms=duration_ms,
-          stop_reason=result.stop_reason)
+          gaps_closed=gaps_closed, gaps_waiting=gaps_waiting,
+          duration_ms=duration_ms, stop_reason=result.stop_reason)
     logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed in {}ms ({})",
                 touched, gaps_closed, duration_ms, result.stop_reason)
     return {"skills_touched": touched, "gaps_closed": gaps_closed,

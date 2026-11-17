@@ -273,9 +273,10 @@ session close) run only the extract pass, throttled by `ReactiveDreamGate`.
    link is absent. Catch-and-repair pass; skips sessions with no ingested references.
 
 3. **Skill-extract** (`dream_passes.run_skill_extract_pass`): an agentic sub-agent
-   (spins `AgentRunner`) mines recent sessions and logged skill gaps for reusable
-   procedures, then calls `skill_write` to author or update skills. It makes no
-   model call when its whole request matches the last completed run's.
+   (spins `AgentRunner`) works from the logged skill gaps seen on more than one
+   occasion, then calls `skill_write` to author skills. It makes no model call
+   when no gap is over that bar or its whole request matches the last
+   completed run's.
 
 4. **Refine** (`dream_passes.run_refine_pass` → `refine_dream.run_refine`): find
    entity pairs sharing aliases via `AliasIndex`, skip cross-type / tombstoned /
@@ -381,6 +382,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Detect skill corrections and gaps in session turns during extract (feeds daily curation). |
+| `memory.dream.skill_gap_min_occasions` | `2` | Occasions a logged skill gap must be seen on before skill-extract may author from it. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive triggers; 0 disables. |
 | `memory.dream.max_seconds_per_run` | `3600` | Wall-clock cap in seconds for each of the extract, refine and skill-review passes; a pass yields at the cap and resumes on the next run; 0 = unbounded. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for always-on pinned guidance; 0 disables the pin. |

@@ -303,10 +303,12 @@ cannot answer for `auto` skills (those get applied without a human gate).
 
 **`memory.dream.skill_extract`** (`durin/telemetry/schema.py`:
 `MemoryDreamSkillExtractEvent`) is emitted once per `run_skill_extract_pass`
-invocation that has sessions or gaps to read, with
-`{skills_touched, gaps_closed, duration_ms}` plus one of two fields that say
-what kind of pass it was. `skipped: "unchanged"` marks a pass that made no
-model call because its whole request matched the last completed run's
+invocation, with `{skills_touched, gaps_closed, gaps_waiting, duration_ms}`
+plus one of two fields that say what kind of pass it was. `gaps_waiting` is
+how many open gaps were not handed to the pass because they were seen on too
+few occasions — a queue that only grows shows here. `skipped` marks a pass
+that made no model call: `"no_gaps"` when no gap was over the bar,
+`"unchanged"` when its whole request matched the last completed run's
 (`02_lifecycle_and_curation.md`); its counts are 0. A pass that ran carries
 `stop_reason`: the agent runner's stop reason (`completed` when the sub-agent
 reached an answer, `error` for a provider failure, `max_iterations` for a
@@ -429,7 +431,7 @@ them — there is no separate skills-specific telemetry sink.
 | `SkillSuggestionResolvedEvent` | `durin/telemetry/schema.py` | `{skill, action, resolution}` — user's accept/reject of a manual-skill suggestion. |
 | `SkillObservationResolvedEvent` | `durin/telemetry/schema.py` | `{skill, kind, disposition}` — user's manual resolve/dismiss of an open observation. |
 | `SkillObservationStalledEvent` | `durin/telemetry/schema.py` | `{skill, kind, attempts}` — curation stopped trying an OPEN observation (emitted by `apply_dispositions`). |
-| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, gaps_closed?, duration_ms?, stop_reason?, skipped?}` — one skill-extract pass summary; `skipped: "unchanged"` on a pass that did not run, `stop_reason` on one that did. |
+| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, gaps_closed?, gaps_waiting?, duration_ms?, stop_reason?, skipped?}` — one skill-extract pass summary; `skipped` (`"no_gaps"` or `"unchanged"`) on a pass that did not run, `stop_reason` on one that did. |
 | `MemoryDreamSkillSignalsEvent` | `durin/telemetry/schema.py` | `{proposed, logged, skills?}` — one hindsight-pass summary. |
 | `MemorySkillMissEvent` | `durin/telemetry/schema.py` | `{query, result_count, had_skill_candidate, iteration?, session_key?}` — a zero-result skill search. |
 | `_finalize_skill` | `durin/agent/skills_store.py` | Emits `skill.authored` (`ramp="write"`/`"publish"`) once a skill clears the shared activation core; a quarantined skill emits nothing. |

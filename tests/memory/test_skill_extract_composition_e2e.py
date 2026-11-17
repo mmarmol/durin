@@ -6,6 +6,7 @@ scripted fakes."""
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+from durin.agent.skill_observations import log_observation
 from durin.memory.dream_passes import run_skill_extract_pass
 from durin.providers.base import LLMResponse, ToolCallRequest
 
@@ -71,6 +72,10 @@ def test_narration_bounces_then_delegating_retry_lands(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_invoke, "judge_llm_invoke", _fake_judge)
 
     _session(tmp_path, "s1", "user researched gadget opinions across many sites")
+    for seen_in in ("s1", "s2"):
+        log_observation(tmp_path, skill="new:gadget-research", kind="gap",
+                        issue="gadget opinions researched by hand",
+                        improvement="fan out over sites, then synthesize", session=seen_in)
     _workflow(tmp_path)
 
     provider = MagicMock()
@@ -90,3 +95,31 @@ def test_narration_bounces_then_delegating_retry_lands(tmp_path, monkeypatch):
     body = md.read_text(encoding="utf-8")
     assert "run_workflow" in body                        # the delegating retry landed
     assert "Run 3-6 web searches" not in body            # the narration never did
+
+
+def test_the_pass_writes_no_skill_it_was_not_given_a_gap_for(tmp_path, monkeypatch):
+    """The bar on how often a gap was seen holds only if the pass can author
+    nothing else: a name outside its gaps is refused at the tool, whatever the
+    model decides."""
+    from durin.memory import llm_invoke
+    monkeypatch.setattr(llm_invoke, "judge_llm_invoke", _fake_judge)
+
+    for seen_in in ("s1", "s2"):
+        log_observation(tmp_path, skill="new:gadget-research", kind="gap",
+                        issue="gadget opinions researched by hand",
+                        improvement="fan out over sites, then synthesize", session=seen_in)
+    _workflow(tmp_path)
+    stray = ToolCallRequest(id="call_0", name="skill_write", arguments={
+        "name": "holiday-planner",
+        "content": DELEGATING_BODY.replace("gadget-research", "holiday-planner"),
+        "rationale": "seen in passing"})
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(side_effect=[
+        LLMResponse(content="", tool_calls=[stray], finish_reason="tool_calls", usage={}),
+        LLMResponse(content="done", tool_calls=[], finish_reason="stop", usage={}),
+    ])
+
+    out = run_skill_extract_pass(tmp_path, provider=provider, model="test-model")
+
+    assert out["skills_touched"] == 0
+    assert not (tmp_path / "skills" / "holiday-planner").exists()

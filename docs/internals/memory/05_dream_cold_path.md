@@ -490,18 +490,20 @@ extract cursor uses, so `SessionManager.save()` — which only ever replaces the
 warning and is skipped, never aborting the pass. Gated by
 `memory.dream.session_summaries_enabled` (default on).
 
-### Pass 3 — skill-extract: sessions to reusable procedures
+### Pass 3 — skill-extract: recurring gaps to reusable procedures
 
-`run_skill_extract_pass(workspace, *, provider, model, max_sessions=3)` is the
+`run_skill_extract_pass(workspace, *, provider, model, min_gap_occasions=2)` is the
 **only agentic pass**: it spins up an `AgentRunner` sub-agent with
 `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
 `SkillAcquireSeedTool`, `ListWorkflowsTool`, `WorkflowWriteTool`,
-`WorkflowScriptWriteTool`, and `DependentsTool`, mining the
-newest sessions (plus any logged skill gaps)
-for a recurring step-by-step **procedure**. Each session gets its share of the
-input window and is trimmed on its own, keeping its start and its end — the end
-is where what finally worked lives. Each logged gap also brings its own
-evidence (`_gap_evidence`): the end of the sessions it was logged from, and the
+`WorkflowScriptWriteTool`, and `DependentsTool`, working from the logged
+skill gaps for a recurring step-by-step **procedure**. It reads the gaps one
+per working name and is handed only those seen on `min_gap_occasions` separate
+occasions (`memory.dream.skill_gap_min_occasions`: distinct sessions or
+distinct days, whichever is larger); a gap seen once waits in the queue, and
+with none over the bar the pass makes no model call (`skipped: "no_gaps"`). It
+does not read sessions to find procedures by itself. Each gap brings its own
+evidence (`_gap_evidence`): the end of the last sessions it was seen in, and the
 observations recorded from those sessions about existing skills
 (`observations_from_sessions`), marked as overriding the gap's text. A gap
 logged mid-session can carry that slice's failed guesses; the corrections that
@@ -518,12 +520,11 @@ it — the signal pass sees the catalog, a gap named after an existing skill is
 logged as an improvement on that skill, and curation makes that change. It
 is a sync wrapper over the async runner so the cron can call it in a thread.
 
-The session selection has no cursor (the newest sessions by modification time),
-so on a quiet night the pass would send its model the same request as the night
-before. Before starting the sub-agent it hashes that whole request — the
+The gaps stay open until they close, so on a quiet night the pass would send
+its model the same request as the night before. Before starting the sub-agent it hashes that whole request — the
 assembled messages (system prompt with doctrine, workflow catalog, authoring
-reference, existing and retired skills and principles; the gaps, their evidence
-and the session text), the tool schemas and the model — and compares it with
+reference, existing and retired skills and principles; the gaps over the bar and their
+evidence), the tool schemas and the model — and compares it with
 the fingerprint in `memory/.skill_extract_input.json`. On a match it makes no
 model call and its `memory.dream.skill_extract` event carries
 `skipped: "unchanged"`. The fingerprint is replaced (atomic write) only after a
@@ -1070,6 +1071,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Log skill corrections/gaps from extracted turns. |
+| `memory.dream.skill_gap_min_occasions` | `2` | Occasions a logged gap must be seen on before skill-extract is handed it. |
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |

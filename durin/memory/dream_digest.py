@@ -129,7 +129,7 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
         # the feed matches the "skills nuevas" / "skills mejoradas" split.
         return [{
             "kind": "created",
-            "summary": f"Created {touched} new skill(s) from session patterns",
+            "summary": f"Created {touched} new skill(s) from recurring gaps",
             "ref": None,
             "ref_kind": "skill",
             "at_ms": at_ms,

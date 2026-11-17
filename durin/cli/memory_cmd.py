@@ -225,8 +225,10 @@ def cmd_dream(
                           vector_index=_vi)
     console.print("[dim]Derived-from pass (link entities → source documents)…[/dim]")
     df = run_derived_from_pass(workspace, model=model)
-    console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
-    sk = run_skill_extract_pass(workspace, model=model)
+    console.print("[dim]Skill-extract pass (recurring gaps → skills)…[/dim]")
+    sk = run_skill_extract_pass(
+        workspace, model=model,
+        min_gap_occasions=cfg.memory.dream.skill_gap_min_occasions)
     if _absorb.enabled:
         console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
     else:
