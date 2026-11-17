@@ -371,16 +371,20 @@ _CAP_SHAPES = {
 def test_surviving_quadratic_shapes_are_checked_quickly_at_the_new_cap(shape_name):
     """At the (lowered) cap, even the two shapes the pre-checks cannot fix
     stay well under the 3s budget (generous for CI; the real numbers are in
-    the fix-round report)."""
+    the fix-round report).
+
+    The budget is on the work the check does, so it is measured in this
+    thread's CPU time: on a runner shared by several test processes the wall
+    clock also counts the time spent waiting for a core."""
     import time
 
     from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
 
     command = _CAP_SHAPES[shape_name](MAX_CHECKED_COMMAND_CHARS)
     assert len(command) <= MAX_CHECKED_COMMAND_CHARS
-    start = time.perf_counter()
+    start = time.thread_time()
     ExecTool(restrict_to_workspace=True, working_dir="/w")._check(command, "/w")
-    assert time.perf_counter() - start < 3.0
+    assert time.thread_time() - start < 3.0
 
 
 @pytest.mark.parametrize("shape_name", list(_CAP_SHAPES), ids=list(_CAP_SHAPES))

@@ -5,6 +5,85 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.15.0 — 2026-11-17
+
+### Highlights
+
+- **A skill is written only for a procedure that came back.** The nightly
+  pass used to write a skill the first time it saw a procedure done with no
+  skill covering it, and most of those skills were never used again. It now
+  waits until the same gap was seen on two separate occasions — two
+  conversations, or two different days of one long conversation — and it no
+  longer reads recent conversations to look for procedures by itself.
+  `memory.dream.skill_gap_min_occasions` sets the number; `1` restores the
+  old behaviour. (#754)
+- **A gap the nightly pass keeps turning down is closed.** When a skill or a
+  workflow already covered a procedure, the pass declined to write a skill
+  for it, and was handed the same gap again every time it was seen — for
+  good. After three such verdicts the gap is closed, and later sightings are
+  noted on the closed record instead of reopening it. (#755)
+- **The nightly passes no longer overwrite a note they were not shown.** The
+  learnings sweep was shown only some of the existing guidance and could
+  replace the body of a page it had never read. It now asks again, showing
+  that page, before it writes; the pass that runs when a conversation is
+  compacted only adds pages that have no body yet. (#753)
+
+### Changes
+
+#### Skills
+
+- Repeated sightings of one gap are read as one gap, by name. Each sighting
+  was stored as a separate record that read as "seen once", however often
+  the procedure came back. (#754)
+- The pass that detects gaps is shown every gap already flagged, one line per
+  name, most recently seen first. It was shown the first twenty records, so a
+  gap logged many times hid the others and a returning procedure got a new
+  name. (#754, #755)
+- On a night with no gap ready, the skill-writing pass makes no model call.
+  When one gap is ready it gets longer ends of the conversations it was seen
+  in. (#754)
+- The skill-writing pass can write a skill only for a gap it was handed; any
+  other name is refused. (#754)
+- A skill edit made by the nightly curation is recorded as made by curation,
+  not by the agent. (#753)
+- "Skill loaded at turn N" now counts turns the way the stored conversation
+  does, in the main loop and in the nightly pass. (#753)
+- With a large catalog the gap detector sees every skill name and shortens
+  the descriptions alike; it used to see about a third of the skills, and the
+  rest looked like gaps. (#753)
+- A skill hidden from the model no longer takes a place in the catalog shown
+  to it. (#753)
+- The skill-suggestion queue is written under the store lock. (#753)
+- Closed gaps are not listed to the curation judge, and are not shown in the
+  dashboard's observation list, which shows open records. (#755)
+
+#### Memory
+
+- A guidance page deleted by hand no longer comes back empty and pinned on
+  the next night. (#753)
+
+#### Workflows
+
+- A structural proposal reworded on a later night updates the existing
+  record instead of adding a new one. (#753)
+
+#### Telemetry
+
+- `memory.dream.skill_extract` carries `gaps_waiting` (open gaps seen too few
+  times) and `gaps_given_up` (gaps closed after three verdicts), and
+  `skipped: "no_gaps"` on a night with nothing ready. (#754, #755)
+- `memory.dream.learnings` carries `reasked`. `skill.observation_logged`
+  carries `closed: true` for a sighting noted on a closed gap. (#753, #755)
+
+#### Upgrading
+
+- Gaps seen once that are already in the queue wait for a second sighting;
+  nothing is deleted. A gap that was already seen on two occasions is handed
+  to the nightly pass as before, and is closed after three verdicts if the
+  pass keeps declining it.
+- A procedure done once no longer becomes a skill by itself. Asking for a
+  skill in a conversation works as before.
+
 ## 0.14.2 — 2026-11-13
 
 ### Highlights
