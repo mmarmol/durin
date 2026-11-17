@@ -838,11 +838,24 @@ async def _skill_extract_async(
 
     touched = sum(1 for ev in (result.tool_events or []) if _authored(ev))
     gaps_closed = _resolve_gap_observations(workspace)
+    # A run that reached its answer and left a gap unauthored turned it down;
+    # a run that failed says nothing about the gap.
+    gaps_given_up = 0
+    attempted = sum(1 for ev in (result.tool_events or [])
+                    if ev.get("name") in ("skill_write", "skill_publish"))
+    # A write that was tried and refused is not a gap turned down either.
+    if result.stop_reason == "completed" and attempted == touched:
+        from durin.agent.skill_observations import note_gap_handovers
+        gaps_given_up = note_gap_handovers(
+            workspace, [str(gap["skill"])[4:] for gap in ready])
     duration_ms = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.skill_extract", skills_touched=touched,
           gaps_closed=gaps_closed, gaps_waiting=gaps_waiting,
+          gaps_given_up=gaps_given_up,
           duration_ms=duration_ms, stop_reason=result.stop_reason)
-    logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed in {}ms ({})",
-                touched, gaps_closed, duration_ms, result.stop_reason)
+    logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed, {} given up "
+                "in {}ms ({})", touched, gaps_closed, gaps_given_up, duration_ms,
+                result.stop_reason)
     return {"skills_touched": touched, "gaps_closed": gaps_closed,
+            "gaps_given_up": gaps_given_up,
             "duration_ms": duration_ms, "stop_reason": result.stop_reason}

@@ -46,8 +46,9 @@ Rules:
 - Only signals that generalize. A correction specific to THIS task (a particular \
 value, name, or one-off preference) is NOT a skill signal — skip it.
 - A gap is only for work no skill in EXISTING SKILLS covers. If one covers it, \
-even in part, report a "correction" on that skill instead. If an OPEN GAP is \
-the same procedure, use its name. At most one gap per procedure.
+even in part, report a "correction" on that skill instead. If a gap under \
+GAPS ALREADY FLAGGED is the same procedure, use its name. At most one gap per \
+procedure.
 - Ground every signal in the turns. Do not invent.
 - For a gap, the improvement states only what the turns show working in the \
 end — the commands, queries and names that succeeded — never an attempt that \
@@ -65,7 +66,7 @@ SKILLS LOADED (name @ turn):
 EXISTING SKILLS (name: what it covers):
 {catalog}
 
-OPEN GAPS (already flagged, not yet a skill):
+GAPS ALREADY FLAGGED (not a skill):
 {open_gaps}
 
 CONVERSATION TURNS:
@@ -108,13 +109,17 @@ def _catalog_text(workspace: Path) -> str:
 
 
 def _open_gaps_text(workspace: Path) -> str:
-    """The open gaps the pass may name again, one line per working name,
-    most recently seen first. A gap it is not shown gets a fresh name when
-    the procedure comes back, and then never counts as seen twice."""
-    from durin.agent.skill_observations import open_gaps
+    """The gaps the pass may name again, one line per working name, most
+    recently seen first: the open ones and the ones that were turned down. A
+    gap it is not shown gets a fresh name when the procedure comes back —
+    an open one then never counts as seen twice, and a turned-down one
+    starts over as if it were new."""
+    from durin.agent.skill_observations import closed_gaps, open_gaps
 
-    return "\n".join(f"- {gap['skill'][4:]}: {gap['issue'][:120]}"
-                     for gap in open_gaps(workspace)[:_OPEN_GAPS_SHOWN]) or "(none)"
+    gaps = sorted(open_gaps(workspace) + closed_gaps(workspace),
+                  key=lambda g: str(g.get("last_seen") or ""), reverse=True)
+    return "\n".join(f"- {str(gap['skill'])[4:]}: {str(gap.get('issue') or '')[:120]}"
+                     for gap in gaps[:_OPEN_GAPS_SHOWN]) or "(none)"
 
 
 def build_skill_signal_prompt(turns: str, skill_loads: list[dict], *,
@@ -210,7 +215,8 @@ def discover_skill_signals(
         r = log_observation(
             workspace, skill=sig["skill"], kind=sig["kind"],
             issue=sig["issue"], improvement=sig["improvement"], session=session)
-        if r.get("ok"):
+        # A sighting noted on a turned-down gap opened nothing.
+        if r.get("ok") and not r.get("closed"):
             logged.append({**sig, "id": r.get("id")})
 
     try:

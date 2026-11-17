@@ -131,6 +131,25 @@ the bar, and the pass then makes no model call (`skipped: "no_gaps"`). A person
 who wants a skill for something done once asks for it in the conversation;
 that path does not go through this pass.
 
+**A gap the pass keeps turning down is closed.** The sub-agent leaves a gap
+unauthored when a skill or a workflow already covers the procedure, and the
+gap would be handed to it again on every new sighting. After a run that
+reached its answer (`stop_reason: "completed"`) and tried no write that was
+refused, `note_gap_handovers` counts one handover for each gap still open —
+once per time the gap was seen again, so a rerun caused by something else (a
+new skill, another gap) is not a second verdict. At `GAP_HANDOVERS` (3) the
+gap is closed: its records collapse into one `DECLINED` record for the name
+(the newest, so observation ids are never reused), carrying every session and
+a `closed_reason`. A failed run counts nothing. From then on `log_observation`
+notes a sighting of that name on the closed record (`seen_since_closed`,
+`last_seen`) instead of opening a gap, so the pass is not handed it again. A
+gap a person declines closes the same way, whichever of its records was
+declined. Nothing reopens a closed gap, and the dashboard's observation list
+shows open records only — a closed gap is read in `skills/.observations.jsonl`;
+a person who wants the skill asks for it in a conversation.
+Matching is by normalized name only: the same procedure logged under a
+different name is a different gap.
+
 Each gap over the bar is one line of the `LOGGED GAPS` block — its working
 name, the newest issue text and the number of occasions — followed by its
 evidence (`_gap_evidence`): the end of the last sessions it was seen in and the
@@ -317,9 +336,10 @@ The prompt distinguishes two kinds of signal, both required to **generalize**
 - **`gap`** — the agent completed a multi-step procedure that no existing skill
   covers and that looks likely to recur; its `skill` field is normalized to
   `new:<working-name>`. The prompt carries the catalog (every skill's name and
-  a one-line description) and the open gaps — one line per working name, most
-  recently seen first — so a procedure that comes back is logged under the
-  name it already has and counts as seen again. The catalog has a size budget and
+  a one-line description) and the gaps already flagged — the open ones and
+  the ones that were turned down, one line per working name, most recently
+  seen first — so a procedure that comes back is logged under the name it
+  already has: an open gap counts as seen again, a closed one stays closed. The catalog has a size budget and
   never drops a name — a skill the pass cannot see would read as a gap — so in
   a large catalog it is the descriptions that shrink, all alike, down to names
   alone. A procedure a skill
@@ -374,7 +394,8 @@ provenance.
   record by hand (see the API surface below); `UPSTREAM` is a manual-only exit.
   `DECLINED` and `UPSTREAM` records are kept **active** (not archived) — together
   they are the judge's memory against re-proposing something already settled,
-  which `suppressed_observations` reads. `APPLIED` records are moved to
+  which `suppressed_observations` reads (turned-down gaps excepted: they are
+  about no existing skill, and `closed_gaps` lists them). `APPLIED` records are moved to
   `.observations.archive.jsonl` by `archive_resolved`, called at the **start** of
   the next curation pass so an applied record gets one full cycle of visibility
   (e.g. in the webui backlog) before leaving the active file.
@@ -791,6 +812,7 @@ decisions about external content are never made silently.
 | `run_skill_extract_pass` / `_skill_extract_async` | `durin/memory/dream_passes.py` | Agentic dream pass: author or acquire skills for the logged gaps over the bar, via a sub-agent. |
 | `_skill_extract_messages` | `durin/memory/dream_passes.py` | Assembles the sub-agent's input (the gaps over the bar and their evidence); returns `None` when no gap is over it. |
 | `open_gaps` | `durin/agent/skill_observations.py` | The open gaps, one per working name, with sessions, days and `occasions`; newest first. |
+| `note_gap_handovers` / `closed_gaps` | `durin/agent/skill_observations.py` | Count a handover for each gap the extractor left unauthored and close it at `GAP_HANDOVERS`; list the closed gaps. |
 | `_recent_sessions_text` | `durin/memory/dream_passes.py` | Head+tail windowing of recent session transcripts for the extract prompt. |
 | `_resolve_gap_observations` | `durin/memory/dream_passes.py` | Closes `new:*` gaps by exact or `name_key` match; declines a gap for a retired name. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Hindsight pass: detects generalizing corrections/gaps from a session's turns, tail-truncated; logs via `log_observation`. |

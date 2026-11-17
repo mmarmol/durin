@@ -106,6 +106,26 @@ def test_a_gap_logged_many_times_takes_one_line_of_the_open_gaps(tmp_path):
     assert "release-runbook" in text
 
 
+def test_the_signal_pass_is_shown_turned_down_gaps_by_name(tmp_path):
+    """Named afresh, a turned-down procedure would start over as a new gap."""
+    from durin.agent.skill_observations import GAP_HANDOVERS, note_gap_handovers
+    from durin.agent.skill_signals import _open_gaps_text
+
+    for n in range(GAP_HANDOVERS):
+        log_observation(tmp_path, skill="new:ticket-triage", kind="gap",
+                        issue=f"case{n} step{n} queue{n} sorted{n} by hand",
+                        improvement="write one", session=f"slack_{n}")
+        note_gap_handovers(tmp_path, ["ticket-triage"])
+
+    assert "- ticket-triage:" in _open_gaps_text(tmp_path)
+
+    logged = discover_skill_signals(
+        tmp_path, "USER: sort the queue", session="slack_9",
+        llm_invoke=lambda prompt, **kw: '[{"skill": "new:ticket-triage", "kind": "gap", '
+                                         '"issue": "sorted by hand again", "improvement": "x"}]')
+    assert logged == []
+
+
 def test_a_gap_named_after_an_existing_skill_becomes_an_improvement_on_it(tmp_path):
     skill = tmp_path / "skills" / "athena-boto3-query" / "SKILL.md"
     skill.parent.mkdir(parents=True)
