@@ -1627,6 +1627,8 @@ class MemoryDreamSkillExtractEvent(TypedDict):
     gaps_closed: NotRequired[int]
     # Open gaps not handed to the pass: seen on too few occasions so far.
     gaps_waiting: NotRequired[int]
+    # Gaps closed because the pass was handed them repeatedly and authored none.
+    gaps_given_up: NotRequired[int]
     duration_ms: NotRequired[int]
     stop_reason: NotRequired[str]
     skipped: NotRequired[str]  # "no_gaps" | "unchanged"
@@ -1883,14 +1885,16 @@ class SkillUsedEvent(TypedDict):
 
 class SkillObservationLoggedEvent(TypedDict):
     """A live skill observation was appended, bumped an existing OPEN record
-    (dedup), or reopened an APPLIED one whose issue came back. ``count`` is
-    the record's count after this call."""
+    (dedup), reopened an APPLIED one whose issue came back, or was noted on
+    a turned-down gap that stays closed. ``count`` is the record's count
+    after this call."""
 
     skill: str
     kind: str
     dedup_bumped: bool
     count: int
     reopened: NotRequired[bool]
+    closed: NotRequired[bool]
 
 
 class SkillAuthoredEvent(TypedDict):

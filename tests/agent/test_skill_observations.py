@@ -462,3 +462,125 @@ def test_resolve_observation_emits_event(tmp_path, monkeypatch):
     resolved = [d for n, d in events if n == "skill.observation_resolved"]
     assert resolved == [{"skill": "deploy-gateway", "kind": "correction",
                          "disposition": "declined"}]
+
+
+# --- gaps the extractor turned down -------------------------------------------
+
+
+def _gap_seen(ws, name, issue, session):
+    return log_observation(ws, skill=f"new:{name}", kind="gap", issue=issue,
+                           improvement="write the steps down", session=session)
+
+
+def _close(ws, name):
+    """Hand the gap over until it closes, seen once more before each time."""
+    from durin.agent.skill_observations import GAP_HANDOVERS, note_gap_handovers
+
+    for n in range(GAP_HANDOVERS):
+        _gap_seen(ws, name, f"case{n} step{n} queue{n} sorted{n} by hand", f"slack_{n}")
+        note_gap_handovers(ws, [name])
+
+
+def test_a_gap_closes_into_one_record_after_enough_handovers(tmp_path):
+    from durin.agent.skill_observations import (
+        closed_gaps,
+        note_gap_handovers,
+        open_gaps,
+    )
+
+    _gap_seen(tmp_path, "ticket-triage", "tickets were triaged by hand", "slack_1")
+    _gap_seen(tmp_path, "Ticket Triage", "queue sorted manually once more today", "slack_2")
+    _gap_seen(tmp_path, "weekly-report", "report drafted by hand", "slack_1")
+
+    assert note_gap_handovers(tmp_path, ["ticket-triage"]) == 0
+    _gap_seen(tmp_path, "ticket-triage", "sorted by hand a third time", "slack_3")
+    assert note_gap_handovers(tmp_path, ["ticket-triage"]) == 0
+    _gap_seen(tmp_path, "ticket-triage", "queue sorted manually once more today", "slack_4")
+    assert note_gap_handovers(tmp_path, ["ticket-triage"]) == 1
+
+    (closed,) = closed_gaps(tmp_path)
+    assert closed["skill"] == "new:ticket-triage"
+    assert closed["sessions"] == ["slack_1", "slack_2", "slack_3", "slack_4"]
+    assert closed["issue"] == "queue sorted manually once more today"
+    assert "never authored" in closed["closed_reason"]
+    assert [g["skill"] for g in open_gaps(tmp_path)] == ["new:weekly-report"]
+
+
+def test_a_closed_gap_seen_again_stays_closed(tmp_path):
+    from durin.agent.skill_observations import (
+        closed_gaps,
+        open_gaps,
+    )
+
+    _close(tmp_path, "ticket-triage")
+
+    out = _gap_seen(tmp_path, "Ticket_Triage", "a wholly different wording this time", "slack_9")
+
+    assert out["ok"] and out["closed"]
+    assert open_gaps(tmp_path) == []
+    (closed,) = closed_gaps(tmp_path)
+    assert closed["seen_since_closed"] == 1
+
+
+def test_a_gap_a_person_declined_stays_closed_too(tmp_path):
+    from durin.agent.skill_observations import open_gaps, resolve_observation
+
+    rec = _gap_seen(tmp_path, "ticket-triage", "tickets were triaged by hand", "slack_1")
+    resolve_observation(tmp_path, rec["id"], "declined")
+
+    assert _gap_seen(tmp_path, "ticket-triage", "triaged by hand again", "slack_2")["closed"]
+    assert open_gaps(tmp_path) == []
+
+
+def test_turned_down_gaps_are_not_shown_to_the_curation_judge(tmp_path):
+    """They are about no existing skill; listed, every one would ride in
+    every batch's prompt."""
+    from durin.agent.skill_observations import (
+        suppressed_observations,
+    )
+
+    _close(tmp_path, "ticket-triage")
+
+    assert suppressed_observations(tmp_path) == []
+
+
+def test_a_rerun_with_no_new_sighting_is_not_another_handover(tmp_path):
+    """The pass reruns when anything it reads changes — another gap, a new
+    skill. The same verdict on the same sightings counts once."""
+    from durin.agent.skill_observations import (
+        GAP_HANDOVERS,
+        closed_gaps,
+        note_gap_handovers,
+        open_gaps,
+    )
+
+    _gap_seen(tmp_path, "ticket-triage", "tickets were triaged by hand", "slack_1")
+    for _ in range(GAP_HANDOVERS + 2):
+        note_gap_handovers(tmp_path, ["ticket-triage"])
+
+    assert closed_gaps(tmp_path) == []
+    assert len(open_gaps(tmp_path)) == 1
+
+
+def test_closing_a_gap_never_frees_an_id(tmp_path):
+    _close(tmp_path, "ticket-triage")
+    from durin.agent.skill_observations import closed_gaps
+
+    new = log_observation(tmp_path, skill="release-notes", kind="correction",
+                          issue="notes skip the changelog", improvement="read it first")
+
+    assert new["id"] > closed_gaps(tmp_path)[0]["id"]
+
+
+def test_one_declined_record_closes_the_whole_gap(tmp_path):
+    """A person declines one record of a gap that has several; the gap is
+    closed, not half open."""
+    from durin.agent.skill_observations import open_gaps, resolve_observation
+
+    first = _gap_seen(tmp_path, "ticket-triage", "tickets were triaged by hand", "slack_1")
+    _gap_seen(tmp_path, "ticket-triage", "queue sorted manually once more today", "slack_2")
+    assert open_gaps(tmp_path)[0]["occasions"] == 2
+
+    resolve_observation(tmp_path, first["id"], "declined")
+
+    assert open_gaps(tmp_path) == []

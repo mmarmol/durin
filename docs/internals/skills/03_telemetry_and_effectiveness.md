@@ -195,9 +195,10 @@ session's own log.
 
 Emitted from `log_observation` (`durin/agent/skill_observations.py`) every
 time an observation is appended, an existing OPEN record is bumped by
-dedup, or an APPLIED record is reopened because its issue came back. The
+dedup, an APPLIED record is reopened because its issue came back, or a
+sighting is noted on a turned-down gap that stays closed. The
 payload — `{skill, kind, dedup_bumped, count}`, plus `reopened: true` on a
-reopen — makes the cases distinguishable: `dedup_bumped=False, count=1` is a
+reopen and `closed: true` on a closed gap — makes the cases distinguishable: `dedup_bumped=False, count=1` is a
 brand-new observation; `dedup_bumped=True, count=N` is the Nth time the same issue (by
 the paraphrase-tolerant `_same_issue` match) has recurred for that skill. A
 dashboard tracking this event over time can see whether observation volume for
@@ -304,7 +305,9 @@ cannot answer for `auto` skills (those get applied without a human gate).
 **`memory.dream.skill_extract`** (`durin/telemetry/schema.py`:
 `MemoryDreamSkillExtractEvent`) is emitted once per `run_skill_extract_pass`
 invocation, with `{skills_touched, gaps_closed, gaps_waiting, duration_ms}`
-plus one of two fields that say what kind of pass it was. `gaps_waiting` is
+plus one of two fields that say what kind of pass it was. A pass that ran also
+carries `gaps_given_up`: gaps closed because the pass was handed them
+repeatedly and authored none. `gaps_waiting` is
 how many open gaps were not handed to the pass because they were seen on too
 few occasions — a queue that only grows shows here. `skipped` marks a pass
 that made no model call: `"no_gaps"` when no gap was over the bar,
@@ -431,7 +434,7 @@ them — there is no separate skills-specific telemetry sink.
 | `SkillSuggestionResolvedEvent` | `durin/telemetry/schema.py` | `{skill, action, resolution}` — user's accept/reject of a manual-skill suggestion. |
 | `SkillObservationResolvedEvent` | `durin/telemetry/schema.py` | `{skill, kind, disposition}` — user's manual resolve/dismiss of an open observation. |
 | `SkillObservationStalledEvent` | `durin/telemetry/schema.py` | `{skill, kind, attempts}` — curation stopped trying an OPEN observation (emitted by `apply_dispositions`). |
-| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, gaps_closed?, gaps_waiting?, duration_ms?, stop_reason?, skipped?}` — one skill-extract pass summary; `skipped` (`"no_gaps"` or `"unchanged"`) on a pass that did not run, `stop_reason` on one that did. |
+| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, gaps_closed?, gaps_waiting?, gaps_given_up?, duration_ms?, stop_reason?, skipped?}` — one skill-extract pass summary; `skipped` (`"no_gaps"` or `"unchanged"`) on a pass that did not run, `stop_reason` on one that did. |
 | `MemoryDreamSkillSignalsEvent` | `durin/telemetry/schema.py` | `{proposed, logged, skills?}` — one hindsight-pass summary. |
 | `MemorySkillMissEvent` | `durin/telemetry/schema.py` | `{query, result_count, had_skill_candidate, iteration?, session_key?}` — a zero-result skill search. |
 | `_finalize_skill` | `durin/agent/skills_store.py` | Emits `skill.authored` (`ramp="write"`/`"publish"`) once a skill clears the shared activation core; a quarantined skill emits nothing. |

@@ -207,6 +207,19 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     store = _store_init(workspace)
     records = _read_records(_active_path(workspace))
 
+    closed = _closed_gap(records, skill)
+    if closed is not None:
+        # A gap that was turned down stays turned down: a later sighting is
+        # noted on its record instead of opening it again.
+        closed["seen_since_closed"] = int(closed.get("seen_since_closed", 0)) + 1
+        closed["last_seen"] = _today()
+        _write_records(_active_path(workspace), records)
+        sha = store.auto_commit(
+            f"observation(#{closed['id']} {closed['skill']}): seen again, stays closed")
+        _emit("skill.observation_logged", skill=str(closed["skill"]), kind=kind,
+              dedup_bumped=True, count=int(closed.get("count", 1)), closed=True)
+        return {"ok": True, "id": closed["id"], "closed": True, "commit": sha}
+
     for rec in records:
         if rec.get("skill") != skill or rec.get("status") != "OPEN":
             continue
@@ -252,6 +265,95 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     _emit("skill.observation_logged", skill=skill, kind=kind,
          dedup_bumped=False, count=1)
     return {"ok": True, "id": rec["id"], "count": 1, "commit": sha}
+
+
+def _closed_gap(records: list[dict], skill: str) -> dict | None:
+    """The turned-down record of the gap ``skill`` names, if there is one."""
+    if not skill.startswith("new:"):
+        return None
+    from durin.agent.skill_retirements import name_key
+
+    key = name_key(skill[4:])
+    return next((r for r in records
+                 if r.get("status") == "DECLINED"
+                 and str(r.get("skill", "")).startswith("new:")
+                 and name_key(str(r["skill"])[4:]) == key), None)
+
+
+def closed_gaps(workspace: Path) -> list[dict]:
+    """The gaps that were turned down, most recently seen first."""
+    gaps = [r for r in _read_records(_active_path(Path(workspace)))
+            if r.get("status") == "DECLINED" and str(r.get("skill", "")).startswith("new:")]
+    gaps.sort(key=lambda r: str(r.get("last_seen") or ""), reverse=True)
+    return gaps
+
+
+# How many times the skill-extract pass is handed a gap, and leaves it
+# unauthored, before the gap is closed.
+GAP_HANDOVERS = 3
+
+
+@_under_store_lock
+def note_gap_handovers(workspace: Path, names: list[str]) -> int:
+    """Record that the extractor was handed these gaps and authored none of
+    them; close the ones it has now left ``GAP_HANDOVERS`` times.
+
+    The extractor turns a gap down when a skill or a workflow already covers
+    the procedure, and it would be handed the same gap again on every new
+    sighting. A closed gap becomes one DECLINED record for its name — the
+    newest, carrying every session — and the others are dropped, so later
+    sightings have one place to land. Returns how many gaps were closed.
+    """
+    from durin.agent.skill_retirements import name_key
+
+    workspace = Path(workspace)
+    wanted = {name_key(n) for n in names}
+    records = _read_records(_active_path(workspace))
+    groups: dict[str, list[dict]] = {}
+    for rec in records:
+        ref = str(rec.get("skill", ""))
+        if rec.get("status") == "OPEN" and ref.startswith("new:") and name_key(ref[4:]) in wanted:
+            groups.setdefault(name_key(ref[4:]), []).append(rec)
+    if not groups:
+        return 0
+    occasions = {name_key(str(g["skill"])[4:]): g["occasions"] for g in open_gaps(workspace)}
+    dropped: set[int] = set()
+    counted = closed = 0
+    for key, group in groups.items():
+        # The newest record is the one kept: ids stay the highest ever given.
+        keep = group[-1]
+        handed = max(int(r.get("handed", 0)) for r in group)
+        seen = occasions.get(key, 1)
+        # A rerun caused by something else — another gap, a new skill, a
+        # changed prompt — is the same verdict again, not a new one: a
+        # handover counts once per time the gap was seen again.
+        if handed and seen <= max(int(r.get("handed_occasions", 0)) for r in group):
+            continue
+        counted += 1
+        for rec in group:
+            rec["handed"] = handed + 1
+            rec["handed_occasions"] = seen
+        if handed + 1 < GAP_HANDOVERS:
+            continue
+        sessions: list[str] = []
+        for rec in group:
+            sessions += [s for s in rec.get("sessions") or [] if s not in sessions]
+        keep.update({
+            "sessions": sessions, "count": sum(int(r.get("count", 1)) for r in group),
+            "first_seen": min(str(r.get("first_seen") or "") for r in group),
+            "status": "DECLINED", "resolved_at": _today(),
+            "closed_reason": f"handed to skill-extract {handed + 1} times, never authored",
+        })
+        dropped.update(id(r) for r in group[:-1])
+        closed += 1
+        _emit("skill.observation_resolved", skill=str(keep.get("skill", "")),
+              kind="gap", disposition="declined")
+    if not counted:
+        return 0
+    _write_records(_active_path(workspace), [r for r in records if id(r) not in dropped])
+    _store_init(workspace).auto_commit(
+        f"observations: {counted} gap(s) left unauthored by skill-extract, {closed} closed")
+    return closed
 
 
 def _reopen_applied(workspace: Path, records: list[dict], skill: str, issue: str,
@@ -342,10 +444,13 @@ def open_gaps(workspace: Path) -> list[dict]:
     """
     from durin.agent.skill_retirements import name_key
 
+    # A name with a turned-down record is closed, whatever else is open
+    # under it: a person may have declined one record of several.
+    closed = {name_key(str(r["skill"])[4:]) for r in closed_gaps(workspace)}
     groups: dict[str, dict] = {}
     for rec in open_observations(workspace):
         ref = str(rec.get("skill", ""))
-        if not ref.startswith("new:"):
+        if not ref.startswith("new:") or name_key(ref[4:]) in closed:
             continue
         gap = groups.setdefault(name_key(ref[4:]), {
             "skill": ref, "sessions": [], "days": set(), "last_seen": "", "_newest": rec})
@@ -408,10 +513,13 @@ def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
 
 
 def suppressed_observations(workspace: Path) -> list[dict]:
-    """Records kept active as memory against re-proposing: DECLINED (rejected
-    here) and UPSTREAM (accepted, but the fix belongs in durin itself)."""
+    """Records kept active as memory against re-proposing a change to a
+    skill: DECLINED (rejected here) and UPSTREAM (accepted, but the fix
+    belongs in durin itself). Turned-down gaps are not among them — they are
+    about no existing skill, and ``closed_gaps`` lists those."""
     return [r for r in _read_records(_active_path(Path(workspace)))
-            if r.get("status") in ("DECLINED", "UPSTREAM")]
+            if r.get("status") in ("DECLINED", "UPSTREAM")
+            and not str(r.get("skill", "")).startswith("new:")]
 
 
 @_under_store_lock

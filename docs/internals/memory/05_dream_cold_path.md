@@ -502,7 +502,10 @@ per working name and is handed only those seen on `min_gap_occasions` separate
 occasions (`memory.dream.skill_gap_min_occasions`: distinct sessions or
 distinct days, whichever is larger); a gap seen once waits in the queue, and
 with none over the bar the pass makes no model call (`skipped: "no_gaps"`). It
-does not read sessions to find procedures by itself. Each gap brings its own
+does not read sessions to find procedures by itself. A gap it is handed three
+times and never authors is closed, and later sightings of that name are noted
+on the closed record instead of reopening it
+(`../skills/02_lifecycle_and_curation.md`). Each gap brings its own
 evidence (`_gap_evidence`): the end of the last sessions it was seen in, and the
 observations recorded from those sessions about existing skills
 (`observations_from_sessions`), marked as overriding the gap's text. A gap

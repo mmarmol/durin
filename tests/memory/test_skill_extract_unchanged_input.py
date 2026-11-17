@@ -404,3 +404,49 @@ def test_a_gap_seen_for_the_first_time_does_not_rerun_the_pass(ws):
 
     assert _calls(provider) == settled
     assert out["skipped"] == "unchanged"
+
+
+# --- a gap the pass keeps turning down is closed ------------------------------
+
+
+def _sighting(ws, n):
+    _gap(ws, session=f"later-{n}")
+    _gap(ws, name="db-backup", issue="the database was backed up by hand",
+         session=f"later-{n}")
+
+
+def test_a_gap_left_unauthored_three_times_is_closed(ws, events):
+    """The pass turns a gap down when something already covers it, and was
+    handed the same gap again on every new sighting, for good."""
+    from durin.agent.skill_observations import GAP_HANDOVERS, closed_gaps, open_gaps
+
+    provider = _answering_provider()
+    for n in range(GAP_HANDOVERS):
+        assert len(open_gaps(ws)) == 2
+        _sighting(ws, n)
+        out = run_skill_extract_pass(ws, provider=provider, model="test-model")
+
+    assert out["gaps_given_up"] == 2
+    assert _extract_events(events)[-1]["gaps_given_up"] == 2
+    assert open_gaps(ws) == []
+    assert sorted(g["skill"] for g in closed_gaps(ws)) == ["new:db-backup", "new:release-runbook"]
+
+    # Seen again: nothing reopens, and the pass has nothing to read.
+    calls = _calls(provider)
+    _sighting(ws, 99)
+    out = run_skill_extract_pass(ws, provider=provider, model="test-model")
+    assert _calls(provider) == calls
+    assert out["skipped"] == "no_gaps"
+    assert open_gaps(ws) == []
+
+
+def test_a_failed_run_does_not_count_against_a_gap(ws):
+    from durin.agent.skill_observations import GAP_HANDOVERS, open_gaps
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(side_effect=RuntimeError("provider down"))
+    for n in range(GAP_HANDOVERS + 1):
+        _sighting(ws, n)
+        run_skill_extract_pass(ws, provider=provider, model="test-model")
+
+    assert len(open_gaps(ws)) == 2
